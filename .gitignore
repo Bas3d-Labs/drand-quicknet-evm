@@ -1,0 +1,62 @@
+.env
+.env.*
+!.env.example
+
+# Foundry / local wallets
+keystore/
+keystores/
+broadcast/
+cache/
+out/
+
+# Node / pnpm
+node_modules/
+.pnpm-store/
+dist/
+build/
+coverage/
+
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Foundry / Solidity tooling
+contracts/cache/
+contracts/out/
+contracts/broadcast/
+contracts/.env
+
+# Test / coverage artifacts
+lcov.info
+coverage/
+coverage.json
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local runtime
+data/
+tmp/
+.temp/
+.cache/
+
+*.sqlite
+*.sqlite3
+*.db
+
+# PID / process state
+*.pid
+*.pid.lock

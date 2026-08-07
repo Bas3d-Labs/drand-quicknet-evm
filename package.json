@@ -1,0 +1,20 @@
+{
+  "name": "drand-quicknet-evm",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm build:contracts && pnpm -r build",
+    "build:contracts": "forge build --root contracts",
+    "test": "pnpm test:contracts && pnpm -r test",
+    "test:contracts": "forge test --root contracts -vvv",
+    "fmt": "pnpm fmt:contracts && pnpm -r fmt",
+    "fmt:contracts:check": "forge fmt --root contracts --check",
+    "fmt:contracts": "forge fmt --root contracts"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "^11.13.1",
+      "onFail": "download"
+    }
+  }
+}
