@@ -8,18 +8,20 @@
   "oracle": {
     "address": "0x692100c4863adAED9f560F6Ce982cF878F083e93",
     "runtimeCodehash": "0x78faa56ca608db8a19cfb3bb052f11fedbaa14fb1ce74db58044db99246b4cfc",
-    "oracleSource": "Zodomo/DrandVerifier",
-    "upstreamCommit": "ccf2336ae51efd85208b29e7b7a10cb53db2f01f"
+    "sourceRepository": "Zodomo/DrandVerifier",
+    "sourceCommit": "ccf2336ae51efd85208b29e7b7a10cb53db2f01f"
   },
   "registry": {
-    "address": null,
-    "deploymentTx": null,
-    "sourceCommit": null,
+    "address": "0x288F3D166B0178e323341fd9579cF01038fB4ca1",
+    "deploymentTx": "0xca770ba175ea59cfa0f8fece405aa7f57b2cb1a76d87efa8261ac367e53e5f62",
+    "deploymentBlock": 98216477,
+    "sourceCommit": "18cf18daa7f12e584f2a97acc3dbbbad24516daf",
     "build": {
       "solc": "0.8.36",
       "optimizer": true,
       "optimizerRuns": 200,
-      "viaIR": false
+      "viaIR": false,
+      "evmVersion": "osaka"
     }
   }
 }

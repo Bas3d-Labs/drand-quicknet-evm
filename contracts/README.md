@@ -200,7 +200,7 @@ Always simulate before broadcasting.
 DEPLOYMENT_FILE=robinhood-testnet.json \
 forge script \
   --root contracts \
-  script/DeployRegistry.s.sol:DeployRegistry \
+  contracts/script/DeployRegistry.s.sol:DeployRegistry \
   --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
 ```
 
@@ -210,7 +210,7 @@ forge script \
 DEPLOYMENT_FILE=robinhood-mainnet.json \
 forge script \
   --root contracts \
-  script/DeployRegistry.s.sol:DeployRegistry \
+  contracts/script/DeployRegistry.s.sol:DeployRegistry \
   --rpc-url "$ROBINHOOD_MAINNET_RPC_URL"
 ```
 
@@ -224,13 +224,13 @@ The simulation must succeed before using `--broadcast`.
 DEPLOYMENT_FILE=robinhood-testnet.json \
 forge script \
   --root contracts \
-  script/DeployRegistry.s.sol:DeployRegistry \
+  contracts/script/DeployRegistry.s.sol:DeployRegistry \
   --rpc-url "$ROBINHOOD_TESTNET_RPC_URL" \
   --private-key "$PRIVATE_KEY" \
   --verify \
   --verifier blockscout \
   --verifier-url "https://explorer.testnet.chain.robinhood.com/api" \
-  --broadcast
+  --broadcast \
   -vvv
 ```
 
@@ -240,13 +240,13 @@ forge script \
 DEPLOYMENT_FILE=robinhood-mainnet.json \
 forge script \
   --root contracts \
-  script/DeployRegistry.s.sol:DeployRegistry \
+  contracts/script/DeployRegistry.s.sol:DeployRegistry \
   --rpc-url "$ROBINHOOD_MAINNET_RPC_URL" \
   --private-key "$PRIVATE_KEY" \
   --verify \
   --verifier blockscout \
   --verifier-url "https://robinhoodchain.blockscout.com/api" \
-  --broadcast
+  --broadcast \
   -vvv
 ```
 
