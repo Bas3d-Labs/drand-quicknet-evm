@@ -4,11 +4,14 @@
   "scripts": {
     "build": "pnpm build:contracts && pnpm -r build",
     "build:contracts": "forge build --root contracts",
+    "build:quicknet": "pnpm --filter @based-labs/drand-quicknet build",
     "test": "pnpm test:contracts && pnpm -r test",
     "test:contracts": "forge test --root contracts -vvv",
+    "test:quicknet": "pnpm --filter @based-labs/drand-quicknet test",
     "fmt": "pnpm fmt:contracts && pnpm -r fmt",
     "fmt:contracts:check": "forge fmt --root contracts --check",
-    "fmt:contracts": "forge fmt --root contracts"
+    "fmt:contracts": "forge fmt --root contracts",
+    "typecheck:quicknet": "pnpm --filter @based-labs/drand-quicknet typecheck"
   },
   "devEngines": {
     "packageManager": {
@@ -16,5 +19,10 @@
       "version": "^11.13.1",
       "onFail": "download"
     }
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }
