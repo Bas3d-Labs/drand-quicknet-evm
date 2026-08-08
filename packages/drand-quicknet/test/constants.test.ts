@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { 
   QUICKNET_GENESIS_TIMESTAMP, 
   QUICKNET_PERIOD_SECONDS 
-} from "../src/index";
+} from "../src/constants.js";
 
 describe("quicknet", () => {
   it("has the expected schedule constants", () => {
