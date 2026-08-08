@@ -88,7 +88,7 @@ import {IDrandOracleQuicknet} from "./IDrandOracleQuicknet.sol";
 ///         Neither storage in this registry nor the `BeaconStored` event
 ///         proves that the value was unknowable beforehand. A colluding
 ///         drand signing threshold could additionally know an unchained
-///         future beacon before its scheduled time.  
+///         future beacon before its scheduled time.
 contract DrandQuicknetBeaconRegistry {
     error InvalidOracle();
     error InvalidRound();
@@ -103,21 +103,20 @@ contract DrandQuicknetBeaconRegistry {
 
     /// @notice Runtime code hash of the exact Quicknet verifier accepted
     ///         by this registry.
-    bytes32 public constant EXPECTED_ORACLE_CODEHASH = 0x78faa56ca608db8a19cfb3bb052f11fedbaa14fb1ce74db58044db99246b4cfc;
+    bytes32 public constant EXPECTED_ORACLE_CODEHASH =
+        0x78faa56ca608db8a19cfb3bb052f11fedbaa14fb1ce74db58044db99246b4cfc;
 
     /// @notice Immutable drand Quicknet verifier.
     IDrandOracleQuicknet public immutable oracle;
 
     /// @dev round => canonical normalized beacon hash.
     ///      bytes32(0) represents "not stored".
-    ///      A verified zero hash is deliberately rejected so zero 
+    ///      A verified zero hash is deliberately rejected so zero
     ///      can serve as the unstored sentinel.
     mapping(uint64 round => bytes32 randomness) private _beacons;
 
     event BeaconStored(
-        uint64 indexed round,
-        bytes32 randomness,
-        address indexed submitter
+        uint64 indexed round, bytes32 randomness, address indexed submitter
     );
 
     constructor(address oracle_) {
@@ -150,10 +149,8 @@ contract DrandQuicknetBeaconRegistry {
             return randomness;
         }
 
-        (
-            bool verified, 
-            bytes32 normalizedRoundHash, 
-        ) = oracle.verifyNormalized(round, signature);
+        (bool verified, bytes32 normalizedRoundHash,) =
+            oracle.verifyNormalized(round, signature);
 
         if (!verified || normalizedRoundHash == bytes32(0)) {
             revert InvalidBeacon();
@@ -169,7 +166,7 @@ contract DrandQuicknetBeaconRegistry {
 
     /// @notice Returns the verified randomness for `round`.
     /// @dev Reverts if the round has not been cached.
-    function getBeacon(uint64 round) 
+    function getBeacon(uint64 round)
         external
         view
         returns (bytes32 randomness)
@@ -177,7 +174,7 @@ contract DrandQuicknetBeaconRegistry {
         if (round == 0) {
             revert InvalidRound();
         }
-        
+
         randomness = _beacons[round];
 
         if (randomness == bytes32(0)) {
@@ -186,11 +183,7 @@ contract DrandQuicknetBeaconRegistry {
     }
 
     /// @notice Returns true if `round` has already been verified and stored.
-    function isStored(uint64 round) 
-        external
-        view
-        returns (bool)
-    {
+    function isStored(uint64 round) external view returns (bool) {
         return _beacons[round] != bytes32(0);
     }
 
@@ -198,34 +191,26 @@ contract DrandQuicknetBeaconRegistry {
     /// @dev This is Quicknet schedule arithmetic only. It does not
     ///      prove that the beacon was actually published at this exact
     ///      time, nor that it could not have been known earlier by a
-    ///      colluding drand signing threshold. 
-    function roundScheduledTime(uint64 round)
-        public
-        pure
-        returns (uint256)
-    {
+    ///      colluding drand signing threshold.
+    function roundScheduledTime(uint64 round) public pure returns (uint256) {
         if (round == 0) {
             revert InvalidRound();
         }
 
         return
-            uint256(GENESIS_TIMESTAMP) +
-            uint256(round - 1) *
-            uint256(PERIOD_SECONDS);
+            uint256(GENESIS_TIMESTAMP) + uint256(round - 1)
+                * uint256(PERIOD_SECONDS);
     }
-    
+
     /// @notice Returns the latest Quicknet round scheduled at or
     ///         before `timestamp`.
-    function roundAt(uint256 timestamp)
-        public
-        pure
-        returns (uint64)
-    {
+    function roundAt(uint256 timestamp) public pure returns (uint64) {
         if (timestamp < uint256(GENESIS_TIMESTAMP)) {
             return 0;
         }
 
-        uint256 round = (timestamp - uint256(GENESIS_TIMESTAMP)) / uint256(PERIOD_SECONDS) + 1;
+        uint256 round = (timestamp - uint256(GENESIS_TIMESTAMP))
+            / uint256(PERIOD_SECONDS) + 1;
 
         if (round > type(uint64).max) {
             revert InvalidRound();
@@ -238,11 +223,7 @@ contract DrandQuicknetBeaconRegistry {
     ///         has passed according to this chain's block.timestamp.
     /// @dev This is not a proof of beacon availability or first
     ///      knowability, only a schedule helper.
-    function latestScheduledRound()
-        external
-        view
-        returns (uint64)
-    {
+    function latestScheduledRound() external view returns (uint64) {
         return roundAt(block.timestamp);
     }
 }
