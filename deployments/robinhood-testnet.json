@@ -12,10 +12,11 @@
     "sourceCommit": "ccf2336ae51efd85208b29e7b7a10cb53db2f01f"
   },
   "registry": {
-    "address": "0x288F3D166B0178e323341fd9579cF01038fB4ca1",
-    "deploymentTx": "0xca770ba175ea59cfa0f8fece405aa7f57b2cb1a76d87efa8261ac367e53e5f62",
-    "deploymentBlock": 98216477,
-    "sourceCommit": "18cf18daa7f12e584f2a97acc3dbbbad24516daf",
+    "address": "0x37362343d9eE1EfCC9293C611FA10A994C02f75F",
+    "runtimeCodehash": "0xeb9999d76103ebf6437dd08c7e239df18a9ca06155a9003e9b49b32de4952984",
+    "deploymentTx": "0x11acdb78a4d3f12935585223f168d8c8c68c52f113826f1c397cc10486fd2d3a",
+    "deploymentBlock": 98512436,
+    "sourceCommit": "0f8c05e00b85374a4a2a911bccbcd1bcaf6a7af0",
     "build": {
       "solc": "0.8.36",
       "optimizer": true,
