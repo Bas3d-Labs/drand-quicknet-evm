@@ -203,9 +203,9 @@ describe('importQuicknetRound', () => {
     ).toHaveBeenCalledOnce();
 
     expect(
-      verifyDeployment.mock.invocationCallOrder[0],
+      firstInvocationOrder(verifyDeployment),
     ).toBeLessThan(
-      isStored.mock.invocationCallOrder[0],
+      firstInvocationOrder(isStored),
     );
   });
 
@@ -430,9 +430,9 @@ describe('importQuicknetRound', () => {
     ).toHaveBeenCalledWith(ROUND);
 
     expect(
-      waitForTransactionReceipt.mock.invocationCallOrder[0],
+      firstInvocationOrder(waitForTransactionReceipt),
     ).toBeLessThan(
-      getBeacon.mock.invocationCallOrder[0],
+      firstInvocationOrder(getBeacon),
     );
   });
 
@@ -486,56 +486,53 @@ describe('importQuicknetRound', () => {
   it('performs the import steps in the expected order', async () => {
     await importRound();
 
-    const verifyOrder =
-      verifyDeployment.mock
-        .invocationCallOrder[0];
-
-    const storedOrder =
-      isStored.mock
-        .invocationCallOrder[0];
-
-    const fetchOrder =
-      quicknetMocks.fetchBeacon.mock
-        .invocationCallOrder[0];
-
-    const decompressOrder =
-      quicknetMocks.decompressSignature.mock
-        .invocationCallOrder[0];
-
-    const submitOrder =
-      registryMocks.submitBeacon.mock
-        .invocationCallOrder[0];
-
-    const receiptOrder =
-      waitForTransactionReceipt.mock
-        .invocationCallOrder[0];
-
-    const readOrder =
-      getBeacon.mock
-        .invocationCallOrder[0];
+  const verifyOrder = firstInvocationOrder(verifyDeployment);
+  const storedOrder = firstInvocationOrder(isStored);
+  const fetchOrder = firstInvocationOrder(quicknetMocks.fetchBeacon);
+  const decompressOrder = firstInvocationOrder(quicknetMocks.decompressSignature);
+  const submitOrder = firstInvocationOrder(registryMocks.submitBeacon);
+  const receiptOrder = firstInvocationOrder(waitForTransactionReceipt);
+  const readOrder = firstInvocationOrder(getBeacon);
 
     expect(verifyOrder).toBeLessThan(
-      storedOrder,
+      storedOrder
     );
 
     expect(storedOrder).toBeLessThan(
-      fetchOrder,
+      fetchOrder
     );
 
     expect(fetchOrder).toBeLessThan(
-      decompressOrder,
+      decompressOrder
     );
 
     expect(decompressOrder).toBeLessThan(
-      submitOrder,
+      submitOrder
     );
 
     expect(submitOrder).toBeLessThan(
-      receiptOrder,
+      receiptOrder
     );
 
     expect(receiptOrder).toBeLessThan(
-      readOrder,
+      readOrder
     );
   });
 });
+
+function firstInvocationOrder(
+  mock: {
+    mock: {
+      invocationCallOrder: number[];
+    };
+  },
+): number {
+  const order = mock.mock.invocationCallOrder[0];
+  if (order === undefined) {
+    throw new Error(
+      'Expected mock to have been called.',
+    );
+  }
+
+  return order;
+}
