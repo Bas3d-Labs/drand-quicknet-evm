@@ -6,15 +6,18 @@
     "build:contracts": "forge build --root contracts",
     "build:quicknet": "pnpm --filter @based-labs/drand-quicknet build",
     "build:registry-sdk": "pnpm --filter @based-labs/drand-quicknet-registry build",
+    "build:relayer": "pnpm --filter @based-labs/drand-quicknet-relayer build",
     "test": "pnpm test:contracts && pnpm -r test",
     "test:contracts": "forge test --root contracts -vvv",
     "test:quicknet": "pnpm --filter @based-labs/drand-quicknet test",
     "test:registry-sdk": "pnpm --filter @based-labs/drand-quicknet-registry test",
+    "test:relayer": "pnpm --filter @based-labs/drand-quicknet-relayer test",
     "fmt": "pnpm fmt:contracts && pnpm -r fmt",
     "fmt:contracts:check": "forge fmt --root contracts --check",
     "fmt:contracts": "forge fmt --root contracts",
     "typecheck:quicknet": "pnpm --filter @based-labs/drand-quicknet typecheck",
-    "typecheck:registry-sdk": "pnpm --filter @based-labs/drand-quicknet-registry typecheck"
+    "typecheck:registry-sdk": "pnpm --filter @based-labs/drand-quicknet-registry typecheck",
+    "typecheck:relayer": "pnpm --filter @based-labs/drand-quicknet-relayer typecheck"
   },
   "devEngines": {
     "packageManager": {
