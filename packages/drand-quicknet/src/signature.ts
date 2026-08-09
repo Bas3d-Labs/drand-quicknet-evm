@@ -1,8 +1,8 @@
-import type { Hex } from "./types.js";
+import type { Hex } from './types.js';
 
 const COMPRESSED_SIGNATURE_BYTES = 48;
 const HEX_CHARACTERS = new Set(
-  "0123456789abcdefABCDEF",
+  '0123456789abcdefABCDEF',
 );
 
 export function parseCompressedSignature(
@@ -21,7 +21,7 @@ export function parseCompressedSignature(
 
   if (!isHex(signature)) {
     throw new Error(
-      "Invalid compressed Quicknet signature: contains non-hex characters",
+      'Invalid compressed Quicknet signature: contains non-hex characters',
     );
   }
 

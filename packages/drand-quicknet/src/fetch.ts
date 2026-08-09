@@ -1,5 +1,5 @@
-import { parseCompressedSignature } from "./signature.js";
-import type { QuicknetBeacon } from "./types.js";
+import { parseCompressedSignature } from './signature.js';
+import type { QuicknetBeacon } from './types.js';
 
 interface DrandBeaconResponse {
   round?: unknown;
@@ -11,7 +11,7 @@ export async function fetchBeaconFromEndpoint(
   round: bigint,
 ): Promise<QuicknetBeacon> {
   if (round <= 0n) {
-    throw new RangeError("Quicknet round must be greater than zero.");
+    throw new RangeError('Quicknet round must be greater than zero.');
   }
 
   const baseUrl = removeTrailingSlashes(endpoint);

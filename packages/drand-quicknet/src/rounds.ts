@@ -1,7 +1,7 @@
 import { 
   QUICKNET_GENESIS_TIMESTAMP, 
   QUICKNET_PERIOD_SECONDS 
-} from "./constants.js";
+} from './constants.js';
 
 export function roundAt(timestamp: bigint) {
   if (timestamp < QUICKNET_GENESIS_TIMESTAMP) {
@@ -15,7 +15,7 @@ export function roundAt(timestamp: bigint) {
 
 export function roundScheduledTime(round: bigint): bigint {
   if (round === 0n) {
-    throw new RangeError("Quicknet round must be greater than zero.");
+    throw new RangeError('Quicknet round must be greater than zero.');
   }
 
   return (
