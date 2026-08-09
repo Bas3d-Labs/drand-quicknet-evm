@@ -483,6 +483,67 @@ describe('importQuicknetRound', () => {
     });
   });
 
+  it('uses a provided beacon without fetching it again', async () => {
+    const beacon = {
+      round: ROUND,
+      signature:
+        COMPRESSED_SIGNATURE,
+    };
+
+    const result =
+      await importQuicknetRound({
+        publicClient,
+        walletClient,
+        account,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        beacon,
+      });
+
+    expect(
+      quicknetMocks.fetchBeacon,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      quicknetMocks.decompressSignature,
+    ).toHaveBeenCalledWith(
+      COMPRESSED_SIGNATURE,
+    );
+
+    expect(result.status).toBe(
+      'imported',
+    );
+  });
+
+  it('rejects a provided beacon for a different round', async () => {
+    const beacon = {
+      round: ROUND + 1n,
+      signature:
+        COMPRESSED_SIGNATURE,
+    };
+
+    await expect(
+      importQuicknetRound({
+        publicClient,
+        walletClient,
+        account,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        beacon,
+      }),
+    ).rejects.toThrow(
+      `Quicknet round mismatch: requested ${ROUND}, received ${ROUND + 1n}.`,
+    );
+
+    expect(
+      quicknetMocks.fetchBeacon,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      registryMocks.submitBeacon,
+    ).not.toHaveBeenCalled();
+  });
+
   it('performs the import steps in the expected order', async () => {
     await importRound();
 

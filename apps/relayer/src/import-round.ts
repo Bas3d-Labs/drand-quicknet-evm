@@ -12,6 +12,7 @@ import type {
 import {
   decompressSignature,
   fetchBeacon,
+  type QuicknetBeacon,
 } from '@based-labs/drand-quicknet';
 
 export interface ImportQuicknetRoundOptions {
@@ -20,6 +21,7 @@ export interface ImportQuicknetRoundOptions {
   account: Account;
   deployment: RegistryDeployment;
   round: bigint;
+  beacon?: QuicknetBeacon;
 }
 
 export type ImportQuicknetRoundResult =
@@ -44,6 +46,7 @@ export async function importQuicknetRound(
     account,
     deployment,
     round,
+    beacon: providedBeacon,
   } = options;
 
   if (round <= 0n) {
@@ -66,7 +69,7 @@ export async function importQuicknetRound(
     };
   }
 
-  const beacon = await fetchBeacon(round);
+  const beacon = providedBeacon ?? await fetchBeacon(round);
   if (beacon.round !== round) {
     throw new Error(
       `Quicknet round mismatch: requested ${round}, received ${beacon.round}.`
