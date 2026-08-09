@@ -1,7 +1,13 @@
 export {
   QUICKNET_GENESIS_TIMESTAMP,
   QUICKNET_PERIOD_SECONDS,
+  QUICKNET_ENDPOINTS,
 } from './constants.js';
+
+export {
+  fetchBeacon,
+  fetchBeaconFromEndpoint,
+} from './fetch.js';
 
 export {
   roundAt,

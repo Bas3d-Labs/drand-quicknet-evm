@@ -1,9 +1,37 @@
+import { QUICKNET_ENDPOINTS } from './constants.js';
 import { parseCompressedSignature } from './signature.js';
 import type { QuicknetBeacon } from './types.js';
 
 interface DrandBeaconResponse {
   round?: unknown;
   signature?: unknown;
+}
+
+export async function fetchBeacon(
+  round: bigint,
+  endpoints: readonly string[] = QUICKNET_ENDPOINTS,
+): Promise<QuicknetBeacon> {
+  if (endpoints.length === 0) {
+    throw new Error('At least one Quicknet endpoint is required.');
+  }
+
+  const errors: Error[] = [];
+
+  for (const endpoint of endpoints) {
+    try {
+      return await fetchBeaconFromEndpoint(
+        endpoint,
+        round,
+      );
+    } catch (error) {
+      errors.push(toError(error));
+    }
+  }
+
+  throw new AggregateError(
+    errors,
+    `Failed to fetch Quicknet round ${round} from all endpoints.`
+  );
 }
 
 export async function fetchBeaconFromEndpoint(
@@ -50,4 +78,12 @@ function removeTrailingSlashes(
   }
 
   return value.slice(0, end);
+}
+
+function toError(value: unknown): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+
+  return new Error(String(value));
 }
