@@ -13,3 +13,15 @@ export {
   roundAt,
   roundScheduledTime,
 } from './rounds.js';
+
+export {
+  decompressSignature,
+  parseCompressedSignature,
+} from './signature.js';
+
+export type {
+  CompressedSignature,
+  Hex,
+  QuicknetBeacon,
+  UncompressedSignature,
+} from './types.js';
