@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.36;
 
-import {IDrandOracleQuicknet} from "./IDrandOracleQuicknet.sol";
+import {IDrandOracleQuicknet} from "./interfaces/IDrandOracleQuicknet.sol";
 
 /// @title DrandQuicknetBeaconRegistry
 /// @notice Permissionless cache of cryptographically verified drand
