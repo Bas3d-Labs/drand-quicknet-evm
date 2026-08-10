@@ -28,13 +28,13 @@ drand provides a distributed randomness beacon with a deterministic publication 
 
 This project provides the EVM-side infrastructure needed to safely use those beacons:
 
-- verify drand Quicknet signatures on-chain
-- normalize each beacon to one canonical randomness value
-- cache verified randomness by exact Quicknet round
-- let any account submit valid beacons
-- fetch and submit beacons using a reference TypeScript relayer
-- support future-round waiting and bounded drand API retries
-- provide a path toward permissionless demand-driven relaying across applications and chains
+* verify drand Quicknet signatures on-chain
+* normalize each beacon to one canonical randomness value
+* cache verified randomness by exact Quicknet round
+* let any account submit valid beacons
+* fetch and submit beacons using a reference TypeScript relayer
+* support future-round waiting and bounded drand API retries
+* provide a path toward permissionless demand-driven relaying across applications and chains
 
 ## Security model
 
@@ -44,14 +44,12 @@ A consumer must never choose randomness based on which beacons happen to be avai
 
 Unsafe patterns include:
 
-```text
-latest stored round
-first available round
-latest available beacon
-R, otherwise R + 1
-retry with another round
-pick among several stored rounds
-```
+* latest stored round
+* first available round
+* latest available beacon
+* R, otherwise R + 1
+* retry with another round
+* pick among several stored rounds
 
 The safe flow is:
 
