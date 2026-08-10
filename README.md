@@ -183,8 +183,8 @@ drand-quicknet-evm/
 ├── docs/
 ├── scripts/
 ├── package.json
-└── README.md
-├── ...
+├── README.md
+└── ...
 ```
 
 ## Components
@@ -240,7 +240,7 @@ It provides:
 * BLS G1 signature decompression
 * typed compressed/uncompressed signatures
 
-The official relayer fetches drand's compressed 48-byte signature and decompresses it off-chain before submission.
+The relayer fetches drand's compressed 48-byte signature and decompresses it off-chain before submission.
 
 Both compressed and uncompressed signatures normalize to the same registry randomness, but submitting the uncompressed representation avoids expensive on-chain point decompression.
 
