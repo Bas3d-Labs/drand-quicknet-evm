@@ -10,5 +10,5 @@ export type UncompressedSignature = Hex & {
 
 export interface QuicknetBeacon {
   round: bigint;
-  signature: Hex;
+  signature: CompressedSignature;
 }
