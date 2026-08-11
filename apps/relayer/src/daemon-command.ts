@@ -69,6 +69,7 @@ export async function runDaemonCommand(
     consumers,
     startBlock: config.startBlock,
     maxBlockRange: config.maxBlockRange,
+    finality: config.finality,
     pollIntervalMs: config.pollIntervalMs,
     ...(options.signal !== undefined
       ? { signal: options.signal }

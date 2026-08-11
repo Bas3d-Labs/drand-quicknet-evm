@@ -1,0 +1,756 @@
+# Quicknet Relayer
+
+Permissionless relayer for importing requested [drand Quicknet](https://drand.love/) beacons into `DrandQuicknetBeaconRegistry`.
+
+The relayer watches configured consumer contracts for:
+
+```solidity
+event QuicknetRandomnessRequested(
+    uint64 indexed round
+);
+```
+
+When a consumer requests a Quicknet round, the relayer:
+
+1. Discovers the request on-chain.
+2. Fetches the exact requested round from drand.
+3. Decompresses and validates the beacon off-chain.
+4. Checks whether that round is already stored.
+5. Simulates the registry submission.
+6. Submits the beacon if necessary.
+
+The relayer is deliberately not trusted by the protocol. It is only a courier for publicly verifiable randomness.
+
+## Architecture
+
+```text
+Consumer
+   │
+   │ QuicknetRandomnessRequested(round)
+   ▼
+Relayer
+   │
+   ├── discover request
+   ├── fetch exact drand round
+   ├── validate/decompress locally
+   ├── simulate registry submission
+   │
+   ▼
+DrandQuicknetBeaconRegistry
+   │
+   │ verifyNormalized(round, signature)
+   ▼
+DrandOracleQuicknetV1
+   │
+   ▼
+stored normalized beacon
+```
+
+The relayer never chooses the randomness round.
+
+The consumer must commit to an exact future Quicknet round before that round becomes knowable. Once committed, only that round may be used.
+
+There is no:
+
+- "latest available" randomness
+- fallback round
+- reroll
+- relayer-selected round
+- first-relayer-wins randomness choice
+
+
+
+## Commands
+
+The relayer provides three operational modes.
+
+### `daemon`
+
+Continuously discovers consumer requests and imports their requested beacons.
+
+```sh
+pnpm --filter @based-labs/drand-quicknet-relayer \
+  start daemon \
+  --network robinhood-testnet
+```
+
+### `import`
+
+Imports a specific Quicknet round immediately.
+
+Use this for manual operation or diagnostics when the round is already available.
+
+### `import-when-available`
+
+Waits for a future exact Quicknet round and imports it when it becomes available.
+
+This is useful for manual testing of future rounds.
+
+None of these commands allows round substitution.
+
+## Security model
+
+The relayer is permissionless. Correctness is enforced on-chain by `DrandQuicknetBeaconRegistry` and the configured drand verifier.
+
+A malicious relayer cannot:
+
+- forge a valid drand beacon
+- substitute another round for the requested round
+- alter stored randomness
+- overwrite an already stored beacon
+- choose between multiple valid outcomes
+
+A malicious relayer may:
+
+- refuse to relay
+- delay a relay
+- submit a beacon that is already stored
+- attempt to submit invalid data
+
+Multiple independent relayers may safely operate at the same time.
+
+Beacon storage is idempotent.
+
+## Exact-round processing
+
+Requests are always handled using the exact round emitted by the consumer:
+
+```text
+request round R
+      │
+      ▼
+fetch drand round R
+      │
+      ▼
+store round R
+```
+
+The relayer never searches for another usable round if `R` is unavailable.
+
+If drand round `R` cannot currently be fetched, that is a liveness condition. It does not authorize a replacement round.
+
+## Finality and reorg handling
+
+The daemon separates **low-latency discovery** from **durable checkpointing**.
+
+On Robinhood Chain, the configured durable boundary is the RPC `safe` head.
+
+```text
+                         latest
+                           │
+                           │ soft scan
+                           ▼
+                  immediate discovery
+                  immediate importing
+                           │
+                           │
+                    memory-only cursor
+
+
+                          safe
+                           │
+                           │ durable scan
+                           ▼
+                   canonical replay
+                           │
+                           ▼
+                  persisted checkpoint
+```
+
+### Soft scan
+
+The daemon scans up to `latest` so new requests can be processed immediately.
+
+Soft progress is stored only in memory.
+
+This avoids forcing users to wait for a request block to reach the durable finality boundary before its beacon can be imported.
+
+### Durable scan
+
+The daemon separately scans up to the configured durable head.
+
+Only successfully processed durable ranges are written to the checkpoint file.
+
+For Robinhood Testnet:
+
+```ts
+finality: {
+  type: 'safe',
+}
+```
+
+is configured statically as network security policy.
+
+Finality is not operator-configurable through an environment variable.
+
+### Restart behavior
+
+Because the soft cursor is intentionally memory-only, restarting the daemon causes the non-durable region to be scanned again.
+
+This is safe because beacon imports are idempotent.
+
+For example:
+
+```text
+request R discovered at latest
+        │
+        ▼
+beacon R imported
+        │
+        ▼
+daemon restarts before request is safe
+        │
+        ▼
+request R discovered again
+        │
+        ▼
+registry already contains R
+        │
+        ▼
+no replacement randomness
+no duplicate state change
+```
+
+### Reorg guarantee
+
+The current design does not attempt immediate detection of every soft-chain reorg.
+
+Instead, it guarantees eventual reconciliation against the durable chain.
+
+A reorg of non-durable history may temporarily delay discovery of a replacement request, but a healthy daemon will eventually discover the canonical request when the durable scanner reaches it.
+
+In other words: `latest` is safe enough to act on, but not safe enough to forget.
+
+Future versions may add block-hash anchoring to detect soft reorgs earlier. The current checkpoint model does not depend on that optimization.
+
+## Checkpoints
+
+Checkpoints are maintained per consumer.
+
+A checkpoint stores:
+
+```text
+nextBlock
+```
+
+where `nextBlock` means:
+
+> the first durable block that has not yet been successfully processed.
+
+Example:
+
+```json
+{
+  "version": 1,
+  "chainId": 46630,
+  "registry": "0x37362343d9eE1EfCC9293C611FA10A994C02f75F",
+  "consumers": {
+    "0x8ceb97CA6550b750185497dF7b1148384c619372": {
+      "nextBlock": "99706403"
+    }
+  }
+}
+```
+
+If the durable head is:
+
+```text
+safe = 99706402
+```
+
+then:
+
+```text
+nextBlock = 99706403
+```
+
+means the relayer has durably processed everything through the current safe head.
+
+### Checkpoint safety
+
+The daemon:
+
+- writes progress only after successful durable processing
+- uses atomic file replacement
+- binds the checkpoint to the configured chain and registry
+- validates consumer addresses and stored values when loading
+- rejects duplicate normalized consumer addresses
+- never persists the soft scan cursor
+
+If the process crashes before a durable checkpoint write, that range is replayed after restart.
+
+### Older checkpoint files
+
+Checkpoint files created by versions of the relayer that checkpointed `latest` must not automatically be treated as durable checkpoints.
+
+Do not silently reinterpret an old latest-head checkpoint as a safe-head checkpoint.
+
+## Consumer interface
+
+Consumers expose the registry they trust:
+
+```solidity
+function quicknetBeaconRegistry()
+    external
+    view
+    returns (address);
+```
+
+and emit:
+
+```solidity
+event QuicknetRandomnessRequested(
+    uint64 indexed round
+);
+```
+
+The relayer validates configured consumers before starting.
+
+Each configured consumer must:
+
+1. contain deployed bytecode
+2. implement `quicknetBeaconRegistry()`
+3. point to the configured registry
+
+The request event should only be emitted after the consumer has irreversibly committed all outcome-sensitive inputs and the exact requested round.
+
+Emitting the event does not itself grant authority to:
+
+- settle a draw
+- choose an outcome
+- refund a user
+- invoke a callback
+- change the requested round
+
+Those semantics belong to the consumer protocol.
+
+---
+
+## Quicknet
+
+The current deployment uses drand Quicknet.
+
+Quicknet parameters:
+
+```text
+genesis timestamp: 1692803367
+period:            3 seconds
+```
+
+Round scheduling is:
+
+```text
+roundAt(timestamp) = floor((timestamp - genesis) / 3) + 1
+```
+
+Consumers should choose a sufficiently future round so the commitment is fixed before the beacon becomes knowable.
+
+The relayer does not enforce application-specific commitment timing. That is a consumer security responsibility.
+
+## Running the daemon
+
+Run commands from the repository root.
+
+Install dependencies:
+
+```sh
+pnpm install
+```
+
+Build the workspace:
+
+```sh
+pnpm build
+```
+
+Or build only the relayer:
+
+```sh
+pnpm --filter @based-labs/drand-quicknet-relayer build
+```
+
+Configure the relayer using the root `.env`.
+
+The daemon-specific configuration includes:
+
+```text
+QUICKNET_CONSUMERS
+QUICKNET_START_BLOCK
+QUICKNET_CHECKPOINT_FILE
+QUICKNET_MAX_BLOCK_RANGE
+QUICKNET_POLL_INTERVAL_MS
+```
+
+RPC/account configuration is supplied by the selected network configuration.
+
+Example consumer configuration:
+
+```sh
+QUICKNET_CONSUMERS=0x1111111111111111111111111111111111111111
+QUICKNET_START_BLOCK=123456
+QUICKNET_CHECKPOINT_FILE=./state/checkpoint.json
+QUICKNET_MAX_BLOCK_RANGE=2000
+QUICKNET_POLL_INTERVAL_MS=1000
+```
+
+Then run:
+
+```sh
+pnpm --filter @based-labs/drand-quicknet-relayer \
+  start daemon \
+  --network robinhood-testnet
+```
+
+The daemon exits cleanly on `SIGINT` or `SIGTERM`.
+
+---
+
+## Choosing `QUICKNET_START_BLOCK`
+
+For a new consumer, set `QUICKNET_START_BLOCK` to the first block from which request events may exist.
+
+For a newly deployed consumer, this can normally be its deployment block.
+
+Do not set the start block later than requests that still need to be processed.
+
+Once a durable checkpoint exists for the consumer, the checkpoint takes precedence over the configured initial start block.
+
+---
+
+## Request processing
+
+For each scan range, the relayer:
+
+```text
+scan events
+    │
+    ▼
+collect requested rounds
+    │
+    ▼
+deduplicate rounds
+    │
+    ▼
+for each exact round
+    │
+    ├── already stored ───────────► success
+    │
+    └── missing
+          │
+          ▼
+      fetch drand
+          │
+          ▼
+      validate/decompress
+          │
+          ▼
+      simulate transaction
+          │
+          ▼
+      broadcast
+```
+
+Requests are processed sequentially.
+
+If processing a durable range fails, the durable checkpoint is not advanced past that range.
+
+## Drand endpoint failover
+
+The Quicknet package supports multiple public drand endpoints:
+
+```text
+https://api.drand.sh/v2
+https://api2.drand.sh/v2
+https://api3.drand.sh/v2
+```
+
+Failover still fetches the exact requested round.
+
+Changing endpoints never permits changing rounds.
+
+## Signature handling
+
+Quicknet BLS signatures may be represented in compressed or uncompressed form.
+
+The relayer prefers off-chain decompression and submits the uncompressed point to the verifier because this is substantially cheaper on the target EVM environment than performing decompression on-chain.
+
+Malformed points are rejected locally before broadcast when possible.
+
+The relayer also simulates the registry transaction before submitting it.
+
+This protects the relayer account from wasting gas on obviously reverting transactions.
+
+## Transaction retry policy
+
+Do not blindly retry transactions after an ambiguous broadcast result.
+
+If a broadcast times out or the RPC response is uncertain, first determine whether the transaction was accepted or whether the beacon is already stored.
+
+Because the registry is permissionless and idempotent, another relayer may also import the same beacon while recovery is occurring.
+
+Always re-check chain state before submitting another transaction.
+
+## Testing
+
+Run the relayer test suite:
+
+```sh
+pnpm --filter @based-labs/drand-quicknet-relayer test
+```
+
+Run TypeScript checks:
+
+```sh
+pnpm --filter @based-labs/drand-quicknet-relayer typecheck
+```
+
+Build:
+
+```sh
+pnpm --filter @based-labs/drand-quicknet-relayer build
+```
+
+Before release, all three should pass:
+
+```sh
+pnpm --filter @based-labs/drand-quicknet-relayer test
+pnpm --filter @based-labs/drand-quicknet-relayer typecheck
+pnpm --filter @based-labs/drand-quicknet-relayer build
+```
+
+---
+
+## Live finality smoke test
+
+The Robinhood Testnet daemon has been tested against the network's `latest`, `safe`, and `finalized` RPC heads.
+
+Observed behavior confirmed:
+
+```text
+finalized <= safe <= latest
+```
+
+and both `safe` and `finalized` advance over time.
+
+The finality-aware smoke test exercised the following sequence:
+
+```text
+request emitted above safe
+        │
+        ▼
+soft scanner discovered request
+        │
+        ▼
+beacon imported immediately
+        │
+        ▼
+no unsafe checkpoint written
+        │
+        ▼
+daemon restarted
+        │
+        ▼
+non-durable history replayed
+        │
+        ▼
+no duplicate import transaction
+        │
+        ▼
+request block reached safe
+        │
+        ▼
+durable scanner replayed request
+        │
+        ▼
+checkpoint advanced past request
+```
+
+One test run produced:
+
+```text
+target round:         31226127
+request block:        99705911
+safe after request:   99702754
+safe final:           99706402
+checkpoint nextBlock: 99706403
+```
+
+The beacon was imported while:
+
+```text
+request block > safe
+```
+
+and the final checkpoint satisfied:
+
+```text
+checkpoint nextBlock > request block
+checkpoint nextBlock = safe + 1
+```
+
+This validated both low-latency soft processing and durable canonical replay.
+
+## Finality policies
+
+The relayer supports several finality policy primitives:
+
+```ts
+type FinalityPolicy =
+  | {
+      type: 'safe';
+    }
+  | {
+      type: 'finalized';
+    }
+  | {
+      type: 'confirmations';
+      confirmations: bigint;
+    };
+```
+
+The appropriate policy is selected as part of the supported network configuration.
+
+It should not be selected casually by an operator because it is part of the relayer's durability assumptions.
+
+### `safe`
+
+Uses the RPC `safe` block tag.
+
+### `finalized`
+
+Uses the RPC `finalized` block tag.
+
+### `confirmations`
+
+Uses a block-depth policy relative to `latest`.
+
+This exists for chains where meaningful `safe` or `finalized` tags are unavailable.
+
+A supported network should only use a finality mechanism whose semantics have been verified for that network and RPC infrastructure.
+
+---
+
+## Registry verification
+
+Before starting, the relayer verifies the configured registry deployment.
+
+The deployment manifest includes:
+
+```ts
+interface RegistryDeployment {
+  chainId: number;
+  address: Address;
+  runtimeCodehash: Hex;
+}
+```
+
+The relayer checks:
+
+- connected chain ID;
+- configured registry address;
+- runtime bytecode hash.
+
+This prevents silently operating against the wrong contract deployment.
+
+The deployment manifest is the source of truth for supported registry deployments.
+
+---
+
+## Verifier trust
+
+The registry relies on an immutable external Quicknet verifier.
+
+The verifier deployment is pinned by runtime code hash.
+
+A runtime code hash proves the runtime bytecode at that address matches the expected deployment. It should not be treated as sufficient protection for a mutable proxy or a contract whose critical behavior can be changed through storage.
+
+Accepted verifier deployments should therefore be non-upgradeable and should not expose mutable security-critical configuration.
+
+## Multiple relayers
+
+Running more than one relayer is encouraged for liveness.
+
+Relayers do not require coordination.
+
+Example:
+
+```text
+relayer A ──┐
+            ├──► same permissionless registry
+relayer B ──┤
+            │
+relayer C ──┘
+```
+
+If two relayers observe the same request:
+
+1. both may fetch the same beacon
+2. one may store it first
+3. the other observes the beacon is already stored
+4. both converge on the same registry state
+
+No relayer leader election is required.
+
+For a production deployment, each relayer process should maintain its own checkpoint state.
+
+Do not share one checkpoint file between concurrently running processes.
+
+## Operational assumptions
+
+The file checkpoint store assumes a single process owns its checkpoint file. It provides atomic replacement but is not intended to be a distributed database.
+
+Production operators should also monitor:
+
+- RPC availability
+- drand endpoint availability
+- relayer account balance
+- transaction failures
+- checkpoint advancement
+- distance between `latest` and the durable head
+- requests that remain unprocessed
+- daemon process health
+
+## Liveness vs fairness
+
+The relayer solves a liveness problem: get the already-selected public beacon onto the destination chain.
+
+It does not solve the consumer's fairness problem by itself.
+
+Consumer protocols must independently guarantee that:
+
+- all outcome-sensitive inputs are committed before randomness is knowable
+- the exact target round is fixed in advance
+- settlement cannot substitute another round
+- failure recovery cannot create a reroll
+- refunds or termination rules cannot be selectively abused
+
+The relayer should remain a narrow infrastructure component rather than becoming an application-level settlement authority.
+
+## Application finality is separate
+
+Relayer checkpoint finality and application commitment finality are different concerns.
+
+The relayer may safely act on a request observed at `latest` because importing a valid public drand beacon is harmless even if the request is later orphaned.
+
+That does **not** automatically mean an application commitment observed at `latest` is sufficiently final for fairness.
+
+For applications where a commitment must be L1-backed before the target beacon becomes knowable, the consumer must choose a target round far enough in the future to satisfy that requirement.
+
+A three-second Quicknet period should not be confused with a three-second commitment-finality guarantee.
+
+## Design principles
+
+The relayer follows a few intentionally strict rules:
+
+1. **Exact rounds only.**
+2. **No randomness substitution.**
+3. **No relayer permissioning required by the protocol.**
+4. **Act quickly on soft history.**
+5. **Persist only durable history.**
+6. **Replay rather than guess after failure.**
+7. **Make repeated imports harmless.**
+8. **Verify configured contracts before operating.**
+9. **Simulate before spending gas.**
+10. **Keep application settlement outside the relayer.**
+
+The result is a small, permissionless service whose failure mode is primarily delayed liveness rather than biased randomness.

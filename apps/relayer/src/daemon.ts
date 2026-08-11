@@ -1,5 +1,6 @@
 import type {
   Account,
+  Address,
   PublicClient,
   WalletClient,
 } from 'viem';
@@ -21,6 +22,14 @@ import {
   type RunDaemonCycleResult,
 } from './daemon-cycle.js';
 
+import type {
+  SoftScanCursor,
+} from './daemon-iteration.js';
+
+import type {
+  FinalityPolicy,
+} from './finality-policy.js';
+
 export interface RunDaemonOptions {
   publicClient: PublicClient;
   walletClient: WalletClient;
@@ -30,6 +39,7 @@ export interface RunDaemonOptions {
   consumers: readonly ValidatedQuicknetConsumer[];
   startBlock: bigint;
   maxBlockRange: bigint;
+  finality: FinalityPolicy;
   pollIntervalMs: number;
   signal?: AbortSignal;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
@@ -47,6 +57,7 @@ export async function runDaemon(
   }
 
   const sleep = options.sleep ?? sleepUntilTimeoutOrAbort;
+  const softCursors = new Map<Address, SoftScanCursor>();
 
   while (!options.signal?.aborted) {
     const result = await runDaemonCycle({
@@ -58,6 +69,8 @@ export async function runDaemon(
       consumers: options.consumers,
       startBlock: options.startBlock,
       maxBlockRange: options.maxBlockRange,
+      finality: options.finality,
+      softCursors,
     });
 
     if (options.onCycle !== undefined) {

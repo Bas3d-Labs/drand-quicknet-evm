@@ -1,5 +1,6 @@
 import type {
   Account,
+  Address,
   PublicClient,
   WalletClient,
 } from 'viem';
@@ -19,7 +20,12 @@ import type {
 import {
   runDaemonIteration,
   type RunDaemonIterationResult,
+  type SoftScanCursor,
 } from './daemon-iteration.js';
+
+import type {
+  FinalityPolicy,
+} from './finality-policy.js';
 
 export interface RunDaemonCycleOptions {
   publicClient: PublicClient;
@@ -30,6 +36,8 @@ export interface RunDaemonCycleOptions {
   consumers: readonly ValidatedQuicknetConsumer[];
   startBlock: bigint;
   maxBlockRange: bigint;
+  finality: FinalityPolicy;
+  softCursors: Map<Address, SoftScanCursor>;
 }
 
 export type DaemonConsumerCycleResult =
@@ -54,6 +62,7 @@ export async function runDaemonCycle(
   const consumers: DaemonConsumerCycleResult[] = [];
   for (const consumer of options.consumers) {
     try {
+      const softCursor = options.softCursors.get(consumer.address);
       const iteration = await runDaemonIteration({
         publicClient: options.publicClient,
         walletClient: options.walletClient,
@@ -63,7 +72,15 @@ export async function runDaemonCycle(
         consumer: consumer.address,
         startBlock: options.startBlock,
         maxBlockRange: options.maxBlockRange,
+        finality: options.finality,
+        ...(softCursor === undefined
+          ? {}
+          : {
+              softCursor,
+            }),
       });
+
+      options.softCursors.set(consumer.address, iteration.softCursor);
 
       consumers.push({
         status: 'success',

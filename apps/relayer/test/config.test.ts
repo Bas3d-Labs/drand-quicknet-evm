@@ -127,10 +127,8 @@ describe('loadRelayerConfig', () => {
   it('loads a valid relayer configuration', async () => {
     const config =
       await loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment(),
+        network: 'robinhood-testnet',
+        env: createEnvironment(),
       });
 
     expect(
@@ -156,15 +154,55 @@ describe('loadRelayerConfig', () => {
     ).toBe(
       REGISTRY_DEPLOYMENT,
     );
+    
+    expect(
+      config.finality,
+    ).toEqual({
+      type: 'safe',
+    });
+  });
+
+  it('configures Robinhood Testnet with safe finality', async () => {
+    const config =
+      await loadRelayerConfig({
+        network: 'robinhood-testnet',
+        env: createEnvironment(),
+      });
+
+    expect(
+      config.chain,
+    ).toBe(
+      robinhoodTestnet,
+    );
+
+    expect(
+      config.finality,
+    ).toEqual({
+      type: 'safe',
+    });
+  });
+
+  it('does not allow operator configuration to override network finality', async () => {
+    const config =
+      await loadRelayerConfig({
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          QUICKNET_FINALITY: 'finalized',
+        }),
+      });
+
+    expect(
+      config.finality,
+    ).toEqual({
+      type: 'safe',
+    });
   });
 
   it('creates the account from PRIVATE_KEY', async () => {
     const config =
       await loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment(),
+        network: 'robinhood-testnet',
+        env: createEnvironment(),
       });
 
     const expectedAccount =
@@ -187,10 +225,8 @@ describe('loadRelayerConfig', () => {
 
   it('loads the deployment manifest for the selected network', async () => {
     await loadRelayerConfig({
-      network:
-        'robinhood-testnet',
-      env:
-        createEnvironment(),
+      network: 'robinhood-testnet',
+      env: createEnvironment(),
     });
 
     expect(
@@ -223,10 +259,8 @@ describe('loadRelayerConfig', () => {
 
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment(),
+        network: 'robinhood-testnet',
+        env: createEnvironment(),
       }),
     ).rejects.toBe(
       error,
@@ -236,13 +270,10 @@ describe('loadRelayerConfig', () => {
   it('requires the network RPC URL', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL:
-              undefined,
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          ROBINHOOD_TESTNET_RPC_URL: undefined,
+        }),
       }),
     ).rejects.toThrow(
       'Missing required environment variable: ROBINHOOD_TESTNET_RPC_URL.'
@@ -257,13 +288,10 @@ describe('loadRelayerConfig', () => {
   it('rejects an empty RPC URL', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL:
-              '',
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          ROBINHOOD_TESTNET_RPC_URL: '',
+        }),
       }),
     ).rejects.toThrow(
       'Missing required environment variable: ROBINHOOD_TESTNET_RPC_URL.'
@@ -273,13 +301,10 @@ describe('loadRelayerConfig', () => {
   it('rejects a whitespace-only RPC URL', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL:
-              '   ',
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          ROBINHOOD_TESTNET_RPC_URL: '   ',
+        }),
       }),
     ).rejects.toThrow(
       'Missing required environment variable: ROBINHOOD_TESTNET_RPC_URL.'
@@ -289,13 +314,10 @@ describe('loadRelayerConfig', () => {
   it('trims the RPC URL', async () => {
     const config =
       await loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL:
-              `  ${RPC_URL}  `,
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          ROBINHOOD_TESTNET_RPC_URL: `  ${RPC_URL}  `,
+        }),
       });
 
     expect(
@@ -308,13 +330,10 @@ describe('loadRelayerConfig', () => {
   it('accepts an HTTPS RPC URL', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL:
-              'https://rpc.example.com',
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          ROBINHOOD_TESTNET_RPC_URL: 'https://rpc.example.com',
+        }),
       }),
     ).resolves.toBeDefined();
   });
@@ -322,13 +341,10 @@ describe('loadRelayerConfig', () => {
   it('accepts an HTTP RPC URL', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL:
-              'http://localhost:8545',
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          ROBINHOOD_TESTNET_RPC_URL: 'http://localhost:8545',
+        }),
       }),
     ).resolves.toBeDefined();
   });
@@ -336,13 +352,10 @@ describe('loadRelayerConfig', () => {
   it('rejects an invalid RPC URL', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL:
-              'not-a-url',
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          ROBINHOOD_TESTNET_RPC_URL: 'not-a-url',
+        }),
       }),
     ).rejects.toThrow(
       'Invalid RPC URL.',
@@ -357,13 +370,10 @@ describe('loadRelayerConfig', () => {
   it('rejects an unsupported RPC protocol', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL:
-              'ws://rpc.example.com',
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          ROBINHOOD_TESTNET_RPC_URL: 'ws://rpc.example.com',
+        }),
       }),
     ).rejects.toThrow(
       'Unsupported RPC URL protocol: ws:.',
@@ -378,13 +388,10 @@ describe('loadRelayerConfig', () => {
   it('requires PRIVATE_KEY', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            PRIVATE_KEY:
-              undefined,
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          PRIVATE_KEY: undefined,
+        }),
       }),
     ).rejects.toThrow(
       'Missing required environment variable: PRIVATE_KEY.'
@@ -399,12 +406,10 @@ describe('loadRelayerConfig', () => {
   it('rejects an empty PRIVATE_KEY', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            PRIVATE_KEY: '',
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          PRIVATE_KEY: '',
+        }),
       }),
     ).rejects.toThrow(
       'Missing required environment variable: PRIVATE_KEY.'
@@ -414,13 +419,10 @@ describe('loadRelayerConfig', () => {
   it('rejects a private key without a 0x prefix', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            PRIVATE_KEY:
-              '11'.repeat(32),
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          PRIVATE_KEY: '11'.repeat(32),
+        }),
       }),
     ).rejects.toThrow(
       'PRIVATE_KEY must be a 32-byte hex value.',
@@ -435,13 +437,10 @@ describe('loadRelayerConfig', () => {
   it('rejects a private key shorter than 32 bytes', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            PRIVATE_KEY:
-              `0x${'11'.repeat(31)}`,
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          PRIVATE_KEY: `0x${'11'.repeat(31)}`,
+        }),
       }),
     ).rejects.toThrow(
       'PRIVATE_KEY must be a 32-byte hex value.',
@@ -451,13 +450,10 @@ describe('loadRelayerConfig', () => {
   it('rejects a private key longer than 32 bytes', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            PRIVATE_KEY:
-              `0x${'11'.repeat(33)}`,
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          PRIVATE_KEY: `0x${'11'.repeat(33)}`,
+        }),
       }),
     ).rejects.toThrow(
       'PRIVATE_KEY must be a 32-byte hex value.',
@@ -467,13 +463,10 @@ describe('loadRelayerConfig', () => {
   it('rejects non-hex characters in PRIVATE_KEY', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            PRIVATE_KEY:
-              `0x${'gg'.repeat(32)}`,
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          PRIVATE_KEY: `0x${'gg'.repeat(32)}`,
+        }),
       }),
     ).rejects.toThrow(
       'PRIVATE_KEY must be a 32-byte hex value.',
@@ -483,13 +476,10 @@ describe('loadRelayerConfig', () => {
   it('trims PRIVATE_KEY before parsing it', async () => {
     const config =
       await loadRelayerConfig({
-        network:
-          'robinhood-testnet',
-        env:
-          createEnvironment({
-            PRIVATE_KEY:
-              `  ${PRIVATE_KEY}  `,
-          }),
+        network: 'robinhood-testnet',
+        env: createEnvironment({
+          PRIVATE_KEY: `  ${PRIVATE_KEY}  `,
+        }),
       });
 
     expect(
@@ -504,8 +494,7 @@ describe('loadRelayerConfig', () => {
   it('validates operator configuration before loading the deployment', async () => {
     await expect(
       loadRelayerConfig({
-        network:
-          'robinhood-testnet',
+        network: 'robinhood-testnet',
         env: {},
       }),
     ).rejects.toThrow();

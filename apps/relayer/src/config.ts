@@ -6,17 +6,18 @@ import type {
 import { privateKeyToAccount } from 'viem/accounts';
 import { robinhoodTestnet } from 'viem/chains';
 import { loadRegistryDeployment } from './deployment.js';
+import type { FinalityPolicy } from './finality-policy.js';
 
 export const RELAYER_NETWORKS = [
   'robinhood-testnet',
 ] as const;
-
 export type RelayerNetwork = (typeof RELAYER_NETWORKS)[number];
 
 interface NetworkConfig {
   chain: Chain;
   rpcUrlEnv: string;
   deploymentManifestUrl: URL;
+  finality: FinalityPolicy;
 }
 
 const NETWORK_CONFIGS: Record<
@@ -30,8 +31,11 @@ const NETWORK_CONFIGS: Record<
       '../../../deployments/robinhood-testnet.json',
       import.meta.url,
     ),
+    finality: {
+      type: 'safe',
+    },
   },
-};
+} satisfies Record<RelayerNetwork, NetworkConfig>;
 
 export interface RelayerConfig {
   network: RelayerNetwork;
@@ -39,6 +43,7 @@ export interface RelayerConfig {
   rpcUrl: string;
   account: ReturnType<typeof privateKeyToAccount>;
   deployment: RegistryDeployment;
+  finality: FinalityPolicy;
 }
 
 export interface LoadRelayerConfigOptions {
@@ -81,6 +86,7 @@ export async function loadRelayerConfig(
     rpcUrl,
     account,
     deployment,
+    finality: networkConfig.finality,
   };
 }
 

@@ -12,18 +12,19 @@ export interface ScanQuicknetRequestOptions {
   publicClient: PublicClient;
   consumers: readonly Address[];
   nextBlock: bigint;
+  throughBlock: bigint;
   maxBlockRange: bigint;
 }
 
 export type ScanQuicknetRequestsResult =
   | {
       status: 'caught-up';
-      headBlock: bigint;
+      throughBlock: bigint;
       nextBlock: bigint;
     }
   | {
       status: 'scanned';
-      headBlock: bigint;
+      throughBlock: bigint;
       fromBlock: bigint;
       toBlock: bigint;
       nextBlock: bigint;
@@ -37,23 +38,26 @@ export async function scanQuicknetRequests(
     throw new Error('nextBlock must not be negative.');
   }
 
+  if (options.throughBlock < 0n) {
+    throw new Error('throughBlock must not be negative.');
+  }
+
   if (options.maxBlockRange <= 0n) {
     throw new Error('maxBlockRange must be greater than zero.');
   }
 
-  const headBlock = await options.publicClient.getBlockNumber();
-  if (options.nextBlock > headBlock) {
+  if (options.nextBlock > options.throughBlock) {
     return {
       status: 'caught-up',
-      headBlock,
+      throughBlock: options.throughBlock,
       nextBlock: options.nextBlock,
     };
   }
 
   const maximumToBlock = options.nextBlock + options.maxBlockRange - 1n;
-  const toBlock = maximumToBlock < headBlock
+  const toBlock = maximumToBlock < options.throughBlock
     ? maximumToBlock
-    : headBlock;
+    : options.throughBlock;
 
   const requests = await getQuicknetRandomnessRequests({
     publicClient: options.publicClient,
@@ -64,7 +68,7 @@ export async function scanQuicknetRequests(
 
   return {
     status: 'scanned',
-    headBlock,
+    throughBlock: options.throughBlock,
     fromBlock: options.nextBlock,
     toBlock,
     nextBlock: toBlock + 1n,

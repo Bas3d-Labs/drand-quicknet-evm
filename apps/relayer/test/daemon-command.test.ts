@@ -121,6 +121,9 @@ const DAEMON_CONFIG: DaemonConfig = {
   rpcUrl: 'https://rpc.example.test',
   account: ACCOUNT,
   deployment: DEPLOYMENT,
+  finality: {
+    type: 'safe',
+  },
   consumers: [
     CONSUMER_A,
     CONSUMER_B,
@@ -348,6 +351,9 @@ describe('runDaemonCommand', () => {
       consumers: VALIDATED_CONSUMERS,
       startBlock: 123_456n,
       maxBlockRange: 2_000n,
+      finality: {
+        type: 'safe',
+      },
       pollIntervalMs: 1_000,
     });
   });
@@ -377,6 +383,9 @@ describe('runDaemonCommand', () => {
       startBlock: 123_456n,
       maxBlockRange: 2_000n,
       pollIntervalMs: 1_000,
+      finality: {
+        type: 'safe',
+      },
       signal: controller.signal,
     });
   });
