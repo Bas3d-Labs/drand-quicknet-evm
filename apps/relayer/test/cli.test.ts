@@ -1,407 +1,918 @@
 import {
+  afterEach,
+  beforeEach,
   describe,
   expect,
   it,
+  vi,
 } from 'vitest';
 
+vi.mock(
+  '../src/config.js',
+  () => ({
+    loadRelayerConfig: vi.fn(),
+  }),
+);
+
+vi.mock(
+  '../src/clients.js',
+  () => ({
+    createRelayerClients: vi.fn(),
+  }),
+);
+
+vi.mock(
+  '../src/daemon-command.js',
+  () => ({
+    runDaemonCommand: vi.fn(),
+  }),
+);
+
+vi.mock(
+  '../src/import-round.js',
+  () => ({
+    importQuicknetRound: vi.fn(),
+  }),
+);
+
+vi.mock(
+  '../src/import-round-when-available.js',
+  () => ({
+    importQuicknetRoundWhenAvailable: vi.fn(),
+  }),
+);
+
 import {
-  parseCliArgs,
+  runDaemonCommand,
+} from '../src/daemon-command.js';
+
+import {
+  main,
+  parseCommandArguments,
 } from '../src/cli.js';
 
-const IMPORT_COMMANDS = [
-  'import',
-  'import-when-available',
-] as const;
+const MAX_UINT64 = '18446744073709551615';
+const ABOVE_MAX_UINT64 = '18446744073709551616';
 
-describe('parseCliArgs', () => {
+describe('parseCommandArguments', () => {
   describe('help', () => {
-    it('shows help when no arguments are provided', () => {
+    it('returns help when no command is provided', () => {
       expect(
-        parseCliArgs([]),
+        parseCommandArguments([])
       ).toEqual({
-        kind: 'help',
+        command: 'help',
       });
     });
 
-    it('shows help for --help', () => {
+    it('returns help for --help', () => {
       expect(
-        parseCliArgs([
+        parseCommandArguments([
           '--help',
-        ]),
+        ])
       ).toEqual({
-        kind: 'help',
+        command: 'help',
       });
     });
 
-    it('shows help for -h', () => {
+    it('returns help for -h', () => {
       expect(
-        parseCliArgs([
+        parseCommandArguments([
           '-h',
-        ]),
+        ])
       ).toEqual({
-        kind: 'help',
+        command: 'help',
       });
     });
 
-    it('shows help for the help command', () => {
+    it('returns help for the help command', () => {
       expect(
-        parseCliArgs([
+        parseCommandArguments([
           'help',
-        ]),
+        ])
       ).toEqual({
-        kind: 'help',
-      });
-    });
-
-    for (
-      const command of
-      IMPORT_COMMANDS
-    ) {
-      it(`shows help for ${command} --help`, () => {
-        expect(
-          parseCliArgs([
-            command,
-            '--help',
-          ]),
-        ).toEqual({
-          kind: 'help',
-        });
-      });
-
-      it(`shows help for ${command} -h`, () => {
-        expect(
-          parseCliArgs([
-            command,
-            '-h',
-          ]),
-        ).toEqual({
-          kind: 'help',
-        });
-      });
-    }
-  });
-
-  describe('leading -- separator', () => {
-    it('accepts a leading -- separator', () => {
-      expect(
-        parseCliArgs([
-          '--',
-          'import',
-          '--network',
-          'robinhood-testnet',
-          '--round',
-          '31089008',
-        ]),
-      ).toEqual({
-        kind: 'import',
-        network: 'robinhood-testnet',
-        round: 31_089_008n,
-      });
-    });
-
-    it('accepts a leading -- separator for import-when-available', () => {
-      expect(
-        parseCliArgs([
-          '--',
-          'import-when-available',
-          '--network',
-          'robinhood-testnet',
-          '--round',
-          '31089008',
-        ]),
-      ).toEqual({
-        kind: 'import-when-available',
-        network: 'robinhood-testnet',
-        round: 31_089_008n,
+        command: 'help',
       });
     });
   });
 
   describe('import', () => {
-    it('parses a valid import command', () => {
+    it('parses an import command', () => {
       expect(
-        parseCliArgs([
+        parseCommandArguments([
           'import',
           '--network',
           'robinhood-testnet',
           '--round',
           '31089008',
-        ]),
+        ])
       ).toEqual({
-        kind: 'import',
+        command: 'import',
         network: 'robinhood-testnet',
         round: 31_089_008n,
       });
     });
 
-    it('allows options in either order', () => {
+    it('accepts import options in either order', () => {
       expect(
-        parseCliArgs([
+        parseCommandArguments([
           'import',
           '--round',
           '31089008',
           '--network',
           'robinhood-testnet',
-        ]),
+        ])
       ).toEqual({
-        kind: 'import',
+        command: 'import',
         network: 'robinhood-testnet',
         round: 31_089_008n,
       });
     });
-  });
 
-  describe(
-    'import-when-available',
-    () => {
-      it('parses a valid command', () => {
-        expect(
-          parseCliArgs([
-            'import-when-available',
-            '--network',
-            'robinhood-testnet',
-            '--round',
-            '31089008',
-          ]),
-        ).toEqual({
-          kind: 'import-when-available',
-          network: 'robinhood-testnet',
-          round: 31_089_008n,
-        });
-      });
-
-      it('allows options in either order', () => {
-        expect(
-          parseCliArgs([
-            'import-when-available',
-            '--round',
-            '31089008',
-            '--network',
-            'robinhood-testnet',
-          ]),
-        ).toEqual({
-          kind: 'import-when-available',
-          network: 'robinhood-testnet',
-          round: 31_089_008n,
-        });
-      });
-    },
-  );
-
-  describe('commands', () => {
-    it('rejects an unknown command', () => {
-      expect(() =>
-        parseCliArgs([
-          'something',
-        ]),
-      ).toThrow('Unknown command: something');
-    });
-  });
-
-  describe.each(
-    IMPORT_COMMANDS,
-  )('%s options', (command) => {
-    it('requires --network', () => {
-      expect(() =>
-        parseCliArgs([
-          command,
-          '--round',
-          '31089008',
-        ]),
-      ).toThrow('Missing required option: --network');
-    });
-
-    it('requires --round', () => {
-      expect(() =>
-        parseCliArgs([
-          command,
+    it('accepts leading zeroes in the round', () => {
+      expect(
+        parseCommandArguments([
+          'import',
           '--network',
           'robinhood-testnet',
-        ]),
-      ).toThrow('Missing required option: --round');
+          '--round',
+          '000123',
+        ])
+      ).toEqual({
+        command: 'import',
+        network: 'robinhood-testnet',
+        round: 123n,
+      });
+    });
+
+    it('accepts the maximum uint64 round', () => {
+      expect(
+        parseCommandArguments([
+          'import',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          MAX_UINT64,
+        ])
+      ).toEqual({
+        command: 'import',
+        network: 'robinhood-testnet',
+        round: 18_446_744_073_709_551_615n,
+      });
+    });
+
+    it('rejects a missing network', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--round',
+          '31089008',
+        ])
+      ).toThrow(
+        'Missing required argument: --network.'
+      );
+    });
+
+    it('rejects a missing round', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--network',
+          'robinhood-testnet',
+        ])
+      ).toThrow(
+        'Missing required argument: --round.'
+      );
     });
 
     it('rejects a missing --network value', () => {
       expect(() =>
-        parseCliArgs([
-          command,
+        parseCommandArguments([
+          'import',
           '--network',
-        ]),
-      ).toThrow('Missing value for --network');
+        ])
+      ).toThrow(
+        'Missing value for --network.'
+      );
     });
 
     it('rejects a missing --round value', () => {
       expect(() =>
-        parseCliArgs([
-          command,
+        parseCommandArguments([
+          'import',
           '--network',
           'robinhood-testnet',
           '--round',
-        ]),
-      ).toThrow('Missing value for --round');
+        ])
+      ).toThrow(
+        'Missing value for --round.'
+      );
     });
 
-    it('rejects another option as the --network value', () => {
+    it('rejects duplicate network arguments', () => {
       expect(() =>
-        parseCliArgs([
-          command,
-          '--network',
-          '--round',
-          '31089008',
-        ]),
-      ).toThrow('Missing value for --network');
-    });
-
-    it('rejects another option as the --round value', () => {
-      expect(() =>
-        parseCliArgs([
-          command,
-          '--round',
-          '--network',
-          'robinhood-testnet',
-        ]),
-      ).toThrow('Missing value for --round');
-    });
-
-    it('rejects duplicate --network options', () => {
-      expect(() =>
-        parseCliArgs([
-          command,
+        parseCommandArguments([
+          'import',
           '--network',
           'robinhood-testnet',
           '--network',
           'robinhood-testnet',
           '--round',
           '31089008',
-        ]),
-      ).toThrow('Option --network may only be specified once.');
+        ])
+      ).toThrow(
+        'Duplicate argument: --network.'
+      );
     });
 
-    it('rejects duplicate --round options', () => {
+    it('rejects duplicate round arguments', () => {
       expect(() =>
-        parseCliArgs([
-          command,
+        parseCommandArguments([
+          'import',
           '--network',
           'robinhood-testnet',
           '--round',
           '31089008',
           '--round',
           '31089009',
-        ]),
-      ).toThrow('Option --round may only be specified once.');
+        ])
+      ).toThrow(
+        'Duplicate argument: --round.'
+      );
     });
 
-    it('rejects an unknown option', () => {
+    it('rejects round zero', () => {
       expect(() =>
-        parseCliArgs([
-          command,
+        parseCommandArguments([
+          'import',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          '0',
+        ])
+      ).toThrow(
+        'Round must be greater than zero.'
+      );
+    });
+
+    it('rejects a round larger than uint64', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          ABOVE_MAX_UINT64,
+        ])
+      ).toThrow(
+        'Round must fit in uint64.'
+      );
+    });
+
+    it('rejects an empty round', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          '',
+        ])
+      ).toThrow(
+        'Round must be a positive decimal integer.'
+      );
+    });
+
+    it('rejects a negative round', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          '-1',
+        ])
+      ).toThrow(
+        'Round must be a positive decimal integer.'
+      );
+    });
+
+    it('rejects a hexadecimal round', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          '0x1234',
+        ])
+      ).toThrow(
+        'Round must be a positive decimal integer.'
+      );
+    });
+
+    it('rejects a fractional round', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          '123.5',
+        ])
+      ).toThrow(
+        'Round must be a positive decimal integer.'
+      );
+    });
+
+    it('rejects a non-numeric round', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          '123abc',
+        ])
+      ).toThrow(
+        'Round must be a positive decimal integer.'
+      );
+    });
+
+    it('rejects a round with surrounding whitespace', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          ' 123 ',
+        ])
+      ).toThrow(
+        'Round must be a positive decimal integer.'
+      );
+    });
+
+    it('rejects an unsupported network', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--network',
+          'unsupported-network',
+          '--round',
+          '31089008',
+        ])
+      ).toThrow(
+        'Unsupported network: unsupported-network.'
+      );
+    });
+
+    it('rejects an unknown import argument', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
           '--network',
           'robinhood-testnet',
           '--round',
           '31089008',
           '--unknown',
-        ]),
-      ).toThrow('Unknown option: --unknown');
+        ])
+      ).toThrow(
+        'Unknown import argument: --unknown.'
+      );
     });
+  });
 
-    it('rejects an unsupported network', () => {
-      expect(() =>
-        parseCliArgs([
-          command,
-          '--network',
-          'not-a-network',
-          '--round',
-          '31089008',
-        ]),
-      ).toThrow('Unsupported network: not-a-network.');
-    });
-
-    it('rejects round zero', () => {
-      expect(() =>
-        parseCliArgs([
-          command,
-          '--network',
-          'robinhood-testnet',
-          '--round',
-          '0',
-        ]),
-      ).toThrow('Quicknet round must be greater than zero.');
-    });
-
-    it('rejects a negative round', () => {
-      expect(() =>
-        parseCliArgs([
-          command,
-          '--network',
-          'robinhood-testnet',
-          '--round',
-          '-1',
-        ]),
-      ).toThrow('Invalid Quicknet round: -1');
-    });
-
-    it('rejects a hexadecimal round', () => {
-      expect(() =>
-        parseCliArgs([
-          command,
-          '--network',
-          'robinhood-testnet',
-          '--round',
-          '0x1234',
-        ]),
-      ).toThrow('Invalid Quicknet round: 0x1234');
-    });
-
-    it('rejects a fractional round', () => {
-      expect(() =>
-        parseCliArgs([
-          command,
-          '--network',
-          'robinhood-testnet',
-          '--round',
-          '123.5',
-        ]),
-      ).toThrow('Invalid Quicknet round: 123.5');
-    });
-
-    it('rejects a round containing non-numeric characters', () => {
-      expect(() =>
-        parseCliArgs([
-          command,
-          '--network',
-          'robinhood-testnet',
-          '--round',
-          '31089008abc',
-        ]),
-      ).toThrow('Invalid Quicknet round: 31089008abc');
-    });
-
-    it('accepts the maximum uint64 round', () => {
+  describe('import-when-available', () => {
+    it('parses an import-when-available command', () => {
       expect(
-        parseCliArgs([
-          command,
+        parseCommandArguments([
+          'import-when-available',
           '--network',
           'robinhood-testnet',
           '--round',
-          '18446744073709551615',
-        ]),
+          '31192648',
+        ])
       ).toEqual({
-        kind: command,
+        command: 'import-when-available',
         network: 'robinhood-testnet',
-        round: 18_446_744_073_709_551_615n,
+        round: 31_192_648n,
       });
     });
 
-    it('rejects a round larger than uint64', () => {
+    it('accepts options in either order', () => {
+      expect(
+        parseCommandArguments([
+          'import-when-available',
+          '--round',
+          '31192648',
+          '--network',
+          'robinhood-testnet',
+        ])
+      ).toEqual({
+        command: 'import-when-available',
+        network: 'robinhood-testnet',
+        round: 31_192_648n,
+      });
+    });
+
+    it('rejects a missing network', () => {
       expect(() =>
-        parseCliArgs([
-          command,
+        parseCommandArguments([
+          'import-when-available',
+          '--round',
+          '31192648',
+        ])
+      ).toThrow(
+        'Missing required argument: --network.'
+      );
+    });
+
+    it('rejects a missing round', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import-when-available',
+          '--network',
+          'robinhood-testnet',
+        ])
+      ).toThrow(
+        'Missing required argument: --round.'
+      );
+    });
+
+    it('rejects an unknown import-when-available argument', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import-when-available',
           '--network',
           'robinhood-testnet',
           '--round',
-          '18446744073709551616',
-        ]),
-      ).toThrow('Quicknet round must fit within uint64.');
+          '31192648',
+          '--unknown',
+        ])
+      ).toThrow(
+        'Unknown import-when-available argument: --unknown.'
+      );
     });
+  });
+
+  describe('daemon', () => {
+    it('parses a daemon command', () => {
+      expect(
+        parseCommandArguments([
+          'daemon',
+          '--network',
+          'robinhood-testnet',
+        ])
+      ).toEqual({
+        command: 'daemon',
+        network: 'robinhood-testnet',
+      });
+    });
+
+    it('returns daemon help for --help', () => {
+      expect(
+        parseCommandArguments([
+          'daemon',
+          '--help',
+        ])
+      ).toEqual({
+        command: 'daemon-help',
+      });
+    });
+
+    it('returns daemon help for -h', () => {
+      expect(
+        parseCommandArguments([
+          'daemon',
+          '-h',
+        ])
+      ).toEqual({
+        command: 'daemon-help',
+      });
+    });
+
+    it('rejects a daemon command with no network', () => {
+      expect(() =>
+        parseCommandArguments([
+          'daemon',
+        ])
+      ).toThrow(
+        'Missing required argument: --network.'
+      );
+    });
+
+    it('rejects a missing daemon network value', () => {
+      expect(() =>
+        parseCommandArguments([
+          'daemon',
+          '--network',
+        ])
+      ).toThrow(
+        'Missing value for --network.'
+      );
+    });
+
+    it('rejects duplicate daemon network arguments', () => {
+      expect(() =>
+        parseCommandArguments([
+          'daemon',
+          '--network',
+          'robinhood-testnet',
+          '--network',
+          'robinhood-testnet',
+        ])
+      ).toThrow(
+        'Duplicate argument: --network.'
+      );
+    });
+
+    it('rejects an unsupported daemon network', () => {
+      expect(() =>
+        parseCommandArguments([
+          'daemon',
+          '--network',
+          'unsupported-network',
+        ])
+      ).toThrow(
+        'Unsupported network: unsupported-network.'
+      );
+    });
+
+    it('rejects an unknown daemon argument', () => {
+      expect(() =>
+        parseCommandArguments([
+          'daemon',
+          '--network',
+          'robinhood-testnet',
+          '--unknown',
+        ])
+      ).toThrow(
+        'Unknown daemon argument: --unknown.'
+      );
+    });
+
+    it('rejects --round because the daemon does not select a round', () => {
+      expect(() =>
+        parseCommandArguments([
+          'daemon',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          '31089008',
+        ])
+      ).toThrow(
+        'Unknown daemon argument: --round.'
+      );
+    });
+  });
+
+  it('rejects an unknown command', () => {
+    expect(() =>
+      parseCommandArguments([
+        'unknown',
+      ])
+    ).toThrow(
+      'Unknown command: unknown.'
+    );
+  });
+});
+
+describe('main daemon command', () => {
+  beforeEach(() => {
+    vi.mocked(
+      runDaemonCommand,
+    ).mockReset();
+
+    vi.mocked(
+      runDaemonCommand,
+    ).mockResolvedValue();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('runs the daemon for the selected network', async () => {
+    await main([
+      'daemon',
+      '--network',
+      'robinhood-testnet',
+    ]);
+
+    expect(
+      runDaemonCommand,
+    ).toHaveBeenCalledOnce();
+
+    const call = vi.mocked(runDaemonCommand).mock.calls[0];
+    if (call === undefined) {
+      throw new Error(
+        'Expected runDaemonCommand to be called.'
+      );
+    }
+
+    const options = call[0];
+    expect(options.network).toBe(
+      'robinhood-testnet'
+    );
+
+    expect(options.signal).toBeInstanceOf(
+      AbortSignal
+    );
+
+    expect(options.signal?.aborted).toBe(
+      false
+    );
+  });
+
+  it('accepts the pnpm argument separator', async () => {
+    await main([
+      '--',
+      'daemon',
+      '--network',
+      'robinhood-testnet',
+    ]);
+
+    expect(
+      runDaemonCommand,
+    ).toHaveBeenCalledOnce();
+  });
+
+  it('aborts the daemon on SIGINT', async () => {
+    const listenerCountBefore =
+      process.listenerCount('SIGINT');
+
+    vi.mocked(
+      runDaemonCommand,
+    ).mockImplementation(
+      async (options) => {
+        expect(options.signal?.aborted).toBe(
+          false
+        );
+
+        expect(
+          process.listenerCount('SIGINT')
+        ).toBe(
+          listenerCountBefore + 1
+        );
+
+        const listeners = process.listeners('SIGINT');
+        const listener = listeners[listeners.length - 1];
+        if (listener === undefined) {
+          throw new Error(
+            'Expected SIGINT listener.'
+          );
+        }
+
+        listener('SIGINT');
+
+        expect(options.signal?.aborted).toBe(
+          true
+        );
+      },
+    );
+
+    await main([
+      'daemon',
+      '--network',
+      'robinhood-testnet',
+    ]);
+
+    expect(
+      process.listenerCount('SIGINT')
+    ).toBe(
+      listenerCountBefore
+    );
+  });
+
+  it('aborts the daemon on SIGTERM', async () => {
+    const listenerCountBefore =
+      process.listenerCount('SIGTERM');
+
+    vi.mocked(
+      runDaemonCommand,
+    ).mockImplementation(
+      async (options) => {
+        expect(options.signal?.aborted).toBe(
+          false
+        );
+
+        expect(
+          process.listenerCount('SIGTERM')
+        ).toBe(
+          listenerCountBefore + 1
+        );
+
+        const listeners = process.listeners('SIGTERM');
+        const listener = listeners[listeners.length - 1];
+        if (listener === undefined) {
+          throw new Error(
+            'Expected SIGTERM listener.'
+          );
+        }
+
+        listener('SIGTERM');
+
+        expect(options.signal?.aborted).toBe(
+          true
+        );
+      },
+    );
+
+    await main([
+      'daemon',
+      '--network',
+      'robinhood-testnet',
+    ]);
+
+    expect(
+      process.listenerCount('SIGTERM')
+    ).toBe(
+      listenerCountBefore
+    );
+  });
+
+  it('removes signal listeners after the daemon exits', async () => {
+    const sigintCountBefore =
+      process.listenerCount('SIGINT');
+
+    const sigtermCountBefore =
+      process.listenerCount('SIGTERM');
+
+    await main([
+      'daemon',
+      '--network',
+      'robinhood-testnet',
+    ]);
+
+    expect(
+      process.listenerCount('SIGINT')
+    ).toBe(
+      sigintCountBefore
+    );
+
+    expect(
+      process.listenerCount('SIGTERM')
+    ).toBe(
+      sigtermCountBefore
+    );
+  });
+
+  it('removes signal listeners when the daemon fails', async () => {
+    const failure =
+      new Error('Daemon failed.');
+
+    const sigintCountBefore =
+      process.listenerCount('SIGINT');
+
+    const sigtermCountBefore =
+      process.listenerCount('SIGTERM');
+
+    vi.mocked(
+      runDaemonCommand,
+    ).mockRejectedValue(
+      failure,
+    );
+
+    await expect(
+      main([
+        'daemon',
+        '--network',
+        'robinhood-testnet',
+      ])
+    ).rejects.toBe(
+      failure
+    );
+
+    expect(
+      process.listenerCount('SIGINT')
+    ).toBe(
+      sigintCountBefore
+    );
+
+    expect(
+      process.listenerCount('SIGTERM')
+    ).toBe(
+      sigtermCountBefore
+    );
+  });
+
+  it('propagates daemon failures', async () => {
+    const failure =
+      new Error('Daemon failed.');
+
+    vi.mocked(
+      runDaemonCommand,
+    ).mockRejectedValue(
+      failure,
+    );
+
+    await expect(
+      main([
+        'daemon',
+        '--network',
+        'robinhood-testnet',
+      ])
+    ).rejects.toBe(
+      failure
+    );
+  });
+
+  it('prints daemon help without starting the daemon', async () => {
+    const consoleLog =
+      vi.spyOn(
+        console,
+        'log'
+      ).mockImplementation(
+        () => {}
+      );
+
+    await main([
+      'daemon',
+      '--help',
+    ]);
+
+    expect(
+      runDaemonCommand,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'relayer daemon --network <network>'
+      )
+    );
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'QUICKNET_CONSUMERS'
+      )
+    );
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'QUICKNET_START_BLOCK'
+      )
+    );
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'QUICKNET_CHECKPOINT_FILE'
+      )
+    );
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'QUICKNET_MAX_BLOCK_RANGE'
+      )
+    );
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'QUICKNET_POLL_INTERVAL_MS'
+      )
+    );
+  });
+
+  it('includes the daemon in top-level help', async () => {
+    const consoleLog =
+      vi.spyOn(
+        console,
+        'log'
+      ).mockImplementation(
+        () => {}
+      );
+
+    await main([]);
+
+    expect(
+      runDaemonCommand,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'daemon                 Watch configured consumers and relay requested rounds.'
+      )
+    );
   });
 });
