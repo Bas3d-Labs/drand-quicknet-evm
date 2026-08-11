@@ -284,160 +284,157 @@ describe('parseStartBlock', () => {
   });
 });
 
-describe(
-  'loadDaemonConfig',
-  () => {
-    beforeEach(() => {
-      vi.clearAllMocks();
+describe('loadDaemonConfig', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
 
-      vi.mocked(
-        loadRelayerConfig,
-      ).mockResolvedValue(
-        RELAYER_CONFIG,
-      );
+    vi.mocked(
+      loadRelayerConfig,
+    ).mockResolvedValue(
+      RELAYER_CONFIG,
+    );
+  });
+
+  it('loads the base relayer configuration', async () => {
+    const env = {
+      QUICKNET_CONSUMERS: CONSUMER_A,
+      QUICKNET_START_BLOCK: '123456',
+    };
+
+    await loadDaemonConfig({
+      network: 'robinhood-testnet',
+      env,
     });
 
-    it('loads the base relayer configuration', async () => {
-      const env = {
-        QUICKNET_CONSUMERS: CONSUMER_A,
-        QUICKNET_START_BLOCK: '123456',
-      };
+    expect(
+      loadRelayerConfig,
+    ).toHaveBeenCalledOnce();
 
-      await loadDaemonConfig({
+    expect(
+      loadRelayerConfig,
+    ).toHaveBeenCalledWith({
+      network: 'robinhood-testnet',
+      env,
+    });
+  });
+
+  it('adds parsed consumers to the relayer configuration', async () => {
+    const env = {
+      QUICKNET_CONSUMERS: `${CONSUMER_A},${CONSUMER_B}`,
+      QUICKNET_START_BLOCK: '123456',
+    };
+
+    const result = await loadDaemonConfig({
+      network: 'robinhood-testnet',
+      env,
+    });
+
+    expect(result).toEqual({
+      ...RELAYER_CONFIG,
+      consumers: [
+        getAddress(CONSUMER_A),
+        getAddress(CONSUMER_B),
+      ],
+      startBlock: 123456n,
+    });
+  });
+
+  it('supports a startBlock of zero', async () => {
+    const env = {
+      QUICKNET_CONSUMERS: CONSUMER_A,
+      QUICKNET_START_BLOCK: '0',
+    };
+
+    const result = await loadDaemonConfig({
+      network: 'robinhood-testnet',
+      env,
+    });
+
+    expect(result.startBlock).toBe(
+      0n
+    );
+  });
+
+  it('deduplicates configured consumers', async () => {
+    const checksummed = getAddress(LOWERCASE_CONSUMER);
+    const env = {
+      QUICKNET_CONSUMERS: `${LOWERCASE_CONSUMER},${checksummed}`,
+      QUICKNET_START_BLOCK: '123456',
+    };
+
+    const result = await loadDaemonConfig({
+      network: 'robinhood-testnet',
+      env,
+    });
+
+    expect(
+      result.consumers,
+    ).toEqual([
+      checksummed,
+    ]);
+  });
+
+  it('rejects daemon configuration with no consumers', async () => {
+    const env = {};
+
+    await expect(
+      loadDaemonConfig({
         network: 'robinhood-testnet',
         env,
-      });
+      }),
+    ).rejects.toThrow(
+      'Missing required environment variable: QUICKNET_CONSUMERS.'
+    );
+  });
 
-      expect(
-        loadRelayerConfig,
-      ).toHaveBeenCalledOnce();
+  it('rejects daemon configuration with no start block', async () => {
+    const env = {
+      QUICKNET_CONSUMERS: CONSUMER_A,
+    };
 
-      expect(
-        loadRelayerConfig,
-      ).toHaveBeenCalledWith({
+    await expect(
+      loadDaemonConfig({
         network: 'robinhood-testnet',
         env,
-      });
-    });
+      }),
+    ).rejects.toThrow(
+      'Missing required environment variable: QUICKNET_START_BLOCK.'
+    );
+  });
 
-    it('adds parsed consumers to the relayer configuration', async () => {
-      const env = {
-        QUICKNET_CONSUMERS: `${CONSUMER_A},${CONSUMER_B}`,
-        QUICKNET_START_BLOCK: '123456',
-      };
+  it('rejects daemon configuration with an invalid start block', async () => {
+    const env = {
+      QUICKNET_CONSUMERS: CONSUMER_A,
+      QUICKNET_START_BLOCK: '-1',
+    };
 
-      const result = await loadDaemonConfig({
+    await expect(
+      loadDaemonConfig({
         network: 'robinhood-testnet',
         env,
-      });
+      })
+    ).rejects.toThrow(
+      'QUICKNET_START_BLOCK must be a non-negative decimal integer.'
+    );
+  });
 
-      expect(result).toEqual({
-        ...RELAYER_CONFIG,
-        consumers: [
-          getAddress(CONSUMER_A),
-          getAddress(CONSUMER_B),
-        ],
-        startBlock: 123456n,
-      });
-    });
+  it('propagates base relayer configuration failures', async () => {
+    vi.mocked(
+      loadRelayerConfig,
+    ).mockRejectedValue(
+      new Error('Relayer configuration failed.'),
+    );
 
-    it('supports a startBlock of zero', async () => {
-      const env = {
-        QUICKNET_CONSUMERS: CONSUMER_A,
-        QUICKNET_START_BLOCK: '0',
-      };
+    const env = {
+      QUICKNET_CONSUMERS: CONSUMER_A,
+      QUICKNET_START_BLOCK: '123456',
+    };
 
-      const result = await loadDaemonConfig({
+    await expect(
+      loadDaemonConfig({
         network: 'robinhood-testnet',
         env,
-      });
-
-      expect(result.startBlock).toBe(
-        0n
-      );
-    });
-
-    it('deduplicates configured consumers', async () => {
-      const checksummed = getAddress(LOWERCASE_CONSUMER);
-      const env = {
-        QUICKNET_CONSUMERS: `${LOWERCASE_CONSUMER},${checksummed}`,
-        QUICKNET_START_BLOCK: '123456',
-      };
-
-      const result = await loadDaemonConfig({
-        network: 'robinhood-testnet',
-        env,
-      });
-
-      expect(
-        result.consumers,
-      ).toEqual([
-        checksummed,
-      ]);
-    });
-
-    it('rejects daemon configuration with no consumers', async () => {
-      const env = {};
-
-      await expect(
-        loadDaemonConfig({
-          network: 'robinhood-testnet',
-          env,
-        }),
-      ).rejects.toThrow(
-        'Missing required environment variable: QUICKNET_CONSUMERS.'
-      );
-    });
-
-    it('rejects daemon configuration with no start block', async () => {
-      const env = {
-        QUICKNET_CONSUMERS: CONSUMER_A,
-      };
-
-      await expect(
-        loadDaemonConfig({
-          network: 'robinhood-testnet',
-          env,
-        }),
-      ).rejects.toThrow(
-        'Missing required environment variable: QUICKNET_START_BLOCK.'
-      );
-    });
-
-    it('rejects daemon configuration with an invalid start block', async () => {
-      const env = {
-        QUICKNET_CONSUMERS: CONSUMER_A,
-        QUICKNET_START_BLOCK: '-1',
-      };
-
-      await expect(
-        loadDaemonConfig({
-          network: 'robinhood-testnet',
-          env,
-        })
-      ).rejects.toThrow(
-        'QUICKNET_START_BLOCK must be a non-negative decimal integer.'
-      );
-    });
-
-    it('propagates base relayer configuration failures', async () => {
-      vi.mocked(
-        loadRelayerConfig,
-      ).mockRejectedValue(
-        new Error('Relayer configuration failed.'),
-      );
-
-      const env = {
-        QUICKNET_CONSUMERS: CONSUMER_A,
-        QUICKNET_START_BLOCK: '123456',
-      };
-
-      await expect(
-        loadDaemonConfig({
-          network: 'robinhood-testnet',
-          env,
-        }),
-      ).rejects.toThrow('Relayer configuration failed.');
-    });
-  },
-);
+      }),
+    ).rejects.toThrow('Relayer configuration failed.');
+  });
+});
