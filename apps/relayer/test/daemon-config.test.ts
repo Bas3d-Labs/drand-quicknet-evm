@@ -32,8 +32,13 @@ import {
 } from '../src/config.js';
 
 import {
+  DEFAULT_MAX_BLOCK_RANGE,
+  DEFAULT_POLL_INTERVAL_MS,
   loadDaemonConfig,
+  parseCheckpointFile,
   parseConsumerAddresses,
+  parseMaxBlockRange,
+  parsePollIntervalMs,
   parseStartBlock,
 } from '../src/daemon-config.js';
 
@@ -284,6 +289,281 @@ describe('parseStartBlock', () => {
   });
 });
 
+describe('parseCheckpointFile', () => {
+  it('parses a checkpoint file path', () => {
+    expect(
+      parseCheckpointFile('./state/robinhood-testnet.json')
+    ).toBe(
+      './state/robinhood-testnet.json'
+    );
+  });
+
+  it('accepts an absolute checkpoint file path', () => {
+    expect(
+      parseCheckpointFile('/var/lib/quicknet/checkpoint.json')
+    ).toBe(
+      '/var/lib/quicknet/checkpoint.json'
+    );
+  });
+
+  it('rejects a missing QUICKNET_CHECKPOINT_FILE value', () => {
+    expect(() =>
+      parseCheckpointFile(undefined)
+    ).toThrow(
+      'Missing required environment variable: QUICKNET_CHECKPOINT_FILE.'
+    );
+  });
+
+  it('rejects an empty checkpoint file path', () => {
+    expect(() =>
+      parseCheckpointFile('')
+    ).toThrow(
+      'QUICKNET_CHECKPOINT_FILE must not be empty.'
+    );
+  });
+
+  it('rejects a whitespace-only checkpoint file path', () => {
+    expect(() =>
+      parseCheckpointFile('   ')
+    ).toThrow(
+      'QUICKNET_CHECKPOINT_FILE must not be empty.'
+    );
+  });
+
+  it('preserves a non-empty checkpoint file path exactly', () => {
+    expect(
+      parseCheckpointFile(' ./state/checkpoint.json ')
+    ).toBe(
+      ' ./state/checkpoint.json '
+    );
+  });
+});
+
+describe('parseMaxBlockRange', () => {
+  it('uses the default when QUICKNET_MAX_BLOCK_RANGE is missing', () => {
+    expect(
+      parseMaxBlockRange(undefined)
+    ).toBe(
+      DEFAULT_MAX_BLOCK_RANGE
+    );
+  });
+
+  it('parses a valid max block range', () => {
+    expect(
+      parseMaxBlockRange('5000')
+    ).toBe(
+      5_000n
+    );
+  });
+
+  it('accepts a max block range of one', () => {
+    expect(
+      parseMaxBlockRange('1')
+    ).toBe(
+      1n
+    );
+  });
+
+  it('accepts a large max block range without precision loss', () => {
+    const value = '123456789012345678901234567890';
+
+    expect(
+      parseMaxBlockRange(value)
+    ).toBe(
+      BigInt(value)
+    );
+  });
+
+  it('accepts leading zeroes', () => {
+    expect(
+      parseMaxBlockRange('000123')
+    ).toBe(
+      123n
+    );
+  });
+
+  it('rejects zero', () => {
+    expect(() =>
+      parseMaxBlockRange('0')
+    ).toThrow(
+      'QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.'
+    );
+  });
+
+  it('rejects an empty max block range', () => {
+    expect(() =>
+      parseMaxBlockRange('')
+    ).toThrow(
+      'QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.'
+    );
+  });
+
+  it('rejects a whitespace-only max block range', () => {
+    expect(() =>
+      parseMaxBlockRange('   ')
+    ).toThrow(
+      'QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.'
+    );
+  });
+
+  it('rejects a negative max block range', () => {
+    expect(() =>
+      parseMaxBlockRange('-1')
+    ).toThrow(
+      'QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.'
+    );
+  });
+
+  it('rejects a hexadecimal max block range', () => {
+    expect(() =>
+      parseMaxBlockRange('0x100')
+    ).toThrow(
+      'QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.'
+    );
+  });
+
+  it('rejects a fractional max block range', () => {
+    expect(() =>
+      parseMaxBlockRange('100.5')
+    ).toThrow(
+      'QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.'
+    );
+  });
+
+  it('rejects a non-numeric max block range', () => {
+    expect(() =>
+      parseMaxBlockRange('100abc')
+    ).toThrow(
+      'QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.'
+    );
+  });
+
+  it('rejects a max block range with surrounding whitespace', () => {
+    expect(() =>
+      parseMaxBlockRange(' 100 ')
+    ).toThrow(
+      'QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.'
+    );
+  });
+});
+
+describe('parsePollIntervalMs', () => {
+  it('uses the default when QUICKNET_POLL_INTERVAL_MS is missing', () => {
+    expect(
+      parsePollIntervalMs(undefined)
+    ).toBe(
+      DEFAULT_POLL_INTERVAL_MS
+    );
+  });
+
+  it('parses a valid poll interval', () => {
+    expect(
+      parsePollIntervalMs('2500')
+    ).toBe(
+      2_500
+    );
+  });
+
+  it('accepts a poll interval of one millisecond', () => {
+    expect(
+      parsePollIntervalMs('1')
+    ).toBe(
+      1
+    );
+  });
+
+  it('accepts Number.MAX_SAFE_INTEGER', () => {
+    expect(
+      parsePollIntervalMs(Number.MAX_SAFE_INTEGER.toString())
+    ).toBe(
+      Number.MAX_SAFE_INTEGER
+    );
+  });
+
+  it('accepts leading zeroes', () => {
+    expect(
+      parsePollIntervalMs('001000')
+    ).toBe(
+      1_000
+    );
+  });
+
+  it('rejects zero', () => {
+    expect(() =>
+      parsePollIntervalMs('0')
+    ).toThrow(
+      'QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.'
+    );
+  });
+
+  it('rejects an empty poll interval', () => {
+    expect(() =>
+      parsePollIntervalMs('')
+    ).toThrow(
+      'QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.'
+    );
+  });
+
+  it('rejects a whitespace-only poll interval', () => {
+    expect(() =>
+      parsePollIntervalMs('   ')
+    ).toThrow(
+      'QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.'
+    );
+  });
+
+  it('rejects a negative poll interval', () => {
+    expect(() =>
+      parsePollIntervalMs('-1')
+    ).toThrow(
+      'QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.'
+    );
+  });
+
+  it('rejects a fractional poll interval', () => {
+    expect(() =>
+      parsePollIntervalMs('1000.5')
+    ).toThrow(
+      'QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.'
+    );
+  });
+
+  it('rejects a hexadecimal poll interval', () => {
+    expect(() =>
+      parsePollIntervalMs('0x1000')
+    ).toThrow(
+      'QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.'
+    );
+  });
+
+  it('rejects a non-numeric poll interval', () => {
+    expect(() =>
+      parsePollIntervalMs('1000ms')
+    ).toThrow(
+      'QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.'
+    );
+  });
+
+  it('rejects a poll interval with surrounding whitespace', () => {
+    expect(() =>
+      parsePollIntervalMs(' 1000 ')
+    ).toThrow(
+      'QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.'
+    );
+  });
+
+  it('rejects a value larger than Number.MAX_SAFE_INTEGER', () => {
+    const value =
+      (BigInt(Number.MAX_SAFE_INTEGER) + 1n).toString();
+
+    expect(() =>
+      parsePollIntervalMs(value)
+    ).toThrow(
+      'QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.'
+    );
+  });
+});
+
 describe('loadDaemonConfig', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -299,6 +579,7 @@ describe('loadDaemonConfig', () => {
     const env = {
       QUICKNET_CONSUMERS: CONSUMER_A,
       QUICKNET_START_BLOCK: '123456',
+      QUICKNET_CHECKPOINT_FILE: './state/checkpoint.json',
     };
 
     await loadDaemonConfig({
@@ -318,10 +599,11 @@ describe('loadDaemonConfig', () => {
     });
   });
 
-  it('adds parsed consumers to the relayer configuration', async () => {
+  it('adds daemon configuration with operational defaults', async () => {
     const env = {
       QUICKNET_CONSUMERS: `${CONSUMER_A},${CONSUMER_B}`,
       QUICKNET_START_BLOCK: '123456',
+      QUICKNET_CHECKPOINT_FILE: './state/checkpoint.json',
     };
 
     const result = await loadDaemonConfig({
@@ -335,14 +617,41 @@ describe('loadDaemonConfig', () => {
         getAddress(CONSUMER_A),
         getAddress(CONSUMER_B),
       ],
-      startBlock: 123456n,
+      startBlock: 123_456n,
+      checkpointFile: './state/checkpoint.json',
+      maxBlockRange: DEFAULT_MAX_BLOCK_RANGE,
+      pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
     });
+  });
+
+  it('loads max block range and poll interval overrides', async () => {
+    const env = {
+      QUICKNET_CONSUMERS: CONSUMER_A,
+      QUICKNET_START_BLOCK: '123456',
+      QUICKNET_CHECKPOINT_FILE: './state/checkpoint.json',
+      QUICKNET_MAX_BLOCK_RANGE: '5000',
+      QUICKNET_POLL_INTERVAL_MS: '2500',
+    };
+
+    const result = await loadDaemonConfig({
+      network: 'robinhood-testnet',
+      env,
+    });
+
+    expect(result.maxBlockRange).toBe(
+      5_000n
+    );
+
+    expect(result.pollIntervalMs).toBe(
+      2_500
+    );
   });
 
   it('supports a startBlock of zero', async () => {
     const env = {
       QUICKNET_CONSUMERS: CONSUMER_A,
       QUICKNET_START_BLOCK: '0',
+      QUICKNET_CHECKPOINT_FILE: './state/checkpoint.json',
     };
 
     const result = await loadDaemonConfig({
@@ -360,6 +669,7 @@ describe('loadDaemonConfig', () => {
     const env = {
       QUICKNET_CONSUMERS: `${LOWERCASE_CONSUMER},${checksummed}`,
       QUICKNET_START_BLOCK: '123456',
+      QUICKNET_CHECKPOINT_FILE: './state/checkpoint.json',
     };
 
     const result = await loadDaemonConfig({
@@ -375,7 +685,10 @@ describe('loadDaemonConfig', () => {
   });
 
   it('rejects daemon configuration with no consumers', async () => {
-    const env = {};
+    const env = {
+      QUICKNET_START_BLOCK: '123456',
+      QUICKNET_CHECKPOINT_FILE: './state/checkpoint.json',
+    };
 
     await expect(
       loadDaemonConfig({
@@ -390,6 +703,7 @@ describe('loadDaemonConfig', () => {
   it('rejects daemon configuration with no start block', async () => {
     const env = {
       QUICKNET_CONSUMERS: CONSUMER_A,
+      QUICKNET_CHECKPOINT_FILE: './state/checkpoint.json',
     };
 
     await expect(
@@ -402,10 +716,27 @@ describe('loadDaemonConfig', () => {
     );
   });
 
+  it('rejects daemon configuration with no checkpoint file', async () => {
+    const env = {
+      QUICKNET_CONSUMERS: CONSUMER_A,
+      QUICKNET_START_BLOCK: '123456',
+    };
+
+    await expect(
+      loadDaemonConfig({
+        network: 'robinhood-testnet',
+        env,
+      }),
+    ).rejects.toThrow(
+      'Missing required environment variable: QUICKNET_CHECKPOINT_FILE.'
+    );
+  });
+
   it('rejects daemon configuration with an invalid start block', async () => {
     const env = {
       QUICKNET_CONSUMERS: CONSUMER_A,
       QUICKNET_START_BLOCK: '-1',
+      QUICKNET_CHECKPOINT_FILE: './state/checkpoint.json',
     };
 
     await expect(
@@ -415,6 +746,42 @@ describe('loadDaemonConfig', () => {
       })
     ).rejects.toThrow(
       'QUICKNET_START_BLOCK must be a non-negative decimal integer.'
+    );
+  });
+
+  it('rejects daemon configuration with an invalid max block range', async () => {
+    const env = {
+      QUICKNET_CONSUMERS: CONSUMER_A,
+      QUICKNET_START_BLOCK: '123456',
+      QUICKNET_CHECKPOINT_FILE: './state/checkpoint.json',
+      QUICKNET_MAX_BLOCK_RANGE: '0',
+    };
+
+    await expect(
+      loadDaemonConfig({
+        network: 'robinhood-testnet',
+        env,
+      })
+    ).rejects.toThrow(
+      'QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.'
+    );
+  });
+
+  it('rejects daemon configuration with an invalid poll interval', async () => {
+    const env = {
+      QUICKNET_CONSUMERS: CONSUMER_A,
+      QUICKNET_START_BLOCK: '123456',
+      QUICKNET_CHECKPOINT_FILE: './state/checkpoint.json',
+      QUICKNET_POLL_INTERVAL_MS: '0',
+    };
+
+    await expect(
+      loadDaemonConfig({
+        network: 'robinhood-testnet',
+        env,
+      })
+    ).rejects.toThrow(
+      'QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.'
     );
   });
 
@@ -428,6 +795,7 @@ describe('loadDaemonConfig', () => {
     const env = {
       QUICKNET_CONSUMERS: CONSUMER_A,
       QUICKNET_START_BLOCK: '123456',
+      QUICKNET_CHECKPOINT_FILE: './state/checkpoint.json',
     };
 
     await expect(

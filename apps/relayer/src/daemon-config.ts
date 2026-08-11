@@ -9,6 +9,9 @@ import {
   type RelayerNetwork,
 } from './config.js';
 
+export const DEFAULT_MAX_BLOCK_RANGE = 2000n;
+export const DEFAULT_POLL_INTERVAL_MS = 1000;
+
 const DECIMAL_DIGITS = new Set([
   '0','1','2','3','4','5','6','7','8','9'
 ]);
@@ -16,6 +19,9 @@ const DECIMAL_DIGITS = new Set([
 export interface DaemonConfig extends RelayerConfig {
   consumers: readonly Address[];
   startBlock: bigint;
+  checkpointFile: string;
+  maxBlockRange: bigint;
+  pollIntervalMs: number;
 }
 
 export interface LoadDaemonConfigOptions {
@@ -33,11 +39,17 @@ export async function loadDaemonConfig(
   });
   const consumers = parseConsumerAddresses(env.QUICKNET_CONSUMERS);
   const startBlock = parseStartBlock(env.QUICKNET_START_BLOCK);
+  const checkpointFile = parseCheckpointFile(env.QUICKNET_CHECKPOINT_FILE);
+  const maxBlockRange = parseMaxBlockRange(env.QUICKNET_MAX_BLOCK_RANGE);
+  const pollIntervalMs = parsePollIntervalMs(env.QUICKNET_POLL_INTERVAL_MS);
 
   return {
     ...relayer,
     consumers,
     startBlock,
+    checkpointFile,
+    maxBlockRange,
+    pollIntervalMs,
   };
 }
 
@@ -76,10 +88,6 @@ export function parseConsumerAddresses(
     consumers.push(address);
   }
 
-  if (consumers.length === 0) {
-    throw new Error('QUICKNET_CONSUMERS must contain at least one consumer address.');
-  }
-
   return consumers;
 }
 
@@ -101,4 +109,70 @@ export function parseStartBlock(
   }
 
   return BigInt(value);
+}
+
+export function parseCheckpointFile(
+  value: string | undefined,
+): string {
+  if (value === undefined) {
+    throw new Error('Missing required environment variable: QUICKNET_CHECKPOINT_FILE.');
+  }
+
+  if (value.trim().length === 0) {
+    throw new Error('QUICKNET_CHECKPOINT_FILE must not be empty.');
+  }
+
+  return value;
+}
+
+export function parseMaxBlockRange(
+  value: string | undefined,
+): bigint {
+  if (value === undefined) {
+    return DEFAULT_MAX_BLOCK_RANGE;
+  }
+
+  if (!isDecimalInteger(value)) {
+    throw new Error('QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.');
+  }
+
+  const parsed = BigInt(value);
+  if (parsed === 0n) {
+    throw new Error('QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.');
+  }
+
+  return parsed;
+}
+
+export function parsePollIntervalMs(
+  value: string | undefined
+): number {
+  if (value === undefined) {
+    return DEFAULT_POLL_INTERVAL_MS;
+  }
+
+  if (!isDecimalInteger(value)) {
+    throw new Error('QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.');
+  }
+
+  const parsed = BigInt(value);
+  if (parsed === 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error('QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.');
+  }
+
+  return Number(parsed);
+}
+
+function isDecimalInteger(value: string): boolean {
+  if (value.length === 0) {
+    return false;
+  }
+
+  for (const character of value) {
+    if (!DECIMAL_DIGITS.has(character)) {
+      return false;
+    }
+  }
+
+  return true;
 }
