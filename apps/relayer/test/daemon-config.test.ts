@@ -30,15 +30,15 @@ vi.mock(
 import {
   loadRelayerConfig,
 } from '../src/config.js';
+
 import {
   loadDaemonConfig,
   parseConsumerAddresses,
+  parseStartBlock,
 } from '../src/daemon-config.js';
 
 const CONSUMER_A = '0x1111111111111111111111111111111111111111';
-
 const CONSUMER_B = '0x2222222222222222222222222222222222222222';
-
 const LOWERCASE_CONSUMER =
   '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' as Address;
 
@@ -71,69 +71,45 @@ describe(
   () => {
     it('parses one consumer address', () => {
       expect(
-        parseConsumerAddresses(
-          CONSUMER_A,
-        ),
+        parseConsumerAddresses(CONSUMER_A),
       ).toEqual([
-        getAddress(
-          CONSUMER_A,
-        ),
+        getAddress(CONSUMER_A),
       ]);
     });
 
     it('parses multiple consumer addresses', () => {
       expect(
-        parseConsumerAddresses(
-          `${CONSUMER_A},${CONSUMER_B}`,
-        ),
+        parseConsumerAddresses(`${CONSUMER_A},${CONSUMER_B}`),
       ).toEqual([
-        getAddress(
-          CONSUMER_A,
-        ),
-        getAddress(
-          CONSUMER_B,
-        ),
+        getAddress(CONSUMER_A),
+        getAddress(CONSUMER_B),
       ]);
     });
 
     it('trims whitespace around consumer addresses', () => {
       expect(
-        parseConsumerAddresses(
-          `  ${CONSUMER_A} , ${CONSUMER_B}  `,
-        ),
+        parseConsumerAddresses(`  ${CONSUMER_A} , ${CONSUMER_B}  `),
       ).toEqual([
-        getAddress(
-          CONSUMER_A,
-        ),
-        getAddress(
-          CONSUMER_B,
-        ),
+        getAddress(CONSUMER_A),
+        getAddress(CONSUMER_B),
       ]);
     });
 
     it('normalizes consumer addresses', () => {
       const result =
-        parseConsumerAddresses(
-          LOWERCASE_CONSUMER,
-        );
+        parseConsumerAddresses(LOWERCASE_CONSUMER);
 
       expect(result).toEqual([
-        getAddress(
-          LOWERCASE_CONSUMER,
-        ),
+        getAddress(LOWERCASE_CONSUMER),
       ]);
     });
 
     it('deduplicates identical consumer addresses', () => {
       const checksummed =
-        getAddress(
-          LOWERCASE_CONSUMER,
-        );
+        getAddress(LOWERCASE_CONSUMER);
 
       expect(
-        parseConsumerAddresses(
-          `${LOWERCASE_CONSUMER},${checksummed}`,
-        ),
+        parseConsumerAddresses(`${LOWERCASE_CONSUMER},${checksummed}`),
       ).toEqual([
         checksummed,
       ]);
@@ -145,20 +121,14 @@ describe(
           `${CONSUMER_B},${CONSUMER_A},${CONSUMER_B}`,
         ),
       ).toEqual([
-        getAddress(
-          CONSUMER_B,
-        ),
-        getAddress(
-          CONSUMER_A,
-        ),
+        getAddress(CONSUMER_B),
+        getAddress(CONSUMER_A),
       ]);
     });
 
     it('rejects a missing QUICKNET_CONSUMERS value', () => {
       expect(() =>
-        parseConsumerAddresses(
-          undefined,
-        ),
+        parseConsumerAddresses(undefined),
       ).toThrow(
         'Missing required environment variable: QUICKNET_CONSUMERS.'
       );
@@ -166,9 +136,7 @@ describe(
 
     it('rejects an empty QUICKNET_CONSUMERS value', () => {
       expect(() =>
-        parseConsumerAddresses(
-          '',
-        ),
+        parseConsumerAddresses(''),
       ).toThrow(
         'QUICKNET_CONSUMERS contains an empty consumer address.'
       );
@@ -176,9 +144,7 @@ describe(
 
     it('rejects a whitespace-only QUICKNET_CONSUMERS value', () => {
       expect(() =>
-        parseConsumerAddresses(
-          '   ',
-        ),
+        parseConsumerAddresses('   '),
       ).toThrow(
         'QUICKNET_CONSUMERS contains an empty consumer address.'
       );
@@ -186,9 +152,7 @@ describe(
 
     it('rejects an empty entry between consumer addresses', () => {
       expect(() =>
-        parseConsumerAddresses(
-          `${CONSUMER_A},,${CONSUMER_B}`,
-        ),
+        parseConsumerAddresses(`${CONSUMER_A},,${CONSUMER_B}`),
       ).toThrow(
         'QUICKNET_CONSUMERS contains an empty consumer address.'
       );
@@ -196,9 +160,7 @@ describe(
 
     it('rejects a trailing empty consumer address', () => {
       expect(() =>
-        parseConsumerAddresses(
-          `${CONSUMER_A},`,
-        ),
+        parseConsumerAddresses(`${CONSUMER_A},`),
       ).toThrow(
         'QUICKNET_CONSUMERS contains an empty consumer address.'
       );
@@ -206,9 +168,7 @@ describe(
 
     it('rejects a malformed consumer address', () => {
       expect(() =>
-        parseConsumerAddresses(
-          'not-an-address',
-        ),
+        parseConsumerAddresses('not-an-address'),
       ).toThrow(
         'Invalid Quicknet consumer address: not-an-address.'
       );
@@ -216,15 +176,113 @@ describe(
 
     it('rejects a malformed address among valid addresses', () => {
       expect(() =>
-        parseConsumerAddresses(
-          `${CONSUMER_A},not-an-address,${CONSUMER_B}`,
-        ),
+        parseConsumerAddresses(`${CONSUMER_A},not-an-address,${CONSUMER_B}`),
       ).toThrow(
         'Invalid Quicknet consumer address: not-an-address.'
       );
     });
   },
 );
+
+describe('parseStartBlock', () => {
+  it('parses a valid start block', () => {
+    expect(
+      parseStartBlock('123456')
+    ).toBe(
+      123_456n
+    );
+  });
+
+  it('accepts block zero', () => {
+    expect(
+      parseStartBlock('0')
+    ).toBe(
+      0n
+    );
+  });
+
+  it('accepts a large decimal start block without precision loss', () => {
+    const value = '123456789012345678901234567890';
+
+    expect(
+      parseStartBlock(value)
+    ).toBe(
+      BigInt(value)
+    );
+  });
+
+  it('accepts leading zeroes', () => {
+    expect(
+      parseStartBlock('000123')
+    ).toBe(
+      123n
+    );
+  });
+
+  it('rejects a missing QUICKNET_START_BLOCK value', () => {
+    expect(() =>
+      parseStartBlock(undefined)
+    ).toThrow(
+      'Missing required environment variable: QUICKNET_START_BLOCK.'
+    );
+  });
+
+  it('rejects an empty start block', () => {
+    expect(() =>
+      parseStartBlock('')
+    ).toThrow(
+      'QUICKNET_START_BLOCK must be a non-negative decimal integer.'
+    );
+  });
+
+  it('rejects a whitespace-only start block', () => {
+    expect(() =>
+      parseStartBlock('   ')
+    ).toThrow(
+      'QUICKNET_START_BLOCK must be a non-negative decimal integer.'
+    );
+  });
+
+  it('rejects a negative start block', () => {
+    expect(() =>
+      parseStartBlock('-1')
+    ).toThrow(
+      'QUICKNET_START_BLOCK must be a non-negative decimal integer.'
+    );
+  });
+
+  it('rejects a hexadecimal start block', () => {
+    expect(() =>
+      parseStartBlock('0x1234')
+    ).toThrow(
+      'QUICKNET_START_BLOCK must be a non-negative decimal integer.'
+    );
+  });
+
+  it('rejects a fractional start block', () => {
+    expect(() =>
+      parseStartBlock('123.5')
+    ).toThrow(
+      'QUICKNET_START_BLOCK must be a non-negative decimal integer.'
+    );
+  });
+
+  it('rejects a non-numeric start block', () => {
+    expect(() =>
+      parseStartBlock('123abc')
+    ).toThrow(
+      'QUICKNET_START_BLOCK must be a non-negative decimal integer.'
+    );
+  });
+
+  it('rejects a start block with surrounding whitespace', () => {
+    expect(() =>
+      parseStartBlock(' 123 ')
+    ).toThrow(
+      'QUICKNET_START_BLOCK must be a non-negative decimal integer.'
+    );
+  });
+});
 
 describe(
   'loadDaemonConfig',
@@ -242,6 +300,7 @@ describe(
     it('loads the base relayer configuration', async () => {
       const env = {
         QUICKNET_CONSUMERS: CONSUMER_A,
+        QUICKNET_START_BLOCK: '123456',
       };
 
       await loadDaemonConfig({
@@ -263,39 +322,52 @@ describe(
 
     it('adds parsed consumers to the relayer configuration', async () => {
       const env = {
-        QUICKNET_CONSUMERS: `${CONSUMER_A},${CONSUMER_B}`
+        QUICKNET_CONSUMERS: `${CONSUMER_A},${CONSUMER_B}`,
+        QUICKNET_START_BLOCK: '123456',
       };
 
-      const result =
-        await loadDaemonConfig({
-          network: 'robinhood-testnet',
-          env,
-        });
+      const result = await loadDaemonConfig({
+        network: 'robinhood-testnet',
+        env,
+      });
 
       expect(result).toEqual({
         ...RELAYER_CONFIG,
         consumers: [
-          getAddress(
-            CONSUMER_A,
-          ),
-          getAddress(
-            CONSUMER_B,
-          ),
+          getAddress(CONSUMER_A),
+          getAddress(CONSUMER_B),
         ],
+        startBlock: 123456n,
       });
+    });
+
+    it('supports a startBlock of zero', async () => {
+      const env = {
+        QUICKNET_CONSUMERS: CONSUMER_A,
+        QUICKNET_START_BLOCK: '0',
+      };
+
+      const result = await loadDaemonConfig({
+        network: 'robinhood-testnet',
+        env,
+      });
+
+      expect(result.startBlock).toBe(
+        0n
+      );
     });
 
     it('deduplicates configured consumers', async () => {
       const checksummed = getAddress(LOWERCASE_CONSUMER);
       const env = {
         QUICKNET_CONSUMERS: `${LOWERCASE_CONSUMER},${checksummed}`,
+        QUICKNET_START_BLOCK: '123456',
       };
 
-      const result =
-        await loadDaemonConfig({
-          network: 'robinhood-testnet',
-          env,
-        });
+      const result = await loadDaemonConfig({
+        network: 'robinhood-testnet',
+        env,
+      });
 
       expect(
         result.consumers,
@@ -317,6 +389,37 @@ describe(
       );
     });
 
+    it('rejects daemon configuration with no start block', async () => {
+      const env = {
+        QUICKNET_CONSUMERS: CONSUMER_A,
+      };
+
+      await expect(
+        loadDaemonConfig({
+          network: 'robinhood-testnet',
+          env,
+        }),
+      ).rejects.toThrow(
+        'Missing required environment variable: QUICKNET_START_BLOCK.'
+      );
+    });
+
+    it('rejects daemon configuration with an invalid start block', async () => {
+      const env = {
+        QUICKNET_CONSUMERS: CONSUMER_A,
+        QUICKNET_START_BLOCK: '-1',
+      };
+
+      await expect(
+        loadDaemonConfig({
+          network: 'robinhood-testnet',
+          env,
+        })
+      ).rejects.toThrow(
+        'QUICKNET_START_BLOCK must be a non-negative decimal integer.'
+      );
+    });
+
     it('propagates base relayer configuration failures', async () => {
       vi.mocked(
         loadRelayerConfig,
@@ -326,6 +429,7 @@ describe(
 
       const env = {
         QUICKNET_CONSUMERS: CONSUMER_A,
+        QUICKNET_START_BLOCK: '123456',
       };
 
       await expect(
