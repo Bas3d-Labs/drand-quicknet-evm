@@ -1,240 +1,351 @@
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
+
 import { 
   loadRelayerConfig, 
-  parseRelayerNetwork, 
   type RelayerNetwork 
 } from './config.js';
+
 import { createRelayerClients } from './clients.js';
+
+import {
+  runDaemonCommand,
+} from './daemon-command.js';
+
 import { 
   importQuicknetRound,
   type ImportQuicknetRoundResult,
 } from './import-round.js';
+
 import {
   importQuicknetRoundWhenAvailable,
-} from './import-round-when-available.js'
+} from './import-round-when-available.js';
 
 const MAX_UINT64 = (1n << 64n) - 1n;
 
-export type CliCommand =
-  | {
-      kind: 'help';
-    }
-  | {
-      kind: 'import';
-      network: RelayerNetwork;
-      round: bigint;
-    }
-  | {
-      kind: 'import-when-available';
-      network: RelayerNetwork;
-      round: bigint;
-    };
-
-async function main(): Promise<void> {
-  try {
-    const command = parseCliArgs(process.argv.slice(2));
-
-    switch (command.kind) {
-      case 'help':
-        printHelp();
-        return;
-      
-      case 'import':
-        await runImportCommand(command);
-        return;
-
-      case 'import-when-available':
-        await runImportWhenAvailable(command);
-        return;
-    }
-  } catch(error) {
-    console.error(`Error: ${formatError(error)}`);
-
-    process.exitCode = -1;
-  }
-}
-
-async function runImportCommand(
-  command: Extract<CliCommand, {kind: 'import'}>
-): Promise<void> {
-  const config = await loadRelayerConfig({
-    network: command.network,
-  });
-
-  const {
-    publicClient,
-    walletClient,
-  } = createRelayerClients(config);
-
-  const result = await importQuicknetRound({
-    publicClient,
-    walletClient,
-    account: config.account,
-    deployment: config.deployment,
-    round: command.round,
-  });
-
-  if (result.status === 'already-stored') {
-    console.log(`Quicknet round ${result.round} is already stored.`);
-    console.log(`Randomness: ${result.randomness}`);
-    return;
-  }
-
-  printImportResult(result);
-}
-
-async function runImportWhenAvailable(
-  command: Extract<CliCommand, { kind: 'import-when-available'; }>
-): Promise<void> {
-  const config = await loadRelayerConfig({
-    network: command.network,
-  });
-
-  const {
-    publicClient,
-    walletClient,
-  } = createRelayerClients(config);
-
-  const result = await importQuicknetRoundWhenAvailable({
-    publicClient,
-    walletClient,
-    account: config.account,
-    deployment: config.deployment,
-    round: command.round,
-  });
-
-  printImportResult(result);
-}
-
-export function parseCliArgs(
-  args: readonly string[],
-): CliCommand {
-  const normalizedArgs =
-    args[0] === '--'
-      ? args.slice(1)
-      : args;
-
-  if (
-    normalizedArgs.length === 0 ||
-    normalizedArgs[0] === '--help' ||
-    normalizedArgs[0] === '-h' ||
-    normalizedArgs[0] === 'help'
-  ) {
-    return {
-      kind: 'help',
-    };
-  }
-
-  if (
-    normalizedArgs.length === 2 &&
-    (
-      normalizedArgs[1] === '--help' ||
-      normalizedArgs[1] === '-h'
-    ) &&
-    (
-      normalizedArgs[0] === 'import' ||
-      normalizedArgs[0] === 'import-when-available'
-    )
-  ) {
-    return {
-      kind: 'help',
-    };
-  }
-
-  const command = normalizedArgs[0];
-  if (
-    command !== 'import' &&
-    command !== 'import-when-available'
-  ) {
-    throw new Error(`Unknown command: ${command}`);
-  }
-
-  const options = parseImportOptions(normalizedArgs.slice(1));
-  return {
-    kind: command,
-    ...options,
-  };
-}
-
-interface ParsedImportOptions {
+interface ImportCommandArguments {
+  command: 'import';
   network: RelayerNetwork;
   round: bigint;
 }
 
-function parseImportOptions(
-  args: readonly string[],
-): ParsedImportOptions {
-  let networkValue: string | undefined;
-  let roundValue: string | undefined;
+interface ImportWhenAvailableCommandArguments {
+  command: 'import-when-available';
+  network: RelayerNetwork;
+  round: bigint;
+}
 
-  for (let i=0; i < args.length;i++) {
+interface DaemonCommandArguments {
+  command: 'daemon';
+  network: RelayerNetwork;
+}
+
+interface DaemonHelpCommandArguments {
+  command: 'daemon-help';
+}
+
+interface HelpCommandArguments {
+  command: 'help';
+}
+
+type CommandArguments =
+  | ImportCommandArguments
+  | ImportWhenAvailableCommandArguments
+  | DaemonCommandArguments
+  | DaemonHelpCommandArguments
+  | HelpCommandArguments;
+
+export async function main(
+  args: readonly string[] = process.argv.slice(2),
+): Promise<void> {
+  const normalizedArgs = normalizeArguments(args);
+  const command = parseCommandArguments(normalizedArgs);
+
+  switch (command.command) {
+    case 'import':
+      await runImportCommand(command);
+      return;
+
+    case 'import-when-available':
+      await runImportWhenAvailableCommand(command);
+      return;
+    
+    case 'daemon':
+      await runDaemonCli(command.network);
+      return;    
+      
+    case 'daemon-help':
+      printDaemonHelp();
+      return;
+
+    case 'help':
+      printHelp();
+      return;
+  }
+}
+
+async function runImportCommand(
+  command: ImportCommandArguments,
+): Promise<void> {
+  const config = await loadRelayerConfig({
+    network: command.network,
+  });
+
+  const clients = createRelayerClients(config);
+
+  const result = await importQuicknetRound({
+    publicClient: clients.publicClient,
+    walletClient: clients.walletClient,
+    account: config.account,
+    deployment: config.deployment,
+    round: command.round,
+  });
+
+  printImportResult(command.round, result);
+}
+
+async function runImportWhenAvailableCommand(
+  command: ImportWhenAvailableCommandArguments,
+): Promise<void> {
+  const config = await loadRelayerConfig({
+    network: command.network,
+  });
+
+  const clients = createRelayerClients(config);
+
+  const result = await importQuicknetRoundWhenAvailable({
+    publicClient: clients.publicClient,
+    walletClient: clients.walletClient,
+    account: config.account,
+    deployment: config.deployment,
+    round: command.round,
+  });
+
+  printImportResult(command.round, result);
+}
+
+async function runDaemonCli(
+  network: RelayerNetwork,
+): Promise<void> {
+  const controller = new AbortController();
+  const handleShutdown = (): void => {
+    controller.abort();
+  };
+
+  process.once(
+    'SIGINT',
+    handleShutdown
+  );
+
+  process.once(
+    'SIGTERM',
+    handleShutdown
+  );
+
+  try {
+    await runDaemonCommand({
+      network,
+      signal: controller.signal,
+    });
+  } finally {
+    process.removeListener(
+      'SIGINT',
+      handleShutdown
+    );
+
+    process.removeListener(
+      'SIGTERM',
+      handleShutdown
+    );
+  }
+}
+
+export function parseCommandArguments(
+  args: readonly string[],
+): CommandArguments {
+  const command = args[0];
+  if (
+    command === undefined ||
+    command === '--help' ||
+    command === '-h' ||
+    command === 'help'
+  ) {
+    return { command: 'help' };
+  }
+
+  const commandArgs = args.slice(1);
+  switch (command) {
+    case 'import':
+      return parseImportArguments(commandArgs);
+
+    case 'import-when-available':
+      return parseImportWhenAvailableArguments(commandArgs);
+
+    case 'daemon':
+      return parseDaemonArguments(commandArgs);
+
+    default:
+      throw new Error(`Unknown command: ${command}.`);
+  }
+}
+
+function parseImportArguments(
+  args: readonly string[],
+): ImportCommandArguments {
+  const parsed = parseRoundCommandOptions(args, 'import');
+
+  return {
+    command: 'import',
+    network: parsed.network,
+    round: parsed.round,
+  };
+}
+
+function parseImportWhenAvailableArguments(
+  args: readonly string[],
+): ImportWhenAvailableCommandArguments {
+  const parsed = parseRoundCommandOptions(args, 'import-when-available');
+
+  return {
+    command: 'import-when-available',
+    network: parsed.network,
+    round: parsed.round,
+  };
+}
+
+function parseDaemonArguments(
+  args: readonly string[],
+):
+  | DaemonCommandArguments
+  | DaemonHelpCommandArguments {
+  let network: RelayerNetwork | undefined;
+
+  for (let i = 0; i < args.length; i++) {
     const argument = args[i];
+    if (argument === undefined) {
+      throw new Error('Expected daemon argument.');
+    }
+
+    if (argument === '--help' || argument === '-h') {
+      return { command: 'daemon-help' };
+    }
+
     if (argument === '--network') {
-      if (networkValue !== undefined) {
-        throw new Error('Option --network may only be specified once.');
+      if (network !== undefined) {
+        throw new Error('Duplicate argument: --network.');
       }
 
-      networkValue = readOptionValue(args, i, '--network');
-      i++;
+      const value = args[i + 1];
+      if (value === undefined) {
+        throw new Error('Missing value for --network.');
+      }
+
+      network = parseNetwork(value);
+
+      i += 1;
+      continue;
+    }
+
+    throw new Error(`Unknown daemon argument: ${argument}.`);
+  }
+
+  if (network === undefined) {
+    throw new Error('Missing required argument: --network.');
+  }
+
+  return {
+    command: 'daemon',
+    network,
+  };
+}
+
+interface RoundCommandOptions {
+  network: RelayerNetwork;
+  round: bigint;
+}
+
+function parseRoundCommandOptions(
+  args: readonly string[],
+  command: string,
+): RoundCommandOptions {
+  let network: RelayerNetwork | undefined;
+  let round: bigint | undefined;
+  
+  for (let i = 0; i < args.length; i++) {
+    const argument = args[i];
+    if (argument === undefined) {
+      throw new Error(`Expected ${command} argument.`);
+    }
+
+    if (argument === '--network') {
+      if (network !== undefined) {
+        throw new Error('Duplicate argument: --network.');
+      }
+
+      const value = args[i + 1];
+      if (value === undefined) {
+        throw new Error('Missing value for --network.');
+      }
+
+      network = parseNetwork(value);
+
+      i += 1;
       continue;
     }
 
     if (argument === '--round') {
-      if (roundValue !== undefined) {
-        throw new Error('Option --round may only be specified once.');
+      if (round !== undefined) {
+        throw new Error('Duplicate argument: --round.');
       }
 
-      roundValue = readOptionValue(args, i, '--round');
-      i++;
+      const value = args[i + 1];
+      if (value === undefined) {
+        throw new Error('Missing value for --round.');
+      }
+
+      round = parseRound(value);
+
+      i += 1;
       continue;
     }
 
-    throw new Error(`Unknown option: ${argument}`);
+    throw new Error(`Unknown ${command} argument: ${argument}.`);
   }
 
-  if (networkValue === undefined) {
-    throw new Error('Missing required option: --network');
+  if (network === undefined) {
+    throw new Error('Missing required argument: --network.');
   }
 
-  if (roundValue === undefined) {
-    throw new Error('Missing required option: --round');
+  if (round === undefined) {
+    throw new Error('Missing required argument: --round.');
   }
 
   return {
-    network: parseRelayerNetwork(networkValue),
-    round: parseRound(roundValue),
+    network,
+    round,
   };
 }
 
-function printImportResult(result: ImportQuicknetRoundResult): void {
+function parseNetwork(value: string): RelayerNetwork {
+  if (value === 'robinhood-testnet') {
+    return value;
+  }
+
+  throw new Error(`Unsupported network: ${value}.`);
+}
+
+function printImportResult(
+  round: bigint,
+  result: ImportQuicknetRoundResult,
+): void {
   if (result.status === 'already-stored') {
-    console.log(`Quicknet round ${result.round} is already stored.`);
+    console.log(`Quicknet round ${round} is already stored.`);
     console.log(`Randomness: ${result.randomness}`);
     return;
   }
 
-  console.log(`Imported Quicknet round ${result.round}.`);
+  console.log(`Imported Quicknet round ${round}.`);
   console.log(`Randomness: ${result.randomness}`);
   console.log(`Transaction: ${result.transactionHash}`);
-}
-
-function readOptionValue(
-  args: readonly string[],
-  index: number,
-  option: string,
-): string {
-  const value = args[index + 1];
-
-  if (
-    value === undefined ||
-    value.length === 0 ||
-    value.startsWith('--')
-  ) {
-    throw new Error(`Missing value for ${option}`);
-  }
-
-  return value;
 }
 
 function parseRound(
@@ -244,19 +355,29 @@ function parseRound(
     value.length === 0 ||
     !isDecimalInteger(value)
   ) {
-    throw new Error(`Invalid Quicknet round: ${value}`);
+    throw new Error('Round must be a positive decimal integer.');
   }
 
   const round = BigInt(value);
   if (round <= 0n) {
-    throw new Error('Quicknet round must be greater than zero.');
+    throw new Error('Round must be greater than zero.');
   }
 
   if (round > MAX_UINT64) {
-    throw new Error('Quicknet round must fit within uint64.');
+    throw new Error('Round must fit in uint64.');
   }
 
   return round;
+}
+
+function normalizeArguments(
+  args: readonly string[],
+): readonly string[] {
+  if (args[0] === '--') {
+    return args.slice(1);
+  }
+
+  return args;
 }
 
 function isDecimalInteger(
@@ -282,40 +403,45 @@ function formatError(
 }
 
 function printHelp(): void {
-  console.log(`
-drand-quicknet-relayer
-
-Usage:
-  drand-quicknet-relayer import --network <network> --round <round>
-  drand-quicknet-relayer import-when-available --network <network> --round <round>
-
-Commands:
-  import
-    Import one exact drand Quicknet round immediately.
-
-  import-when-available
-    Wait for one exact drand Quicknet round to be published,
-    retry fetching it for a bounded period, then import it.
-
-Options:
-  --network <network>    Target network.
-  --round <round>        Exact Quicknet round to import.
-  -h, --help             Show this help.
-
-Examples:
-  drand-quicknet-relayer import \\
-    --network robinhood-testnet \\
-    --round 31089008
-
-  drand-quicknet-relayer import-when-available \\
-    --network robinhood-testnet \\
-    --round 31089008
-`.trim());
+  console.log(
+    [
+      'Usage:',
+      '  relayer <command> [options]',
+      '',
+      'Commands:',
+      '  import                 Import an exact Quicknet round immediately.',
+      '  import-when-available  Wait for and import an exact Quicknet round.',
+      '  daemon                 Watch configured consumers and relay requested rounds.',
+      '',
+      'Run relayer daemon --help for daemon-specific usage.',
+    ].join('\n')
+  );
 }
 
-if (
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
-  await main();
+function printDaemonHelp(): void {
+  console.log(
+    [
+      'Usage:',
+      '  relayer daemon --network <network>',
+      '',
+      'Options:',
+      '  --network <network>  Network to service.',
+      '',
+      'Required environment variables:',
+      '  QUICKNET_CONSUMERS',
+      '  QUICKNET_START_BLOCK',
+      '  QUICKNET_CHECKPOINT_FILE',
+      '',
+      'Optional environment variables:',
+      '  QUICKNET_MAX_BLOCK_RANGE',
+      '  QUICKNET_POLL_INTERVAL_MS',
+    ].join('\n')
+  );
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error: unknown) => {
+    console.error(`Error: ${formatError(error)}`);
+    process.exitCode = 1;
+  });
 }
