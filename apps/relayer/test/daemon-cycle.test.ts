@@ -40,7 +40,12 @@ import {
 import {
   runDaemonIteration,
   type RunDaemonIterationResult,
+  type SoftScanCursor,
 } from '../src/daemon-iteration.js';
+
+import type {
+  FinalityPolicy,
+} from '../src/finality-policy.js';
 
 const CONSUMER_A: Address = '0x1111111111111111111111111111111111111111';
 const CONSUMER_B: Address = '0x2222222222222222222222222222222222222222';
@@ -55,6 +60,10 @@ const PUBLIC_CLIENT = {} as PublicClient;
 const WALLET_CLIENT = {} as WalletClient;
 const ACCOUNT = {} as Account;
 const CHECKPOINT_STORE = {} as CheckpointStore;
+
+const FINALITY: FinalityPolicy = {
+  type: 'safe',
+};
 
 const DEPLOYMENT: RegistryDeployment = {
   chainId: 46630,
@@ -78,33 +87,44 @@ const VALIDATED_CONSUMER_C: ValidatedQuicknetConsumer = {
 };
 
 function caughtUpResult(
-  nextBlock: bigint,
-  headBlock: bigint,
+  consumer: Address,
+  softNextBlock: bigint,
 ): RunDaemonIterationResult {
   return {
     status: 'caught-up',
-    consumer: CONSUMER_A,
-    headBlock,
-    nextBlock,
+    consumer,
+    latestBlock: 1_500n,
+    durableBlock: 1_200n,
+    durableNextBlock: 1_201n,
+    softCursor: {
+      nextBlock: softNextBlock,
+    },
+    durableScan: undefined,
+    softScan: undefined,
   };
 }
 
 function processedResult(
   consumer: Address,
-  fromBlock: bigint,
-  toBlock: bigint,
-  nextBlock: bigint,
-  headBlock: bigint,
+  softNextBlock: bigint,
 ): RunDaemonIterationResult {
   return {
     status: 'processed',
     consumer,
-    headBlock,
-    fromBlock,
-    toBlock,
-    nextBlock,
-    processing: {
-      rounds: [],
+    latestBlock: 1_500n,
+    durableBlock: 1_200n,
+    durableNextBlock: 1_201n,
+    softCursor: {
+      nextBlock: softNextBlock,
+    },
+    durableScan: undefined,
+    softScan: {
+      fromBlock: 1_201n,
+      toBlock: softNextBlock - 1n,
+      nextBlock: softNextBlock,
+      processing: {
+        rounds: [],
+      },
     },
   };
 }
@@ -117,16 +137,22 @@ describe('runDaemonCycle', () => {
   });
 
   it('returns an empty result for an empty consumer list', async () => {
-    const result = await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-    });
+    const softCursors =
+      new Map<Address, SoftScanCursor>();
+
+    const result =
+      await runDaemonCycle({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore: CHECKPOINT_STORE,
+        consumers: [],
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursors,
+      });
 
     expect(result).toEqual({
       consumers: [],
@@ -135,28 +161,45 @@ describe('runDaemonCycle', () => {
     expect(
       runDaemonIteration,
     ).not.toHaveBeenCalled();
+
+    expect(
+      softCursors.size,
+    ).toBe(
+      0
+    );
   });
 
-  it('runs one iteration for one consumer', async () => {
-    const iteration = caughtUpResult(
-      1_001n,
-      1_000n,
-    );
+  it('runs one iteration for one consumer without an existing soft cursor', async () => {
+    const iteration =
+      caughtUpResult(
+        CONSUMER_A,
+        1_501n,
+      );
 
     vi.mocked(
       runDaemonIteration,
-    ).mockResolvedValue(iteration);
+    ).mockResolvedValue(
+      iteration
+    );
 
-    const result = await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-    });
+    const softCursors =
+      new Map<Address, SoftScanCursor>();
+
+    const result =
+      await runDaemonCycle({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore: CHECKPOINT_STORE,
+        consumers: [
+          VALIDATED_CONSUMER_A,
+        ],
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursors,
+      });
 
     expect(
       runDaemonIteration,
@@ -173,6 +216,7 @@ describe('runDaemonCycle', () => {
       consumer: CONSUMER_A,
       startBlock: 1_000n,
       maxBlockRange: 100n,
+      finality: FINALITY,
     });
 
     expect(result).toEqual({
@@ -186,22 +230,165 @@ describe('runDaemonCycle', () => {
     });
   });
 
+  it('passes an existing soft cursor to the consumer iteration', async () => {
+    const existingCursor: SoftScanCursor = {
+      nextBlock: 1_400n,
+    };
+
+    const iteration =
+      caughtUpResult(
+        CONSUMER_A,
+        1_501n,
+      );
+
+    vi.mocked(
+      runDaemonIteration,
+    ).mockResolvedValue(
+      iteration
+    );
+
+    const softCursors =
+      new Map<Address, SoftScanCursor>([
+        [
+          CONSUMER_A,
+          existingCursor,
+        ],
+      ]);
+
+    await runDaemonCycle({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore: CHECKPOINT_STORE,
+      consumers: [
+        VALIDATED_CONSUMER_A,
+      ],
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursors,
+    });
+
+    expect(
+      runDaemonIteration,
+    ).toHaveBeenCalledWith({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore: CHECKPOINT_STORE,
+      consumer: CONSUMER_A,
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursor: existingCursor,
+    });
+  });
+
+  it('stores the returned soft cursor after a successful iteration', async () => {
+    const iteration =
+      processedResult(
+        CONSUMER_A,
+        1_501n,
+      );
+
+    vi.mocked(
+      runDaemonIteration,
+    ).mockResolvedValue(
+      iteration
+    );
+
+    const softCursors =
+      new Map<Address, SoftScanCursor>();
+
+    await runDaemonCycle({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore: CHECKPOINT_STORE,
+      consumers: [
+        VALIDATED_CONSUMER_A,
+      ],
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursors,
+    });
+
+    expect(
+      softCursors.get(
+        CONSUMER_A
+      ),
+    ).toEqual({
+      nextBlock: 1_501n,
+    });
+  });
+
+  it('replaces an existing soft cursor after a successful iteration', async () => {
+    const softCursors =
+      new Map<Address, SoftScanCursor>([
+        [
+          CONSUMER_A,
+          {
+            nextBlock: 1_300n,
+          },
+        ],
+      ]);
+
+    vi.mocked(
+      runDaemonIteration,
+    ).mockResolvedValue(
+      processedResult(
+        CONSUMER_A,
+        1_501n,
+      )
+    );
+
+    await runDaemonCycle({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore: CHECKPOINT_STORE,
+      consumers: [
+        VALIDATED_CONSUMER_A,
+      ],
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursors,
+    });
+
+    expect(
+      softCursors.get(
+        CONSUMER_A
+      ),
+    ).toEqual({
+      nextBlock: 1_501n,
+    });
+  });
+
   it('forwards shared daemon options to every consumer iteration', async () => {
     vi.mocked(
       runDaemonIteration,
     )
       .mockResolvedValueOnce(
         caughtUpResult(
-          1_001n,
-          1_000n,
+          CONSUMER_A,
+          1_501n,
         )
       )
-      .mockResolvedValueOnce({
-        status: 'caught-up',
-        consumer: CONSUMER_B,
-        headBlock: 1_000n,
-        nextBlock: 1_001n,
-      });
+      .mockResolvedValueOnce(
+        caughtUpResult(
+          CONSUMER_B,
+          1_501n,
+        )
+      );
+
+    const softCursors =
+      new Map<Address, SoftScanCursor>();
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
@@ -215,6 +402,8 @@ describe('runDaemonCycle', () => {
       ],
       startBlock: 500n,
       maxBlockRange: 250n,
+      finality: FINALITY,
+      softCursors,
     });
 
     expect(
@@ -230,6 +419,7 @@ describe('runDaemonCycle', () => {
         consumer: CONSUMER_A,
         startBlock: 500n,
         maxBlockRange: 250n,
+        finality: FINALITY,
       },
     );
 
@@ -246,60 +436,71 @@ describe('runDaemonCycle', () => {
         consumer: CONSUMER_B,
         startBlock: 500n,
         maxBlockRange: 250n,
+        finality: FINALITY,
       },
     );
   });
 
-  it('preserves configured consumer order', async () => {
-    const iterationB: RunDaemonIterationResult = {
-      status: 'caught-up',
-      consumer: CONSUMER_B,
-      headBlock: 1_000n,
-      nextBlock: 1_001n,
+  it('passes the correct soft cursor to each consumer', async () => {
+    const cursorA: SoftScanCursor = {
+      nextBlock: 1_300n,
     };
 
-    const iterationA: RunDaemonIterationResult = {
-      status: 'caught-up',
-      consumer: CONSUMER_A,
-      headBlock: 1_000n,
-      nextBlock: 1_001n,
+    const cursorB: SoftScanCursor = {
+      nextBlock: 1_400n,
     };
+
+    const softCursors =
+      new Map<Address, SoftScanCursor>([
+        [
+          CONSUMER_A,
+          cursorA,
+        ],
+        [
+          CONSUMER_B,
+          cursorB,
+        ],
+      ]);
 
     vi.mocked(
       runDaemonIteration,
     )
-      .mockResolvedValueOnce(iterationB)
-      .mockResolvedValueOnce(iterationA);
+      .mockResolvedValueOnce(
+        caughtUpResult(
+          CONSUMER_A,
+          1_501n,
+        )
+      )
+      .mockResolvedValueOnce(
+        caughtUpResult(
+          CONSUMER_B,
+          1_501n,
+        )
+      );
 
-    const result = await runDaemonCycle({
+    await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [
-        VALIDATED_CONSUMER_B,
         VALIDATED_CONSUMER_A,
+        VALIDATED_CONSUMER_B,
       ],
-      startBlock: 1_000n,
+      startBlock: 500n,
       maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursors,
     });
-
-    expect(
-      result.consumers.map(
-        (consumer) => consumer.consumer.address
-      )
-    ).toEqual([
-      CONSUMER_B,
-      CONSUMER_A,
-    ]);
 
     expect(
       runDaemonIteration,
     ).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        consumer: CONSUMER_B,
+        consumer: CONSUMER_A,
+        softCursor: cursorA,
       }),
     );
 
@@ -308,33 +509,95 @@ describe('runDaemonCycle', () => {
     ).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        consumer: CONSUMER_A,
+        consumer: CONSUMER_B,
+        softCursor: cursorB,
       }),
     );
   });
 
-  it('preserves a caught-up iteration result', async () => {
-    const iteration: RunDaemonIterationResult = {
-      status: 'caught-up',
-      consumer: CONSUMER_A,
-      headBlock: 2_000n,
-      nextBlock: 2_001n,
-    };
+  it('preserves configured consumer order', async () => {
+    const iterationB =
+      caughtUpResult(
+        CONSUMER_B,
+        1_501n,
+      );
+
+    const iterationA =
+      caughtUpResult(
+        CONSUMER_A,
+        1_501n,
+      );
 
     vi.mocked(
       runDaemonIteration,
-    ).mockResolvedValue(iteration);
+    )
+      .mockResolvedValueOnce(
+        iterationB
+      )
+      .mockResolvedValueOnce(
+        iterationA
+      );
 
-    const result = await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-    });
+    const softCursors =
+      new Map<Address, SoftScanCursor>();
+
+    const result =
+      await runDaemonCycle({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore: CHECKPOINT_STORE,
+        consumers: [
+          VALIDATED_CONSUMER_B,
+          VALIDATED_CONSUMER_A,
+        ],
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursors,
+      });
+
+    expect(
+      result.consumers.map(
+        (consumer) =>
+          consumer.consumer.address
+      )
+    ).toEqual([
+      CONSUMER_B,
+      CONSUMER_A,
+    ]);
+  });
+
+  it('preserves a caught-up iteration result', async () => {
+    const iteration =
+      caughtUpResult(
+        CONSUMER_A,
+        2_001n,
+      );
+
+    vi.mocked(
+      runDaemonIteration,
+    ).mockResolvedValue(
+      iteration
+    );
+
+    const result =
+      await runDaemonCycle({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore: CHECKPOINT_STORE,
+        consumers: [
+          VALIDATED_CONSUMER_A,
+        ],
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursors:
+          new Map<Address, SoftScanCursor>(),
+      });
 
     expect(result).toEqual({
       consumers: [
@@ -348,28 +611,34 @@ describe('runDaemonCycle', () => {
   });
 
   it('preserves a processed iteration result', async () => {
-    const iteration = processedResult(
-      CONSUMER_A,
-      1_000n,
-      1_099n,
-      1_100n,
-      1_500n,
-    );
+    const iteration =
+      processedResult(
+        CONSUMER_A,
+        1_501n,
+      );
 
     vi.mocked(
       runDaemonIteration,
-    ).mockResolvedValue(iteration);
+    ).mockResolvedValue(
+      iteration
+    );
 
-    const result = await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-    });
+    const result =
+      await runDaemonCycle({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore: CHECKPOINT_STORE,
+        consumers: [
+          VALIDATED_CONSUMER_A,
+        ],
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursors:
+          new Map<Address, SoftScanCursor>(),
+      });
 
     expect(result).toEqual({
       consumers: [
@@ -383,22 +652,33 @@ describe('runDaemonCycle', () => {
   });
 
   it('captures a consumer iteration failure', async () => {
-    const failure = new Error('Consumer iteration failed.');
+    const failure =
+      new Error(
+        'Consumer iteration failed.',
+      );
 
     vi.mocked(
       runDaemonIteration,
-    ).mockRejectedValue(failure);
+    ).mockRejectedValue(
+      failure
+    );
 
-    const result = await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-    });
+    const result =
+      await runDaemonCycle({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore: CHECKPOINT_STORE,
+        consumers: [
+          VALIDATED_CONSUMER_A,
+        ],
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursors:
+          new Map<Address, SoftScanCursor>(),
+      });
 
     expect(result).toEqual({
       consumers: [
@@ -419,29 +699,41 @@ describe('runDaemonCycle', () => {
 
     vi.mocked(
       runDaemonIteration,
-    ).mockRejectedValue(failure);
+    ).mockRejectedValue(
+      failure
+    );
 
-    const result = await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-    });
+    const result =
+      await runDaemonCycle({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore: CHECKPOINT_STORE,
+        consumers: [
+          VALIDATED_CONSUMER_A,
+        ],
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursors:
+          new Map<Address, SoftScanCursor>(),
+      });
 
     const consumerResult =
       result.consumers[0];
 
-    expect(consumerResult).toBeDefined();
+    expect(
+      consumerResult,
+    ).toBeDefined();
 
     if (
       consumerResult === undefined ||
       consumerResult.status !== 'failed'
     ) {
-      throw new Error('Expected a failed consumer result.');
+      throw new Error(
+        'Expected a failed consumer result.'
+      );
     }
 
     expect(
@@ -451,33 +743,19 @@ describe('runDaemonCycle', () => {
     );
   });
 
-  it('continues processing later consumers after one consumer fails', async () => {
-    const failure = new Error('Consumer B failed.');
-
-    const iterationA = processedResult(
-      CONSUMER_A,
-      1_000n,
-      1_099n,
-      1_100n,
-      1_500n,
-    );
-
-    const iterationC = processedResult(
-      CONSUMER_C,
-      1_000n,
-      1_099n,
-      1_100n,
-      1_500n,
-    );
-
+  it('does not create a soft cursor when a consumer iteration fails', async () => {
     vi.mocked(
       runDaemonIteration,
-    )
-      .mockResolvedValueOnce(iterationA)
-      .mockRejectedValueOnce(failure)
-      .mockResolvedValueOnce(iterationC);
+    ).mockRejectedValue(
+      new Error(
+        'Consumer iteration failed.',
+      )
+    );
 
-    const result = await runDaemonCycle({
+    const softCursors =
+      new Map<Address, SoftScanCursor>();
+
+    await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
@@ -485,16 +763,124 @@ describe('runDaemonCycle', () => {
       checkpointStore: CHECKPOINT_STORE,
       consumers: [
         VALIDATED_CONSUMER_A,
-        VALIDATED_CONSUMER_B,
-        VALIDATED_CONSUMER_C,
       ],
       startBlock: 1_000n,
       maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursors,
     });
 
     expect(
+      softCursors.has(
+        CONSUMER_A
+      ),
+    ).toBe(
+      false
+    );
+  });
+
+  it('preserves an existing soft cursor when a consumer iteration fails', async () => {
+    const existingCursor: SoftScanCursor = {
+      nextBlock: 1_400n,
+    };
+
+    const softCursors =
+      new Map<Address, SoftScanCursor>([
+        [
+          CONSUMER_A,
+          existingCursor,
+        ],
+      ]);
+
+    vi.mocked(
       runDaemonIteration,
-    ).toHaveBeenCalledTimes(3);
+    ).mockRejectedValue(
+      new Error(
+        'Consumer iteration failed.',
+      )
+    );
+
+    await runDaemonCycle({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore: CHECKPOINT_STORE,
+      consumers: [
+        VALIDATED_CONSUMER_A,
+      ],
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursors,
+    });
+
+    expect(
+      softCursors.get(
+        CONSUMER_A
+      ),
+    ).toBe(
+      existingCursor
+    );
+  });
+
+  it('continues processing later consumers after one consumer fails', async () => {
+    const failure =
+      new Error(
+        'Consumer B failed.',
+      );
+
+    const iterationA =
+      processedResult(
+        CONSUMER_A,
+        1_501n,
+      );
+
+    const iterationC =
+      processedResult(
+        CONSUMER_C,
+        1_601n,
+      );
+
+    vi.mocked(
+      runDaemonIteration,
+    )
+      .mockResolvedValueOnce(
+        iterationA
+      )
+      .mockRejectedValueOnce(
+        failure
+      )
+      .mockResolvedValueOnce(
+        iterationC
+      );
+
+    const softCursors =
+      new Map<Address, SoftScanCursor>();
+
+    const result =
+      await runDaemonCycle({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore: CHECKPOINT_STORE,
+        consumers: [
+          VALIDATED_CONSUMER_A,
+          VALIDATED_CONSUMER_B,
+          VALIDATED_CONSUMER_C,
+        ],
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursors,
+      });
+
+    expect(
+      runDaemonIteration,
+    ).toHaveBeenCalledTimes(
+      3
+    );
 
     expect(result).toEqual({
       consumers: [
@@ -515,39 +901,67 @@ describe('runDaemonCycle', () => {
         },
       ],
     });
+
+    expect(
+      softCursors.get(
+        CONSUMER_A
+      ),
+    ).toEqual({
+      nextBlock: 1_501n,
+    });
+
+    expect(
+      softCursors.has(
+        CONSUMER_B
+      ),
+    ).toBe(
+      false
+    );
+
+    expect(
+      softCursors.get(
+        CONSUMER_C
+      ),
+    ).toEqual({
+      nextBlock: 1_601n,
+    });
   });
 
-  it('processes consumers sequentially', async () => {
-    let resolveFirst:
-      | ((value: RunDaemonIterationResult) => void)
-      | undefined;
-
-    const firstResult: RunDaemonIterationResult = {
-      status: 'caught-up',
-      consumer: CONSUMER_A,
-      headBlock: 1_000n,
-      nextBlock: 1_001n,
+  it('preserves a failed consumer cursor while updating successful consumers', async () => {
+    const existingCursorB: SoftScanCursor = {
+      nextBlock: 1_350n,
     };
 
-    const secondResult: RunDaemonIterationResult = {
-      status: 'caught-up',
-      consumer: CONSUMER_B,
-      headBlock: 1_000n,
-      nextBlock: 1_001n,
-    };
-
-    const firstPromise =
-      new Promise<RunDaemonIterationResult>((resolve) => {
-        resolveFirst = resolve;
-      });
+    const softCursors =
+      new Map<Address, SoftScanCursor>([
+        [
+          CONSUMER_B,
+          existingCursorB,
+        ],
+      ]);
 
     vi.mocked(
       runDaemonIteration,
     )
-      .mockReturnValueOnce(firstPromise)
-      .mockResolvedValueOnce(secondResult);
+      .mockResolvedValueOnce(
+        processedResult(
+          CONSUMER_A,
+          1_501n,
+        )
+      )
+      .mockRejectedValueOnce(
+        new Error(
+          'Consumer B failed.',
+        )
+      )
+      .mockResolvedValueOnce(
+        processedResult(
+          CONSUMER_C,
+          1_601n,
+        )
+      );
 
-    const cycle = runDaemonCycle({
+    await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
@@ -556,28 +970,118 @@ describe('runDaemonCycle', () => {
       consumers: [
         VALIDATED_CONSUMER_A,
         VALIDATED_CONSUMER_B,
+        VALIDATED_CONSUMER_C,
       ],
       startBlock: 1_000n,
       maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursors,
     });
+
+    expect(
+      softCursors.get(
+        CONSUMER_A
+      ),
+    ).toEqual({
+      nextBlock: 1_501n,
+    });
+
+    expect(
+      softCursors.get(
+        CONSUMER_B
+      ),
+    ).toBe(
+      existingCursorB
+    );
+
+    expect(
+      softCursors.get(
+        CONSUMER_C
+      ),
+    ).toEqual({
+      nextBlock: 1_601n,
+    });
+  });
+
+  it('processes consumers sequentially', async () => {
+    let resolveFirst:
+      | ((value: RunDaemonIterationResult) => void)
+      | undefined;
+
+    const firstResult =
+      caughtUpResult(
+        CONSUMER_A,
+        1_501n,
+      );
+
+    const secondResult =
+      caughtUpResult(
+        CONSUMER_B,
+        1_501n,
+      );
+
+    const firstPromise =
+      new Promise<RunDaemonIterationResult>(
+        (resolve) => {
+          resolveFirst =
+            resolve;
+        },
+      );
+
+    vi.mocked(
+      runDaemonIteration,
+    )
+      .mockReturnValueOnce(
+        firstPromise
+      )
+      .mockResolvedValueOnce(
+        secondResult
+      );
+
+    const cycle =
+      runDaemonCycle({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore: CHECKPOINT_STORE,
+        consumers: [
+          VALIDATED_CONSUMER_A,
+          VALIDATED_CONSUMER_B,
+        ],
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursors:
+          new Map<Address, SoftScanCursor>(),
+      });
 
     await Promise.resolve();
 
     expect(
       runDaemonIteration,
-    ).toHaveBeenCalledTimes(1);
+    ).toHaveBeenCalledTimes(
+      1
+    );
 
     if (resolveFirst === undefined) {
-      throw new Error('Expected first consumer resolver to be initialized.');
+      throw new Error(
+        'Expected first consumer resolver to be initialized.'
+      );
     }
 
-    resolveFirst(firstResult);
+    resolveFirst(
+      firstResult
+    );
 
-    const result = await cycle;
+    const result =
+      await cycle;
 
     expect(
       runDaemonIteration,
-    ).toHaveBeenCalledTimes(2);
+    ).toHaveBeenCalledTimes(
+      2
+    );
 
     expect(result).toEqual({
       consumers: [
@@ -600,57 +1104,79 @@ describe('runDaemonCycle', () => {
       | ((reason?: unknown) => void)
       | undefined;
 
-    const failure = new Error('Consumer A failed.');
+    const failure =
+      new Error(
+        'Consumer A failed.',
+      );
 
-    const secondResult: RunDaemonIterationResult = {
-      status: 'caught-up',
-      consumer: CONSUMER_B,
-      headBlock: 1_000n,
-      nextBlock: 1_001n,
-    };
+    const secondResult =
+      caughtUpResult(
+        CONSUMER_B,
+        1_501n,
+      );
 
     const firstPromise =
-      new Promise<RunDaemonIterationResult>((_resolve, reject) => {
-        rejectFirst = reject;
-      });
+      new Promise<RunDaemonIterationResult>(
+        (_resolve, reject) => {
+          rejectFirst =
+            reject;
+        },
+      );
 
     vi.mocked(
       runDaemonIteration,
     )
-      .mockReturnValueOnce(firstPromise)
-      .mockResolvedValueOnce(secondResult);
+      .mockReturnValueOnce(
+        firstPromise
+      )
+      .mockResolvedValueOnce(
+        secondResult
+      );
 
-    const cycle = runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [
-        VALIDATED_CONSUMER_A,
-        VALIDATED_CONSUMER_B,
-      ],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-    });
+    const cycle =
+      runDaemonCycle({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore: CHECKPOINT_STORE,
+        consumers: [
+          VALIDATED_CONSUMER_A,
+          VALIDATED_CONSUMER_B,
+        ],
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursors:
+          new Map<Address, SoftScanCursor>(),
+      });
 
     await Promise.resolve();
 
     expect(
       runDaemonIteration,
-    ).toHaveBeenCalledTimes(1);
+    ).toHaveBeenCalledTimes(
+      1
+    );
 
     if (rejectFirst === undefined) {
-      throw new Error('Expected first consumer rejector to be initialized.');
+      throw new Error(
+        'Expected first consumer rejector to be initialized.'
+      );
     }
 
-    rejectFirst(failure);
+    rejectFirst(
+      failure
+    );
 
-    const result = await cycle;
+    const result =
+      await cycle;
 
     expect(
       runDaemonIteration,
-    ).toHaveBeenCalledTimes(2);
+    ).toHaveBeenCalledTimes(
+      2
+    );
 
     expect(result).toEqual({
       consumers: [

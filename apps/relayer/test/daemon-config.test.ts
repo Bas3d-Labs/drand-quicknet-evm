@@ -29,6 +29,7 @@ vi.mock(
 
 import {
   loadRelayerConfig,
+  RelayerConfig,
 } from '../src/config.js';
 
 import {
@@ -63,12 +64,15 @@ const DEPLOYMENT: RegistryDeployment = {
 
 const ACCOUNT = privateKeyToAccount(PRIVATE_KEY);
 
-const RELAYER_CONFIG = {
+const RELAYER_CONFIG: RelayerConfig = {
   network: 'robinhood-testnet' as const,
   chain: robinhoodTestnet,
   rpcUrl: 'https://rpc.example.test',
   account: ACCOUNT,
   deployment: DEPLOYMENT,
+  finality: {
+    type: 'safe',
+  },
 };
 
 describe(

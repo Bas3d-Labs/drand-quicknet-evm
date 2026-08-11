@@ -19,6 +19,13 @@ import type {
 } from '@based-labs/drand-quicknet-registry';
 
 vi.mock(
+  '../src/chain-heads.js',
+  () => ({
+    getChainHeads: vi.fn(),
+  }),
+);
+
+vi.mock(
   '../src/request-processor.js',
   () => ({
     processQuicknetRequests: vi.fn(),
@@ -32,13 +39,22 @@ vi.mock(
   }),
 );
 
+import {
+  getChainHeads,
+} from '../src/chain-heads.js';
+
 import type {
   CheckpointStore,
 } from '../src/checkpoint.js';
 
 import {
   runDaemonIteration,
+  type SoftScanCursor,
 } from '../src/daemon-iteration.js';
+
+import type {
+  FinalityPolicy,
+} from '../src/finality-policy.js';
 
 import {
   processQuicknetRequests,
@@ -65,6 +81,10 @@ const TRANSACTION_HASH: Hex =
 const PUBLIC_CLIENT = {} as PublicClient;
 const WALLET_CLIENT = {} as WalletClient;
 const ACCOUNT = {} as Account;
+
+const FINALITY: FinalityPolicy = {
+  type: 'safe',
+};
 
 const DEPLOYMENT: RegistryDeployment = {
   chainId: 46630,
@@ -113,9 +133,13 @@ function firstInvocationOrder(
     };
   },
 ): number {
-  const order = mock.mock.invocationCallOrder[0];
+  const order =
+    mock.mock.invocationCallOrder[0];
+
   if (order === undefined) {
-    throw new Error('Expected mock to have been called.');
+    throw new Error(
+      'Expected mock to have been called.'
+    );
   }
 
   return order;
@@ -128,6 +152,10 @@ describe('runDaemonIteration', () => {
 
   beforeEach(() => {
     vi.mocked(
+      getChainHeads,
+    ).mockReset();
+
+    vi.mocked(
       scanQuicknetRequests,
     ).mockReset();
 
@@ -135,11 +163,30 @@ describe('runDaemonIteration', () => {
       processQuicknetRequests,
     ).mockReset();
 
-    const checkpoint = createCheckpointStore();
+    const checkpoint =
+      createCheckpointStore();
 
-    checkpointStore = checkpoint.checkpointStore;
-    load = checkpoint.load;
-    save = checkpoint.save;
+    checkpointStore =
+      checkpoint.checkpointStore;
+
+    load =
+      checkpoint.load;
+
+    save =
+      checkpoint.save;
+
+    vi.mocked(
+      getChainHeads,
+    ).mockResolvedValue({
+      latestBlock: 1_500n,
+      durableBlock: 1_200n,
+    });
+
+    vi.mocked(
+      processQuicknetRequests,
+    ).mockResolvedValue(
+      PROCESSING_RESULT
+    );
   });
 
   it('rejects a negative startBlock', async () => {
@@ -153,6 +200,7 @@ describe('runDaemonIteration', () => {
         consumer: CONSUMER,
         startBlock: -1n,
         maxBlockRange: 100n,
+        finality: FINALITY,
       })
     ).rejects.toThrow(
       'startBlock must not be negative.'
@@ -160,6 +208,10 @@ describe('runDaemonIteration', () => {
 
     expect(
       load,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      getChainHeads,
     ).not.toHaveBeenCalled();
 
     expect(
@@ -175,80 +227,105 @@ describe('runDaemonIteration', () => {
     ).not.toHaveBeenCalled();
   });
 
-  it('uses startBlock when no checkpoint exists', async () => {
-    load.mockResolvedValue(undefined);
-
-    vi.mocked(
-      scanQuicknetRequests,
-    ).mockResolvedValue({
-      status: 'caught-up',
-      headBlock: 999n,
-      nextBlock: 1_000n,
-    });
-
-    await runDaemonIteration({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore,
-      consumer: CONSUMER,
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-    });
+  it('rejects a zero maxBlockRange', async () => {
+    await expect(
+      runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 1_000n,
+        maxBlockRange: 0n,
+        finality: FINALITY,
+      })
+    ).rejects.toThrow(
+      'maxBlockRange must be greater than zero.'
+    );
 
     expect(
-      scanQuicknetRequests,
-    ).toHaveBeenCalledWith({
-      publicClient: PUBLIC_CLIENT,
-      consumers: [CONSUMER],
-      nextBlock: 1_000n,
-      maxBlockRange: 100n,
-    });
+      load,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      getChainHeads,
+    ).not.toHaveBeenCalled();
   });
 
-  it('uses the persisted checkpoint instead of startBlock', async () => {
-    load.mockResolvedValue(2_000n);
-
-    vi.mocked(
-      scanQuicknetRequests,
-    ).mockResolvedValue({
-      status: 'caught-up',
-      headBlock: 1_999n,
-      nextBlock: 2_000n,
-    });
-
-    await runDaemonIteration({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore,
-      consumer: CONSUMER,
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-    });
+  it('rejects a negative maxBlockRange', async () => {
+    await expect(
+      runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 1_000n,
+        maxBlockRange: -1n,
+        finality: FINALITY,
+      })
+    ).rejects.toThrow(
+      'maxBlockRange must be greater than zero.'
+    );
 
     expect(
-      scanQuicknetRequests,
-    ).toHaveBeenCalledWith({
-      publicClient: PUBLIC_CLIENT,
-      consumers: [CONSUMER],
-      nextBlock: 2_000n,
-      maxBlockRange: 100n,
-    });
+      load,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      getChainHeads,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('rejects a negative soft cursor', async () => {
+    await expect(
+      runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursor: {
+          nextBlock: -1n,
+        },
+      })
+    ).rejects.toThrow(
+      'Soft cursor nextBlock must not be negative.'
+    );
+
+    expect(
+      load,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      getChainHeads,
+    ).not.toHaveBeenCalled();
   });
 
   it('loads the checkpoint for the current consumer', async () => {
-    load.mockResolvedValue(undefined);
+    load.mockResolvedValue(
+      1_201n
+    );
 
     vi.mocked(
       scanQuicknetRequests,
-    ).mockResolvedValue({
-      status: 'caught-up',
-      headBlock: 999n,
-      nextBlock: 1_000n,
-    });
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_500n,
+        nextBlock: 1_501n,
+      });
 
     await runDaemonIteration({
       publicClient: PUBLIC_CLIENT,
@@ -257,8 +334,12 @@ describe('runDaemonIteration', () => {
       deployment: DEPLOYMENT,
       checkpointStore,
       consumer: CONSUMER,
-      startBlock: 1_000n,
+      startBlock: 500n,
       maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursor: {
+        nextBlock: 1_501n,
+      },
     });
 
     expect(
@@ -272,95 +353,24 @@ describe('runDaemonIteration', () => {
     );
   });
 
-  it('scans only the current consumer', async () => {
-    load.mockResolvedValue(1_000n);
-
-    vi.mocked(
-      scanQuicknetRequests,
-    ).mockResolvedValue({
-      status: 'caught-up',
-      headBlock: 999n,
-      nextBlock: 1_000n,
-    });
-
-    await runDaemonIteration({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore,
-      consumer: CONSUMER,
-      startBlock: 500n,
-      maxBlockRange: 250n,
-    });
-
-    expect(
-      scanQuicknetRequests,
-    ).toHaveBeenCalledWith({
-      publicClient: PUBLIC_CLIENT,
-      consumers: [CONSUMER],
-      nextBlock: 1_000n,
-      maxBlockRange: 250n,
-    });
-  });
-
-  it('returns caught-up without processing or saving', async () => {
-    load.mockResolvedValue(1_001n);
-
-    vi.mocked(
-      scanQuicknetRequests,
-    ).mockResolvedValue({
-      status: 'caught-up',
-      headBlock: 1_000n,
-      nextBlock: 1_001n,
-    });
-
-    const result = await runDaemonIteration({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore,
-      consumer: CONSUMER,
-      startBlock: 500n,
-      maxBlockRange: 100n,
-    });
-
-    expect(result).toEqual({
-      status: 'caught-up',
-      consumer: CONSUMER,
-      headBlock: 1_000n,
-      nextBlock: 1_001n,
-    });
-
-    expect(
-      processQuicknetRequests,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      save,
-    ).not.toHaveBeenCalled();
-  });
-
-  it('processes requests returned by the scanner', async () => {
-    load.mockResolvedValue(1_000n);
-
-    vi.mocked(
-      scanQuicknetRequests,
-    ).mockResolvedValue({
-      status: 'scanned',
-      headBlock: 1_500n,
-      fromBlock: 1_000n,
-      toBlock: 1_099n,
-      nextBlock: 1_100n,
-      requests: [REQUEST],
-    });
-
-    vi.mocked(
-      processQuicknetRequests,
-    ).mockResolvedValue(
-      PROCESSING_RESULT
+  it('loads the checkpoint before reading chain heads', async () => {
+    load.mockResolvedValue(
+      1_201n
     );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_500n,
+        nextBlock: 1_501n,
+      });
 
     await runDaemonIteration({
       publicClient: PUBLIC_CLIENT,
@@ -371,152 +381,45 @@ describe('runDaemonIteration', () => {
       consumer: CONSUMER,
       startBlock: 500n,
       maxBlockRange: 100n,
-    });
-
-    expect(
-      processQuicknetRequests,
-    ).toHaveBeenCalledOnce();
-
-    expect(
-      processQuicknetRequests,
-    ).toHaveBeenCalledWith({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      requests: [REQUEST],
-    });
-  });
-
-  it('advances the checkpoint after successful processing', async () => {
-    load.mockResolvedValue(1_000n);
-
-    vi.mocked(
-      scanQuicknetRequests,
-    ).mockResolvedValue({
-      status: 'scanned',
-      headBlock: 1_500n,
-      fromBlock: 1_000n,
-      toBlock: 1_099n,
-      nextBlock: 1_100n,
-      requests: [REQUEST],
-    });
-
-    vi.mocked(
-      processQuicknetRequests,
-    ).mockResolvedValue(
-      PROCESSING_RESULT
-    );
-
-    await runDaemonIteration({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore,
-      consumer: CONSUMER,
-      startBlock: 500n,
-      maxBlockRange: 100n,
-    });
-
-    expect(
-      save,
-    ).toHaveBeenCalledOnce();
-
-    expect(
-      save,
-    ).toHaveBeenCalledWith(
-      CONSUMER,
-      1_100n
-    );
-  });
-
-  it('advances the checkpoint for an empty successfully scanned range', async () => {
-    load.mockResolvedValue(1_000n);
-
-    vi.mocked(
-      scanQuicknetRequests,
-    ).mockResolvedValue({
-      status: 'scanned',
-      headBlock: 1_500n,
-      fromBlock: 1_000n,
-      toBlock: 1_099n,
-      nextBlock: 1_100n,
-      requests: [],
-    });
-
-    vi.mocked(
-      processQuicknetRequests,
-    ).mockResolvedValue({
-      rounds: [],
-    });
-
-    const result = await runDaemonIteration({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore,
-      consumer: CONSUMER,
-      startBlock: 500n,
-      maxBlockRange: 100n,
-    });
-
-    expect(
-      processQuicknetRequests,
-    ).toHaveBeenCalledWith({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      requests: [],
-    });
-
-    expect(
-      save,
-    ).toHaveBeenCalledWith(
-      CONSUMER,
-      1_100n
-    );
-
-    expect(result).toEqual({
-      status: 'processed',
-      consumer: CONSUMER,
-      headBlock: 1_500n,
-      fromBlock: 1_000n,
-      toBlock: 1_099n,
-      nextBlock: 1_100n,
-      processing: {
-        rounds: [],
+      finality: FINALITY,
+      softCursor: {
+        nextBlock: 1_501n,
       },
     });
+
+    expect(
+      firstInvocationOrder(
+        load
+      )
+    ).toBeLessThan(
+      firstInvocationOrder(
+        vi.mocked(
+          getChainHeads
+        )
+      )
+    );
   });
 
-  it('returns the processed scan result', async () => {
-    load.mockResolvedValue(1_000n);
-
-    const processing: ProcessQuicknetRequestsResult = {
-      rounds: [],
-    };
+  it('uses the configured finality policy', async () => {
+    load.mockResolvedValue(
+      1_201n
+    );
 
     vi.mocked(
       scanQuicknetRequests,
-    ).mockResolvedValue({
-      status: 'scanned',
-      headBlock: 1_500n,
-      fromBlock: 1_000n,
-      toBlock: 1_099n,
-      nextBlock: 1_100n,
-      requests: [REQUEST],
-    });
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_500n,
+        nextBlock: 1_501n,
+      });
 
-    vi.mocked(
-      processQuicknetRequests,
-    ).mockResolvedValue(
-      processing
-    );
-
-    const result = await runDaemonIteration({
+    await runDaemonIteration({
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
@@ -525,33 +428,559 @@ describe('runDaemonIteration', () => {
       consumer: CONSUMER,
       startBlock: 500n,
       maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursor: {
+        nextBlock: 1_501n,
+      },
     });
 
-    expect(result).toEqual({
-      status: 'processed',
+    expect(
+      getChainHeads,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      getChainHeads,
+    ).toHaveBeenCalledWith({
+      publicClient: PUBLIC_CLIENT,
+      finality: FINALITY,
+    });
+  });
+
+  it('uses startBlock as the durable cursor when no checkpoint exists', async () => {
+    load.mockResolvedValue(
+      undefined
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_200n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        requests: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [],
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
       consumer: CONSUMER,
-      headBlock: 1_500n,
-      fromBlock: 1_000n,
-      toBlock: 1_099n,
-      nextBlock: 1_100n,
-      processing,
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
     });
+
+    expect(
+      scanQuicknetRequests,
+    ).toHaveBeenNthCalledWith(
+      1,
+      {
+        publicClient: PUBLIC_CLIENT,
+        consumers: [
+          CONSUMER,
+        ],
+        nextBlock: 1_000n,
+        throughBlock: 1_200n,
+        maxBlockRange: 100n,
+      },
+    );
   });
 
-  it('does not save the checkpoint when request processing fails', async () => {
-    const failure = new Error('Request processing failed.');
-
-    load.mockResolvedValue(1_000n);
+  it('uses the persisted checkpoint instead of startBlock for durable scanning', async () => {
+    load.mockResolvedValue(
+      1_100n
+    );
 
     vi.mocked(
       scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_200n,
+        fromBlock: 1_100n,
+        toBlock: 1_199n,
+        nextBlock: 1_200n,
+        requests: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [],
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
+      consumer: CONSUMER,
+      startBlock: 500n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+    });
+
+    expect(
+      scanQuicknetRequests,
+    ).toHaveBeenNthCalledWith(
+      1,
+      {
+        publicClient: PUBLIC_CLIENT,
+        consumers: [
+          CONSUMER,
+        ],
+        nextBlock: 1_100n,
+        throughBlock: 1_200n,
+        maxBlockRange: 100n,
+      },
+    );
+  });
+
+  it('rejects a durable head behind a persisted checkpoint', async () => {
+    load.mockResolvedValue(
+      1_301n
+    );
+
+    vi.mocked(
+      getChainHeads,
     ).mockResolvedValue({
+      latestBlock: 1_500n,
+      durableBlock: 1_250n,
+    });
+
+    await expect(
+      runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      })
+    ).rejects.toThrow(
+      'Durable block 1250 is behind persisted checkpoint block 1300.'
+    );
+
+    expect(
+      scanQuicknetRequests,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      processQuicknetRequests,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      save,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('allows the durable head to equal the last persisted checkpoint block', async () => {
+    load.mockResolvedValue(
+      1_201n
+    );
+
+    vi.mocked(
+      getChainHeads,
+    ).mockResolvedValue({
+      latestBlock: 1_500n,
+      durableBlock: 1_200n,
+    });
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [],
+      });
+
+    await expect(
+      runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      })
+    ).resolves.toBeDefined();
+  });
+
+  it('allows an initial startBlock ahead of the durable head', async () => {
+    load.mockResolvedValue(
+      undefined
+    );
+
+    vi.mocked(
+      getChainHeads,
+    ).mockResolvedValue({
+      latestBlock: 1_500n,
+      durableBlock: 999n,
+    });
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 999n,
+        nextBlock: 1_000n,
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        requests: [],
+      });
+
+    await expect(
+      runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      })
+    ).resolves.toBeDefined();
+
+    expect(
+      scanQuicknetRequests,
+    ).toHaveBeenNthCalledWith(
+      2,
+      {
+        publicClient: PUBLIC_CLIENT,
+        consumers: [
+          CONSUMER,
+        ],
+        nextBlock: 1_000n,
+        throughBlock: 1_500n,
+        maxBlockRange: 100n,
+      },
+    );
+  });
+
+  it('scans durable history only through the durable block', async () => {
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_200n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        requests: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [],
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
+      consumer: CONSUMER,
+      startBlock: 500n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+    });
+
+    expect(
+      scanQuicknetRequests,
+    ).toHaveBeenNthCalledWith(
+      1,
+      {
+        publicClient: PUBLIC_CLIENT,
+        consumers: [
+          CONSUMER,
+        ],
+        nextBlock: 1_000n,
+        throughBlock: 1_200n,
+        maxBlockRange: 100n,
+      },
+    );
+  });
+
+  it('processes durable requests returned by the scanner', async () => {
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_200n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        requests: [
+          REQUEST,
+        ],
+      })
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_500n,
+        nextBlock: 1_501n,
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
+      consumer: CONSUMER,
+      startBlock: 500n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursor: {
+        nextBlock: 1_501n,
+      },
+    });
+
+    expect(
+      processQuicknetRequests,
+    ).toHaveBeenNthCalledWith(
+      1,
+      {
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        requests: [
+          REQUEST,
+        ],
+      },
+    );
+  });
+
+  it('advances the durable checkpoint after successful processing', async () => {
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_200n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        requests: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_500n,
+        nextBlock: 1_501n,
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
+      consumer: CONSUMER,
+      startBlock: 500n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursor: {
+        nextBlock: 1_501n,
+      },
+    });
+
+    expect(
+      save,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      save,
+    ).toHaveBeenCalledWith(
+      CONSUMER,
+      1_100n
+    );
+  });
+
+  it('advances the durable checkpoint for an empty successfully scanned range', async () => {
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_200n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        requests: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_500n,
+        nextBlock: 1_501n,
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
+      consumer: CONSUMER,
+      startBlock: 500n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursor: {
+        nextBlock: 1_501n,
+      },
+    });
+
+    expect(
+      processQuicknetRequests,
+    ).toHaveBeenCalledWith({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      requests: [],
+    });
+
+    expect(
+      save,
+    ).toHaveBeenCalledWith(
+      CONSUMER,
+      1_100n
+    );
+  });
+
+  it('processes durable requests before advancing the checkpoint', async () => {
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_200n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        requests: [
+          REQUEST,
+        ],
+      })
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_500n,
+        nextBlock: 1_501n,
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
+      consumer: CONSUMER,
+      startBlock: 500n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursor: {
+        nextBlock: 1_501n,
+      },
+    });
+
+    expect(
+      firstInvocationOrder(
+        vi.mocked(
+          processQuicknetRequests
+        )
+      )
+    ).toBeLessThan(
+      firstInvocationOrder(
+        save
+      )
+    );
+  });
+
+  it('does not save the durable checkpoint when durable processing fails', async () => {
+    const failure =
+      new Error(
+        'Durable request processing failed.',
+      );
+
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    ).mockResolvedValueOnce({
       status: 'scanned',
-      headBlock: 1_500n,
+      throughBlock: 1_200n,
       fromBlock: 1_000n,
       toBlock: 1_099n,
       nextBlock: 1_100n,
-      requests: [REQUEST],
+      requests: [
+        REQUEST,
+      ],
     });
 
     vi.mocked(
@@ -570,6 +999,7 @@ describe('runDaemonIteration', () => {
         consumer: CONSUMER,
         startBlock: 500n,
         maxBlockRange: 100n,
+        finality: FINALITY,
       })
     ).rejects.toBe(
       failure
@@ -578,99 +1008,32 @@ describe('runDaemonIteration', () => {
     expect(
       save,
     ).not.toHaveBeenCalled();
+
+    expect(
+      scanQuicknetRequests,
+    ).toHaveBeenCalledOnce();
   });
 
-  it('does not process or save when scanning fails', async () => {
-    const failure = new Error('Request scan failed.');
+  it('does not run the soft scan when durable checkpoint saving fails', async () => {
+    const failure =
+      new Error(
+        'Checkpoint save failed.',
+      );
 
-    load.mockResolvedValue(1_000n);
+    load.mockResolvedValue(
+      1_000n
+    );
 
     vi.mocked(
       scanQuicknetRequests,
-    ).mockRejectedValue(
-      failure
-    );
-
-    await expect(
-      runDaemonIteration({
-        publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
-        account: ACCOUNT,
-        deployment: DEPLOYMENT,
-        checkpointStore,
-        consumer: CONSUMER,
-        startBlock: 500n,
-        maxBlockRange: 100n,
-      })
-    ).rejects.toBe(
-      failure
-    );
-
-    expect(
-      processQuicknetRequests,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      save,
-    ).not.toHaveBeenCalled();
-  });
-
-  it('does not scan, process, or save when checkpoint loading fails', async () => {
-    const failure = new Error('Checkpoint load failed.');
-
-    load.mockRejectedValue(
-      failure
-    );
-
-    await expect(
-      runDaemonIteration({
-        publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
-        account: ACCOUNT,
-        deployment: DEPLOYMENT,
-        checkpointStore,
-        consumer: CONSUMER,
-        startBlock: 500n,
-        maxBlockRange: 100n,
-      })
-    ).rejects.toBe(
-      failure
-    );
-
-    expect(
-      scanQuicknetRequests,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      processQuicknetRequests,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      save,
-    ).not.toHaveBeenCalled();
-  });
-
-  it('propagates checkpoint save failures', async () => {
-    const failure = new Error('Checkpoint save failed.');
-
-    load.mockResolvedValue(1_000n);
-
-    vi.mocked(
-      scanQuicknetRequests,
-    ).mockResolvedValue({
+    ).mockResolvedValueOnce({
       status: 'scanned',
-      headBlock: 1_500n,
+      throughBlock: 1_200n,
       fromBlock: 1_000n,
       toBlock: 1_099n,
       nextBlock: 1_100n,
-      requests: [REQUEST],
+      requests: [],
     });
-
-    vi.mocked(
-      processQuicknetRequests,
-    ).mockResolvedValue(
-      PROCESSING_RESULT
-    );
 
     save.mockRejectedValue(
       failure
@@ -686,6 +1049,1039 @@ describe('runDaemonIteration', () => {
         consumer: CONSUMER,
         startBlock: 500n,
         maxBlockRange: 100n,
+        finality: FINALITY,
+      })
+    ).rejects.toBe(
+      failure
+    );
+
+    expect(
+      scanQuicknetRequests,
+    ).toHaveBeenCalledOnce();
+  });
+
+  it('starts soft scanning after the durable head when durable history has a backlog', async () => {
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_200n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        requests: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [],
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
+      consumer: CONSUMER,
+      startBlock: 500n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+    });
+
+    expect(
+      scanQuicknetRequests,
+    ).toHaveBeenNthCalledWith(
+      2,
+      {
+        publicClient: PUBLIC_CLIENT,
+        consumers: [
+          CONSUMER,
+        ],
+        nextBlock: 1_201n,
+        throughBlock: 1_500n,
+        maxBlockRange: 100n,
+      },
+    );
+  });
+
+  it('preserves a soft cursor that is ahead of the durable boundary', async () => {
+    load.mockResolvedValue(
+      1_201n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_400n,
+        toBlock: 1_499n,
+        nextBlock: 1_500n,
+        requests: [],
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
+      consumer: CONSUMER,
+      startBlock: 500n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursor: {
+        nextBlock: 1_400n,
+      },
+    });
+
+    expect(
+      scanQuicknetRequests,
+    ).toHaveBeenNthCalledWith(
+      2,
+      {
+        publicClient: PUBLIC_CLIENT,
+        consumers: [
+          CONSUMER,
+        ],
+        nextBlock: 1_400n,
+        throughBlock: 1_500n,
+        maxBlockRange: 100n,
+      },
+    );
+  });
+
+  it('moves a stale soft cursor forward to the first non-durable block', async () => {
+    load.mockResolvedValue(
+      1_201n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [],
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
+      consumer: CONSUMER,
+      startBlock: 500n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursor: {
+        nextBlock: 1_100n,
+      },
+    });
+
+    expect(
+      scanQuicknetRequests,
+    ).toHaveBeenNthCalledWith(
+      2,
+      {
+        publicClient: PUBLIC_CLIENT,
+        consumers: [
+          CONSUMER,
+        ],
+        nextBlock: 1_201n,
+        throughBlock: 1_500n,
+        maxBlockRange: 100n,
+      },
+    );
+  });
+
+  it('moves the soft cursor forward when finality overtakes it', async () => {
+    load.mockResolvedValue(
+      1_301n
+    );
+
+    vi.mocked(
+      getChainHeads,
+    ).mockResolvedValue({
+      latestBlock: 1_600n,
+      durableBlock: 1_500n,
+    });
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_301n,
+        toBlock: 1_400n,
+        nextBlock: 1_401n,
+        requests: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_600n,
+        fromBlock: 1_501n,
+        toBlock: 1_600n,
+        nextBlock: 1_601n,
+        requests: [],
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
+      consumer: CONSUMER,
+      startBlock: 500n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursor: {
+        nextBlock: 1_350n,
+      },
+    });
+
+    expect(
+      scanQuicknetRequests,
+    ).toHaveBeenNthCalledWith(
+      2,
+      {
+        publicClient: PUBLIC_CLIENT,
+        consumers: [
+          CONSUMER,
+        ],
+        nextBlock: 1_501n,
+        throughBlock: 1_600n,
+        maxBlockRange: 100n,
+      },
+    );
+  });
+
+  it('uses the initial startBlock for soft scanning when it is ahead of the durable boundary', async () => {
+    load.mockResolvedValue(
+      undefined
+    );
+
+    vi.mocked(
+      getChainHeads,
+    ).mockResolvedValue({
+      latestBlock: 1_500n,
+      durableBlock: 1_000n,
+    });
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_000n,
+        nextBlock: 1_200n,
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_200n,
+        toBlock: 1_299n,
+        nextBlock: 1_300n,
+        requests: [],
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
+      consumer: CONSUMER,
+      startBlock: 1_200n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+    });
+
+    expect(
+      scanQuicknetRequests,
+    ).toHaveBeenNthCalledWith(
+      2,
+      {
+        publicClient: PUBLIC_CLIENT,
+        consumers: [
+          CONSUMER,
+        ],
+        nextBlock: 1_200n,
+        throughBlock: 1_500n,
+        maxBlockRange: 100n,
+      },
+    );
+  });
+
+  it('processes soft requests returned by the scanner', async () => {
+    load.mockResolvedValue(
+      1_201n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [
+          REQUEST,
+        ],
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
+      consumer: CONSUMER,
+      startBlock: 500n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+    });
+
+    expect(
+      processQuicknetRequests,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      processQuicknetRequests,
+    ).toHaveBeenCalledWith({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      requests: [
+        REQUEST,
+      ],
+    });
+  });
+
+  it('advances the in-memory soft cursor after successful processing', async () => {
+    load.mockResolvedValue(
+      1_201n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [],
+      });
+
+    const result =
+      await runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      });
+
+    expect(
+      result.softCursor,
+    ).toEqual({
+      nextBlock: 1_301n,
+    });
+  });
+
+  it('does not persist soft scan progress', async () => {
+    load.mockResolvedValue(
+      1_201n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [],
+      });
+
+    const result =
+      await runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      });
+
+    expect(
+      save,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      result.durableNextBlock,
+    ).toBe(
+      1_201n
+    );
+
+    expect(
+      result.softCursor.nextBlock,
+    ).toBe(
+      1_301n
+    );
+  });
+
+  it('advances the soft cursor for an empty successfully scanned range', async () => {
+    load.mockResolvedValue(
+      1_201n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [],
+      });
+
+    const result =
+      await runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      });
+
+    expect(
+      processQuicknetRequests,
+    ).toHaveBeenCalledWith({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      requests: [],
+    });
+
+    expect(
+      result.softCursor.nextBlock,
+    ).toBe(
+      1_301n
+    );
+  });
+
+  it('does not persist soft progress when soft request processing fails', async () => {
+    const failure =
+      new Error(
+        'Soft request processing failed.',
+      );
+
+    load.mockResolvedValue(
+      1_201n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [
+          REQUEST,
+        ],
+      });
+
+    vi.mocked(
+      processQuicknetRequests,
+    ).mockRejectedValue(
+      failure
+    );
+
+    await expect(
+      runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      })
+    ).rejects.toBe(
+      failure
+    );
+
+    expect(
+      save,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('keeps successful durable progress when later soft processing fails', async () => {
+    const failure =
+      new Error(
+        'Soft request processing failed.',
+      );
+
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_200n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        requests: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [
+          REQUEST,
+        ],
+      });
+
+    vi.mocked(
+      processQuicknetRequests,
+    )
+      .mockResolvedValueOnce(
+        PROCESSING_RESULT
+      )
+      .mockRejectedValueOnce(
+        failure
+      );
+
+    await expect(
+      runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      })
+    ).rejects.toBe(
+      failure
+    );
+
+    expect(
+      save,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      save,
+    ).toHaveBeenCalledWith(
+      CONSUMER,
+      1_100n
+    );
+  });
+
+  it('returns caught-up when neither durable nor soft history needs scanning', async () => {
+    load.mockResolvedValue(
+      1_201n
+    );
+
+    vi.mocked(
+      getChainHeads,
+    ).mockResolvedValue({
+      latestBlock: 1_500n,
+      durableBlock: 1_200n,
+    });
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_500n,
+        nextBlock: 1_501n,
+      });
+
+    const result =
+      await runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursor: {
+          nextBlock: 1_501n,
+        },
+      });
+
+    expect(result).toEqual({
+      status: 'caught-up',
+      consumer: CONSUMER,
+      latestBlock: 1_500n,
+      durableBlock: 1_200n,
+      durableNextBlock: 1_201n,
+      softCursor: {
+        nextBlock: 1_501n,
+      },
+      durableScan: undefined,
+      softScan: undefined,
+    });
+
+    expect(
+      processQuicknetRequests,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      save,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('returns processed when only durable history is scanned', async () => {
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_200n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        requests: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_500n,
+        nextBlock: 1_501n,
+      });
+
+    const result =
+      await runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursor: {
+          nextBlock: 1_501n,
+        },
+      });
+
+    expect(result).toEqual({
+      status: 'processed',
+      consumer: CONSUMER,
+      latestBlock: 1_500n,
+      durableBlock: 1_200n,
+      durableNextBlock: 1_100n,
+      softCursor: {
+        nextBlock: 1_501n,
+      },
+      durableScan: {
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        processing: PROCESSING_RESULT,
+      },
+      softScan: undefined,
+    });
+  });
+
+  it('returns processed when only soft history is scanned', async () => {
+    load.mockResolvedValue(
+      1_201n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [],
+      });
+
+    const result =
+      await runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      });
+
+    expect(result).toEqual({
+      status: 'processed',
+      consumer: CONSUMER,
+      latestBlock: 1_500n,
+      durableBlock: 1_200n,
+      durableNextBlock: 1_201n,
+      softCursor: {
+        nextBlock: 1_301n,
+      },
+      durableScan: undefined,
+      softScan: {
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        processing: PROCESSING_RESULT,
+      },
+    });
+  });
+
+  it('returns both durable and soft scan results when both paths make progress', async () => {
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_200n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        requests: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [],
+      });
+
+    const result =
+      await runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      });
+
+    expect(result).toEqual({
+      status: 'processed',
+      consumer: CONSUMER,
+      latestBlock: 1_500n,
+      durableBlock: 1_200n,
+      durableNextBlock: 1_100n,
+      softCursor: {
+        nextBlock: 1_301n,
+      },
+      durableScan: {
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        processing: PROCESSING_RESULT,
+      },
+      softScan: {
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        processing: PROCESSING_RESULT,
+      },
+    });
+  });
+
+  it('runs the durable scan before the soft scan', async () => {
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_200n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        requests: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_500n,
+        fromBlock: 1_201n,
+        toBlock: 1_300n,
+        nextBlock: 1_301n,
+        requests: [],
+      });
+
+    await runDaemonIteration({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      deployment: DEPLOYMENT,
+      checkpointStore,
+      consumer: CONSUMER,
+      startBlock: 500n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+    });
+
+    expect(
+      scanQuicknetRequests,
+    ).toHaveBeenCalledTimes(
+      2
+    );
+
+    const firstCall =
+      vi.mocked(
+        scanQuicknetRequests
+      ).mock.calls[0];
+
+    const secondCall =
+      vi.mocked(
+        scanQuicknetRequests
+      ).mock.calls[1];
+
+    expect(
+      firstCall?.[0].throughBlock,
+    ).toBe(
+      1_200n
+    );
+
+    expect(
+      secondCall?.[0].throughBlock,
+    ).toBe(
+      1_500n
+    );
+  });
+
+  it('propagates checkpoint loading failures before reading chain heads', async () => {
+    const failure =
+      new Error(
+        'Checkpoint load failed.',
+      );
+
+    load.mockRejectedValue(
+      failure
+    );
+
+    await expect(
+      runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      })
+    ).rejects.toBe(
+      failure
+    );
+
+    expect(
+      getChainHeads,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      scanQuicknetRequests,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      processQuicknetRequests,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      save,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('propagates chain head failures before scanning', async () => {
+    const failure =
+      new Error(
+        'Failed to read chain heads.',
+      );
+
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      getChainHeads,
+    ).mockRejectedValue(
+      failure
+    );
+
+    await expect(
+      runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      })
+    ).rejects.toBe(
+      failure
+    );
+
+    expect(
+      scanQuicknetRequests,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      processQuicknetRequests,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      save,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('propagates durable scan failures before processing or saving', async () => {
+    const failure =
+      new Error(
+        'Durable request scan failed.',
+      );
+
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    ).mockRejectedValueOnce(
+      failure
+    );
+
+    await expect(
+      runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
       })
     ).rejects.toBe(
       failure
@@ -693,136 +2089,198 @@ describe('runDaemonIteration', () => {
 
     expect(
       processQuicknetRequests,
-    ).toHaveBeenCalledOnce();
+    ).not.toHaveBeenCalled();
+
+    expect(
+      save,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('propagates soft scan failures without changing the durable checkpoint when no durable progress occurred', async () => {
+    const failure =
+      new Error(
+        'Soft request scan failed.',
+      );
+
+    load.mockResolvedValue(
+      1_201n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'caught-up',
+        throughBlock: 1_200n,
+        nextBlock: 1_201n,
+      })
+      .mockRejectedValueOnce(
+        failure
+      );
+
+    await expect(
+      runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      })
+    ).rejects.toBe(
+      failure
+    );
+
+    expect(
+      save,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      processQuicknetRequests,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('keeps successful durable progress when the later soft scan fails', async () => {
+    const failure =
+      new Error(
+        'Soft request scan failed.',
+      );
+
+    load.mockResolvedValue(
+      1_000n
+    );
+
+    vi.mocked(
+      scanQuicknetRequests,
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 1_200n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
+        nextBlock: 1_100n,
+        requests: [],
+      })
+      .mockRejectedValueOnce(
+        failure
+      );
+
+    await expect(
+      runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 500n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      })
+    ).rejects.toBe(
+      failure
+    );
 
     expect(
       save,
     ).toHaveBeenCalledOnce();
+
+    expect(
+      save,
+    ).toHaveBeenCalledWith(
+      CONSUMER,
+      1_100n
+    );
   });
 
   it('supports block zero as the initial start block', async () => {
-    load.mockResolvedValue(undefined);
+    load.mockResolvedValue(
+      undefined
+    );
+
+    vi.mocked(
+      getChainHeads,
+    ).mockResolvedValue({
+      latestBlock: 500n,
+      durableBlock: 199n,
+    });
 
     vi.mocked(
       scanQuicknetRequests,
-    ).mockResolvedValue({
-      status: 'scanned',
-      headBlock: 500n,
-      fromBlock: 0n,
-      toBlock: 99n,
-      nextBlock: 100n,
-      requests: [],
-    });
+    )
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 199n,
+        fromBlock: 0n,
+        toBlock: 99n,
+        nextBlock: 100n,
+        requests: [],
+      })
+      .mockResolvedValueOnce({
+        status: 'scanned',
+        throughBlock: 500n,
+        fromBlock: 200n,
+        toBlock: 299n,
+        nextBlock: 300n,
+        requests: [],
+      });
 
-    vi.mocked(
-      processQuicknetRequests,
-    ).mockResolvedValue(
-      PROCESSING_RESULT
-    );
-
-    const result = await runDaemonIteration({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore,
-      consumer: CONSUMER,
-      startBlock: 0n,
-      maxBlockRange: 100n,
-    });
+    const result =
+      await runDaemonIteration({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore,
+        consumer: CONSUMER,
+        startBlock: 0n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+      });
 
     expect(
       scanQuicknetRequests,
-    ).toHaveBeenCalledWith({
-      publicClient: PUBLIC_CLIENT,
-      consumers: [CONSUMER],
-      nextBlock: 0n,
-      maxBlockRange: 100n,
-    });
-
-    expect(result).toEqual({
-      status: 'processed',
-      consumer: CONSUMER,
-      headBlock: 500n,
-      fromBlock: 0n,
-      toBlock: 99n,
-      nextBlock: 100n,
-      processing: PROCESSING_RESULT,
-    });
-  });
-
-  it('loads the checkpoint before scanning', async () => {
-    load.mockResolvedValue(1_000n);
-
-    vi.mocked(
-      scanQuicknetRequests,
-    ).mockResolvedValue({
-      status: 'caught-up',
-      headBlock: 999n,
-      nextBlock: 1_000n,
-    });
-
-    await runDaemonIteration({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore,
-      consumer: CONSUMER,
-      startBlock: 500n,
-      maxBlockRange: 100n,
-    });
-
-    expect(
-      firstInvocationOrder(load)
-    ).toBeLessThan(
-      firstInvocationOrder(
-        vi.mocked(
-          scanQuicknetRequests
-        )
-      )
-    );
-  });
-
-  it('processes requests before advancing the checkpoint', async () => {
-    load.mockResolvedValue(1_000n);
-
-    vi.mocked(
-      scanQuicknetRequests,
-    ).mockResolvedValue({
-      status: 'scanned',
-      headBlock: 1_500n,
-      fromBlock: 1_000n,
-      toBlock: 1_099n,
-      nextBlock: 1_100n,
-      requests: [REQUEST],
-    });
-
-    vi.mocked(
-      processQuicknetRequests,
-    ).mockResolvedValue(
-      PROCESSING_RESULT
+    ).toHaveBeenNthCalledWith(
+      1,
+      {
+        publicClient: PUBLIC_CLIENT,
+        consumers: [
+          CONSUMER,
+        ],
+        nextBlock: 0n,
+        throughBlock: 199n,
+        maxBlockRange: 100n,
+      },
     );
 
-    await runDaemonIteration({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore,
-      consumer: CONSUMER,
-      startBlock: 500n,
-      maxBlockRange: 100n,
-    });
+    expect(
+      scanQuicknetRequests,
+    ).toHaveBeenNthCalledWith(
+      2,
+      {
+        publicClient: PUBLIC_CLIENT,
+        consumers: [
+          CONSUMER,
+        ],
+        nextBlock: 200n,
+        throughBlock: 500n,
+        maxBlockRange: 100n,
+      },
+    );
 
     expect(
-      firstInvocationOrder(
-        vi.mocked(
-          processQuicknetRequests
-        )
-      )
-    ).toBeLessThan(
-      firstInvocationOrder(save)
+      result.durableNextBlock,
+    ).toBe(
+      100n
+    );
+
+    expect(
+      result.softCursor.nextBlock,
+    ).toBe(
+      300n
     );
   });
 });
