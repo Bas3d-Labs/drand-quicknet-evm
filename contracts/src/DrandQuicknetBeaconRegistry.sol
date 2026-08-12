@@ -101,30 +101,46 @@ contract DrandQuicknetBeaconRegistry {
     /// @notice Seconds between consecutive scheduled Quicknet rounds.
     uint64 public constant PERIOD_SECONDS = 3;
 
-    /// @notice Runtime code hash of the exact Quicknet verifier accepted
-    ///         by this registry.
-    bytes32 public constant EXPECTED_ORACLE_CODEHASH =
-        0x78faa56ca608db8a19cfb3bb052f11fedbaa14fb1ce74db58044db99246b4cfc;
-
     /// @notice Immutable drand Quicknet verifier.
     IDrandOracleQuicknet public immutable oracle;
+
+    /// @notice Expected runtime bytecode hash of `oracle`.
+    bytes32 public immutable oracleCodehash;
 
     /// @dev round => canonical normalized beacon hash.
     ///      bytes32(0) represents "not stored".
     ///      A verified zero hash is deliberately rejected so zero
     ///      can serve as the unstored sentinel.
     mapping(uint64 round => bytes32 randomness) private _beacons;
-
+    
+    /// @notice Emitted the first time a round is stored.
+    ///
+    /// @dev Not emitted for an idempotent submission of an already
+    ///      stored round.
     event BeaconStored(
         uint64 indexed round, bytes32 randomness, address indexed submitter
     );
 
-    constructor(address oracle_) {
-        if (oracle_.codehash != EXPECTED_ORACLE_CODEHASH) {
+    /// @param oracle_ Quicknet verifier used by this registry.
+    /// @param oracleCodehash_ Expected runtime bytecode hash of `oracle_`.    
+    constructor(
+        address oracle_,
+        bytes32 oracleCodehash_
+    )
+    {
+        if (oracle_.code.length == 0) {
+            revert InvalidOracle();
+        }
+
+        if (
+            oracleCodehash_ == bytes32(0) ||
+            oracle_.codehash != oracleCodehash_
+        ) {
             revert InvalidOracle();
         }
 
         oracle = IDrandOracleQuicknet(oracle_);
+        oracleCodehash = oracleCodehash_;
     }
 
     /// @notice Verifies and caches a Quicknet beacon.

@@ -23,15 +23,16 @@ interface ITestDrandOracleQuicknet {
 
 /// @dev Shared fork setup for registry tests.
 ///
-/// The fork is pinned to the registry deployment block recorded in
-/// deployments/robinhood-testnet.json so tests do not depend on the
-/// latest testnet state.
+/// The expected chain, verifier address, and verifier runtime codehash
+/// are loaded from deployments/robinhood-testnet.json. The verifier
+/// runtime bytecode is checked before constructing a fresh registry.
 abstract contract RegistryTestBase is Test {
     using stdJson for string;
 
     string internal deploymentJson;
 
     address internal oracleAddress;
+    bytes32 internal expectedOracleCodehash;
 
     ITestDrandOracleQuicknet internal oracle;
     DrandQuicknetBeaconRegistry internal registry;
@@ -40,7 +41,9 @@ abstract contract RegistryTestBase is Test {
     address internal otherSubmitter = makeAddr("otherSubmitter");
 
     event BeaconStored(
-        uint64 indexed round, bytes32 randomness, address indexed submitter
+        uint64 indexed round,
+        bytes32 randomness,
+        address indexed submitter
     );
 
     function setUp() public virtual {
@@ -59,8 +62,7 @@ abstract contract RegistryTestBase is Test {
         assertEq(block.chainid, expectedChainId, "unexpected fork chain ID");
 
         oracleAddress = deploymentJson.readAddress(".oracle.address");
-
-        bytes32 expectedOracleCodehash =
+        expectedOracleCodehash = 
             deploymentJson.readBytes32(".oracle.runtimeCodehash");
 
         assertEq(
@@ -70,8 +72,10 @@ abstract contract RegistryTestBase is Test {
         );
 
         oracle = ITestDrandOracleQuicknet(oracleAddress);
-
-        registry = new DrandQuicknetBeaconRegistry(oracleAddress);
+        registry = new DrandQuicknetBeaconRegistry(
+            oracleAddress, 
+            expectedOracleCodehash
+        );
     }
 
     function _mockVerify(

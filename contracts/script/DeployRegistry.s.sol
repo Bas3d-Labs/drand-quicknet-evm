@@ -12,17 +12,26 @@ contract DeployRegistry is Script {
 
     function run() external returns (DrandQuicknetBeaconRegistry registry) {
         string memory deploymentFile = vm.envString("DEPLOYMENT_FILE");
-        string memory path =
-            string.concat(vm.projectRoot(), "/../deployments/", deploymentFile);
+        string memory path = string.concat(
+            vm.projectRoot(), 
+            "/../deployments/", 
+            deploymentFile
+        );
         string memory json = vm.readFile(path);
 
-        address oracle = json.readAddress(".oracle.address");
         uint256 expectedChainId = json.readUint(".chainId");
+        address oracle = json.readAddress(".oracle.address");
+        bytes32 expectedOracleCodehash = json.readBytes32(".oracle.runtimeCodehash");
+
         require(block.chainid == expectedChainId, "Wrong chain");
+        require(oracle.codehash == expectedOracleCodehash);
 
         vm.startBroadcast();
 
-        registry = new DrandQuicknetBeaconRegistry(oracle);
+        registry = new DrandQuicknetBeaconRegistry(
+            oracle,
+            expectedOracleCodehash
+        );
 
         vm.stopBroadcast();
     }

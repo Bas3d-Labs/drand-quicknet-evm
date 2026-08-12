@@ -9,8 +9,6 @@ import {
 
 import {RegistryTestBase} from "./utils/RegistryTestBase.sol";
 
-contract WrongOracle {}
-
 contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
     using stdJson for string;
     // ---------------------------------------------------------------------
@@ -19,6 +17,11 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
 
     function test_ConstructorStoresOracle() public view {
         assertEq(address(registry.oracle()), oracleAddress);
+    }
+
+    function test_ConstructorStoresOracleCodehash() public view {
+        assertEq(registry.oracleCodehash(), expectedOracleCodehash);
+        assertEq(oracleAddress.codehash, expectedOracleCodehash);
     }
 
     function test_ConstantsMatchDeploymentManifest() public view {
@@ -31,11 +34,6 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
             uint256(registry.PERIOD_SECONDS()),
             deploymentJson.readUint(".quicknet.periodSeconds")
         );
-
-        assertEq(
-            registry.EXPECTED_ORACLE_CODEHASH(),
-            deploymentJson.readBytes32(".oracle.runtimeCodehash")
-        );
     }
 
     function test_ConstructorRejectsAddressWithoutCode() public {
@@ -43,15 +41,36 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
 
         vm.expectRevert(DrandQuicknetBeaconRegistry.InvalidOracle.selector);
 
-        new DrandQuicknetBeaconRegistry(invalidOracle);
+        new DrandQuicknetBeaconRegistry(
+            invalidOracle,
+            expectedOracleCodehash
+        );
     }
 
-    function test_ConstructorRejectsWrongRuntimeCode() public {
-        WrongOracle wrongOracle = new WrongOracle();
+    function test_ConstructorRejectsZeroOracleCodehash() public {
+        vm.expectRevert(DrandQuicknetBeaconRegistry.InvalidOracle.selector);
+
+        new DrandQuicknetBeaconRegistry(
+            oracleAddress,
+            bytes32(0)
+        );
+    }
+
+    function test_ConstructorRejectsMismatchedOracleCodehash() public {
+        bytes32 wrongOracleCodehash =
+            keccak256("wrong-oracle-codehash");
+
+        assertNotEq(
+            wrongOracleCodehash,
+            oracleAddress.codehash
+        );
 
         vm.expectRevert(DrandQuicknetBeaconRegistry.InvalidOracle.selector);
 
-        new DrandQuicknetBeaconRegistry(address(wrongOracle));
+        new DrandQuicknetBeaconRegistry(
+            oracleAddress,
+            wrongOracleCodehash
+        );
     }
 
     // ---------------------------------------------------------------------

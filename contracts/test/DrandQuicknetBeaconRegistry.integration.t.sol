@@ -62,10 +62,16 @@ contract DrandQuicknetBeaconRegistryIntegrationTest is RegistryTestBase {
         assertEq(compressedHash, uncompressedHash);
 
         DrandQuicknetBeaconRegistry compressedRegistry =
-            new DrandQuicknetBeaconRegistry(oracleAddress);
+            new DrandQuicknetBeaconRegistry(
+                oracleAddress,
+                expectedOracleCodehash
+            );
 
         DrandQuicknetBeaconRegistry uncompressedRegistry =
-            new DrandQuicknetBeaconRegistry(oracleAddress);
+            new DrandQuicknetBeaconRegistry(
+                oracleAddress,
+                expectedOracleCodehash
+            );
 
         bytes32 fromCompressed =
             compressedRegistry.submitBeacon(ROUND_1, compressed);
