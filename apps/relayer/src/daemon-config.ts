@@ -5,9 +5,10 @@ import {
 
 import {
   loadRelayerConfig,
+  type NetworkSource,
   type RelayerConfig,
-  type RelayerNetwork,
 } from './config.js';
+
 import { isDecimalInteger } from './decimal.js';
 
 export const DEFAULT_MAX_BLOCK_RANGE = 2000n;
@@ -22,7 +23,7 @@ export interface DaemonConfig extends RelayerConfig {
 }
 
 export interface LoadDaemonConfigOptions {
-  network: RelayerNetwork;
+  source: NetworkSource;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -31,7 +32,7 @@ export async function loadDaemonConfig(
 ): Promise<DaemonConfig> {
   const env = options.env ?? process.env;
   const relayer = await loadRelayerConfig({
-    network: options.network,
+    source: options.source,
     env,
   });
   const consumers = parseConsumerAddresses(env.QUICKNET_CONSUMERS);

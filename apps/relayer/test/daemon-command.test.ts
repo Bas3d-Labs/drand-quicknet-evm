@@ -227,7 +227,10 @@ describe('runDaemonCommand', () => {
     };
 
     await runDaemonCommand({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
       env,
     });
 
@@ -238,26 +241,38 @@ describe('runDaemonCommand', () => {
     expect(
       loadDaemonConfig,
     ).toHaveBeenCalledWith({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
       env,
     });
   });
 
   it('omits env when no environment is provided', async () => {
     await runDaemonCommand({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
     });
 
     expect(
       loadDaemonConfig,
     ).toHaveBeenCalledWith({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
     });
   });
 
   it('creates relayer clients from the daemon configuration', async () => {
     await runDaemonCommand({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
     });
 
     expect(
@@ -273,7 +288,10 @@ describe('runDaemonCommand', () => {
 
   it('verifies the configured registry deployment', async () => {
     await runDaemonCommand({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
     });
 
     expect(
@@ -290,7 +308,10 @@ describe('runDaemonCommand', () => {
 
   it('validates the configured consumers', async () => {
     await runDaemonCommand({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
     });
 
     expect(
@@ -311,7 +332,10 @@ describe('runDaemonCommand', () => {
 
   it('creates a checkpoint store for the configured deployment', async () => {
     await runDaemonCommand({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
     });
 
     expect(
@@ -328,12 +352,13 @@ describe('runDaemonCommand', () => {
 
   it('starts the daemon with the validated consumers and configured settings', async () => {
     await runDaemonCommand({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
     });
 
-    const checkpointStore =
-      vi.mocked(FileCheckpointStore).mock.instances[0];
-
+    const checkpointStore = vi.mocked(FileCheckpointStore).mock.instances[0];
     expect(checkpointStore).toBeDefined();
 
     expect(
@@ -358,17 +383,35 @@ describe('runDaemonCommand', () => {
     });
   });
 
+  it('passes a custom network source to daemon configuration', async () => {
+    const source = {
+      type: 'custom',
+      configFile: './networks/example-mainnet.json',
+    } as const;
+
+    await runDaemonCommand({
+      source,
+    });
+
+    expect(
+      loadDaemonConfig,
+    ).toHaveBeenCalledWith({
+      source,
+    });
+  });
+
   it('forwards the abort signal to the daemon', async () => {
     const controller = new AbortController();
 
     await runDaemonCommand({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
       signal: controller.signal,
     });
 
-    const checkpointStore =
-      vi.mocked(FileCheckpointStore).mock.instances[0];
-
+    const checkpointStore = vi.mocked(FileCheckpointStore).mock.instances[0];
     expect(checkpointStore).toBeDefined();
 
     expect(
@@ -401,7 +444,10 @@ describe('runDaemonCommand', () => {
 
     await expect(
       runDaemonCommand({
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
       }),
     ).rejects.toBe(
       failure
@@ -439,7 +485,10 @@ describe('runDaemonCommand', () => {
 
     await expect(
       runDaemonCommand({
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
       }),
     ).rejects.toBe(
       failure
@@ -469,7 +518,10 @@ describe('runDaemonCommand', () => {
 
     await expect(
       runDaemonCommand({
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
       }),
     ).rejects.toBe(
       failure
@@ -494,8 +546,11 @@ describe('runDaemonCommand', () => {
     );
 
     await expect(
-      runDaemonCommand({
-        network: 'robinhood-testnet',
+      runDaemonCommand({ 
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
       }),
     ).rejects.toBe(
       failure
@@ -504,7 +559,10 @@ describe('runDaemonCommand', () => {
 
   it('verifies the deployment before validating consumers', async () => {
     await runDaemonCommand({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
     });
 
     expect(
@@ -520,7 +578,10 @@ describe('runDaemonCommand', () => {
 
   it('validates consumers before creating the checkpoint store', async () => {
     await runDaemonCommand({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
     });
 
     expect(
@@ -536,7 +597,10 @@ describe('runDaemonCommand', () => {
 
   it('creates the checkpoint store before starting the daemon', async () => {
     await runDaemonCommand({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
     });
 
     expect(

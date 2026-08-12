@@ -1,53 +1,89 @@
 import process from 'node:process';
-import { type Chain, isHex, size, type Hex } from 'viem';
-import type {
-  RegistryDeployment,
-} from '@based-labs/drand-quicknet-registry';
-import { privateKeyToAccount } from 'viem/accounts';
-import { robinhoodTestnet } from 'viem/chains';
-import { loadRegistryDeployment } from './deployment.js';
-import type { FinalityPolicy } from './finality-policy.js';
 
-export const RELAYER_NETWORKS = [
+import {
+  defineChain,
+  isHex,
+  size,
+  type Chain,
+  type Hex,
+} from 'viem';
+
+import {
+  type RegistryDeployment,
+} from '@based-labs/drand-quicknet-registry';
+
+import {
+  privateKeyToAccount,
+} from 'viem/accounts';
+
+import {
+  robinhoodTestnet,
+} from 'viem/chains';
+
+import {
+  loadCustomNetworkDescriptor,
+} from './custom-network-config.js';
+
+import {
+  loadRegistryDeployment,
+} from './deployment.js';
+
+import type {
+  FinalityPolicy,
+} from './finality-policy.js';
+
+export const RELAYER_NETWORK_PRESETS = [
   'robinhood-testnet',
 ] as const;
-export type RelayerNetwork = (typeof RELAYER_NETWORKS)[number];
+export type RelayerNetworkPreset = (typeof RELAYER_NETWORK_PRESETS)[number];
 
-interface NetworkConfig {
+export type NetworkSource =
+  | {
+      type: 'preset';
+      network: RelayerNetworkPreset;
+    }
+  | {
+      type: 'custom';
+      configFile: string;
+    };
+
+interface NetworkPresetConfig {
   chain: Chain;
   rpcUrlEnv: string;
   deploymentManifestUrl: URL;
   finality: FinalityPolicy;
 }
 
-const NETWORK_CONFIGS: Record<
-  RelayerNetwork,
-  NetworkConfig
-> = {
+const NETWORK_RESETS: Record<RelayerNetworkPreset, NetworkPresetConfig> = {
   'robinhood-testnet': {
     chain: robinhoodTestnet,
-    rpcUrlEnv: 'ROBINHOOD_TESTNET_RPC_URL',
-    deploymentManifestUrl: new URL(
-      '../../../deployments/robinhood-testnet.json',
-      import.meta.url,
-    ),
+    rpcUrlEnv:
+      'ROBINHOOD_TESTNET_RPC_URL',
+    deploymentManifestUrl:
+      new URL(
+        '../../../deployments/robinhood-testnet.json',
+        import.meta.url,
+      ),
     finality: {
       type: 'safe',
     },
   },
-} satisfies Record<RelayerNetwork, NetworkConfig>;
+};
 
-export interface RelayerConfig {
-  network: RelayerNetwork;
+export interface ResolvedNetworkConfig {
+  network: string;
   chain: Chain;
   rpcUrl: string;
-  account: ReturnType<typeof privateKeyToAccount>;
   deployment: RegistryDeployment;
   finality: FinalityPolicy;
 }
 
+export interface RelayerConfig extends ResolvedNetworkConfig {
+  account: ReturnType<typeof privateKeyToAccount>;
+}
+
 export interface LoadRelayerConfigOptions {
-  network: RelayerNetwork;
+  source: NetworkSource;
   env?: Readonly<Record<string, string | undefined>>;
 }
 
@@ -55,17 +91,9 @@ export async function loadRelayerConfig(
   options: LoadRelayerConfigOptions,
 ): Promise<RelayerConfig> {
   const {
-    network,
+    source,
     env = process.env
   } = options;
-
-  const networkConfig = NETWORK_CONFIGS[network];
-  
-  const rpcUrl = requireEnvironmentVariable(
-    env,
-    networkConfig.rpcUrlEnv,
-  );
-  validateRpcUrl(rpcUrl);
 
   const privateKey = parsePrivateKey(
     requireEnvironmentVariable(
@@ -73,33 +101,97 @@ export async function loadRelayerConfig(
       'PRIVATE_KEY',
     ),
   );
-
-  const account = privateKeyToAccount(privateKey);
-  const deployment = await loadRegistryDeployment({
-    manifestUrl: networkConfig.deploymentManifestUrl,
-    expectedChainId: networkConfig.chain.id,
-  });
+  const network = await resolveNetworkConfig(source, env);
 
   return {
-    network,
-    chain: networkConfig.chain,
-    rpcUrl,
-    account,
-    deployment,
-    finality: networkConfig.finality,
+    ...network,
+    account: privateKeyToAccount(privateKey),
   };
 }
 
-export function parseRelayerNetwork(value: string): RelayerNetwork {
-  for (const network of RELAYER_NETWORKS) {
+export function parseRelayerNetworkPreset(value: string): RelayerNetworkPreset {
+  for (const network of RELAYER_NETWORK_PRESETS) {
     if (value === network) {
       return network;
     }
   }
 
   throw new Error(
-    `Unsupported network: ${value}. Supported networks: ${RELAYER_NETWORKS.join(', ')}`
+    `Unsupported network preset: ${value}. Supported presets: ${RELAYER_NETWORK_PRESETS.join(', ')}`
   );
+}
+
+async function resolveNetworkConfig(
+  source: NetworkSource,
+  env: Readonly<Record<string, string | undefined>>,
+): Promise<ResolvedNetworkConfig> {
+  switch (source.type) {
+    case 'preset':
+      return resolveNetworkPreset(source.network, env);
+
+    case 'custom':
+      return resolveCustomNetwork(source.configFile, env);
+  }
+}
+
+async function resolveNetworkPreset(
+  network: RelayerNetworkPreset,
+  env: Readonly<Record<string, string | undefined>>,
+): Promise<ResolvedNetworkConfig> {
+  const preset = NETWORK_RESETS[network];
+  
+  const rpcUrl = requireEnvironmentVariable(env, preset.rpcUrlEnv);
+  validateRpcUrl(rpcUrl);
+
+  const deployment = await loadRegistryDeployment({
+    manifestUrl: preset.deploymentManifestUrl,
+    expectedChainId: preset.chain.id,
+  });
+
+  return {
+    network,
+    chain: preset.chain,
+    rpcUrl,
+    deployment,
+    finality: preset.finality,
+  };
+}
+
+async function resolveCustomNetwork(
+  configFile: string,
+  env: Readonly<Record<string, string | undefined>>,
+): Promise<ResolvedNetworkConfig> {
+  const descriptor = await loadCustomNetworkDescriptor(configFile);
+
+  const rpcUrl = requireEnvironmentVariable(env, 'QUICKNET_RPC_URL');
+  validateRpcUrl(rpcUrl);
+
+  const chain =  defineChain({
+    id: descriptor.chain.id,
+    name: descriptor.chain.name,
+    nativeCurrency:
+      descriptor.chain.nativeCurrency,
+    rpcUrls: {
+      default: {
+        http: [
+          rpcUrl,
+        ],
+      },
+    },
+    ...(descriptor.chain.testnet === undefined
+    ? {}
+    : {
+        testnet: descriptor.chain.testnet,
+      }),
+  });
+
+  return {
+    network: descriptor.name,
+    chain,
+    rpcUrl,
+    deployment: descriptor.deployment,
+    finality: descriptor.finality,
+  };
 }
 
 function requireEnvironmentVariable(

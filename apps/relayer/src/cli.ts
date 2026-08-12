@@ -1,8 +1,9 @@
 import process from 'node:process';
 
-import { 
-  loadRelayerConfig, 
-  type RelayerNetwork 
+import {
+  loadRelayerConfig,
+  parseRelayerNetworkPreset,
+  type NetworkSource,
 } from './config.js';
 
 import { createRelayerClients } from './clients.js';
@@ -19,24 +20,25 @@ import {
 import {
   importQuicknetRoundWhenAvailable,
 } from './import-round-when-available.js';
+import { isDecimalInteger } from './decimal.js';
 
 const MAX_UINT64 = (1n << 64n) - 1n;
 
 interface ImportCommandArguments {
   command: 'import';
-  network: RelayerNetwork;
+  source: NetworkSource;
   round: bigint;
 }
 
 interface ImportWhenAvailableCommandArguments {
   command: 'import-when-available';
-  network: RelayerNetwork;
+  source: NetworkSource;
   round: bigint;
 }
 
 interface DaemonCommandArguments {
   command: 'daemon';
-  network: RelayerNetwork;
+  source: NetworkSource;
 }
 
 interface DaemonHelpCommandArguments {
@@ -70,7 +72,7 @@ export async function main(
       return;
     
     case 'daemon':
-      await runDaemonCli(command.network);
+      await runDaemonCli(command.source);
       return;    
       
     case 'daemon-help':
@@ -87,7 +89,7 @@ async function runImportCommand(
   command: ImportCommandArguments,
 ): Promise<void> {
   const config = await loadRelayerConfig({
-    network: command.network,
+    source: command.source,
   });
 
   const clients = createRelayerClients(config);
@@ -107,7 +109,7 @@ async function runImportWhenAvailableCommand(
   command: ImportWhenAvailableCommandArguments,
 ): Promise<void> {
   const config = await loadRelayerConfig({
-    network: command.network,
+    source: command.source,
   });
 
   const clients = createRelayerClients(config);
@@ -124,7 +126,7 @@ async function runImportWhenAvailableCommand(
 }
 
 async function runDaemonCli(
-  network: RelayerNetwork,
+  source: NetworkSource,
 ): Promise<void> {
   const controller = new AbortController();
   const handleShutdown = (): void => {
@@ -143,7 +145,7 @@ async function runDaemonCli(
 
   try {
     await runDaemonCommand({
-      network,
+      source,
       signal: controller.signal,
     });
   } finally {
@@ -195,7 +197,7 @@ function parseImportArguments(
 
   return {
     command: 'import',
-    network: parsed.network,
+    source: parsed.source,
     round: parsed.round,
   };
 }
@@ -207,7 +209,7 @@ function parseImportWhenAvailableArguments(
 
   return {
     command: 'import-when-available',
-    network: parsed.network,
+    source: parsed.source,
     round: parsed.round,
   };
 }
@@ -217,7 +219,7 @@ function parseDaemonArguments(
 ):
   | DaemonCommandArguments
   | DaemonHelpCommandArguments {
-  let network: RelayerNetwork | undefined;
+  let source: NetworkSource | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const argument = args[i];
@@ -229,37 +231,29 @@ function parseDaemonArguments(
       return { command: 'daemon-help' };
     }
 
-    if (argument === '--network') {
-      if (network !== undefined) {
-        throw new Error('Duplicate argument: --network.');
-      }
-
-      const value = args[i + 1];
-      if (value === undefined) {
-        throw new Error('Missing value for --network.');
-      }
-
-      network = parseNetwork(value);
-
-      i += 1;
+    const networkArgument = parseNetworkSourceArgument(args, i, source);
+    if (networkArgument !== undefined) {
+      source = networkArgument.source;
+      i = networkArgument.nextIndex;
+      
       continue;
     }
 
     throw new Error(`Unknown daemon argument: ${argument}.`);
   }
 
-  if (network === undefined) {
-    throw new Error('Missing required argument: --network.');
+  if (source === undefined) {
+    throw new Error('Missing required argument: --network or --network-config.');
   }
 
   return {
     command: 'daemon',
-    network,
+    source,
   };
 }
 
 interface RoundCommandOptions {
-  network: RelayerNetwork;
+  source: NetworkSource;
   round: bigint;
 }
 
@@ -267,7 +261,7 @@ function parseRoundCommandOptions(
   args: readonly string[],
   command: string,
 ): RoundCommandOptions {
-  let network: RelayerNetwork | undefined;
+  let source: NetworkSource | undefined;
   let round: bigint | undefined;
   
   for (let i = 0; i < args.length; i++) {
@@ -276,19 +270,11 @@ function parseRoundCommandOptions(
       throw new Error(`Expected ${command} argument.`);
     }
 
-    if (argument === '--network') {
-      if (network !== undefined) {
-        throw new Error('Duplicate argument: --network.');
-      }
+    const networkArgument = parseNetworkSourceArgument(args, i, source);
+    if (networkArgument !== undefined) {
+      source = networkArgument.source;
+      i = networkArgument.nextIndex;
 
-      const value = args[i + 1];
-      if (value === undefined) {
-        throw new Error('Missing value for --network.');
-      }
-
-      network = parseNetwork(value);
-
-      i += 1;
       continue;
     }
 
@@ -303,16 +289,16 @@ function parseRoundCommandOptions(
       }
 
       round = parseRound(value);
-
       i += 1;
+
       continue;
     }
 
     throw new Error(`Unknown ${command} argument: ${argument}.`);
   }
 
-  if (network === undefined) {
-    throw new Error('Missing required argument: --network.');
+  if (source === undefined) {
+    throw new Error('Missing required argument: --network or --network-config.');
   }
 
   if (round === undefined) {
@@ -320,17 +306,60 @@ function parseRoundCommandOptions(
   }
 
   return {
-    network,
+    source,
     round,
   };
 }
 
-function parseNetwork(value: string): RelayerNetwork {
-  if (value === 'robinhood-testnet') {
-    return value;
+interface ParsedNetworkSourceArgument {
+  source: NetworkSource,
+  nextIndex: number;
+}
+
+function parseNetworkSourceArgument(
+  args: readonly string[],
+  index: number,
+  currentSource: NetworkSource | undefined,
+): ParsedNetworkSourceArgument | undefined {
+  const argument = args[index];
+  if (argument !== '--network' && argument !== '--network-config') {
+    return undefined;
   }
 
-  throw new Error(`Unsupported network: ${value}.`);
+  if (currentSource !== undefined) {
+    if (argument === '--network' && currentSource.type === 'preset') {
+      throw new Error('Duplicate argument: --network.');
+    }
+
+    if (argument === '--network-config' && currentSource.type === 'custom') {
+      throw new Error('Duplicate argument: --network-config.');
+    }
+
+    throw new Error('Arguments --network and --network-config are mutually exclusive.');
+  }
+
+  const value = args[index + 1];
+  if (value === undefined) {
+    throw new Error(`Missing value for ${argument}.`);
+  }
+
+  if (argument === '--network') {
+    return {
+      source: {
+        type: 'preset',
+        network: parseRelayerNetworkPreset(value)
+      },
+      nextIndex: index + 1,
+    };
+  }
+
+  return {
+    source: {
+      type: 'custom',
+      configFile: value,
+    },
+    nextIndex: index + 1,
+  };
 }
 
 function printImportResult(
@@ -380,18 +409,6 @@ function normalizeArguments(
   return args;
 }
 
-function isDecimalInteger(
-  value: string,
-): boolean {
-  for (const character of value) {
-    if (character < '0' || character > '9') {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 function formatError(
   error: unknown,
 ): string {
@@ -413,6 +430,12 @@ function printHelp(): void {
       '  import-when-available  Wait for and import an exact Quicknet round.',
       '  daemon                 Watch configured consumers and relay requested rounds.',
       '',
+      'Network selection:',
+      '  --network <preset>       Use an official network preset.',
+      '  --network-config <file>  Use a custom network configuration.',
+      '',
+      'Exactly one network selection option is required for import, import-when-available, and daemon.',
+      '',
       'Run relayer daemon --help for daemon-specific usage.',
     ].join('\n')
   );
@@ -422,15 +445,22 @@ function printDaemonHelp(): void {
   console.log(
     [
       'Usage:',
-      '  relayer daemon --network <network>',
+      '  relayer daemon --network <preset>',
+      '  relayer daemon --network-config <file>',
       '',
-      'Options:',
-      '  --network <network>  Network to service.',
+      'Network options:',
+      '  --network <preset>       Use an official network preset.',
+      '  --network-config <file>  Use a custom network configuration.',
       '',
-      'Required environment variables:',
+      'Exactly one network option is required.',
+      '',
+      'Required daemon environment variables:',
       '  QUICKNET_CONSUMERS',
       '  QUICKNET_START_BLOCK',
       '  QUICKNET_CHECKPOINT_FILE',
+      '',
+      'Custom network environment:',
+      '  QUICKNET_RPC_URL',
       '',
       'Optional environment variables:',
       '  QUICKNET_MAX_BLOCK_RANGE',

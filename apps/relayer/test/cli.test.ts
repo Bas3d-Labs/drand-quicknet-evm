@@ -11,6 +11,20 @@ vi.mock(
   '../src/config.js',
   () => ({
     loadRelayerConfig: vi.fn(),
+    parseRelayerNetworkPreset: (
+      value: string,
+    ) => {
+      if (
+        value ===
+          'robinhood-testnet'
+      ) {
+        return value;
+      }
+
+      throw new Error(
+        `Unsupported network preset: ${value}. Supported presets: robinhood-testnet`
+      );
+    },
   }),
 );
 
@@ -96,7 +110,7 @@ describe('parseCommandArguments', () => {
   });
 
   describe('import', () => {
-    it('parses an import command', () => {
+    it('parses an import command with a network preset', () => {
       expect(
         parseCommandArguments([
           'import',
@@ -107,7 +121,31 @@ describe('parseCommandArguments', () => {
         ])
       ).toEqual({
         command: 'import',
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network:
+            'robinhood-testnet',
+        },
+        round: 31_089_008n,
+      });
+    });
+
+    it('parses an import command with a custom network config', () => {
+      expect(
+        parseCommandArguments([
+          'import',
+          '--network-config',
+          './networks/example-mainnet.json',
+          '--round',
+          '31089008',
+        ])
+      ).toEqual({
+        command: 'import',
+        source: {
+          type: 'custom',
+          configFile:
+            './networks/example-mainnet.json',
+        },
         round: 31_089_008n,
       });
     });
@@ -123,7 +161,31 @@ describe('parseCommandArguments', () => {
         ])
       ).toEqual({
         command: 'import',
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network:
+            'robinhood-testnet',
+        },
+        round: 31_089_008n,
+      });
+    });
+
+    it('accepts a custom network config after the round', () => {
+      expect(
+        parseCommandArguments([
+          'import',
+          '--round',
+          '31089008',
+          '--network-config',
+          './networks/example-mainnet.json',
+        ])
+      ).toEqual({
+        command: 'import',
+        source: {
+          type: 'custom',
+          configFile:
+            './networks/example-mainnet.json',
+        },
         round: 31_089_008n,
       });
     });
@@ -139,7 +201,11 @@ describe('parseCommandArguments', () => {
         ])
       ).toEqual({
         command: 'import',
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network:
+            'robinhood-testnet',
+        },
         round: 123n,
       });
     });
@@ -155,12 +221,16 @@ describe('parseCommandArguments', () => {
         ])
       ).toEqual({
         command: 'import',
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network:
+            'robinhood-testnet',
+        },
         round: 18_446_744_073_709_551_615n,
       });
     });
 
-    it('rejects a missing network', () => {
+    it('rejects a missing network source', () => {
       expect(() =>
         parseCommandArguments([
           'import',
@@ -168,7 +238,7 @@ describe('parseCommandArguments', () => {
           '31089008',
         ])
       ).toThrow(
-        'Missing required argument: --network.'
+        'Missing required argument: --network or --network-config.'
       );
     });
 
@@ -192,6 +262,17 @@ describe('parseCommandArguments', () => {
         ])
       ).toThrow(
         'Missing value for --network.'
+      );
+    });
+
+    it('rejects a missing --network-config value', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--network-config',
+        ])
+      ).toThrow(
+        'Missing value for --network-config.'
       );
     });
 
@@ -221,6 +302,54 @@ describe('parseCommandArguments', () => {
         ])
       ).toThrow(
         'Duplicate argument: --network.'
+      );
+    });
+
+    it('rejects duplicate network config arguments', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--network-config',
+          './networks/example-mainnet.json',
+          '--network-config',
+          './networks/other-mainnet.json',
+          '--round',
+          '31089008',
+        ])
+      ).toThrow(
+        'Duplicate argument: --network-config.'
+      );
+    });
+
+    it('rejects a network preset with a custom network config', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--network',
+          'robinhood-testnet',
+          '--network-config',
+          './networks/example-mainnet.json',
+          '--round',
+          '31089008',
+        ])
+      ).toThrow(
+        'Arguments --network and --network-config are mutually exclusive.'
+      );
+    });
+
+    it('rejects a custom network config with a network preset', () => {
+      expect(() =>
+        parseCommandArguments([
+          'import',
+          '--network-config',
+          './networks/example-mainnet.json',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          '31089008',
+        ])
+      ).toThrow(
+        'Arguments --network and --network-config are mutually exclusive.'
       );
     });
 
@@ -352,7 +481,7 @@ describe('parseCommandArguments', () => {
       );
     });
 
-    it('rejects an unsupported network', () => {
+    it('rejects an unsupported network preset', () => {
       expect(() =>
         parseCommandArguments([
           'import',
@@ -362,7 +491,7 @@ describe('parseCommandArguments', () => {
           '31089008',
         ])
       ).toThrow(
-        'Unsupported network: unsupported-network.'
+        'Unsupported network preset: unsupported-network. Supported presets: robinhood-testnet'
       );
     });
 
@@ -383,7 +512,7 @@ describe('parseCommandArguments', () => {
   });
 
   describe('import-when-available', () => {
-    it('parses an import-when-available command', () => {
+    it('parses an import-when-available command with a network preset', () => {
       expect(
         parseCommandArguments([
           'import-when-available',
@@ -393,8 +522,34 @@ describe('parseCommandArguments', () => {
           '31192648',
         ])
       ).toEqual({
-        command: 'import-when-available',
-        network: 'robinhood-testnet',
+        command:
+          'import-when-available',
+        source: {
+          type: 'preset',
+          network:
+            'robinhood-testnet',
+        },
+        round: 31_192_648n,
+      });
+    });
+
+    it('parses an import-when-available command with a custom network config', () => {
+      expect(
+        parseCommandArguments([
+          'import-when-available',
+          '--network-config',
+          './networks/example-mainnet.json',
+          '--round',
+          '31192648',
+        ])
+      ).toEqual({
+        command:
+          'import-when-available',
+        source: {
+          type: 'custom',
+          configFile:
+            './networks/example-mainnet.json',
+        },
         round: 31_192_648n,
       });
     });
@@ -409,13 +564,18 @@ describe('parseCommandArguments', () => {
           'robinhood-testnet',
         ])
       ).toEqual({
-        command: 'import-when-available',
-        network: 'robinhood-testnet',
+        command:
+          'import-when-available',
+        source: {
+          type: 'preset',
+          network:
+            'robinhood-testnet',
+        },
         round: 31_192_648n,
       });
     });
 
-    it('rejects a missing network', () => {
+    it('rejects a missing network source', () => {
       expect(() =>
         parseCommandArguments([
           'import-when-available',
@@ -423,7 +583,7 @@ describe('parseCommandArguments', () => {
           '31192648',
         ])
       ).toThrow(
-        'Missing required argument: --network.'
+        'Missing required argument: --network or --network-config.'
       );
     });
 
@@ -456,7 +616,7 @@ describe('parseCommandArguments', () => {
   });
 
   describe('daemon', () => {
-    it('parses a daemon command', () => {
+    it('parses a daemon command with a network preset', () => {
       expect(
         parseCommandArguments([
           'daemon',
@@ -465,7 +625,28 @@ describe('parseCommandArguments', () => {
         ])
       ).toEqual({
         command: 'daemon',
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network:
+            'robinhood-testnet',
+        },
+      });
+    });
+
+    it('parses a daemon command with a custom network config', () => {
+      expect(
+        parseCommandArguments([
+          'daemon',
+          '--network-config',
+          './networks/example-mainnet.json',
+        ])
+      ).toEqual({
+        command: 'daemon',
+        source: {
+          type: 'custom',
+          configFile:
+            './networks/example-mainnet.json',
+        },
       });
     });
 
@@ -491,13 +672,13 @@ describe('parseCommandArguments', () => {
       });
     });
 
-    it('rejects a daemon command with no network', () => {
+    it('rejects a daemon command with no network source', () => {
       expect(() =>
         parseCommandArguments([
           'daemon',
         ])
       ).toThrow(
-        'Missing required argument: --network.'
+        'Missing required argument: --network or --network-config.'
       );
     });
 
@@ -509,6 +690,17 @@ describe('parseCommandArguments', () => {
         ])
       ).toThrow(
         'Missing value for --network.'
+      );
+    });
+
+    it('rejects a missing daemon network config value', () => {
+      expect(() =>
+        parseCommandArguments([
+          'daemon',
+          '--network-config',
+        ])
+      ).toThrow(
+        'Missing value for --network-config.'
       );
     });
 
@@ -526,7 +718,35 @@ describe('parseCommandArguments', () => {
       );
     });
 
-    it('rejects an unsupported daemon network', () => {
+    it('rejects duplicate daemon network config arguments', () => {
+      expect(() =>
+        parseCommandArguments([
+          'daemon',
+          '--network-config',
+          './networks/example-mainnet.json',
+          '--network-config',
+          './networks/other-mainnet.json',
+        ])
+      ).toThrow(
+        'Duplicate argument: --network-config.'
+      );
+    });
+
+    it('rejects a daemon network preset with a custom network config', () => {
+      expect(() =>
+        parseCommandArguments([
+          'daemon',
+          '--network',
+          'robinhood-testnet',
+          '--network-config',
+          './networks/example-mainnet.json',
+        ])
+      ).toThrow(
+        'Arguments --network and --network-config are mutually exclusive.'
+      );
+    });
+
+    it('rejects an unsupported daemon network preset', () => {
       expect(() =>
         parseCommandArguments([
           'daemon',
@@ -534,7 +754,7 @@ describe('parseCommandArguments', () => {
           'unsupported-network',
         ])
       ).toThrow(
-        'Unsupported network: unsupported-network.'
+        'Unsupported network preset: unsupported-network. Supported presets: robinhood-testnet'
       );
     });
 
@@ -592,7 +812,7 @@ describe('main daemon command', () => {
     vi.restoreAllMocks();
   });
 
-  it('runs the daemon for the selected network', async () => {
+  it('runs the daemon for the selected network preset', async () => {
     await main([
       'daemon',
       '--network',
@@ -603,7 +823,11 @@ describe('main daemon command', () => {
       runDaemonCommand,
     ).toHaveBeenCalledOnce();
 
-    const call = vi.mocked(runDaemonCommand).mock.calls[0];
+    const call =
+      vi.mocked(
+        runDaemonCommand,
+      ).mock.calls[0];
+
     if (call === undefined) {
       throw new Error(
         'Expected runDaemonCommand to be called.'
@@ -611,15 +835,69 @@ describe('main daemon command', () => {
     }
 
     const options = call[0];
-    expect(options.network).toBe(
-      'robinhood-testnet'
-    );
 
-    expect(options.signal).toBeInstanceOf(
+    expect(
+      options.source,
+    ).toEqual({
+      type: 'preset',
+      network:
+        'robinhood-testnet',
+    });
+
+    expect(
+      options.signal,
+    ).toBeInstanceOf(
       AbortSignal
     );
 
-    expect(options.signal?.aborted).toBe(
+    expect(
+      options.signal?.aborted,
+    ).toBe(
+      false
+    );
+  });
+
+  it('runs the daemon for a custom network config', async () => {
+    await main([
+      'daemon',
+      '--network-config',
+      './networks/example-mainnet.json',
+    ]);
+
+    expect(
+      runDaemonCommand,
+    ).toHaveBeenCalledOnce();
+
+    const call =
+      vi.mocked(
+        runDaemonCommand,
+      ).mock.calls[0];
+
+    if (call === undefined) {
+      throw new Error(
+        'Expected runDaemonCommand to be called.'
+      );
+    }
+
+    const options = call[0];
+
+    expect(
+      options.source,
+    ).toEqual({
+      type: 'custom',
+      configFile:
+        './networks/example-mainnet.json',
+    });
+
+    expect(
+      options.signal,
+    ).toBeInstanceOf(
+      AbortSignal
+    );
+
+    expect(
+      options.signal?.aborted,
+    ).toBe(
       false
     );
   });
@@ -645,27 +923,43 @@ describe('main daemon command', () => {
       runDaemonCommand,
     ).mockImplementation(
       async (options) => {
-        expect(options.signal?.aborted).toBe(
+        expect(
+          options.signal?.aborted,
+        ).toBe(
           false
         );
 
         expect(
-          process.listenerCount('SIGINT')
+          process.listenerCount(
+            'SIGINT',
+          )
         ).toBe(
           listenerCountBefore + 1
         );
 
-        const listeners = process.listeners('SIGINT');
-        const listener = listeners[listeners.length - 1];
+        const listeners =
+          process.listeners(
+            'SIGINT',
+          );
+
+        const listener =
+          listeners[
+            listeners.length - 1
+          ];
+
         if (listener === undefined) {
           throw new Error(
             'Expected SIGINT listener.'
           );
         }
 
-        listener('SIGINT');
+        listener(
+          'SIGINT',
+        );
 
-        expect(options.signal?.aborted).toBe(
+        expect(
+          options.signal?.aborted,
+        ).toBe(
           true
         );
       },
@@ -678,7 +972,9 @@ describe('main daemon command', () => {
     ]);
 
     expect(
-      process.listenerCount('SIGINT')
+      process.listenerCount(
+        'SIGINT',
+      )
     ).toBe(
       listenerCountBefore
     );
@@ -686,33 +982,51 @@ describe('main daemon command', () => {
 
   it('aborts the daemon on SIGTERM', async () => {
     const listenerCountBefore =
-      process.listenerCount('SIGTERM');
+      process.listenerCount(
+        'SIGTERM',
+      );
 
     vi.mocked(
       runDaemonCommand,
     ).mockImplementation(
       async (options) => {
-        expect(options.signal?.aborted).toBe(
+        expect(
+          options.signal?.aborted,
+        ).toBe(
           false
         );
 
         expect(
-          process.listenerCount('SIGTERM')
+          process.listenerCount(
+            'SIGTERM',
+          )
         ).toBe(
           listenerCountBefore + 1
         );
 
-        const listeners = process.listeners('SIGTERM');
-        const listener = listeners[listeners.length - 1];
+        const listeners =
+          process.listeners(
+            'SIGTERM',
+          );
+
+        const listener =
+          listeners[
+            listeners.length - 1
+          ];
+
         if (listener === undefined) {
           throw new Error(
             'Expected SIGTERM listener.'
           );
         }
 
-        listener('SIGTERM');
+        listener(
+          'SIGTERM',
+        );
 
-        expect(options.signal?.aborted).toBe(
+        expect(
+          options.signal?.aborted,
+        ).toBe(
           true
         );
       },
@@ -725,7 +1039,9 @@ describe('main daemon command', () => {
     ]);
 
     expect(
-      process.listenerCount('SIGTERM')
+      process.listenerCount(
+        'SIGTERM',
+      )
     ).toBe(
       listenerCountBefore
     );
@@ -733,10 +1049,14 @@ describe('main daemon command', () => {
 
   it('removes signal listeners after the daemon exits', async () => {
     const sigintCountBefore =
-      process.listenerCount('SIGINT');
+      process.listenerCount(
+        'SIGINT',
+      );
 
     const sigtermCountBefore =
-      process.listenerCount('SIGTERM');
+      process.listenerCount(
+        'SIGTERM',
+      );
 
     await main([
       'daemon',
@@ -745,13 +1065,17 @@ describe('main daemon command', () => {
     ]);
 
     expect(
-      process.listenerCount('SIGINT')
+      process.listenerCount(
+        'SIGINT',
+      )
     ).toBe(
       sigintCountBefore
     );
 
     expect(
-      process.listenerCount('SIGTERM')
+      process.listenerCount(
+        'SIGTERM',
+      )
     ).toBe(
       sigtermCountBefore
     );
@@ -759,13 +1083,19 @@ describe('main daemon command', () => {
 
   it('removes signal listeners when the daemon fails', async () => {
     const failure =
-      new Error('Daemon failed.');
+      new Error(
+        'Daemon failed.',
+      );
 
     const sigintCountBefore =
-      process.listenerCount('SIGINT');
+      process.listenerCount(
+        'SIGINT',
+      );
 
     const sigtermCountBefore =
-      process.listenerCount('SIGTERM');
+      process.listenerCount(
+        'SIGTERM',
+      );
 
     vi.mocked(
       runDaemonCommand,
@@ -784,13 +1114,17 @@ describe('main daemon command', () => {
     );
 
     expect(
-      process.listenerCount('SIGINT')
+      process.listenerCount(
+        'SIGINT',
+      )
     ).toBe(
       sigintCountBefore
     );
 
     expect(
-      process.listenerCount('SIGTERM')
+      process.listenerCount(
+        'SIGTERM',
+      )
     ).toBe(
       sigtermCountBefore
     );
@@ -798,7 +1132,9 @@ describe('main daemon command', () => {
 
   it('propagates daemon failures', async () => {
     const failure =
-      new Error('Daemon failed.');
+      new Error(
+        'Daemon failed.',
+      );
 
     vi.mocked(
       runDaemonCommand,
@@ -843,7 +1179,15 @@ describe('main daemon command', () => {
       consoleLog,
     ).toHaveBeenCalledWith(
       expect.stringContaining(
-        'relayer daemon --network <network>'
+        'relayer daemon --network <preset>'
+      )
+    );
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'relayer daemon --network-config <file>'
       )
     );
 
@@ -868,6 +1212,14 @@ describe('main daemon command', () => {
     ).toHaveBeenCalledWith(
       expect.stringContaining(
         'QUICKNET_CHECKPOINT_FILE'
+      )
+    );
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'QUICKNET_RPC_URL'
       )
     );
 
@@ -912,6 +1264,14 @@ describe('main daemon command', () => {
     ).toHaveBeenCalledWith(
       expect.stringContaining(
         'daemon                 Watch configured consumers and relay requested rounds.'
+      )
+    );
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '--network-config <file>'
       )
     );
   });
