@@ -49,11 +49,8 @@ import {
 
 const CHAIN_ID = 46630;
 
-const REGISTRY_ADDRESS: Address =
-  '0x1111111111111111111111111111111111111111';
-
-const ACCOUNT_ADDRESS: Address =
-  '0x2222222222222222222222222222222222222222';
+const REGISTRY_ADDRESS: Address = '0x1111111111111111111111111111111111111111';
+const ACCOUNT_ADDRESS: Address = '0x2222222222222222222222222222222222222222';
 
 const RUNTIME_CODEHASH: Hex =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -77,6 +74,8 @@ const SUBMITTED_TRANSACTION_HASH: Hex =
 
 const RECEIPT_TRANSACTION_HASH: Hex =
   '0x6666666666666666666666666666666666666666666666666666666666666666';
+
+const RECEIPT_BLOCK_NUMBER = 123_456n;
 
 const DEPLOYMENT: RegistryDeployment = {
   chainId: CHAIN_ID,
@@ -131,8 +130,8 @@ describe('importQuicknetRound', () => {
     waitForTransactionReceipt =
       vi.fn().mockResolvedValue({
         status: 'success',
-        transactionHash:
-          RECEIPT_TRANSACTION_HASH,
+        transactionHash: RECEIPT_TRANSACTION_HASH,
+        blockNumber: RECEIPT_BLOCK_NUMBER,
       });
 
     publicClient = {
@@ -210,8 +209,7 @@ describe('importQuicknetRound', () => {
   });
 
   it('propagates deployment verification failures', async () => {
-    const error =
-      new Error('Invalid registry deployment');
+    const error = new Error('Invalid registry deployment');
 
     verifyDeployment.mockRejectedValue(error);
 
@@ -301,8 +299,7 @@ describe('importQuicknetRound', () => {
   });
 
   it('propagates beacon fetch failures', async () => {
-    const error =
-      new Error('Quicknet unavailable');
+    const error = new Error('Quicknet unavailable');
 
     quicknetMocks.fetchBeacon.mockRejectedValue(
       error,
@@ -347,8 +344,7 @@ describe('importQuicknetRound', () => {
   });
 
   it('does not submit when signature decompression fails', async () => {
-    const error =
-      new Error('Invalid compressed point');
+    const error = new Error('Invalid compressed point');
 
     quicknetMocks.decompressSignature.mockImplementation(
       () => {
@@ -370,8 +366,7 @@ describe('importQuicknetRound', () => {
   });
 
   it('propagates registry submission failures', async () => {
-    const error =
-      new Error('Simulation reverted');
+    const error = new Error('Simulation reverted');
 
     registryMocks.submitBeacon.mockRejectedValue(
       error,
@@ -403,8 +398,8 @@ describe('importQuicknetRound', () => {
   it('rejects a reverted registry transaction', async () => {
     waitForTransactionReceipt.mockResolvedValue({
       status: 'reverted',
-      transactionHash:
-        RECEIPT_TRANSACTION_HASH,
+      transactionHash: RECEIPT_TRANSACTION_HASH,
+      blockNumber: RECEIPT_BLOCK_NUMBER,
     });
 
     await expect(
@@ -418,7 +413,7 @@ describe('importQuicknetRound', () => {
     ).not.toHaveBeenCalled();
   });
 
-  it('reads the stored beacon after successful inclusion', async () => {
+  it('reads the stored beacon at the receipt block after successful inclusion', async () => {
     await importRound();
 
     expect(
@@ -427,13 +422,105 @@ describe('importQuicknetRound', () => {
 
     expect(
       getBeacon,
-    ).toHaveBeenCalledWith(ROUND);
+    ).toHaveBeenCalledWith(
+      ROUND,
+      RECEIPT_BLOCK_NUMBER,
+    );
 
     expect(
       firstInvocationOrder(waitForTransactionReceipt),
     ).toBeLessThan(
       firstInvocationOrder(getBeacon),
     );
+  });
+
+  it('retries a failed receipt-block beacon read and then succeeds', async () => {
+    vi.useFakeTimers();
+
+    try {
+      const error = new Error('RPC backend is behind');
+
+      getBeacon
+        .mockRejectedValueOnce(error)
+        .mockResolvedValueOnce(RANDOMNESS);
+
+      const resultPromise =
+        importRound();
+
+      await vi.runAllTimersAsync();
+
+      await expect(
+        resultPromise,
+      ).resolves.toEqual({
+        status: 'imported',
+        round: ROUND,
+        randomness: RANDOMNESS,
+        transactionHash:
+          RECEIPT_TRANSACTION_HASH,
+      });
+
+      expect(
+        getBeacon,
+      ).toHaveBeenCalledTimes(2);
+
+      expect(
+        getBeacon,
+      ).toHaveBeenNthCalledWith(
+        1,
+        ROUND,
+        RECEIPT_BLOCK_NUMBER,
+      );
+
+      expect(
+        getBeacon,
+      ).toHaveBeenNthCalledWith(
+        2,
+        ROUND,
+        RECEIPT_BLOCK_NUMBER,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('propagates the last error after receipt-block beacon read retries are exhausted', async () => {
+    vi.useFakeTimers();
+
+    try {
+      const firstError = new Error('RPC backend is behind');
+      const lastError = new Error('RPC backend is still behind');
+
+      getBeacon
+        .mockRejectedValueOnce(firstError)
+        .mockRejectedValueOnce(firstError)
+        .mockRejectedValueOnce(firstError)
+        .mockRejectedValueOnce(firstError)
+        .mockRejectedValueOnce(lastError);
+
+      const resultPromise = importRound();
+
+      const rejection =
+        expect(resultPromise).rejects.toBe(
+          lastError,
+        );
+
+      await vi.runAllTimersAsync();
+
+      await rejection;
+
+      expect(
+        getBeacon,
+      ).toHaveBeenCalledTimes(5);
+
+      for (const call of getBeacon.mock.calls) {
+        expect(call).toEqual([
+          ROUND,
+          RECEIPT_BLOCK_NUMBER,
+        ]);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects a stored randomness value that differs from simulation', async () => {
@@ -452,8 +539,7 @@ describe('importQuicknetRound', () => {
     const lower: Hex =
       '0xabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd';
 
-    const upper =
-      `0x${lower.slice(2).toUpperCase()}` as Hex;
+    const upper = `0x${lower.slice(2).toUpperCase()}` as Hex;
 
     registryMocks.submitBeacon.mockResolvedValue({
       hash: SUBMITTED_TRANSACTION_HASH,
@@ -471,8 +557,7 @@ describe('importQuicknetRound', () => {
   });
 
   it('returns the imported beacon and included transaction hash', async () => {
-    const result =
-      await importRound();
+    const result = await importRound();
 
     expect(result).toEqual({
       status: 'imported',
@@ -547,36 +632,50 @@ describe('importQuicknetRound', () => {
   it('performs the import steps in the expected order', async () => {
     await importRound();
 
-  const verifyOrder = firstInvocationOrder(verifyDeployment);
-  const storedOrder = firstInvocationOrder(isStored);
-  const fetchOrder = firstInvocationOrder(quicknetMocks.fetchBeacon);
-  const decompressOrder = firstInvocationOrder(quicknetMocks.decompressSignature);
-  const submitOrder = firstInvocationOrder(registryMocks.submitBeacon);
-  const receiptOrder = firstInvocationOrder(waitForTransactionReceipt);
-  const readOrder = firstInvocationOrder(getBeacon);
+    const verifyOrder = firstInvocationOrder(verifyDeployment);
+
+    const storedOrder = firstInvocationOrder(isStored);
+
+    const fetchOrder = firstInvocationOrder(
+      quicknetMocks.fetchBeacon,
+    );
+
+    const decompressOrder = firstInvocationOrder(
+      quicknetMocks.decompressSignature,
+    );
+
+    const submitOrder = firstInvocationOrder(
+      registryMocks.submitBeacon,
+    );
+
+    const receiptOrder = firstInvocationOrder(
+      waitForTransactionReceipt,
+    );
+
+    const readOrder = firstInvocationOrder(getBeacon);
 
     expect(verifyOrder).toBeLessThan(
-      storedOrder
+      storedOrder,
     );
 
     expect(storedOrder).toBeLessThan(
-      fetchOrder
+      fetchOrder,
     );
 
     expect(fetchOrder).toBeLessThan(
-      decompressOrder
+      decompressOrder,
     );
 
     expect(decompressOrder).toBeLessThan(
-      submitOrder
+      submitOrder,
     );
 
     expect(submitOrder).toBeLessThan(
-      receiptOrder
+      receiptOrder,
     );
 
     expect(receiptOrder).toBeLessThan(
-      readOrder
+      readOrder,
     );
   });
 });
@@ -588,7 +687,9 @@ function firstInvocationOrder(
     };
   },
 ): number {
-  const order = mock.mock.invocationCallOrder[0];
+  const order =
+    mock.mock.invocationCallOrder[0];
+
   if (order === undefined) {
     throw new Error(
       'Expected mock to have been called.',

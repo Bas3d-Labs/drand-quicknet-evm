@@ -7,7 +7,6 @@ import {
 } from 'vitest';
 
 import type {
-  Hex,
   PublicClient,
 } from 'viem';
 
@@ -140,6 +139,34 @@ describe('createRegistryReader', () => {
       abi: drandQuicknetBeaconRegistryAbi,
       functionName: 'getBeacon',
       args: [ROUND],
+    });
+  });
+
+  it('returns a stored beacon at a specific block', async () => {
+    const blockNumber = 123_456n;
+
+    readContract.mockResolvedValue(
+      RANDOMNESS,
+    );
+
+    const registry = createRegistryReader({
+      client,
+      deployment: DEPLOYMENT,
+    });
+
+    await expect(
+      registry.getBeacon(
+        ROUND,
+        blockNumber,
+      ),
+    ).resolves.toBe(RANDOMNESS);
+
+    expect(readContract).toHaveBeenCalledWith({
+      address: REGISTRY_ADDRESS,
+      abi: drandQuicknetBeaconRegistryAbi,
+      functionName: 'getBeacon',
+      args: [ROUND],
+      blockNumber,
     });
   });
 

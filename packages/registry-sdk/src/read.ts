@@ -2,7 +2,6 @@ import { PublicClient } from "viem";
 import { RegistryDeployment } from "./types.js";
 import { drandQuicknetBeaconRegistryAbi } from "./abi.js";
 import { verifyRegistryDeployment } from "./deployment.js";
-import { roundScheduledTime } from "../../drand-quicknet/dist/rounds.js";
 
 export interface CreateRegistryReaderOptions {
   client: PublicClient;
@@ -43,11 +42,12 @@ export function createRegistryReader(
       });
     },
 
-    getBeacon(round: bigint) {
+    getBeacon(round: bigint, blockNumber?: bigint) {
       return client.readContract({
         ...contract,
         functionName: 'getBeacon',
         args: [round],
+        ...(blockNumber !== undefined ? { blockNumber } : {}),
       });
     },
 

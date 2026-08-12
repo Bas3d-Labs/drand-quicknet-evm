@@ -92,7 +92,11 @@ export async function importQuicknetRound(
     throw new Error(`Registry submission reverted: ${receipt.transactionHash}`);
   }
 
-  const storedRandomness = await registry.getBeacon(round);
+  const storedRandomness = await readStoredBeaconAtBlock(
+    registry,
+    round,
+    receipt.blockNumber,
+  );
   if (storedRandomness.toLowerCase() !== simulatedRandomness.toLowerCase()) {
     throw new Error(
       `Stored randomness mismatch for Quicknet round ${round}: simulated ${simulatedRandomness}, stored ${storedRandomness}.`
@@ -105,4 +109,25 @@ export async function importQuicknetRound(
     randomness: storedRandomness,
     transactionHash: receipt.transactionHash,
   };
+}
+
+async function readStoredBeaconAtBlock(
+  registry: ReturnType<typeof createRegistryReader>,
+  round: bigint,
+  blockNumber: bigint,
+): Promise<Hex> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      return await registry.getBeacon(round, blockNumber);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 5) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+  }
+
+  throw lastError;
 }
