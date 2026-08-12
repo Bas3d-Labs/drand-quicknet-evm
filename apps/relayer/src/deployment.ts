@@ -1,13 +1,7 @@
 import {
-  getAddress,
-  isHex,
-  size,
-  type Hex,
-} from 'viem';
-
-import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
+
 import { readFile } from 'node:fs/promises';
 
 interface DeploymentManifest {
@@ -78,23 +72,23 @@ export function parseRegistryDeployment(
   options: ParseRegistryDeploymentOptions = {},
 ): RegistryDeployment {
   const manifest = parseDeploymentManifest(value);
-  const chainId = parseChainId(manifest.chainId);
+  const registry = parseRegistryManifest(manifest.registry);
+  const deployment = RegistryDeployment.create({
+    chainId: manifest.chainId,
+    address: registry.address,
+    runtimeCodehash: registry.runtimeCodehash,
+  });
 
   if (
     options.expectedChainId !== undefined &&
-    chainId !== options.expectedChainId
+    deployment.chainId !== options.expectedChainId
   ) {
     throw new Error(
-      `Deployment manifest chain mismatch: expected ${options.expectedChainId}, received ${chainId}.`
+      `Deployment manifest chain mismatch: expected ${options.expectedChainId}, received ${deployment.chainId}.`
     );
   }
 
-  const registry = parseRegistryManifest(manifest.registry);
-  return {
-    chainId,
-    address: parseRegistryAddress(registry.address),
-    runtimeCodehash: parseRuntimeCodehash(registry.runtimeCodehash),
-  };
+  return deployment;
 }
 
 function parseDeploymentManifest(
@@ -114,46 +108,6 @@ function parseRegistryManifest(
 ): RegistryManifest {
   if (!isObject(value)) {
     throw new Error('Invalid deployment manifest: registry must be an object.');
-  }
-
-  return value;
-}
-
-function parseChainId(
-  value: unknown,
-): number {
-  if (
-    typeof value !== 'number' ||
-    !Number.isSafeInteger(value) ||
-    value <= 0
-  ) {
-    throw new Error('Invalid deployment manifest: chainId must be a positive safe integer.');
-  }
-
-  return value;
-}
-
-function parseRegistryAddress(
-  value: unknown,
-): RegistryDeployment['address'] {
-  if (typeof value !== 'string') {
-    throw new Error('Invalid deployment manifest: registry.address must be a valid address.');
-  }
-
-  try {
-    return getAddress(value);
-  } catch {
-    throw new Error('Invalid deployment manifest: registry.address must be a valid address.');
-  }
-}
-
-function parseRuntimeCodehash(
-  value: unknown,
-): Hex {
-  if (!isHex(value, { strict: true }) || size(value) !== 32) {
-    throw new Error(
-      'Invalid deployment manifest: registry.runtimeCodehash must be a 32-byte hex value.'
-    );
   }
 
   return value;

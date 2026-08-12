@@ -3,7 +3,7 @@ import {
 } from '@based-labs/drand-quicknet-registry';
 
 import type {
-  RelayerNetwork,
+  NetworkSource,
 } from './config.js';
 
 import {
@@ -27,7 +27,7 @@ import {
 } from './validate-consumers.js';
 
 export interface RunDaemonCommandOptions {
-  network: RelayerNetwork;
+  source: NetworkSource;
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
 }
@@ -36,7 +36,7 @@ export async function runDaemonCommand(
   options: RunDaemonCommandOptions,
 ): Promise<void> {
   const config = await loadDaemonConfig({
-    network: options.network,
+    source: options.source,
     ...(options.env !== undefined
       ? { env: options.env }
       : {}),
@@ -46,7 +46,7 @@ export async function runDaemonCommand(
 
   await verifyRegistryDeployment(
     clients.publicClient,
-    config.deployment
+    config.deployment,
   );
 
   const consumers = await validateQuicknetConsumers({
@@ -57,7 +57,7 @@ export async function runDaemonCommand(
 
   const checkpointStore = new FileCheckpointStore({
     filePath: config.checkpointFile,
-    deployment: config.deployment
+    deployment: config.deployment,
   });
 
   await runDaemon({

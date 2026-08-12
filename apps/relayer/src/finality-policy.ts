@@ -1,6 +1,7 @@
 import type {
   PublicClient,
 } from 'viem';
+import { isDecimalInteger } from './decimal.js';
 
 export type FinalityPolicy = 
   | {
@@ -13,6 +14,41 @@ export type FinalityPolicy =
       type: 'confirmations';
       confirmations: bigint;
     };
+
+export const FinalityPolicy = {
+  parseJson(value: unknown): FinalityPolicy {
+    if (!isObject(value)) {
+      throw new Error('Finality policy must be an object.');
+    }
+
+    switch (value.type) {
+      case 'safe':
+        assertExactKeys(value, ['type']);
+        return { type: 'safe' };
+
+      case 'finalized':
+        assertExactKeys(value, ['type']);
+        return { type: 'finalized' };
+      
+      case 'confirmations':
+        assertExactKeys(value, ['type', 'confirmations']);
+        if (
+          typeof value.confirmations !== 'string' ||
+          !isDecimalInteger(value.confirmations)
+        ) {
+          throw new Error('Finality confirmations must be a non-negative decimal integer string.');
+        }
+
+        return {
+          type: 'confirmations',
+          confirmations: BigInt(value.confirmations),
+        };
+
+      default:
+        throw new Error('Finality policy type must be safe, finalized, or confirmations.');
+    }
+  },
+};
 
 export async function getDurableBlockNumber(
   publicClient: PublicClient,
@@ -48,4 +84,33 @@ export async function getDurableBlockNumber(
       return latest - policy.confirmations;
     }
   }
+}
+
+function assertExactKeys(
+  value: Record<string, unknown>,
+  expectedKeys: readonly string[],
+): void {
+  const expected = new Set(expectedKeys);
+
+  for (const key of Object.keys(value)) {
+    if (!expected.has(key)) {
+      throw new Error(`Unexpected finality policy field: ${key}.`);
+    }
+  }
+
+  for (const key of expectedKeys) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      throw new Error(`Missing finality policy field: ${key}.`);
+    }
+  }
+}
+
+function isObject(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value)
+  );
 }

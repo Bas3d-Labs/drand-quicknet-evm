@@ -141,7 +141,7 @@ describe('parseRegistryDeployment', () => {
           VALID_MANIFEST.registry,
       }),
     ).toThrow(
-      'Invalid deployment manifest: chainId must be a positive safe integer.'
+      'Registry deployment chainId must be a positive safe integer.'
     );
   });
 
@@ -152,7 +152,7 @@ describe('parseRegistryDeployment', () => {
         chainId: '46630',
       }),
     ).toThrow(
-      'Invalid deployment manifest: chainId must be a positive safe integer.'
+      'Registry deployment chainId must be a positive safe integer.'
     );
   });
 
@@ -163,7 +163,7 @@ describe('parseRegistryDeployment', () => {
         chainId: 0,
       }),
     ).toThrow(
-      'Invalid deployment manifest: chainId must be a positive safe integer.'
+      'Registry deployment chainId must be a positive safe integer.'
     );
   });
 
@@ -174,7 +174,7 @@ describe('parseRegistryDeployment', () => {
         chainId: -1,
       }),
     ).toThrow(
-      'Invalid deployment manifest: chainId must be a positive safe integer.'
+      'Registry deployment chainId must be a positive safe integer.'
     );
   });
 
@@ -185,7 +185,7 @@ describe('parseRegistryDeployment', () => {
         chainId: 46_630.5,
       }),
     ).toThrow(
-      'Invalid deployment manifest: chainId must be a positive safe integer.'
+      'Registry deployment chainId must be a positive safe integer.'
     );
   });
 
@@ -197,7 +197,7 @@ describe('parseRegistryDeployment', () => {
           Number.MAX_SAFE_INTEGER + 1,
       }),
     ).toThrow(
-      'Invalid deployment manifest: chainId must be a positive safe integer.'
+      'Registry deployment chainId must be a positive safe integer.'
     );
   });
 
@@ -243,7 +243,7 @@ describe('parseRegistryDeployment', () => {
         },
       }),
     ).toThrow(
-      'Invalid deployment manifest: registry.address must be a valid address.'
+      'Registry deployment address must be a valid address.'
     );
   });
 
@@ -258,7 +258,7 @@ describe('parseRegistryDeployment', () => {
         },
       }),
     ).toThrow(
-      'Invalid deployment manifest: registry.address must be a valid address.'
+      'Registry deployment address must be a valid address.'
     );
   });
 
@@ -273,7 +273,7 @@ describe('parseRegistryDeployment', () => {
         },
       }),
     ).toThrow(
-      'Invalid deployment manifest: registry.address must be a valid address.'
+      'Registry deployment address must be a valid address.'
     );
   });
 
@@ -309,7 +309,7 @@ describe('parseRegistryDeployment', () => {
         },
       }),
     ).toThrow(
-      'Invalid deployment manifest: registry.runtimeCodehash must be a 32-byte hex value.'
+      'Registry deployment runtimeCodehash must be a 32-byte hex value.'
     );
   });
 
@@ -324,7 +324,7 @@ describe('parseRegistryDeployment', () => {
         },
       }),
     ).toThrow(
-      'Invalid deployment manifest: registry.runtimeCodehash must be a 32-byte hex value.'
+      'Registry deployment runtimeCodehash must be a 32-byte hex value.'
     );
   });
 
@@ -340,7 +340,7 @@ describe('parseRegistryDeployment', () => {
         },
       }),
     ).toThrow(
-      'Invalid deployment manifest: registry.runtimeCodehash must be a 32-byte hex value.'
+      'Registry deployment runtimeCodehash must be a 32-byte hex value.'
     );
   });
 
@@ -356,7 +356,7 @@ describe('parseRegistryDeployment', () => {
         },
       }),
     ).toThrow(
-      'Invalid deployment manifest: registry.runtimeCodehash must be a 32-byte hex value.'
+      'Registry deployment runtimeCodehash must be a 32-byte hex value.'
     );
   });
 
@@ -372,7 +372,7 @@ describe('parseRegistryDeployment', () => {
         },
       }),
     ).toThrow(
-      'Invalid deployment manifest: registry.runtimeCodehash must be a 32-byte hex value.'
+      'Registry deployment runtimeCodehash must be a 32-byte hex value.'
     );
   });
 
@@ -388,7 +388,7 @@ describe('parseRegistryDeployment', () => {
         },
       }),
     ).toThrow(
-      'Invalid deployment manifest: registry.runtimeCodehash must be a 32-byte hex value.'
+      'Registry deployment runtimeCodehash must be a 32-byte hex value.'
     );
   });
 
@@ -498,7 +498,7 @@ describe('loadRegistryDeployment', () => {
     );
   });
 
-  it('propagates manifest validation failures after loading', async () => {
+  it('propagates registry deployment validation failures after loading', async () => {
     const manifestUrl =
       await createManifestFile(
         JSON.stringify({
@@ -512,7 +512,7 @@ describe('loadRegistryDeployment', () => {
         manifestUrl,
       }),
     ).rejects.toThrow(
-      'Invalid deployment manifest: chainId must be a positive safe integer.'
+      'Registry deployment chainId must be a positive safe integer.'
     );
   });
 

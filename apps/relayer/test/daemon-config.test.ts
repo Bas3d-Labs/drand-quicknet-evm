@@ -587,7 +587,10 @@ describe('loadDaemonConfig', () => {
     };
 
     await loadDaemonConfig({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
       env,
     });
 
@@ -598,7 +601,35 @@ describe('loadDaemonConfig', () => {
     expect(
       loadRelayerConfig,
     ).toHaveBeenCalledWith({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
+      env,
+    });
+  });
+
+  it('passes a custom network source to the relayer configuration', async () => {
+    const source = {
+      type: 'custom',
+      configFile: './networks/example-mainnet.json',
+    } as const;
+
+    const env = {
+      QUICKNET_CONSUMERS: '0x1111111111111111111111111111111111111111',
+      QUICKNET_START_BLOCK: '123456',
+      QUICKNET_CHECKPOINT_FILE: './state/checkpoint.json',
+    };
+
+    await loadDaemonConfig({
+      source,
+      env,
+    });
+
+    expect(
+      loadRelayerConfig,
+    ).toHaveBeenCalledWith({
+      source,
       env,
     });
   });
@@ -611,7 +642,10 @@ describe('loadDaemonConfig', () => {
     };
 
     const result = await loadDaemonConfig({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
       env,
     });
 
@@ -638,7 +672,10 @@ describe('loadDaemonConfig', () => {
     };
 
     const result = await loadDaemonConfig({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
       env,
     });
 
@@ -659,7 +696,10 @@ describe('loadDaemonConfig', () => {
     };
 
     const result = await loadDaemonConfig({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
       env,
     });
 
@@ -677,7 +717,10 @@ describe('loadDaemonConfig', () => {
     };
 
     const result = await loadDaemonConfig({
-      network: 'robinhood-testnet',
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
       env,
     });
 
@@ -696,7 +739,10 @@ describe('loadDaemonConfig', () => {
 
     await expect(
       loadDaemonConfig({
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
         env,
       }),
     ).rejects.toThrow(
@@ -712,7 +758,10 @@ describe('loadDaemonConfig', () => {
 
     await expect(
       loadDaemonConfig({
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
         env,
       }),
     ).rejects.toThrow(
@@ -728,7 +777,10 @@ describe('loadDaemonConfig', () => {
 
     await expect(
       loadDaemonConfig({
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
         env,
       }),
     ).rejects.toThrow(
@@ -745,7 +797,10 @@ describe('loadDaemonConfig', () => {
 
     await expect(
       loadDaemonConfig({
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
         env,
       })
     ).rejects.toThrow(
@@ -763,7 +818,10 @@ describe('loadDaemonConfig', () => {
 
     await expect(
       loadDaemonConfig({
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
         env,
       })
     ).rejects.toThrow(
@@ -781,7 +839,10 @@ describe('loadDaemonConfig', () => {
 
     await expect(
       loadDaemonConfig({
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
         env,
       })
     ).rejects.toThrow(
@@ -804,7 +865,10 @@ describe('loadDaemonConfig', () => {
 
     await expect(
       loadDaemonConfig({
-        network: 'robinhood-testnet',
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
         env,
       }),
     ).rejects.toThrow('Relayer configuration failed.');
