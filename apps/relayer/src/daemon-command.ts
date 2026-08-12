@@ -34,6 +34,7 @@ import {
 import {
   validateQuicknetConsumers,
 } from './validate-consumers.js';
+import { FileCheckpointLock } from './file-checkpoint-lock.js';
 
 export interface RunDaemonCommandOptions {
   source: NetworkSource;
@@ -69,34 +70,43 @@ export async function runDaemonCommand(
     deployment: config.deployment,
   });
 
-  const durableNextBlocks = new Map<Address, bigint>();
-  for (const consumer of validatedConsumers) {
-    const nextBlock = await checkpointStore.load(consumer.address);
-    if (nextBlock !== undefined) {
-      durableNextBlocks.set(consumer.address, nextBlock);
+  const checkpointLock = new FileCheckpointLock({
+    checkpointFile: config.checkpointFile,
+  });
+  const lockHandle = await checkpointLock.acquire();
+
+  try {
+    const durableNextBlocks = new Map<Address, bigint>();
+    for (const consumer of validatedConsumers) {
+      const nextBlock = await checkpointStore.load(consumer.address);
+      if (nextBlock !== undefined) {
+        durableNextBlocks.set(consumer.address, nextBlock);
+      }
     }
+
+    const startupSummary = await collectDaemonStartupSummary({
+      publicClient: clients.publicClient,
+      config,
+      durableNextBlocks,
+    });
+    console.log(formatDaemonStartupSummary(startupSummary));
+
+    await runDaemon({
+      publicClient: clients.publicClient,
+      walletClient: clients.walletClient,
+      account: config.account,
+      deployment: config.deployment,
+      checkpointStore,
+      consumers: validatedConsumers,
+      startBlock: config.startBlock,
+      maxBlockRange: config.maxBlockRange,
+      finality: config.finality,
+      pollIntervalMs: config.pollIntervalMs,
+      ...(options.signal !== undefined
+        ? { signal: options.signal }
+        : {}),
+    });
+  } finally {
+    await lockHandle.release();
   }
-
-  const startupSummary = await collectDaemonStartupSummary({
-    publicClient: clients.publicClient,
-    config,
-    durableNextBlocks,
-  });
-  console.log(formatDaemonStartupSummary(startupSummary));
-
-  await runDaemon({
-    publicClient: clients.publicClient,
-    walletClient: clients.walletClient,
-    account: config.account,
-    deployment: config.deployment,
-    checkpointStore,
-    consumers: validatedConsumers,
-    startBlock: config.startBlock,
-    maxBlockRange: config.maxBlockRange,
-    finality: config.finality,
-    pollIntervalMs: config.pollIntervalMs,
-    ...(options.signal !== undefined
-      ? { signal: options.signal }
-      : {}),
-  });
 }

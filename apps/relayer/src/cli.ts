@@ -133,12 +133,12 @@ async function runDaemonCli(
     controller.abort();
   };
 
-  process.once(
+  process.on(
     'SIGINT',
     handleShutdown
   );
 
-  process.once(
+  process.on(
     'SIGTERM',
     handleShutdown
   );
