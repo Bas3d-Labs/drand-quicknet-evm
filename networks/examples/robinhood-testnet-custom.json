@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "robinhood-testnet-custom",
+  "chain": {
+    "id": 46630,
+    "name": "Robinhood Chain Testnet",
+    "nativeCurrency": {
+      "name": "Ether",
+      "symbol": "ETH",
+      "decimals": 18
+    },
+    "testnet": true
+  },
+  "registry": {
+    "address": "0xEc2a718F4D1B18c8315794A24Fe90622400A40de",
+    "runtimeCodehash": "0x19ef2338aa49f196ed6ceea377ee52c8674899edb2280f20145768cf30c8f699"
+  },
+  "finality": {
+    "type": "safe"
+  }
+}

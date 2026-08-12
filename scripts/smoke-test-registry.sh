@@ -1,24 +1,123 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR=$(
+  cd "$(dirname "${BASH_SOURCE[0]}")" &&
+  pwd
+)
+ROOT_DIR=$(
+  cd "$SCRIPT_DIR/.." &&
+  pwd
+)
+
+ENV_FILE="$ROOT_DIR/.env"
 MANIFEST="deployments/robinhood-testnet.json"
+
+if [ -f "$ENV_FILE" ]; then
+  set -a
+
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+
+  set +a
+fi
+
 : "${ROBINHOOD_TESTNET_RPC_URL:?Missing ROBINHOOD_TESTNET_RPC_URL}"
 : "${PRIVATE_KEY:?Missing PRIVATE_KEY}"
 
 RPC_URL="$ROBINHOOD_TESTNET_RPC_URL"
+
 REGISTRY=$(jq -r '.registry.address' "$MANIFEST")
+EXPECTED_REGISTRY_CODEHASH=$(jq -r '.registry.runtimeCodehash' "$MANIFEST")
+
 ORACLE=$(jq -r '.oracle.address' "$MANIFEST")
+EXPECTED_ORACLE_CODEHASH=$(jq -r '.oracle.runtimeCodehash' "$MANIFEST")
+
 EXPECTED_CHAIN_ID=$(jq -r '.chainId' "$MANIFEST")
-ACTUAL_CHAIN_ID=$(cast chain-id --rpc-url "$RPC_URL")
+
+fail() {
+  echo "$1"
+  exit 1
+}
+
+# -------------------------------------------------------------------------
+# Deployment verification
+# -------------------------------------------------------------------------
+
+ACTUAL_CHAIN_ID=$(
+  cast chain-id \
+    --rpc-url "$RPC_URL"
+)
 
 if [ "$ACTUAL_CHAIN_ID" != "$EXPECTED_CHAIN_ID" ]; then
-  echo "Wrong chain: expected $EXPECTED_CHAIN_ID, got $ACTUAL_CHAIN_ID"
+  fail "Wrong chain: expected $EXPECTED_CHAIN_ID, got $ACTUAL_CHAIN_ID"
+fi
+
+ACTUAL_REGISTRY_CODEHASH=$(
+  cast codehash \
+    "$REGISTRY" \
+    --rpc-url "$RPC_URL"
+)
+
+if [ "${ACTUAL_REGISTRY_CODEHASH,,}" != "${EXPECTED_REGISTRY_CODEHASH,,}" ]; then
+  echo "Registry runtime codehash mismatch"
+  echo "Expected: $EXPECTED_REGISTRY_CODEHASH"
+  echo "Actual:   $ACTUAL_REGISTRY_CODEHASH"
   exit 1
 fi
 
-echo "Registry: $REGISTRY"
-echo "Oracle:   $ORACLE"
-echo "Chain:    $ACTUAL_CHAIN_ID"
+ACTUAL_ORACLE_CODEHASH=$(
+  cast codehash \
+    "$ORACLE" \
+    --rpc-url "$RPC_URL"
+)
+
+if [ "${ACTUAL_ORACLE_CODEHASH,,}" != "${EXPECTED_ORACLE_CODEHASH,,}" ]; then
+  echo "Oracle runtime codehash mismatch"
+  echo "Expected: $EXPECTED_ORACLE_CODEHASH"
+  echo "Actual:   $ACTUAL_ORACLE_CODEHASH"
+  exit 1
+fi
+
+REGISTRY_ORACLE=$(
+  cast call \
+    "$REGISTRY" \
+    "oracle()(address)" \
+    --rpc-url "$RPC_URL" |
+  awk '{print $1}'
+)
+
+if [ "${REGISTRY_ORACLE,,}" != "${ORACLE,,}" ]; then
+  echo "Registry oracle mismatch"
+  echo "Expected: $ORACLE"
+  echo "Actual:   $REGISTRY_ORACLE"
+  exit 1
+fi
+
+REGISTRY_ORACLE_CODEHASH=$(
+  cast call \
+    "$REGISTRY" \
+    "oracleCodehash()(bytes32)" \
+    --rpc-url "$RPC_URL" |
+  awk '{print $1}'
+)
+
+if [ "${REGISTRY_ORACLE_CODEHASH,,}" != "${EXPECTED_ORACLE_CODEHASH,,}" ]; then
+  echo "Registry oracle codehash mismatch"
+  echo "Expected: $EXPECTED_ORACLE_CODEHASH"
+  echo "Actual:   $REGISTRY_ORACLE_CODEHASH"
+  exit 1
+fi
+
+echo "Registry:          $REGISTRY"
+echo "Registry codehash: $ACTUAL_REGISTRY_CODEHASH"
+echo "Oracle:            $ORACLE"
+echo "Oracle codehash:   $ACTUAL_ORACLE_CODEHASH"
+echo "Chain:             $ACTUAL_CHAIN_ID"
+
+# -------------------------------------------------------------------------
+# Select future Quicknet round
+# -------------------------------------------------------------------------
 
 LATEST=$(
   cast call \
@@ -27,10 +126,11 @@ LATEST=$(
     --rpc-url "$RPC_URL" |
   awk '{print $1}'
 )
+
 TARGET=$((LATEST + 2))
 
-echo "Latest:   $LATEST"
-echo "Target:   $TARGET"
+echo "Latest:            $LATEST"
+echo "Target:            $TARGET"
 
 ALREADY_STORED=$(
   cast call \
@@ -42,8 +142,7 @@ ALREADY_STORED=$(
 )
 
 if [ "$ALREADY_STORED" = "true" ]; then
-  echo "Target round already stored; choose another round"
-  exit 1
+  fail "Target round already stored; choose another round"
 fi
 
 SCHEDULED=$(
@@ -54,6 +153,7 @@ SCHEDULED=$(
     --rpc-url "$RPC_URL" |
   awk '{print $1}'
 )
+
 NOW=$(date +%s)
 WAIT=$((SCHEDULED - NOW))
 
@@ -64,6 +164,10 @@ fi
 
 # Allow a small amount of publication latency.
 sleep 1
+
+# -------------------------------------------------------------------------
+# Fetch exact drand beacon
+# -------------------------------------------------------------------------
 
 echo "Fetching Quicknet round $TARGET..."
 
@@ -83,25 +187,28 @@ for attempt in {1..10}; do
 done
 
 if [ -z "$BEACON" ]; then
-  echo "Failed to fetch Quicknet round $TARGET"
-  exit 1
+  fail "Failed to fetch Quicknet round $TARGET"
 fi
 
 RETURNED_ROUND=$(echo "$BEACON" | jq -r '.round')
 SIGNATURE_HEX=$(echo "$BEACON" | jq -r '.signature')
 
 if [ "$RETURNED_ROUND" != "$TARGET" ]; then
-  echo "Wrong drand round: expected $TARGET, got $RETURNED_ROUND"
-  exit 1
+  fail "Wrong drand round: expected $TARGET, got $RETURNED_ROUND"
 fi
 
 if [ "${#SIGNATURE_HEX}" -ne 96 ]; then
-  echo "Unexpected compressed signature length"
-  exit 1
+  fail "Unexpected compressed signature length"
 fi
 
 SIGNATURE="0x$SIGNATURE_HEX"
+
 echo "Signature: $SIGNATURE"
+
+# -------------------------------------------------------------------------
+# Simulate submission
+# -------------------------------------------------------------------------
+
 echo "Simulating registry submission..."
 
 EXPECTED_RANDOMNESS=$(
@@ -115,6 +222,11 @@ EXPECTED_RANDOMNESS=$(
 )
 
 echo "Randomness: $EXPECTED_RANDOMNESS"
+
+# -------------------------------------------------------------------------
+# Broadcast
+# -------------------------------------------------------------------------
+
 echo "Broadcasting..."
 
 TX_JSON=$(
@@ -129,7 +241,12 @@ TX_JSON=$(
 )
 
 TX_HASH=$(echo "$TX_JSON" | jq -r '.transactionHash')
+
 echo "Transaction: $TX_HASH"
+
+# -------------------------------------------------------------------------
+# Verify resulting registry state
+# -------------------------------------------------------------------------
 
 IS_STORED=$(
   cast call \
@@ -139,9 +256,9 @@ IS_STORED=$(
     --rpc-url "$RPC_URL" |
   awk '{print $1}'
 )
+
 if [ "$IS_STORED" != "true" ]; then
-  echo "Beacon was not stored"
-  exit 1
+  fail "Beacon was not stored"
 fi
 
 STORED_RANDOMNESS=$(
@@ -152,6 +269,7 @@ STORED_RANDOMNESS=$(
     --rpc-url "$RPC_URL" |
   awk '{print $1}'
 )
+
 if [ "${STORED_RANDOMNESS,,}" != "${EXPECTED_RANDOMNESS,,}" ]; then
   echo "Randomness mismatch"
   echo "Expected: $EXPECTED_RANDOMNESS"
