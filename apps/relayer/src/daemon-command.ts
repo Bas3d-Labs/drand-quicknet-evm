@@ -15,6 +15,14 @@ import {
 } from './clients.js';
 
 import {
+  createDaemonLogger,
+} from './daemon-logging.js';
+
+import {
+  logger,
+} from './logger.js';
+
+import {
   loadDaemonConfig,
 } from './daemon-config.js';
 
@@ -50,6 +58,14 @@ export async function runDaemonCommand(
     ...(options.env !== undefined
       ? { env: options.env }
       : {}),
+  });
+
+  const daemonLogger = createDaemonLogger({
+    logger: logger.child({
+      component: 'daemon',
+      network: config.network,
+      chainId: config.chain.id,
+    }),
   });
 
   const clients = createRelayerClients(config);
@@ -102,6 +118,7 @@ export async function runDaemonCommand(
       maxBlockRange: config.maxBlockRange,
       finality: config.finality,
       pollIntervalMs: config.pollIntervalMs,
+      onCycle: daemonLogger.onCycle,
       ...(options.signal !== undefined
         ? { signal: options.signal }
         : {}),
