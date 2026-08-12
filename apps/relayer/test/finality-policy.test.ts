@@ -10,8 +10,8 @@ import type {
 } from 'viem';
 
 import {
+  FinalityPolicy,
   getDurableBlockNumber,
-  type FinalityPolicy,
 } from '../src/finality-policy.js';
 
 const SAFE_BLOCK_NUMBER = 123_456n;
@@ -370,5 +370,132 @@ describe('getDurableBlockNumber', () => {
         failure
       );
     });
+  });
+});
+
+describe('FinalityPolicy.parseJson', () => {
+  it('parses safe finality', () => {
+    expect(
+      FinalityPolicy.parseJson({
+        type: 'safe',
+      }),
+    ).toEqual({
+      type: 'safe',
+    });
+  });
+
+  it('parses finalized finality', () => {
+    expect(
+      FinalityPolicy.parseJson({
+        type: 'finalized',
+      }),
+    ).toEqual({
+      type: 'finalized',
+    });
+  });
+
+  it('parses confirmation finality', () => {
+    expect(
+      FinalityPolicy.parseJson({
+        type: 'confirmations',
+        confirmations: '20',
+      }),
+    ).toEqual({
+      type: 'confirmations',
+      confirmations: 20n,
+    });
+  });
+
+  it('allows zero confirmations', () => {
+    expect(
+      FinalityPolicy.parseJson({
+        type: 'confirmations',
+        confirmations: '0',
+      }),
+    ).toEqual({
+      type: 'confirmations',
+      confirmations: 0n,
+    });
+  });
+
+  it('rejects a non-object policy', () => {
+    expect(
+      () =>
+        FinalityPolicy.parseJson(
+          'safe',
+        ),
+    ).toThrow(
+      'Finality policy must be an object.'
+    );
+  });
+
+  it('rejects an unknown policy type', () => {
+    expect(
+      () =>
+        FinalityPolicy.parseJson({
+          type: 'unknown',
+        }),
+    ).toThrow(
+      'Finality policy type must be safe, finalized, or confirmations.'
+    );
+  });
+
+  it('requires confirmations', () => {
+    expect(
+      () =>
+        FinalityPolicy.parseJson({
+          type: 'confirmations',
+        }),
+    ).toThrow(
+      'Missing finality policy field: confirmations.'
+    );
+  });
+
+  it('rejects numeric confirmations', () => {
+    expect(
+      () =>
+        FinalityPolicy.parseJson({
+          type: 'confirmations',
+          confirmations: 20,
+        }),
+    ).toThrow(
+      'Finality confirmations must be a non-negative decimal integer string.'
+    );
+  });
+
+  it('rejects negative confirmations', () => {
+    expect(
+      () =>
+        FinalityPolicy.parseJson({
+          type: 'confirmations',
+          confirmations: '-1',
+        }),
+    ).toThrow(
+      'Finality confirmations must be a non-negative decimal integer string.'
+    );
+  });
+
+  it('rejects hexadecimal confirmations', () => {
+    expect(
+      () =>
+        FinalityPolicy.parseJson({
+          type: 'confirmations',
+          confirmations: '0x14',
+        }),
+    ).toThrow(
+      'Finality confirmations must be a non-negative decimal integer string.'
+    );
+  });
+
+  it('rejects unexpected safe finality fields', () => {
+    expect(
+      () =>
+        FinalityPolicy.parseJson({
+          type: 'safe',
+          confirmations: '20',
+        }),
+    ).toThrow(
+      'Unexpected finality policy field: confirmations.'
+    );
   });
 });

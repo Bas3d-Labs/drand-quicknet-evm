@@ -8,13 +8,10 @@ import {
   type RelayerConfig,
   type RelayerNetwork,
 } from './config.js';
+import { isDecimalInteger } from './decimal.js';
 
 export const DEFAULT_MAX_BLOCK_RANGE = 2000n;
 export const DEFAULT_POLL_INTERVAL_MS = 1000;
-
-const DECIMAL_DIGITS = new Set([
-  '0','1','2','3','4','5','6','7','8','9'
-]);
 
 export interface DaemonConfig extends RelayerConfig {
   consumers: readonly Address[];
@@ -98,14 +95,8 @@ export function parseStartBlock(
     throw new Error('Missing required environment variable: QUICKNET_START_BLOCK.');
   }
 
-  if (value.length === 0) {
+  if (!isDecimalInteger(value)) {
     throw new Error('QUICKNET_START_BLOCK must be a non-negative decimal integer.');
-  }
-
-  for (const character of value) {
-    if (!DECIMAL_DIGITS.has(character)) {
-      throw new Error('QUICKNET_START_BLOCK must be a non-negative decimal integer.');
-    }
   }
 
   return BigInt(value);
@@ -161,18 +152,4 @@ export function parsePollIntervalMs(
   }
 
   return Number(parsed);
-}
-
-function isDecimalInteger(value: string): boolean {
-  if (value.length === 0) {
-    return false;
-  }
-
-  for (const character of value) {
-    if (!DECIMAL_DIGITS.has(character)) {
-      return false;
-    }
-  }
-
-  return true;
 }

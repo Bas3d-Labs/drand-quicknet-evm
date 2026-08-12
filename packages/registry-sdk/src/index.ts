@@ -15,7 +15,8 @@ export {
   submitBeacon,
 } from './write.js';
 
-export type {
+export {
   RegistryDeployment,
-  RegistrySignature,
+  type CreateRegistryDeploymentOptions,
+  type RegistrySignature,
 } from './types.js';
