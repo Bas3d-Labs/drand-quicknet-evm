@@ -15,6 +15,11 @@ import {
 } from './daemon-config.js';
 
 import {
+  collectDaemonStartupSummary,
+  formatDaemonStartupSummary,
+} from './daemon-startup.js';
+
+import {
   runDaemon,
 } from './daemon.js';
 
@@ -59,6 +64,12 @@ export async function runDaemonCommand(
     filePath: config.checkpointFile,
     deployment: config.deployment,
   });
+
+  const startupSummary = await collectDaemonStartupSummary({
+    publicClient: clients.publicClient,
+    config,
+  });
+  console.log(formatDaemonStartupSummary(startupSummary));
 
   await runDaemon({
     publicClient: clients.publicClient,

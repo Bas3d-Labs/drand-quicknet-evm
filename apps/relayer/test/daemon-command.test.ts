@@ -22,6 +22,11 @@ import {
   type RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+const daemonStartupMocks = vi.hoisted(() => ({
+  collectDaemonStartupSummary: vi.fn(),
+  formatDaemonStartupSummary: vi.fn(),
+}));
+
 vi.mock(
   '@based-labs/drand-quicknet-registry',
   () => ({
@@ -41,6 +46,11 @@ vi.mock(
   () => ({
     loadDaemonConfig: vi.fn(),
   }),
+);
+
+vi.mock(
+  '../src/daemon-startup.js',
+  () => daemonStartupMocks,
 );
 
 vi.mock(
@@ -80,6 +90,11 @@ import {
   loadDaemonConfig,
   type DaemonConfig,
 } from '../src/daemon-config.js';
+
+import {
+  collectDaemonStartupSummary,
+  formatDaemonStartupSummary,
+} from '../src/daemon-startup.js';
 
 import {
   runDaemon,
@@ -149,6 +164,11 @@ const VALIDATED_CONSUMERS = [
   VALIDATED_CONSUMER_B,
 ];
 
+const STARTUP_SUMMARY = {
+  network: 'robinhood-testnet',
+} as never;
+const FORMATTED_STARTUP_SUMMARY = 'Relayer daemon starting\n...';
+
 function firstInvocationOrder(
   mock: {
     mock: {
@@ -212,6 +232,26 @@ describe('runDaemonCommand', () => {
       validateQuicknetConsumers,
     ).mockResolvedValue(
       VALIDATED_CONSUMERS,
+    );
+
+    vi.mocked(
+      collectDaemonStartupSummary,
+    ).mockReset();
+
+    vi.mocked(
+      formatDaemonStartupSummary,
+    ).mockReset();
+
+    vi.mocked(
+      collectDaemonStartupSummary,
+    ).mockResolvedValue(
+      STARTUP_SUMMARY,
+    );
+
+    vi.mocked(
+      formatDaemonStartupSummary,
+    ).mockReturnValue(
+      FORMATTED_STARTUP_SUMMARY,
     );
 
     vi.mocked(
@@ -612,5 +652,69 @@ describe('runDaemonCommand', () => {
         vi.mocked(runDaemon),
       )
     );
+  });
+
+  it('collects and prints the daemon startup summary', async () => {
+    const consoleLog =
+      vi.spyOn(
+        console,
+        'log',
+      ).mockImplementation(
+        () => {},
+      );
+
+    await runDaemonCommand({
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
+    });
+
+    expect(
+      collectDaemonStartupSummary,
+    ).toHaveBeenCalledWith({
+      publicClient: PUBLIC_CLIENT,
+      config: DAEMON_CONFIG,
+    });
+
+    expect(
+      formatDaemonStartupSummary,
+    ).toHaveBeenCalledWith(
+      STARTUP_SUMMARY,
+    );
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledWith(
+      FORMATTED_STARTUP_SUMMARY,
+    );
+
+    consoleLog.mockRestore();
+  });
+
+  it('does not start the daemon when startup summary collection fails', async () => {
+    const failure =
+      new Error('Startup summary failed.');
+
+    vi.mocked(
+      collectDaemonStartupSummary,
+    ).mockRejectedValue(
+      failure,
+    );
+
+    await expect(
+      runDaemonCommand({
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
+      }),
+    ).rejects.toBe(
+      failure
+    );
+
+    expect(
+      runDaemon,
+    ).not.toHaveBeenCalled();
   });
 });
