@@ -1,6 +1,5 @@
 import type {
   Account,
-  Hex,
   PublicClient,
   WalletClient,
 } from 'viem';
@@ -59,7 +58,7 @@ export async function processQuicknetRequests(
     });
   }
 
-  return { 
+  return {
     rounds,
   };
 }
