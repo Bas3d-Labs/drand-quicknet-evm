@@ -53,7 +53,7 @@ export async function runDaemon(
     !Number.isSafeInteger(options.pollIntervalMs) ||
     options.pollIntervalMs <= 0
   ) {
-    throw new Error('pollIntervalMs must be a positive safe integer.')
+    throw new Error('pollIntervalMs must be a positive safe integer.');
   }
 
   const sleep = options.sleep ?? sleepUntilTimeoutOrAbort;

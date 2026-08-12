@@ -23,12 +23,9 @@ import type {
 import type {
   CheckpointStore,
 } from './checkpoint.js';
+import { isDecimalInteger } from './decimal.js';
 
 const CHECKPOINT_FILE_VERSION = 1;
-
-const DECIMAL_DIGITS = new Set([
-  '0','1','2','3','4','5','6','7','8','9'
-]);
 
 interface CheckpointState {
   consumers: Map<Address, bigint>;
@@ -84,6 +81,13 @@ export class FileCheckpointStore
 
     const normalizedConsumer = getAddress(consumer);
     const state = await this.readState();
+
+    const current = state.consumers.get(normalizedConsumer);
+    if (current !== undefined && nextBlock < current) {
+      throw new Error(
+        `Checkpoint for consumer ${normalizedConsumer} cannot move backwards from ${current} to ${nextBlock}.`
+      );
+    }
 
     state.consumers.set(
       normalizedConsumer,
@@ -252,14 +256,12 @@ function parseNextBlock(
   value: unknown,
   consumer: Address,
 ): bigint {
-  if (typeof value !== 'string' || value.length === 0) {
+  if (typeof value !== 'string') {
     throw new Error(`Checkpoint for consumer ${consumer} contains an invalid nextBlock.`);
   }
 
-  for (const character of value) {
-    if (!DECIMAL_DIGITS.has(character)) {
-      throw new Error(`Checkpoint for consumer ${consumer} contains an invalid nextBlock.`);
-    }
+  if (!isDecimalInteger(value)) {
+    throw new Error(`Checkpoint for consumer ${consumer} contains an invalid nextBlock.`);
   }
 
   return BigInt(value);

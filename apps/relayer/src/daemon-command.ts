@@ -1,4 +1,8 @@
 import {
+  type Address,
+} from 'viem';
+
+import {
   verifyRegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
@@ -13,6 +17,11 @@ import {
 import {
   loadDaemonConfig,
 } from './daemon-config.js';
+
+import {
+  collectDaemonStartupSummary,
+  formatDaemonStartupSummary,
+} from './daemon-startup.js';
 
 import {
   runDaemon,
@@ -48,8 +57,8 @@ export async function runDaemonCommand(
     clients.publicClient,
     config.deployment,
   );
-
-  const consumers = await validateQuicknetConsumers({
+  
+  const validatedConsumers = await validateQuicknetConsumers({
     publicClient: clients.publicClient,
     deployment: config.deployment,
     consumers: config.consumers,
@@ -60,13 +69,28 @@ export async function runDaemonCommand(
     deployment: config.deployment,
   });
 
+  const durableNextBlocks = new Map<Address, bigint>();
+  for (const consumer of validatedConsumers) {
+    const nextBlock = await checkpointStore.load(consumer.address);
+    if (nextBlock !== undefined) {
+      durableNextBlocks.set(consumer.address, nextBlock);
+    }
+  }
+
+  const startupSummary = await collectDaemonStartupSummary({
+    publicClient: clients.publicClient,
+    config,
+    durableNextBlocks,
+  });
+  console.log(formatDaemonStartupSummary(startupSummary));
+
   await runDaemon({
     publicClient: clients.publicClient,
     walletClient: clients.walletClient,
     account: config.account,
     deployment: config.deployment,
     checkpointStore,
-    consumers,
+    consumers: validatedConsumers,
     startBlock: config.startBlock,
     maxBlockRange: config.maxBlockRange,
     finality: config.finality,

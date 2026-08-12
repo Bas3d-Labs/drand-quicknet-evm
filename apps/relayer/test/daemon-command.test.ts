@@ -22,6 +22,16 @@ import {
   type RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+const checkpointStoreMocks = vi.hoisted(() => ({
+  load: vi.fn(),
+  save: vi.fn(),
+}));
+
+const daemonStartupMocks = vi.hoisted(() => ({
+  collectDaemonStartupSummary: vi.fn(),
+  formatDaemonStartupSummary: vi.fn(),
+}));
+
 vi.mock(
   '@based-labs/drand-quicknet-registry',
   () => ({
@@ -44,6 +54,11 @@ vi.mock(
 );
 
 vi.mock(
+  '../src/daemon-startup.js',
+  () => daemonStartupMocks,
+);
+
+vi.mock(
   '../src/daemon.js',
   () => ({
     runDaemon: vi.fn(),
@@ -53,7 +68,11 @@ vi.mock(
 vi.mock(
   '../src/file-checkpoint-store.js',
   () => ({
-    FileCheckpointStore: vi.fn(),
+    FileCheckpointStore: vi.fn(
+      function FileCheckpointStore() {
+        return checkpointStoreMocks;
+      },
+    ),
   }),
 );
 
@@ -80,6 +99,11 @@ import {
   loadDaemonConfig,
   type DaemonConfig,
 } from '../src/daemon-config.js';
+
+import {
+  collectDaemonStartupSummary,
+  formatDaemonStartupSummary,
+} from '../src/daemon-startup.js';
 
 import {
   runDaemon,
@@ -149,6 +173,12 @@ const VALIDATED_CONSUMERS = [
   VALIDATED_CONSUMER_B,
 ];
 
+const STARTUP_SUMMARY = {
+  network: 'robinhood-testnet',
+} as never;
+
+const FORMATTED_STARTUP_SUMMARY = 'Relayer daemon starting\n...';
+
 function firstInvocationOrder(
   mock: {
     mock: {
@@ -185,6 +215,17 @@ describe('runDaemonCommand', () => {
 
     vi.mocked(
       FileCheckpointStore,
+    ).mockClear();
+
+    checkpointStoreMocks.load.mockReset();
+    checkpointStoreMocks.save.mockReset();
+
+    vi.mocked(
+      collectDaemonStartupSummary,
+    ).mockReset();
+
+    vi.mocked(
+      formatDaemonStartupSummary,
     ).mockReset();
 
     vi.mocked(
@@ -212,6 +253,26 @@ describe('runDaemonCommand', () => {
       validateQuicknetConsumers,
     ).mockResolvedValue(
       VALIDATED_CONSUMERS,
+    );
+
+    checkpointStoreMocks.load.mockResolvedValue(
+      undefined,
+    );
+
+    checkpointStoreMocks.save.mockResolvedValue(
+      undefined,
+    );
+
+    vi.mocked(
+      collectDaemonStartupSummary,
+    ).mockResolvedValue(
+      STARTUP_SUMMARY,
+    );
+
+    vi.mocked(
+      formatDaemonStartupSummary,
+    ).mockReturnValue(
+      FORMATTED_STARTUP_SUMMARY,
     );
 
     vi.mocked(
@@ -350,7 +411,7 @@ describe('runDaemonCommand', () => {
     });
   });
 
-  it('starts the daemon with the validated consumers and configured settings', async () => {
+  it('loads persisted checkpoints for the validated consumers', async () => {
     await runDaemonCommand({
       source: {
         type: 'preset',
@@ -358,8 +419,32 @@ describe('runDaemonCommand', () => {
       },
     });
 
-    const checkpointStore = vi.mocked(FileCheckpointStore).mock.instances[0];
-    expect(checkpointStore).toBeDefined();
+    expect(
+      checkpointStoreMocks.load,
+    ).toHaveBeenCalledTimes(2);
+
+    expect(
+      checkpointStoreMocks.load,
+    ).toHaveBeenNthCalledWith(
+      1,
+      CONSUMER_A,
+    );
+
+    expect(
+      checkpointStoreMocks.load,
+    ).toHaveBeenNthCalledWith(
+      2,
+      CONSUMER_B,
+    );
+  });
+
+  it('starts the daemon with the validated consumers and configured settings', async () => {
+    await runDaemonCommand({
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
+    });
 
     expect(
       runDaemon,
@@ -372,7 +457,7 @@ describe('runDaemonCommand', () => {
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       deployment: DEPLOYMENT,
-      checkpointStore,
+      checkpointStore: checkpointStoreMocks,
       consumers: VALIDATED_CONSUMERS,
       startBlock: 123_456n,
       maxBlockRange: 2_000n,
@@ -411,9 +496,6 @@ describe('runDaemonCommand', () => {
       signal: controller.signal,
     });
 
-    const checkpointStore = vi.mocked(FileCheckpointStore).mock.instances[0];
-    expect(checkpointStore).toBeDefined();
-
     expect(
       runDaemon,
     ).toHaveBeenCalledWith({
@@ -421,7 +503,7 @@ describe('runDaemonCommand', () => {
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       deployment: DEPLOYMENT,
-      checkpointStore,
+      checkpointStore: checkpointStoreMocks,
       consumers: VALIDATED_CONSUMERS,
       startBlock: 123_456n,
       maxBlockRange: 2_000n,
@@ -536,6 +618,34 @@ describe('runDaemonCommand', () => {
     ).not.toHaveBeenCalled();
   });
 
+  it('does not start the daemon when checkpoint loading fails', async () => {
+    const failure =
+      new Error('Checkpoint loading failed.');
+
+    checkpointStoreMocks.load.mockRejectedValue(
+      failure,
+    );
+
+    await expect(
+      runDaemonCommand({
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
+      }),
+    ).rejects.toBe(
+      failure
+    );
+
+    expect(
+      collectDaemonStartupSummary,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      runDaemon,
+    ).not.toHaveBeenCalled();
+  });
+
   it('propagates daemon failures', async () => {
     const failure = new Error('Daemon failed.');
 
@@ -546,7 +656,7 @@ describe('runDaemonCommand', () => {
     );
 
     await expect(
-      runDaemonCommand({ 
+      runDaemonCommand({
         source: {
           type: 'preset',
           network: 'robinhood-testnet',
@@ -612,5 +722,106 @@ describe('runDaemonCommand', () => {
         vi.mocked(runDaemon),
       )
     );
+  });
+
+  it('collects and prints the daemon startup summary', async () => {
+    const consoleLog =
+      vi.spyOn(
+        console,
+        'log',
+      ).mockImplementation(
+        () => {},
+      );
+
+    await runDaemonCommand({
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
+    });
+
+    expect(
+      collectDaemonStartupSummary,
+    ).toHaveBeenCalledWith({
+      publicClient: PUBLIC_CLIENT,
+      config: DAEMON_CONFIG,
+      durableNextBlocks:
+        new Map(),
+    });
+
+    expect(
+      formatDaemonStartupSummary,
+    ).toHaveBeenCalledWith(
+      STARTUP_SUMMARY,
+    );
+
+    expect(
+      consoleLog,
+    ).toHaveBeenCalledWith(
+      FORMATTED_STARTUP_SUMMARY,
+    );
+
+    consoleLog.mockRestore();
+  });
+
+  it('includes persisted consumer checkpoints in the startup summary', async () => {
+    checkpointStoreMocks.load
+      .mockResolvedValueOnce(
+        123_500n,
+      )
+      .mockResolvedValueOnce(
+        123_600n,
+      );
+
+    await runDaemonCommand({
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
+    });
+
+    expect(
+      collectDaemonStartupSummary,
+    ).toHaveBeenCalledWith({
+      publicClient: PUBLIC_CLIENT,
+      config: DAEMON_CONFIG,
+      durableNextBlocks:
+        new Map([
+          [
+            CONSUMER_A,
+            123_500n,
+          ],
+          [
+            CONSUMER_B,
+            123_600n,
+          ],
+        ]),
+    });
+  });
+
+  it('does not start the daemon when startup summary collection fails', async () => {
+    const failure =
+      new Error('Startup summary failed.');
+
+    vi.mocked(
+      collectDaemonStartupSummary,
+    ).mockRejectedValue(
+      failure,
+    );
+
+    await expect(
+      runDaemonCommand({
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
+      }),
+    ).rejects.toBe(
+      failure
+    );
+
+    expect(
+      runDaemon,
+    ).not.toHaveBeenCalled();
   });
 });
