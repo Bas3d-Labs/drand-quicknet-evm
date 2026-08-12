@@ -22,6 +22,14 @@ import {
   type RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+const checkpointLockHandleMocks = vi.hoisted(() => ({
+  release: vi.fn(),
+}));
+
+const checkpointLockMocks = vi.hoisted(() => ({
+  acquire: vi.fn(),
+}));
+
 const checkpointStoreMocks = vi.hoisted(() => ({
   load: vi.fn(),
   save: vi.fn(),
@@ -62,6 +70,17 @@ vi.mock(
   '../src/daemon.js',
   () => ({
     runDaemon: vi.fn(),
+  }),
+);
+
+vi.mock(
+  '../src/file-checkpoint-lock.js',
+  () => ({
+    FileCheckpointLock: vi.fn(
+      function FileCheckpointLock() {
+        return checkpointLockMocks;
+      },
+    ),
   }),
 );
 
@@ -108,6 +127,10 @@ import {
 import {
   runDaemon,
 } from '../src/daemon.js';
+
+import {
+  FileCheckpointLock,
+} from '../src/file-checkpoint-lock.js';
 
 import {
   FileCheckpointStore,
@@ -217,8 +240,15 @@ describe('runDaemonCommand', () => {
       FileCheckpointStore,
     ).mockClear();
 
+    vi.mocked(
+      FileCheckpointLock,
+    ).mockClear();
+
     checkpointStoreMocks.load.mockReset();
     checkpointStoreMocks.save.mockReset();
+
+    checkpointLockMocks.acquire.mockReset();
+    checkpointLockHandleMocks.release.mockReset();
 
     vi.mocked(
       collectDaemonStartupSummary,
@@ -247,7 +277,9 @@ describe('runDaemonCommand', () => {
 
     vi.mocked(
       verifyRegistryDeployment,
-    ).mockResolvedValue();
+    ).mockResolvedValue(
+      undefined,
+    );
 
     vi.mocked(
       validateQuicknetConsumers,
@@ -260,6 +292,14 @@ describe('runDaemonCommand', () => {
     );
 
     checkpointStoreMocks.save.mockResolvedValue(
+      undefined,
+    );
+
+    checkpointLockMocks.acquire.mockResolvedValue(
+      checkpointLockHandleMocks,
+    );
+
+    checkpointLockHandleMocks.release.mockResolvedValue(
       undefined,
     );
 
@@ -277,7 +317,9 @@ describe('runDaemonCommand', () => {
 
     vi.mocked(
       runDaemon,
-    ).mockResolvedValue();
+    ).mockResolvedValue(
+      undefined,
+    );
   });
 
   it('loads daemon configuration for the requested network', async () => {
@@ -409,6 +451,38 @@ describe('runDaemonCommand', () => {
       filePath: './state/checkpoint.json',
       deployment: DEPLOYMENT,
     });
+  });
+
+  it('creates a checkpoint lock for the configured checkpoint file', async () => {
+    await runDaemonCommand({
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
+    });
+
+    expect(
+      FileCheckpointLock,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      FileCheckpointLock,
+    ).toHaveBeenCalledWith({
+      checkpointFile: './state/checkpoint.json',
+    });
+  });
+
+  it('acquires the checkpoint lock', async () => {
+    await runDaemonCommand({
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
+    });
+
+    expect(
+      checkpointLockMocks.acquire,
+    ).toHaveBeenCalledOnce();
   });
 
   it('loads persisted checkpoints for the validated consumers', async () => {
@@ -552,6 +626,10 @@ describe('runDaemonCommand', () => {
     ).not.toHaveBeenCalled();
 
     expect(
+      FileCheckpointLock,
+    ).not.toHaveBeenCalled();
+
+    expect(
       runDaemon,
     ).not.toHaveBeenCalled();
   });
@@ -585,11 +663,15 @@ describe('runDaemonCommand', () => {
     ).not.toHaveBeenCalled();
 
     expect(
+      FileCheckpointLock,
+    ).not.toHaveBeenCalled();
+
+    expect(
       runDaemon,
     ).not.toHaveBeenCalled();
   });
 
-  it('does not create the checkpoint store or start the daemon when consumer validation fails', async () => {
+  it('does not create checkpoint components or start the daemon when consumer validation fails', async () => {
     const failure = new Error('Consumer validation failed.');
 
     vi.mocked(
@@ -614,7 +696,47 @@ describe('runDaemonCommand', () => {
     ).not.toHaveBeenCalled();
 
     expect(
+      FileCheckpointLock,
+    ).not.toHaveBeenCalled();
+
+    expect(
       runDaemon,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('does not load checkpoints or start the daemon when lock acquisition fails', async () => {
+    const failure =
+      new Error('Checkpoint lock acquisition failed.');
+
+    checkpointLockMocks.acquire.mockRejectedValue(
+      failure,
+    );
+
+    await expect(
+      runDaemonCommand({
+        source: {
+          type: 'preset',
+          network: 'robinhood-testnet',
+        },
+      }),
+    ).rejects.toBe(
+      failure
+    );
+
+    expect(
+      checkpointStoreMocks.load,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      collectDaemonStartupSummary,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      runDaemon,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      checkpointLockHandleMocks.release,
     ).not.toHaveBeenCalled();
   });
 
@@ -644,6 +766,10 @@ describe('runDaemonCommand', () => {
     expect(
       runDaemon,
     ).not.toHaveBeenCalled();
+
+    expect(
+      checkpointLockHandleMocks.release,
+    ).toHaveBeenCalledOnce();
   });
 
   it('propagates daemon failures', async () => {
@@ -665,6 +791,10 @@ describe('runDaemonCommand', () => {
     ).rejects.toBe(
       failure
     );
+
+    expect(
+      checkpointLockHandleMocks.release,
+    ).toHaveBeenCalledOnce();
   });
 
   it('verifies the deployment before validating consumers', async () => {
@@ -701,6 +831,44 @@ describe('runDaemonCommand', () => {
     ).toBeLessThan(
       firstInvocationOrder(
         vi.mocked(FileCheckpointStore),
+      )
+    );
+  });
+
+  it('creates the checkpoint store before creating the checkpoint lock', async () => {
+    await runDaemonCommand({
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
+    });
+
+    expect(
+      firstInvocationOrder(
+        vi.mocked(FileCheckpointStore),
+      )
+    ).toBeLessThan(
+      firstInvocationOrder(
+        vi.mocked(FileCheckpointLock),
+      )
+    );
+  });
+
+  it('acquires the checkpoint lock before loading checkpoints', async () => {
+    await runDaemonCommand({
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
+    });
+
+    expect(
+      firstInvocationOrder(
+        checkpointLockMocks.acquire,
+      )
+    ).toBeLessThan(
+      firstInvocationOrder(
+        checkpointStoreMocks.load,
       )
     );
   });
@@ -823,5 +991,32 @@ describe('runDaemonCommand', () => {
     expect(
       runDaemon,
     ).not.toHaveBeenCalled();
+
+    expect(
+      checkpointLockHandleMocks.release,
+    ).toHaveBeenCalledOnce();
+  });
+
+  it('releases the checkpoint lock after the daemon exits', async () => {
+    await runDaemonCommand({
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
+    });
+
+    expect(
+      checkpointLockHandleMocks.release,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      firstInvocationOrder(
+        vi.mocked(runDaemon),
+      )
+    ).toBeLessThan(
+      firstInvocationOrder(
+        checkpointLockHandleMocks.release,
+      )
+    );
   });
 });
