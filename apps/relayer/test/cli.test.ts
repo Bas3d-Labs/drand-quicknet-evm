@@ -980,6 +980,70 @@ describe('main daemon command', () => {
     );
   });
 
+  it('continues handling repeated SIGINT while the daemon is shutting down', async () => {
+    const listenerCountBefore = process.listenerCount('SIGINT');
+
+    vi.mocked(
+      runDaemonCommand,
+    ).mockImplementation(
+      async (options) => {
+        const listeners =
+          process.listeners('SIGINT');
+
+        const listener =
+          listeners[
+            listeners.length - 1
+          ];
+
+        if (listener === undefined) {
+          throw new Error(
+            'Expected SIGINT listener.'
+          );
+        }
+
+        listener('SIGINT');
+
+        expect(
+          options.signal?.aborted,
+        ).toBe(
+          true
+        );
+
+        expect(
+          process.listenerCount('SIGINT'),
+        ).toBe(
+          listenerCountBefore + 1
+        );
+
+        listener('SIGINT');
+
+        expect(
+          options.signal?.aborted,
+        ).toBe(
+          true
+        );
+
+        expect(
+          process.listenerCount('SIGINT'),
+        ).toBe(
+          listenerCountBefore + 1
+        );
+      }
+    );
+
+    await main([
+      'daemon',
+      '--network',
+      'robinhood-testnet',
+    ]);
+
+    expect(
+      process.listenerCount('SIGINT'),
+    ).toBe(
+      listenerCountBefore
+    );
+  });
+
   it('aborts the daemon on SIGTERM', async () => {
     const listenerCountBefore =
       process.listenerCount(
