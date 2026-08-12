@@ -25,12 +25,8 @@ DEPLOYMENT_FILE="$ROOT_DIR/deployments/robinhood-testnet.json"
 
 cd "$ROOT_DIR"
 
-# Until --network-config is fixed to resolve against INIT_CWD, pnpm --filter
-# runs the relayer with apps/relayer as its cwd.
-CUSTOM_NETWORK_CONFIG_FROM_RELAYER_CWD="${CUSTOM_NETWORK_CONFIG_FROM_RELAYER_CWD:-../../networks/examples/robinhood-testnet.json}"
-
+CUSTOM_NETWORK_CONFIG="${CUSTOM_NETWORK_CONFIG:-networks/examples/robinhood-testnet-custom.json}"
 LEAD_ROUNDS="${QUICKNET_SMOKE_LEAD_ROUNDS:-5}"
-
 RELAYER_PACKAGE="@based-labs/drand-quicknet-relayer"
 
 fail() {
@@ -94,6 +90,9 @@ require_command cast
 
 require_env ROBINHOOD_TESTNET_RPC_URL
 require_env PRIVATE_KEY
+
+[[ -f "$CUSTOM_NETWORK_CONFIG" ]] ||
+  fail "Custom network config not found: $CUSTOM_NETWORK_CONFIG"
 
 [[ -f "$DEPLOYMENT_FILE" ]] ||
   fail "Deployment manifest not found: $DEPLOYMENT_FILE"
@@ -225,15 +224,9 @@ echo "Signer nonce unchanged: $NONCE_AFTER_SECOND_IMPORT"
 
 info "3/3 import same round via custom network config"
 
-# This path is intentionally relative to apps/relayer for now.
-# Once --network-config resolves relative paths against INIT_CWD, change this
-# to:
-#
-#   networks/examples/robinhood-testnet.json
-#
 relayer \
   import \
-  --network-config "$CUSTOM_NETWORK_CONFIG_FROM_RELAYER_CWD" \
+  --network-config "$CUSTOM_NETWORK_CONFIG" \
   --round "$TARGET_ROUND"
 
 BEACON_AFTER_CUSTOM_CONFIG="$(registry_get_beacon "$TARGET_ROUND")"

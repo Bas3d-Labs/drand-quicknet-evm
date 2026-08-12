@@ -13,6 +13,7 @@ import {
 import {
   FinalityPolicy,
 } from './finality-policy.js';
+import { resolveNetworkConfigPath } from './config.js';
 
 export interface CustomChainDescriptor {
   id: number;
@@ -71,7 +72,8 @@ export async function loadCustomNetworkDescriptor(
 ): Promise<CustomNetworkDescriptor> {
   let contents: string;
   try {
-    contents = await readFile(filePath, 'utf8');
+    const configPath = resolveNetworkConfigPath(filePath);
+    contents = await readFile(configPath, 'utf8');
   } catch (cause) {
     throw new Error(
       `Failed to read custom network config: ${filePath}.`,

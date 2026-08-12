@@ -1,4 +1,8 @@
 import {
+  resolve,
+} from 'node:path';
+
+import {
   beforeEach,
   describe,
   expect,
@@ -25,6 +29,10 @@ import type {
 import type {
   CustomNetworkDescriptor,
 } from '../src/custom-network-config.js';
+
+import {
+  resolveNetworkConfigPath,
+} from '../src/config.js';
 
 const deploymentMocks = vi.hoisted(() => ({
   loadRegistryDeployment: vi.fn(),
@@ -915,5 +923,86 @@ describe('loadRelayerConfig', () => {
           .loadCustomNetworkDescriptor,
       ).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('resolveNetworkConfigPath', () => {
+  const repositoryRoot = resolve('/workspace/drand-quicknet-evm');
+  const packageCwd = resolve(repositoryRoot, 'apps/relayer');
+
+  it('resolves a relative path against INIT_CWD when available', () => {
+    expect(
+      resolveNetworkConfigPath(
+        'networks/examples/robinhood-testnet-custom.json',
+        {
+          env: {
+            INIT_CWD: repositoryRoot,
+          },
+          cwd: packageCwd,
+        }
+      )
+    ).toBe(
+      resolve(
+        repositoryRoot,
+        'networks/examples/robinhood-testnet-custom.json'
+      )
+    );
+  });
+
+  it('falls back to the process working directory when INIT_CWD is unavailable', () => {
+    expect(
+      resolveNetworkConfigPath(
+        '../../networks/examples/robinhood-testnet-custom.json',
+        {
+          env: {},
+          cwd: packageCwd,
+        }
+      )
+    ).toBe(
+      resolve(
+        repositoryRoot,
+        'networks/examples/robinhood-testnet-custom.json'
+      )
+    );
+  });
+
+  it('falls back to the process working directory when INIT_CWD is empty', () => {
+    expect(
+      resolveNetworkConfigPath(
+        '../../networks/examples/robinhood-testnet-custom.json',
+        {
+          env: {
+            INIT_CWD: '   ',
+          },
+          cwd: packageCwd,
+        }
+      )
+    ).toBe(
+      resolve(
+        repositoryRoot,
+        'networks/examples/robinhood-testnet-custom.json'
+      )
+    );
+  });
+
+  it('preserves an absolute path', () => {
+    const configPath = resolve(
+      repositoryRoot,
+      'networks/examples/robinhood-testnet-custom.json'
+    );
+
+    expect(
+      resolveNetworkConfigPath(
+        configPath,
+        {
+          env: {
+            INIT_CWD: repositoryRoot,
+          },
+          cwd: packageCwd,
+        }
+      )
+    ).toBe(
+      configPath
+    );
   });
 });

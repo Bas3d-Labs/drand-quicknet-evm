@@ -31,6 +31,7 @@ import {
 import type {
   FinalityPolicy,
 } from './finality-policy.js';
+import { resolve } from 'node:path';
 
 export const RELAYER_NETWORK_PRESETS = [
   'robinhood-testnet',
@@ -192,6 +193,26 @@ async function resolveCustomNetwork(
     deployment: descriptor.deployment,
     finality: descriptor.finality,
   };
+}
+
+export interface ResolveNetworkConfigPathOptions {
+  env?: Readonly<Record<string, string | undefined>>;
+  cwd?: string;
+}
+
+export function resolveNetworkConfigPath(
+  value: string,
+  options: ResolveNetworkConfigPathOptions = {}
+): string {
+  const env = options.env ?? process.env;
+  const cwd = options.cwd ?? process.cwd();
+
+  const initCwd = env.INIT_CWD?.trim();
+  const baseDir = initCwd !== undefined && initCwd.length > 0
+    ? initCwd
+    : cwd;
+
+    return resolve(baseDir, value);
 }
 
 function requireEnvironmentVariable(
