@@ -1,7 +1,18 @@
-import { PublicClient } from "viem";
-import { RegistryDeployment } from "./types.js";
-import { drandQuicknetBeaconRegistryAbi } from "./abi.js";
-import { verifyRegistryDeployment } from "./deployment.js";
+import type {
+  PublicClient,
+} from 'viem';
+
+import type {
+  RegistryDeployment,
+} from './types.js';
+
+import {
+  drandQuicknetBeaconRegistryAbi,
+} from './abi.js';
+
+import {
+  verifyRegistryDeployment,
+} from './deployment.js';
 
 export interface CreateRegistryReaderOptions {
   client: PublicClient;
@@ -31,6 +42,13 @@ export function createRegistryReader(
       return client.readContract({
         ...contract,
         functionName: 'oracle',
+      });
+    },
+
+    oracleCodehash() {
+      return client.readContract({
+        ...contract,
+        functionName: 'oracleCodehash',
       });
     },
 

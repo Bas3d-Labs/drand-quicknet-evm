@@ -7,6 +7,7 @@ import {
 } from 'vitest';
 
 import type {
+  Address,
   PublicClient,
 } from 'viem';
 
@@ -22,6 +23,8 @@ import {
   CHAIN_ID,
   DEPLOYMENT,
   ORACLE_ADDRESS,
+  ORACLE_RUNTIME_CODE,
+  ORACLE_RUNTIME_CODEHASH,
   RANDOMNESS,
   REGISTRY_ADDRESS,
   ROUND,
@@ -36,19 +39,63 @@ describe('createRegistryReader', () => {
   let client: PublicClient;
 
   beforeEach(() => {
-    readContract = vi.fn();
+    readContract =
+      vi.fn().mockImplementation(
+        async ({
+          functionName,
+        }: {
+          functionName: string;
+        }) => {
+          if (functionName === 'oracle') {
+            return ORACLE_ADDRESS;
+          }
+
+          if (functionName === 'oracleCodehash') {
+            return ORACLE_RUNTIME_CODEHASH;
+          }
+
+          throw new Error(`Unexpected function: ${functionName}`);
+        },
+      );
 
     getChainId =
       vi.fn().mockResolvedValue(CHAIN_ID);
 
     getCode =
-      vi.fn().mockResolvedValue(RUNTIME_CODE);
+      vi.fn().mockImplementation(
+        async ({
+          address,
+        }: {
+          address: Address;
+        }) => {
+          if (address === REGISTRY_ADDRESS) {
+            return RUNTIME_CODE;
+          }
+
+          if (address === ORACLE_ADDRESS) {
+            return ORACLE_RUNTIME_CODE;
+          }
+
+          return undefined;
+        },
+      );
 
     client = {
       readContract,
       getChainId,
       getCode,
     } as unknown as PublicClient;
+  });
+
+  it('exposes the deployment', () => {
+    const registry = createRegistryReader({
+      client,
+      deployment: DEPLOYMENT,
+    });
+
+    expect(registry.deployment).toBe(
+      DEPLOYMENT,
+    );
   });
 
   it('exposes the deployment', () => {
@@ -72,10 +119,36 @@ describe('createRegistryReader', () => {
       registry.verifyDeployment(),
     ).resolves.toBeUndefined();
 
-    expect(getChainId).toHaveBeenCalledOnce();
+    expect(
+      getChainId,
+    ).toHaveBeenCalledOnce();
 
-    expect(getCode).toHaveBeenCalledWith({
+    expect(
+      getCode,
+    ).toHaveBeenCalledWith({
       address: REGISTRY_ADDRESS,
+    });
+
+    expect(
+      readContract,
+    ).toHaveBeenCalledWith({
+      address: REGISTRY_ADDRESS,
+      abi: drandQuicknetBeaconRegistryAbi,
+      functionName: 'oracle',
+    });
+
+    expect(
+      readContract,
+    ).toHaveBeenCalledWith({
+      address: REGISTRY_ADDRESS,
+      abi: drandQuicknetBeaconRegistryAbi,
+      functionName: 'oracleCodehash',
+    });
+
+    expect(
+      getCode,
+    ).toHaveBeenCalledWith({
+      address: ORACLE_ADDRESS,
     });
   });
 
@@ -97,6 +170,31 @@ describe('createRegistryReader', () => {
       address: REGISTRY_ADDRESS,
       abi: drandQuicknetBeaconRegistryAbi,
       functionName: 'oracle',
+    });
+  });
+
+  it('reads the oracle codehash', async () => {
+    readContract.mockResolvedValue(
+      ORACLE_RUNTIME_CODEHASH,
+    );
+
+    const registry = createRegistryReader({
+      client,
+      deployment: DEPLOYMENT,
+    });
+
+    await expect(
+      registry.oracleCodehash(),
+    ).resolves.toBe(
+      ORACLE_RUNTIME_CODEHASH,
+    );
+
+    expect(
+      readContract,
+    ).toHaveBeenCalledWith({
+      address: REGISTRY_ADDRESS,
+      abi: drandQuicknetBeaconRegistryAbi,
+      functionName: 'oracleCodehash',
     });
   });
 
