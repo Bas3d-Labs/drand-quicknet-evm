@@ -112,27 +112,21 @@ abstract contract QuicknetRandomnessConsumer is
 
     /// @notice Commits to an exact future Quicknet round.
     ///
-    /// @param leadRounds Number of rounds after the latest scheduled
-    /// round to commit to.
     /// @return round Exact Quicknet round committed by the consumer.
     ///
     /// @dev The application chooses its own lead policy. The base
     /// contract only requires the committed round to be strictly in
     /// the future.
-    function _requestQuicknetRandomness(
-        uint64 leadRounds
-    )
+    function _requestQuicknetRandomness()
         internal
         returns (uint64 round)
     {
         uint64 latest = _quicknetRegistry().latestScheduledRound();
-        uint256 target = uint256(latest) + uint256(leadRounds);
-
-        if (target > type(uint64).max) {
+        if (latest > type(uint64).max - quicknetLeadRounds) {
             revert QuicknetRoundOverflow();
         }
 
-        round = uint64(target);
+        round = latest + quicknetLeadRounds;
 
         emit QuicknetRandomnessRequested(round);
     }
@@ -204,6 +198,17 @@ abstract contract QuicknetRandomnessConsumer is
                 randomness
             )
         );
+    }
+    
+    // @notice Returns whether the exact Quicknet round has been stored.
+    function _isQuicknetBeaconStored(
+        uint64 round
+    )
+        internal
+        view
+        returns (bool)
+    {
+        return _quicknetRegistry().isStored(round);
     }
 
     /// @dev Returns the configured registry as its typed interface.
