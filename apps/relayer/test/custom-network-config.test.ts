@@ -30,6 +30,11 @@ const REGISTRY_ADDRESS =
 const RUNTIME_CODEHASH =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
+const ORACLE_ADDRESS = '0x2222222222222222222222222222222222222222';
+
+const ORACLE_RUNTIME_CODEHASH =
+  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -69,8 +74,9 @@ describe('CustomNetworkDescriptor.parseJson', () => {
       deployment: {
         chainId: 12_345,
         address: REGISTRY_ADDRESS,
-        runtimeCodehash:
-          RUNTIME_CODEHASH,
+        runtimeCodehash: RUNTIME_CODEHASH,
+        oracleAddress: ORACLE_ADDRESS,
+        oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
       },
       finality: {
         type: 'safe',
@@ -721,9 +727,124 @@ describe('CustomNetworkDescriptor.parseJson', () => {
     );
   });
 
-  it('rejects a non-object registry config', () => {
+  it('rejects a missing oracle root field', () => {
     const config =
       createValidConfig();
+
+    delete config.oracle;
+
+    expect(
+      () =>
+        CustomNetworkDescriptor.parseJson(
+          config,
+        ),
+    ).toThrow(
+      'Missing custom network config field: oracle.'
+    );
+  });
+  
+  it('rejects a non-object oracle config', () => {
+    const config = createValidConfig();
+    config.oracle = 'invalid';
+
+    expect(
+      () =>
+        CustomNetworkDescriptor.parseJson(
+          config,
+        ),
+    ).toThrow(
+      'Custom network config oracle must be an object.'
+    );
+  });
+
+  it('rejects a missing oracle field', () => {
+    const config = createValidConfig();
+
+    const oracle =
+      config.oracle as Record<
+        string,
+        unknown
+      >;
+
+    delete oracle.address;
+
+    expect(
+      () =>
+        CustomNetworkDescriptor.parseJson(
+          config,
+        ),
+    ).toThrow(
+      'Missing custom network config field: address.'
+    );
+  });
+
+  it('rejects an unexpected oracle field', () => {
+    const config = createValidConfig();
+
+    const oracle =
+      config.oracle as Record<
+        string,
+        unknown
+      >;
+
+    oracle.chainId = 12_345;
+
+    expect(
+      () =>
+        CustomNetworkDescriptor.parseJson(
+          config,
+        ),
+    ).toThrow(
+      'Unexpected custom network config field: chainId.'
+    );
+  });
+
+  it('propagates invalid oracle address failures', () => {
+    const config = createValidConfig();
+
+    const oracle =
+      config.oracle as Record<
+        string,
+        unknown
+      >;
+
+    oracle.address =
+      '0x1234';
+
+    expect(
+      () =>
+        CustomNetworkDescriptor.parseJson(
+          config,
+        ),
+    ).toThrow(
+      'Registry deployment oracleAddress must be a valid address.'
+    );
+  });
+
+  it('propagates invalid oracle runtime codehash failures', () => {
+    const config = createValidConfig();
+
+    const oracle =
+      config.oracle as Record<
+        string,
+        unknown
+      >;
+
+    oracle.runtimeCodehash =
+      '0x1234';
+
+    expect(
+      () =>
+        CustomNetworkDescriptor.parseJson(
+          config,
+        ),
+    ).toThrow(
+      'Registry deployment oracleRuntimeCodehash must be a 32-byte hex value.'
+    );
+  });
+
+  it('rejects a non-object registry config', () => {
+    const config = createValidConfig();
 
     config.registry = 'invalid';
 
@@ -738,8 +859,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects a missing registry field', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const registry =
       config.registry as Record<
@@ -760,8 +880,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects an unexpected registry field', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const registry =
       config.registry as Record<
@@ -782,8 +901,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('propagates invalid registry address failures', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const registry =
       config.registry as Record<
@@ -805,8 +923,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('propagates invalid registry runtime codehash failures', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const registry =
       config.registry as Record<
@@ -828,8 +945,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('propagates invalid finality policy failures', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     config.finality = {
       type: 'unknown',
@@ -877,8 +993,9 @@ describe('loadCustomNetworkDescriptor', () => {
       deployment: {
         chainId: 12_345,
         address: REGISTRY_ADDRESS,
-        runtimeCodehash:
-          RUNTIME_CODEHASH,
+        runtimeCodehash: RUNTIME_CODEHASH,
+        oracleAddress: ORACLE_ADDRESS,
+        oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
       },
       finality: {
         type: 'safe',
@@ -960,10 +1077,13 @@ function createValidConfig(): Record<
       },
       testnet: false,
     },
+    oracle: {
+      address: ORACLE_ADDRESS,
+      runtimeCodehash: ORACLE_RUNTIME_CODEHASH,
+    },
     registry: {
       address: REGISTRY_ADDRESS,
-      runtimeCodehash:
-        RUNTIME_CODEHASH,
+      runtimeCodehash: RUNTIME_CODEHASH,
     },
     finality: {
       type: 'safe',

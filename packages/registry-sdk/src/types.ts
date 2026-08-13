@@ -15,12 +15,16 @@ export interface RegistryDeployment {
   chainId: number;
   address: Address;
   runtimeCodehash: Hex;
+  oracleAddress: Address;
+  oracleRuntimeCodehash: Hex;
 }
 
 export interface CreateRegistryDeploymentOptions {
   chainId: unknown;
   address: unknown;
   runtimeCodehash: unknown;
+  oracleAddress: unknown;
+  oracleRuntimeCodehash: unknown;
 }
 
 export const RegistryDeployment = {
@@ -31,6 +35,8 @@ export const RegistryDeployment = {
       chainId,
       address,
       runtimeCodehash,
+      oracleAddress,
+      oracleRuntimeCodehash,
     } = options;
 
     if (
@@ -44,31 +50,59 @@ export const RegistryDeployment = {
     if (typeof address !== 'string') {
       throw new Error('Registry deployment address must be a valid address.');
     }
+    
+    const normalizedAddress = normalizeAddress(
+      address,
+      'Registry deployment address'
+    );
 
-    let normalizedAddress: Address;
-    try {
-      normalizedAddress = getAddress(address);
-    } catch (cause) {
-      throw new Error(
-        'Registry deployment address must be a valid address.',
-        { cause }
-      );
-    }
+    const normalizedOracleAddress = normalizeAddress(
+      oracleAddress,
+        'Registry deployment oracleAddress'
+    );
 
-    if (
-      !isHex(runtimeCodehash, { strict: true}) || 
-      size(runtimeCodehash) !== 32
-    ) {
-      throw new Error('Registry deployment runtimeCodehash must be a 32-byte hex value.');
-    }
+    validateCodehash(runtimeCodehash, 'Registry deployment runtimeCodehash');
+    validateCodehash(oracleRuntimeCodehash, 'Registry deployment oracleRuntimeCodehash');
 
     return {
       chainId,
       address: normalizedAddress,
       runtimeCodehash,
-    }
-  }
+      oracleAddress: normalizedOracleAddress,
+      oracleRuntimeCodehash,
+    };
+  },
 };
+
+function normalizeAddress(
+  value: unknown,
+  field: string,
+): Address {
+  if (typeof value !== 'string') {
+    throw new Error(`${field} must be a valid address.`);
+  }
+
+  try {
+    return getAddress(value);
+  } catch (cause) {
+    throw new Error(
+      `${field} must be a valid address.`,
+      { cause }
+    );
+  }
+}
+
+function validateCodehash(
+  value: unknown,
+  field: string,
+): asserts value is Hex {
+  if (
+    !isHex(value, { strict: true }) ||
+    size(value) !== 32
+  ) {
+    throw new Error(`${field} must be a 32-byte hex value.`);
+  }
+}
 
 export type RegistrySignature =
   | CompressedSignature

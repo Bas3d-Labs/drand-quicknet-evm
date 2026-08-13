@@ -6,7 +6,13 @@ import { readFile } from 'node:fs/promises';
 
 interface DeploymentManifest {
   chainId?: unknown;
+  oracle?: unknown;
   registry?: unknown;
+}
+
+interface OracleManifest {
+  address?: unknown;
+  runtimeCodehash?: unknown;
 }
 
 interface RegistryManifest {
@@ -72,11 +78,14 @@ export function parseRegistryDeployment(
   options: ParseRegistryDeploymentOptions = {},
 ): RegistryDeployment {
   const manifest = parseDeploymentManifest(value);
+  const oracle = parseOracleManifest(manifest.oracle);
   const registry = parseRegistryManifest(manifest.registry);
   const deployment = RegistryDeployment.create({
     chainId: manifest.chainId,
     address: registry.address,
     runtimeCodehash: registry.runtimeCodehash,
+    oracleAddress: oracle.address,
+    oracleRuntimeCodehash: oracle.runtimeCodehash,
   });
 
   if (
@@ -97,6 +106,18 @@ function parseDeploymentManifest(
   if (!isObject(value)) {
     throw new Error(
       'Invalid deployment manifest: root value must be an object.'
+    );
+  }
+
+  return value;
+}
+
+function parseOracleManifest(
+  value: unknown,
+): OracleManifest {
+  if (!isObject(value)) {
+    throw new Error(
+      'Invalid deployment manifest: oracle must be an object.'
     );
   }
 

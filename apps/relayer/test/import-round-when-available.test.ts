@@ -82,11 +82,17 @@ const RANDOMNESS: Hex =
 
 const TRANSACTION_HASH: Hex =
   '0x4444444444444444444444444444444444444444444444444444444444444444';
+  
+const ORACLE_ADDRESS = '0x5555555555555555555555555555555555555555';
+const ORACLE_RUNTIME_CODEHASH =
+  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 const DEPLOYMENT: RegistryDeployment = {
   chainId: CHAIN_ID,
   address: REGISTRY_ADDRESS,
   runtimeCodehash: RUNTIME_CODEHASH,
+  oracleAddress: ORACLE_ADDRESS,
+  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
 };
 
 const BEACON: QuicknetBeacon = {

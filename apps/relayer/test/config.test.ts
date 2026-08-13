@@ -66,16 +66,24 @@ const REGISTRY_ADDRESS = '0x1111111111111111111111111111111111111111';
 const RUNTIME_CODEHASH =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
+const ORACLE_ADDRESS = '0x2222222222222222222222222222222222222222';
+const ORACLE_RUNTIME_CODEHASH =
+  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
 const REGISTRY_DEPLOYMENT: RegistryDeployment = {
   chainId: robinhoodTestnet.id,
   address: REGISTRY_ADDRESS,
   runtimeCodehash: RUNTIME_CODEHASH,
+  oracleAddress: ORACLE_ADDRESS,
+  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
 };
 
 const CUSTOM_REGISTRY_DEPLOYMENT: RegistryDeployment = {
   chainId: 12_345,
   address: REGISTRY_ADDRESS,
   runtimeCodehash: RUNTIME_CODEHASH,
+  oracleAddress: ORACLE_ADDRESS,
+  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
 };
 
 const CUSTOM_NETWORK_DESCRIPTOR: CustomNetworkDescriptor = {
