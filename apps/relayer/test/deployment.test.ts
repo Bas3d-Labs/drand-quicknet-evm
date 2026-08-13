@@ -41,8 +41,16 @@ const REGISTRY_ADDRESS: Address =
 const RUNTIME_CODEHASH: Hex =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
+const ORACLE_ADDRESS: Address = '0x2222222222222222222222222222222222222222';
+const ORACLE_RUNTIME_CODEHASH: Hex =
+  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
 const VALID_MANIFEST = {
   chainId: CHAIN_ID,
+  oracle: {
+    address: ORACLE_ADDRESS,
+    runtimeCodehash: ORACLE_RUNTIME_CODEHASH,
+  },
   registry: {
     address: REGISTRY_ADDRESS,
     runtimeCodehash: RUNTIME_CODEHASH,
@@ -72,8 +80,9 @@ describe('parseRegistryDeployment', () => {
     ).toEqual({
       chainId: CHAIN_ID,
       address: REGISTRY_ADDRESS,
-      runtimeCodehash:
-        RUNTIME_CODEHASH,
+      runtimeCodehash: RUNTIME_CODEHASH,
+      oracleAddress: ORACLE_ADDRESS,
+      oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
     });
   });
 
@@ -89,8 +98,9 @@ describe('parseRegistryDeployment', () => {
     ).toEqual({
       chainId: CHAIN_ID,
       address: REGISTRY_ADDRESS,
-      runtimeCodehash:
-        RUNTIME_CODEHASH,
+      runtimeCodehash: RUNTIME_CODEHASH,
+      oracleAddress: ORACLE_ADDRESS,
+      oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
     });
   });
 
@@ -99,8 +109,7 @@ describe('parseRegistryDeployment', () => {
       parseRegistryDeployment(
         VALID_MANIFEST,
         {
-          expectedChainId:
-            CHAIN_ID + 1,
+          expectedChainId: CHAIN_ID + 1,
         },
       ),
     ).toThrow(
@@ -137,8 +146,8 @@ describe('parseRegistryDeployment', () => {
   it('rejects a missing chainId', () => {
     expect(() =>
       parseRegistryDeployment({
-        registry:
-          VALID_MANIFEST.registry,
+        oracle: VALID_MANIFEST.oracle,
+        registry: VALID_MANIFEST.registry,
       }),
     ).toThrow(
       'Registry deployment chainId must be a positive safe integer.'
@@ -193,8 +202,7 @@ describe('parseRegistryDeployment', () => {
     expect(() =>
       parseRegistryDeployment({
         ...VALID_MANIFEST,
-        chainId:
-          Number.MAX_SAFE_INTEGER + 1,
+        chainId: Number.MAX_SAFE_INTEGER + 1,
       }),
     ).toThrow(
       'Registry deployment chainId must be a positive safe integer.'
@@ -205,6 +213,7 @@ describe('parseRegistryDeployment', () => {
     expect(() =>
       parseRegistryDeployment({
         chainId: CHAIN_ID,
+        oracle: VALID_MANIFEST.oracle,
       }),
     ).toThrow(
       'Invalid deployment manifest: registry must be an object.'
@@ -215,6 +224,7 @@ describe('parseRegistryDeployment', () => {
     expect(() =>
       parseRegistryDeployment({
         chainId: CHAIN_ID,
+        oracle: VALID_MANIFEST.oracle,
         registry: null,
       }),
     ).toThrow(
@@ -226,6 +236,7 @@ describe('parseRegistryDeployment', () => {
     expect(() =>
       parseRegistryDeployment({
         chainId: CHAIN_ID,
+        oracle: VALID_MANIFEST.oracle,
         registry: [],
       }),
     ).toThrow(
@@ -236,10 +247,9 @@ describe('parseRegistryDeployment', () => {
   it('rejects a missing registry address', () => {
     expect(() =>
       parseRegistryDeployment({
-        chainId: CHAIN_ID,
+        ...VALID_MANIFEST,
         registry: {
-          runtimeCodehash:
-            RUNTIME_CODEHASH,
+          runtimeCodehash: RUNTIME_CODEHASH,
         },
       }),
     ).toThrow(
@@ -250,7 +260,7 @@ describe('parseRegistryDeployment', () => {
   it('rejects a non-string registry address', () => {
     expect(() =>
       parseRegistryDeployment({
-        chainId: CHAIN_ID,
+        ...VALID_MANIFEST,
         registry: {
           address: 123,
           runtimeCodehash:
@@ -265,7 +275,7 @@ describe('parseRegistryDeployment', () => {
   it('rejects an invalid registry address', () => {
     expect(() =>
       parseRegistryDeployment({
-        chainId: CHAIN_ID,
+        ...VALID_MANIFEST,
         registry: {
           address: '0x1234',
           runtimeCodehash:
@@ -283,12 +293,10 @@ describe('parseRegistryDeployment', () => {
 
     const deployment =
       parseRegistryDeployment({
-        chainId: CHAIN_ID,
+        ...VALID_MANIFEST,
         registry: {
-          address:
-            lowercaseAddress,
-          runtimeCodehash:
-            RUNTIME_CODEHASH,
+          address: lowercaseAddress,
+          runtimeCodehash: RUNTIME_CODEHASH,
         },
       });
 
@@ -302,10 +310,9 @@ describe('parseRegistryDeployment', () => {
   it('rejects a missing runtime codehash', () => {
     expect(() =>
       parseRegistryDeployment({
-        chainId: CHAIN_ID,
+        ...VALID_MANIFEST,
         registry: {
-          address:
-            REGISTRY_ADDRESS,
+          address: REGISTRY_ADDRESS,
         },
       }),
     ).toThrow(
@@ -316,10 +323,9 @@ describe('parseRegistryDeployment', () => {
   it('rejects a non-string runtime codehash', () => {
     expect(() =>
       parseRegistryDeployment({
-        chainId: CHAIN_ID,
+        ...VALID_MANIFEST,
         registry: {
-          address:
-            REGISTRY_ADDRESS,
+          address: REGISTRY_ADDRESS,
           runtimeCodehash: 123,
         },
       }),
@@ -331,12 +337,10 @@ describe('parseRegistryDeployment', () => {
   it('rejects a runtime codehash without a 0x prefix', () => {
     expect(() =>
       parseRegistryDeployment({
-        chainId: CHAIN_ID,
+        ...VALID_MANIFEST,
         registry: {
-          address:
-            REGISTRY_ADDRESS,
-          runtimeCodehash:
-            'aa'.repeat(32),
+          address: REGISTRY_ADDRESS,
+          runtimeCodehash: 'aa'.repeat(32),
         },
       }),
     ).toThrow(
@@ -347,12 +351,10 @@ describe('parseRegistryDeployment', () => {
   it('rejects a runtime codehash shorter than 32 bytes', () => {
     expect(() =>
       parseRegistryDeployment({
-        chainId: CHAIN_ID,
+        ...VALID_MANIFEST,
         registry: {
-          address:
-            REGISTRY_ADDRESS,
-          runtimeCodehash:
-            `0x${'aa'.repeat(31)}`,
+          address: REGISTRY_ADDRESS,
+          runtimeCodehash: `0x${'aa'.repeat(31)}`,
         },
       }),
     ).toThrow(
@@ -363,12 +365,10 @@ describe('parseRegistryDeployment', () => {
   it('rejects a runtime codehash longer than 32 bytes', () => {
     expect(() =>
       parseRegistryDeployment({
-        chainId: CHAIN_ID,
+        ...VALID_MANIFEST,
         registry: {
-          address:
-            REGISTRY_ADDRESS,
-          runtimeCodehash:
-            `0x${'aa'.repeat(33)}`,
+          address: REGISTRY_ADDRESS,
+          runtimeCodehash: `0x${'aa'.repeat(33)}`,
         },
       }),
     ).toThrow(
@@ -379,12 +379,10 @@ describe('parseRegistryDeployment', () => {
   it('rejects non-hex characters in the runtime codehash', () => {
     expect(() =>
       parseRegistryDeployment({
-        chainId: CHAIN_ID,
+        ...VALID_MANIFEST,
         registry: {
-          address:
-            REGISTRY_ADDRESS,
-          runtimeCodehash:
-            `0x${'gg'.repeat(32)}`,
+          address: REGISTRY_ADDRESS,
+          runtimeCodehash: `0x${'gg'.repeat(32)}`,
         },
       }),
     ).toThrow(
@@ -392,25 +390,79 @@ describe('parseRegistryDeployment', () => {
     );
   });
 
+  it('rejects a missing oracle object', () => {
+    expect(() =>
+      parseRegistryDeployment({
+        chainId: CHAIN_ID,
+        registry: VALID_MANIFEST.registry,
+      }),
+    ).toThrow(
+      'Invalid deployment manifest: oracle must be an object.'
+    );
+  });
+
+  it('rejects a missing oracle address', () => {
+    expect(() =>
+      parseRegistryDeployment({
+        ...VALID_MANIFEST,
+        oracle: {
+          runtimeCodehash: ORACLE_RUNTIME_CODEHASH,
+        },
+      }),
+    ).toThrow(
+      'Registry deployment oracleAddress must be a valid address.'
+    );
+  });
+
+  it('rejects an invalid oracle address', () => {
+    expect(() =>
+      parseRegistryDeployment({
+        ...VALID_MANIFEST,
+        oracle: {
+          address: '0x1234',
+          runtimeCodehash: ORACLE_RUNTIME_CODEHASH,
+        },
+      }),
+    ).toThrow(
+      'Registry deployment oracleAddress must be a valid address.'
+    );
+  });
+
+  it('rejects an invalid oracle runtime codehash', () => {
+    expect(() =>
+      parseRegistryDeployment({
+        ...VALID_MANIFEST,
+        oracle: {
+          address: ORACLE_ADDRESS,
+          runtimeCodehash: '0x1234',
+        },
+      }),
+    ).toThrow(
+      'Registry deployment oracleRuntimeCodehash must be a 32-byte hex value.'
+    );
+  });
+
   it('ignores unrelated manifest fields', () => {
     expect(
       parseRegistryDeployment({
         ...VALID_MANIFEST,
-        deploymentBlock:
-          123_456,
-        sourceCommit:
-          'abcdef',
+        deploymentBlock: 123_456,
+        sourceCommit: 'abcdef',
+        oracle: {
+          ...VALID_MANIFEST.oracle,
+          extraMetadata: 'ignored',
+        },
         registry: {
           ...VALID_MANIFEST.registry,
-          extraMetadata:
-            'ignored',
+          extraMetadata: 'ignored',
         },
       }),
     ).toEqual({
       chainId: CHAIN_ID,
       address: REGISTRY_ADDRESS,
-      runtimeCodehash:
-        RUNTIME_CODEHASH,
+      runtimeCodehash: RUNTIME_CODEHASH,
+      oracleAddress: ORACLE_ADDRESS,
+      oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
     });
   });
 });
@@ -434,10 +486,10 @@ describe('loadRegistryDeployment', () => {
       }),
     ).resolves.toEqual({
       chainId: CHAIN_ID,
-      address:
-        REGISTRY_ADDRESS,
-      runtimeCodehash:
-        RUNTIME_CODEHASH,
+      address: REGISTRY_ADDRESS,
+      runtimeCodehash: RUNTIME_CODEHASH,
+      oracleAddress: ORACLE_ADDRESS,
+      oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
     });
   });
 
@@ -455,10 +507,10 @@ describe('loadRegistryDeployment', () => {
       }),
     ).resolves.toEqual({
       chainId: CHAIN_ID,
-      address:
-        REGISTRY_ADDRESS,
-      runtimeCodehash:
-        RUNTIME_CODEHASH,
+      address: REGISTRY_ADDRESS,
+      runtimeCodehash: RUNTIME_CODEHASH,
+      oracleAddress: ORACLE_ADDRESS,
+      oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
     });
   });
 

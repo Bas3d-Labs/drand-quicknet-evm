@@ -49,7 +49,6 @@ import type {
 
 import {
   runDaemonIteration,
-  type SoftScanCursor,
 } from '../src/daemon-iteration.js';
 
 import type {
@@ -77,6 +76,10 @@ const RUNTIME_CODEHASH: Hex =
 
 const TRANSACTION_HASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  
+const ORACLE_ADDRESS = '0x5555555555555555555555555555555555555555';
+const ORACLE_RUNTIME_CODEHASH =
+  '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
 
 const PUBLIC_CLIENT = {} as PublicClient;
 const WALLET_CLIENT = {} as WalletClient;
@@ -90,6 +93,8 @@ const DEPLOYMENT: RegistryDeployment = {
   chainId: 46630,
   address: REGISTRY_ADDRESS,
   runtimeCodehash: RUNTIME_CODEHASH,
+  oracleAddress: ORACLE_ADDRESS,
+  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
 };
 
 const REQUEST: QuicknetRandomnessRequest = {

@@ -3,7 +3,7 @@ import {
 } from 'node:fs/promises';
 
 import {
-  type Chain
+  type Chain,
 } from 'viem';
 
 import {
@@ -13,7 +13,10 @@ import {
 import {
   FinalityPolicy,
 } from './finality-policy.js';
-import { resolveNetworkConfigPath } from './config.js';
+
+import {
+  resolveNetworkConfigPath,
+} from './config.js';
 
 export interface CustomChainDescriptor {
   id: number;
@@ -40,7 +43,14 @@ export const CustomNetworkDescriptor = {
 
     assertExactKeys(
       value,
-      ['version','name','chain','registry','finality'],
+      [
+        'version',
+        'name',
+        'chain',
+        'oracle',
+        'registry',
+        'finality',
+      ],
     );
 
     if (value.version !== 1) {
@@ -49,11 +59,14 @@ export const CustomNetworkDescriptor = {
 
     const name = parseNetworkName(value.name);
     const chain = parseChain(value.chain);
+    const oracle = parseOracle(value.oracle);
     const registry = parseRegistry(value.registry);
     const deployment = RegistryDeployment.create({
       chainId: chain.id,
       address: registry.address,
       runtimeCodehash: registry.runtimeCodehash,
+      oracleAddress: oracle.address,
+      oracleRuntimeCodehash: oracle.runtimeCodehash,
     });
     const finality = FinalityPolicy.parseJson(value.finality);
 
@@ -92,6 +105,11 @@ export async function loadCustomNetworkDescriptor(
   }
 
   return CustomNetworkDescriptor.parseJson(value);
+}
+
+interface OracleDescriptor {
+  address: unknown;
+  runtimeCodehash: unknown;
 }
 
 interface RegistryDescriptor {
@@ -185,6 +203,21 @@ function parseNativeCurrency(
     name: value.name.trim(),
     symbol: value.symbol.trim(),
     decimals: value.decimals,
+  };
+}
+
+function parseOracle(
+  value: unknown,
+): OracleDescriptor {
+  if (!isObject(value)) {
+    throw new Error('Custom network config oracle must be an object.');
+  }
+
+  assertExactKeys(value, ['address', 'runtimeCodehash']);
+
+  return {
+    address: value.address,
+    runtimeCodehash: value.runtimeCodehash,
   };
 }
 

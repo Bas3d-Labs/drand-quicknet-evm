@@ -74,6 +74,10 @@ const SUBMITTED_TRANSACTION_HASH: Hex =
 
 const RECEIPT_TRANSACTION_HASH: Hex =
   '0x6666666666666666666666666666666666666666666666666666666666666666';
+  
+const ORACLE_ADDRESS = '0x5555555555555555555555555555555555555555';
+const ORACLE_RUNTIME_CODEHASH =
+  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 const RECEIPT_BLOCK_NUMBER = 123_456n;
 
@@ -81,6 +85,8 @@ const DEPLOYMENT: RegistryDeployment = {
   chainId: CHAIN_ID,
   address: REGISTRY_ADDRESS,
   runtimeCodehash: RUNTIME_CODEHASH,
+  oracleAddress: ORACLE_ADDRESS,
+  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
 };
 
 describe('importQuicknetRound', () => {

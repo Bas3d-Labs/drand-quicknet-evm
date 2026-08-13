@@ -46,6 +46,7 @@ import {
 import type {
   FinalityPolicy,
 } from '../src/finality-policy.js';
+import { robinhoodTestnet } from 'viem/chains';
 
 const CONSUMER_A: Address = '0x1111111111111111111111111111111111111111';
 const CONSUMER_B: Address = '0x2222222222222222222222222222222222222222';
@@ -55,6 +56,10 @@ const REGISTRY_ADDRESS: Address = '0x4444444444444444444444444444444444444444';
 
 const RUNTIME_CODEHASH: Hex =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  
+const ORACLE_ADDRESS = '0x5555555555555555555555555555555555555555';
+const ORACLE_RUNTIME_CODEHASH =
+  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 const PUBLIC_CLIENT = {} as PublicClient;
 const WALLET_CLIENT = {} as WalletClient;
@@ -66,9 +71,11 @@ const FINALITY: FinalityPolicy = {
 };
 
 const DEPLOYMENT: RegistryDeployment = {
-  chainId: 46630,
+  chainId: robinhoodTestnet.id,
   address: REGISTRY_ADDRESS,
   runtimeCodehash: RUNTIME_CODEHASH,
+  oracleAddress: ORACLE_ADDRESS,
+  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
 };
 
 const VALIDATED_CONSUMER_A: ValidatedQuicknetConsumer = {

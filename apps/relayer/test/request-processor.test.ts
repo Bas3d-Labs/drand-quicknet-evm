@@ -61,6 +61,10 @@ const REQUEST_TRANSACTION_HASH: Hex =
 
 const RUNTIME_CODEHASH: Hex =
   '0x9999999999999999999999999999999999999999999999999999999999999999';
+  
+const ORACLE_ADDRESS = '0x5555555555555555555555555555555555555555';
+const ORACLE_RUNTIME_CODEHASH =
+  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 const PUBLIC_CLIENT =
   {} as PublicClient;
@@ -75,6 +79,8 @@ const DEPLOYMENT: RegistryDeployment = {
   chainId: 46630,
   address: REGISTRY_ADDRESS,
   runtimeCodehash: RUNTIME_CODEHASH,
+  oracleAddress: ORACLE_ADDRESS,
+  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
 };
 
 function createRequest(

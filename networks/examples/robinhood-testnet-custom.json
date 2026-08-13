@@ -11,6 +11,10 @@
     },
     "testnet": true
   },
+  "oracle": {
+    "address": "0x692100c4863adAED9f560F6Ce982cF878F083e93",
+    "runtimeCodehash": "0x78faa56ca608db8a19cfb3bb052f11fedbaa14fb1ce74db58044db99246b4cfc"
+  },
   "registry": {
     "address": "0xEc2a718F4D1B18c8315794A24Fe90622400A40de",
     "runtimeCodehash": "0x19ef2338aa49f196ed6ceea377ee52c8674899edb2280f20145768cf30c8f699"

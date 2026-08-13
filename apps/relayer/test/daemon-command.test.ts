@@ -184,11 +184,17 @@ const RUNTIME_CODEHASH: Hex =
 
 const PRIVATE_KEY =
   '0x1111111111111111111111111111111111111111111111111111111111111111';
+  
+const ORACLE_ADDRESS = '0x5555555555555555555555555555555555555555';
+const ORACLE_RUNTIME_CODEHASH =
+  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 const DEPLOYMENT: RegistryDeployment = {
   chainId: robinhoodTestnet.id,
   address: REGISTRY_ADDRESS,
   runtimeCodehash: RUNTIME_CODEHASH,
+  oracleAddress: ORACLE_ADDRESS,
+  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
 };
 
 const ACCOUNT = privateKeyToAccount(PRIVATE_KEY);

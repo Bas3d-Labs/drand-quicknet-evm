@@ -57,6 +57,10 @@ const REGISTRY_ADDRESS: Address = '0x3333333333333333333333333333333333333333';
 
 const RUNTIME_CODEHASH: Hex =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  
+const ORACLE_ADDRESS = '0x5555555555555555555555555555555555555555';
+const ORACLE_RUNTIME_CODEHASH =
+  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 const PUBLIC_CLIENT = {} as PublicClient;
 const WALLET_CLIENT = {} as WalletClient;
@@ -71,6 +75,8 @@ const DEPLOYMENT: RegistryDeployment = {
   chainId: 46630,
   address: REGISTRY_ADDRESS,
   runtimeCodehash: RUNTIME_CODEHASH,
+  oracleAddress: ORACLE_ADDRESS,
+  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
 };
 
 const VALIDATED_CONSUMER_A: ValidatedQuicknetConsumer = {
