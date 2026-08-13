@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.36;
+pragma solidity 0.8.36;
 
 /// @title IQuicknetRandomnessConsumer
-/// @notice Standard demand signal for contracts that consume drand Quicknet
-///         randomness through a shared beacon registry.
+/// @notice Minimal interface used by Quicknet relayers to discover and
+///         validate randomness consumers.
 /// @dev
 /// Consumers emit `QuicknetRandomnessRequested` only after they have committed
 /// to an exact Quicknet round.
@@ -18,7 +18,8 @@ pragma solidity ^0.8.36;
 /// Emitting this event does not grant the relayer any authority over settlement,
 /// outcome selection, callbacks, or application state.
 interface IQuicknetRandomnessConsumer {
-    /// @notice Signals demand for an exact drand Quicknet round.
+    /// @notice Emitted when a consumer commits an action to an exact
+    ///         Quicknet round.
     /// @param round The exact Quicknet round the consumer has committed to.
     /// @dev
     /// The commitment to `round` MUST already be fixed before this event is
@@ -31,7 +32,7 @@ interface IQuicknetRandomnessConsumer {
         uint64 indexed round
     );
 
-    /// @notice Returns the Quicknet beacon registry used by this consumer.
+    /// @notice Returns the Quicknet beacon registry trusted by this consumer.
     /// @dev
     /// Reference relayers should verify that this address matches the registry
     /// deployment they are configured to service before acting on request

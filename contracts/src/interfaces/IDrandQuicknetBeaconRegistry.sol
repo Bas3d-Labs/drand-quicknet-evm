@@ -1,0 +1,76 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.36;
+
+interface IDrandQuicknetBeaconRegistry {
+    /// @notice Emitted the first time a round is stored.
+    /// @dev Not emitted for an idempotent submission of an already
+    ///      stored round.
+    event BeaconStored(
+        uint64 indexed round,
+        bytes32 randomness,
+        address indexed submitter
+    );
+
+    /// @notice Returns the configured Quicknet verifier address.
+    /// @dev The verifier implementation is external to this interface.
+    function oracle() external view returns (address);
+
+    /// @notice Returns the runtime bytecode hash expected for `oracle`.
+    function oracleCodehash() external view returns (bytes32);
+
+    /// @notice Verifies and caches a Quicknet beacon.
+    /// @dev Idempotent. If `round` has already been stored, returns the
+    ///      cached randomness without examining `signature`.
+    function submitBeacon(
+        uint64 round,
+        bytes calldata signature
+    )
+        external
+        returns (bytes32 randomness);
+
+    /// @notice Returns the verified randomness for `round`.
+    /// @dev Reverts if `round` is zero or has not been stored.
+    function getBeacon(
+        uint64 round
+    )
+        external
+        view
+        returns (bytes32 randomness);
+
+    /// @notice Returns true if `round` has already been verified and stored.
+    /// @dev Returns false for round zero.
+    function isStored(
+        uint64 round
+    )
+        external
+        view
+        returns (bool);
+
+    /// @notice Returns the scheduled Unix timestamp for `round`.
+    /// @dev Reverts for round zero.
+    function roundScheduledTime(
+        uint64 round
+    )
+        external
+        pure
+        returns (uint256);
+
+    /// @notice Returns the latest Quicknet round scheduled at or before
+    ///         `timestamp`.
+    /// @dev Returns zero for timestamps before Quicknet genesis.
+    function roundAt(
+        uint256 timestamp
+    )
+        external
+        pure
+        returns (uint64);
+
+    /// @notice Returns the latest Quicknet round whose scheduled time has
+    ///         passed according to the current chain's `block.timestamp`.
+    /// @dev This is a schedule helper, not a proof of beacon availability
+    ///      or first knowability.
+    function latestScheduledRound()
+        external
+        view
+        returns (uint64);
+}
