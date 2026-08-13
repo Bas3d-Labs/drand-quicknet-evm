@@ -16,7 +16,7 @@
     "fmt:contracts:check": "forge fmt --root contracts --check",
     "fmt:contracts": "forge fmt --root contracts",
     "smoke:relayer": "./scripts/smoke-test-relayer.sh",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm build:quicknet && pnpm build:registry-sdk && pnpm -r typecheck",
     "typecheck:quicknet": "pnpm --filter @based-labs/drand-quicknet typecheck",
     "typecheck:registry-sdk": "pnpm --filter @based-labs/drand-quicknet-registry typecheck",
     "typecheck:relayer": "pnpm --filter @based-labs/drand-quicknet-relayer typecheck"
