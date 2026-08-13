@@ -35,6 +35,20 @@ const checkpointStoreMocks = vi.hoisted(() => ({
   save: vi.fn(),
 }));
 
+const daemonLoggerMocks = vi.hoisted(() => ({
+  onCycle: vi.fn(),
+}));
+
+const childLoggerMocks = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  error: vi.fn(),
+}));
+
+const loggerMocks = vi.hoisted(() => ({
+  child: vi.fn(),
+}));
+
 const daemonStartupMocks = vi.hoisted(() => ({
   collectDaemonStartupSummary: vi.fn(),
   formatDaemonStartupSummary: vi.fn(),
@@ -58,6 +72,15 @@ vi.mock(
   '../src/daemon-config.js',
   () => ({
     loadDaemonConfig: vi.fn(),
+  }),
+);
+
+vi.mock(
+  '../src/daemon-logging.js',
+  () => ({
+    createDaemonLogger: vi.fn(
+      () => daemonLoggerMocks,
+    ),
   }),
 );
 
@@ -96,6 +119,13 @@ vi.mock(
 );
 
 vi.mock(
+  '../src/logger.js',
+  () => ({
+    logger: loggerMocks,
+  }),
+);
+
+vi.mock(
   '../src/validate-consumers.js',
   () => ({
     validateQuicknetConsumers: vi.fn(),
@@ -118,6 +148,10 @@ import {
   loadDaemonConfig,
   type DaemonConfig,
 } from '../src/daemon-config.js';
+
+import {
+  createDaemonLogger,
+} from '../src/daemon-logging.js';
 
 import {
   collectDaemonStartupSummary,
@@ -244,11 +278,23 @@ describe('runDaemonCommand', () => {
       FileCheckpointLock,
     ).mockClear();
 
+    vi.mocked(
+      createDaemonLogger,
+    ).mockClear();
+
     checkpointStoreMocks.load.mockReset();
     checkpointStoreMocks.save.mockReset();
 
     checkpointLockMocks.acquire.mockReset();
     checkpointLockHandleMocks.release.mockReset();
+
+    daemonLoggerMocks.onCycle.mockReset();
+
+    loggerMocks.child.mockReset();
+
+    childLoggerMocks.debug.mockReset();
+    childLoggerMocks.info.mockReset();
+    childLoggerMocks.error.mockReset();
 
     vi.mocked(
       collectDaemonStartupSummary,
@@ -301,6 +347,10 @@ describe('runDaemonCommand', () => {
 
     checkpointLockHandleMocks.release.mockResolvedValue(
       undefined,
+    );
+
+    loggerMocks.child.mockReturnValue(
+      childLoggerMocks,
     );
 
     vi.mocked(
@@ -387,6 +437,46 @@ describe('runDaemonCommand', () => {
     ).toHaveBeenCalledWith(
       DAEMON_CONFIG,
     );
+  });
+
+  it('creates a daemon child logger with network context', async () => {
+    await runDaemonCommand({
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
+    });
+
+    expect(
+      loggerMocks.child,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      loggerMocks.child,
+    ).toHaveBeenCalledWith({
+      component: 'daemon',
+      network: 'robinhood-testnet',
+      chainId: robinhoodTestnet.id,
+    });
+  });
+
+  it('creates the daemon logger from the child logger', async () => {
+    await runDaemonCommand({
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
+    });
+
+    expect(
+      createDaemonLogger,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      createDaemonLogger,
+    ).toHaveBeenCalledWith({
+      logger: childLoggerMocks,
+    });
   });
 
   it('verifies the configured registry deployment', async () => {
@@ -539,6 +629,7 @@ describe('runDaemonCommand', () => {
         type: 'safe',
       },
       pollIntervalMs: 1_000,
+      onCycle: daemonLoggerMocks.onCycle,
     });
   });
 
@@ -585,6 +676,7 @@ describe('runDaemonCommand', () => {
       finality: {
         type: 'safe',
       },
+      onCycle: daemonLoggerMocks.onCycle,
       signal: controller.signal,
     });
   });
@@ -611,6 +703,14 @@ describe('runDaemonCommand', () => {
 
     expect(
       createRelayerClients,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      loggerMocks.child,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      createDaemonLogger,
     ).not.toHaveBeenCalled();
 
     expect(
@@ -889,6 +989,24 @@ describe('runDaemonCommand', () => {
       firstInvocationOrder(
         vi.mocked(runDaemon),
       )
+    );
+  });
+
+  it('passes daemon cycle results to the daemon logger', async () => {
+    await runDaemonCommand({
+      source: {
+        type: 'preset',
+        network: 'robinhood-testnet',
+      },
+    });
+
+    expect(
+      runDaemon,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onCycle:
+          daemonLoggerMocks.onCycle,
+      }),
     );
   });
 
