@@ -1,13 +1,13 @@
 {
   "name": "@based-labs/drand-quicknet",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.1.0-alpha.1",
   "type": "module",
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+  "description": "Utilities for fetching and working with drand Quicknet randomness.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bas3d-Labs/drand-quicknet-evm.git",
+    "directory": "packages/drand-quicknet"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,9 +17,22 @@
       "import": "./dist/index.js"
     }
   },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "pnpm build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=24"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@noble/curves": "^2.3.0"
   }
