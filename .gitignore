@@ -60,3 +60,5 @@ tmp/
 # PID / process state
 *.pid
 *.pid.lock
+
+apps/relayer/state
