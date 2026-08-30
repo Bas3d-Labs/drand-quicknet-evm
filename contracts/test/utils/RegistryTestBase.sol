@@ -2,35 +2,18 @@
 pragma solidity 0.8.36;
 
 import {Test} from "forge-std/Test.sol";
-import {stdJson} from "forge-std/StdJson.sol";
+import {
+    MockDrandOracleQuicknet
+} from "../mocks/MockDrandOracleQuicknet.sol";
+import {
+    ITestDrandOracleQuicknet
+} from "../interfaces/ITestDrandOracleQuicknet.sol";
 import {
     DrandQuicknetBeaconRegistry
 } from "../../src/DrandQuicknetBeaconRegistry.sol";
 
-interface ITestDrandOracleQuicknet {
-    function verifyNormalized(
-        uint64 round,
-        bytes calldata signature
-    )
-        external
-        view
-        returns (
-            bool verified,
-            bytes32 normalizedRoundHash,
-            bytes32 chainScopedHash
-        );
-}
-
-/// @dev Shared fork setup for registry tests.
-///
-/// The expected chain, verifier address, and verifier runtime codehash
-/// are loaded from deployments/robinhood-testnet.json. The verifier
-/// runtime bytecode is checked before constructing a fresh registry.
+/// @dev Shared deterministic setup for registry unit tests.
 abstract contract RegistryTestBase is Test {
-    using stdJson for string;
-
-    string internal deploymentJson;
-
     address internal oracleAddress;
     bytes32 internal expectedOracleCodehash;
 
@@ -47,33 +30,16 @@ abstract contract RegistryTestBase is Test {
     );
 
     function setUp() public virtual {
-        string memory path = string.concat(
-            vm.projectRoot(), "/../deployments/robinhood-testnet.json"
-        );
+        MockDrandOracleQuicknet mockOracle =
+            new MockDrandOracleQuicknet();
 
-        deploymentJson = vm.readFile(path);
-
-        uint256 expectedChainId = deploymentJson.readUint(".chainId");
-
-        string memory rpcUrl = vm.envString("ROBINHOOD_TESTNET_RPC_URL");
-
-        vm.createSelectFork(rpcUrl);
-
-        assertEq(block.chainid, expectedChainId, "unexpected fork chain ID");
-
-        oracleAddress = deploymentJson.readAddress(".oracle.address");
-        expectedOracleCodehash = 
-            deploymentJson.readBytes32(".oracle.runtimeCodehash");
-
-        assertEq(
-            oracleAddress.codehash,
-            expectedOracleCodehash,
-            "oracle runtime codehash mismatch"
-        );
+        oracleAddress = address(mockOracle);
+        expectedOracleCodehash = oracleAddress.codehash;
 
         oracle = ITestDrandOracleQuicknet(oracleAddress);
+
         registry = new DrandQuicknetBeaconRegistry(
-            oracleAddress, 
+            oracleAddress,
             expectedOracleCodehash
         );
     }
@@ -94,7 +60,11 @@ abstract contract RegistryTestBase is Test {
                 round,
                 signature
             ),
-            abi.encode(verified, normalizedRoundHash, chainScopedHash)
+            abi.encode(
+                verified,
+                normalizedRoundHash,
+                chainScopedHash
+            )
         );
     }
 
@@ -108,9 +78,5 @@ abstract contract RegistryTestBase is Test {
 
     function _sig2Uncompressed() internal pure returns (bytes memory) {
         return hex"0a60486975062d9f06633c284cf1a7b46fb343f56f329f180530ca40a9e86320244f4fbfc37ae866cf25ef499665a31f08c61b5471ed86344d6b347d1b0e1a4146877a57c28507448678d8249521d91be74cd5a44fb6fce5f869b235e085ebe6";
-    }
-
-    function _liveCompressedSignature() internal pure returns (bytes memory) {
-        return hex"87b3b9c9f99cc1e7fc326e249538f33b84a1c4ef8bd85920a267af642b570bcd62bf70900a3862f742e574164b5f17f3";
     }
 }

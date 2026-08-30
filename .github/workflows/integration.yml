@@ -1,0 +1,56 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: Robinhood Testnet integration contracts
+    runs-on: ubuntu-latest
+
+    env:
+      ROBINHOOD_TESTNET_RPC_URL: ${{ secrets.ROBINHOOD_TESTNET_RPC_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Set up pnpm and Node.js
+        uses: pnpm/setup@v2
+        with:
+          cache: true
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Show tool versions
+        run: |
+          node --version
+          pnpm --version
+          forge --version
+
+      - name: Check RPC configuration
+        run: |
+          if [ -z "$ROBINHOOD_TESTNET_RPC_URL" ]; then
+            echo "::error::ROBINHOOD_TESTNET_RPC_URL secret is not configured"
+            exit 1
+          fi
+
+      - name: Run contract integration tests
+        run: pnpm run test:contracts:integration
