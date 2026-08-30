@@ -32,6 +32,22 @@ contract QuicknetRandomnessConsumerTest is Test {
             "LOTTERY_DRAW_V1"
         );
 
+    uint256 internal constant V1_VECTOR_CHAIN_ID = 46630;
+    address internal constant V1_VECTOR_CONSUMER = address(0xC0FFEE);
+
+    bytes32 internal constant V1_VECTOR_APPLICATION_DOMAIN =
+        0xd68423ccd1ea2bb7b0aa7b3ad69e61b84d362c827767cd804411835564b33855;
+
+    bytes32 internal constant V1_VECTOR_REQUEST_ID = bytes32(uint256(42));
+
+    uint64 internal constant V1_VECTOR_ROUND = 31_250_005;
+
+    bytes32 internal constant V1_VECTOR_RANDOMNESS =
+        0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef;
+
+    bytes32 internal constant V1_VECTOR_EXPECTED_SEED =
+        0x1ec91054743783996cd7e4abc7845f3124a2257d232d913004cb3390eeb0ea8a;
+
     MockDrandQuicknetBeaconRegistry internal registry;
     MockQuicknetRandomnessConsumer internal consumer;
 
@@ -150,7 +166,7 @@ contract QuicknetRandomnessConsumerTest is Test {
         );
     }
 
-    function test_constructor_acceptsNonCanonicalContractWhenExpectedCodehashMatches()
+    function test_constructor_codehashDoesNotValidateRegistrySemantics()
         public
     {
         UnrelatedContract unrelated = new UnrelatedContract();
@@ -204,7 +220,8 @@ contract QuicknetRandomnessConsumerTest is Test {
             true,
             false,
             false,
-            true
+            true,
+            address(consumer)
         );
 
         emit QuicknetRandomnessRequested(
@@ -265,6 +282,91 @@ contract QuicknetRandomnessConsumerTest is Test {
             consumer.requestRounds(1),
             110
         );
+    }
+
+    function test_request_newRequestUsesAdvancedScheduledRound()
+        public
+    {
+        registry.setLatestScheduledRound(100);
+
+        uint64 firstRound = consumer.request(1);
+
+        registry.setLatestScheduledRound(500);
+
+        uint64 secondRound = consumer.request(2);
+
+        assertEq(firstRound, 110);
+        assertEq(secondRound, 510);
+
+        assertEq(
+            consumer.requestRounds(1),
+            110
+        );
+
+        assertEq(
+            consumer.requestRounds(2),
+            510
+        );
+    }
+
+    function testFuzz_request_usesLatestScheduledRoundPlusLead(
+        uint64 latest,
+        uint64 lead
+    )
+        public
+    {
+        vm.assume(lead != 0);
+        vm.assume(
+            latest <= type(uint64).max - lead
+        );
+
+        MockQuicknetRandomnessConsumer fuzzConsumer =
+            _deployConsumer(
+                registry,
+                lead
+            );
+
+        registry.setLatestScheduledRound(latest);
+
+        uint64 round = fuzzConsumer.request(1);
+
+        assertEq(
+            round,
+            latest + lead
+        );
+
+        assertEq(
+            fuzzConsumer.requestRounds(1),
+            round
+        );
+    }
+
+    function testFuzz_request_revertsOnRoundOverflow(
+        uint64 latest,
+        uint64 lead
+    )
+        public
+    {
+        vm.assume(lead != 0);
+        vm.assume(
+            latest > type(uint64).max - lead
+        );
+
+        MockQuicknetRandomnessConsumer fuzzConsumer =
+            _deployConsumer(
+                registry,
+                lead
+            );
+
+        registry.setLatestScheduledRound(latest);
+
+        vm.expectRevert(
+            QuicknetRandomnessConsumer
+                .QuicknetRoundOverflow
+                .selector
+        );
+
+        fuzzConsumer.request(1);
     }
 
     // ---------------------------------------------------------------------
@@ -355,22 +457,26 @@ contract QuicknetRandomnessConsumerTest is Test {
     // Permissionless submit / idempotency
     // ---------------------------------------------------------------------
 
-    function test_submitBeacon_storesAndReturnsRandomness()
+    function test_submitBeacon_permissionlessCallerStoresAndReturnsBeacon()
         public
     {
         uint64 round = 110;
-        bytes memory signature = hex"1234";
+        address submitter = address(0xBEEF);
+
+        vm.prank(submitter);
 
         bytes32 randomness = consumer.submitBeacon(
             round,
-            signature
+            hex"1234"
         );
-
-        assertTrue(consumer.isStored(round));
 
         assertEq(
             consumer.getBeacon(round),
             randomness
+        );
+
+        assertTrue(
+            consumer.isStored(round)
         );
 
         assertEq(
@@ -424,6 +530,42 @@ contract QuicknetRandomnessConsumerTest is Test {
         consumer.submitBeacon(round, hex"");
     }
 
+    function test_submitBeacon_otherRoundDoesNotFulfillRequest()
+        public
+    {
+        registry.setLatestScheduledRound(100);
+
+        uint64 requestedRound = consumer.request(42);
+
+        consumer.submitBeacon(
+            requestedRound + 1,
+            hex"1234"
+        );
+
+        assertTrue(
+            consumer.isStored(
+                requestedRound + 1
+            )
+        );
+
+        assertFalse(
+            consumer.isStored(
+                requestedRound
+            )
+        );
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MockDrandQuicknetBeaconRegistry
+                    .BeaconUnavailable
+                    .selector,
+                requestedRound
+            )
+        );
+
+        consumer.getRequestedBeacon(42);
+    }
+
     // ---------------------------------------------------------------------
     // Seed derivation
     // ---------------------------------------------------------------------
@@ -475,32 +617,6 @@ contract QuicknetRandomnessConsumerTest is Test {
         );
 
         assertNotEq(first, second);
-    }
-
-    function test_deriveSeed_reusingUniqueRequestIdProducesSameSeed()
-        public
-        view
-    {
-        uint64 round = 110;
-
-        bytes32 randomness = keccak256("randomness");
-        bytes32 requestId = bytes32(uint256(1));
-
-        bytes32 first = consumer.deriveSeed(
-            PACK_DOMAIN,
-            requestId,
-            round,
-            randomness
-        );
-
-        bytes32 second = consumer.deriveSeed(
-            PACK_DOMAIN,
-            requestId,
-            round,
-            randomness
-        );
-
-        assertEq(first, second);
     }
 
     function test_deriveSeed_differsAcrossApplicationDomains()
@@ -610,6 +726,155 @@ contract QuicknetRandomnessConsumerTest is Test {
         assertNotEq(first, second);
     }
 
+    function test_deriveSeed_differsAcrossRandomness()
+        public
+        view
+    {
+        uint64 round = 110;
+        bytes32 requestId = bytes32(uint256(1));
+
+        bytes32 first = consumer.deriveSeed(
+            PACK_DOMAIN,
+            requestId,
+            round,
+            keccak256("randomness-a")
+        );
+
+        bytes32 second = consumer.deriveSeed(
+            PACK_DOMAIN,
+            requestId,
+            round,
+            keccak256("randomness-b")
+        );
+
+        assertNotEq(first, second);
+    }
+
+    function test_deriveSeed_sharedRoundProducesDistinctRequestSeeds()
+        public
+    {
+        registry.setLatestScheduledRound(100);
+
+        uint64 firstRound = consumer.request(1);
+        uint64 secondRound = consumer.request(2);
+
+        assertEq(firstRound, 110);
+        assertEq(secondRound, 110);
+
+        bytes32 randomness = keccak256("round-110");
+
+        registry.setBeacon(
+            110,
+            randomness
+        );
+
+        (
+            ,
+            ,
+            bytes32 firstSeed
+        ) = consumer.deriveRequestedSeed(
+            1,
+            PACK_DOMAIN,
+            bytes32(uint256(1))
+        );
+
+        (
+            ,
+            ,
+            bytes32 secondSeed
+        ) = consumer.deriveRequestedSeed(
+            2,
+            PACK_DOMAIN,
+            bytes32(uint256(2))
+        );
+
+        assertNotEq(firstSeed, secondSeed);
+    }
+
+    function test_deriveSeed_matchesV1CompatibilityVector()
+        public
+    {
+        vm.chainId(V1_VECTOR_CHAIN_ID);
+
+        vm.etch(
+            V1_VECTOR_CONSUMER,
+            address(consumer).code
+        );
+
+        MockQuicknetRandomnessConsumer fixedConsumer =
+            MockQuicknetRandomnessConsumer(
+                V1_VECTOR_CONSUMER
+            );
+
+        bytes32 seed = fixedConsumer.deriveSeed(
+            V1_VECTOR_APPLICATION_DOMAIN,
+            V1_VECTOR_REQUEST_ID,
+            V1_VECTOR_ROUND,
+            V1_VECTOR_RANDOMNESS
+        );
+
+        assertEq(
+            seed,
+            V1_VECTOR_EXPECTED_SEED
+        );
+    }
+
+    function testFuzz_deriveSeed_isDeterministic(
+        bytes32 applicationDomain,
+        bytes32 requestId,
+        uint64 round,
+        bytes32 randomness
+    )
+        public
+        view
+    {
+        bytes32 first = consumer.deriveSeed(
+            applicationDomain,
+            requestId,
+            round,
+            randomness
+        );
+
+        bytes32 second = consumer.deriveSeed(
+            applicationDomain,
+            requestId,
+            round,
+            randomness
+        );
+
+        assertEq(first, second);
+    }
+
+    function testFuzz_deriveSeed_distinguishesUniqueRequestIds(
+        bytes32 firstRequestId,
+        bytes32 secondRequestId,
+        uint64 round,
+        bytes32 randomness
+    )
+        public
+        view
+    {
+        vm.assume(
+            firstRequestId != secondRequestId
+        );
+
+        bytes32 first = consumer.deriveSeed(
+            PACK_DOMAIN,
+            firstRequestId,
+            round,
+            randomness
+        );
+
+        bytes32 second = consumer.deriveSeed(
+            PACK_DOMAIN,
+            secondRequestId,
+            round,
+            randomness
+        );
+
+        assertNotEq(first, second);
+    }
+
     // ---------------------------------------------------------------------
     // Persisted-round behavior
     // ---------------------------------------------------------------------
@@ -636,7 +901,7 @@ contract QuicknetRandomnessConsumerTest is Test {
         assertEq(resolvedRandomness, randomness);
     }
 
-    function test_getRequestedBeacon_revertsIfPersistedRoundIsUnavailable()
+    function test_getRequestedBeacon_revertsIfPersistedRoundUnavailable()
         public
     {
         registry.setLatestScheduledRound(100);
