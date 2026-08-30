@@ -35,6 +35,7 @@ contract QuicknetBeaconVerifierTest is Test {
 
     uint256 internal constant AMPLE_VERIFY_GAS = 2_000_000;
     uint256 internal constant STARVED_VERIFY_GAS = 1_000;
+    uint256 internal constant REFERENCE_KAT_GAS_CEILING = 800_000;
 
     QuicknetBeaconVerifierHarness internal verifier;
 
@@ -624,6 +625,56 @@ contract QuicknetBeaconVerifierTest is Test {
         _assertRejected(signature);
     }
 
+    function testFuzz_verifyBeacon_boundedInputDoesNotRevert(
+        uint64 round,
+        bytes memory signature
+    )
+        public
+        view
+    {
+        vm.assume(round != 0);
+        vm.assume(signature.length <= 96);
+
+        (
+            bool success,
+            bytes memory returnData
+        ) = _callVerifyWithGas(
+            AMPLE_VERIFY_GAS,
+            round,
+            signature
+        );
+
+        assertTrue(success);
+        assertEq(returnData.length, 64);
+
+        (
+            bool verified,
+            bytes32 randomness
+        ) = abi.decode(
+            returnData,
+            (bool, bytes32)
+        );
+
+        if (verified) {
+            assertEq(
+                signature.length,
+                48
+            );
+
+            assertEq(
+                randomness,
+                sha256(signature)
+            );
+
+            return;
+        }
+
+        assertEq(
+            randomness,
+            bytes32(0)
+        );
+    }
+
     // ---------------------------------------------------------------------
     // Caller gas handling
     // ---------------------------------------------------------------------
@@ -664,6 +715,13 @@ contract QuicknetBeaconVerifierTest is Test {
             _minimumSuccessfulKatGas();
 
         assertGt(minimumSuccessfulGas, 0);
+
+        // Regression ceiling for the current compiler and reference EVM profile.
+        // This is not a cross-chain verifier gas requirement.
+        assertLt(
+            minimumSuccessfulGas,
+            REFERENCE_KAT_GAS_CEILING
+        );
 
         (
             bool success,
