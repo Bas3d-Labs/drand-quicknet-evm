@@ -362,8 +362,6 @@ Emitting the event does not itself grant authority to:
 
 Those semantics belong to the consumer protocol.
 
----
-
 ## Quicknet
 
 The current deployment uses drand Quicknet.
@@ -474,7 +472,116 @@ Important structured events include:
 A temporary durable-head regression does not mark the consumer as failed.
 The consumer remains healthy unless request processing itself fails.
 
----
+## Docker
+
+The relayer can also be run as a production container.
+
+The image is chain-agnostic. Network selection, RPC configuration, signer
+credentials, consumers, and checkpoint state are supplied at runtime rather
+than baked into the image.
+
+### Building the image
+
+Build from the repository root:
+
+```sh
+docker build \
+  -f apps/relayer/Dockerfile \
+  -t drand-quicknet-relayer .
+```
+
+The image entrypoint is the relayer CLI. Commands are passed directly to the
+container.
+
+For example:
+
+```sh
+docker run --rm \
+  drand-quicknet-relayer \
+  --help
+```
+
+### Running the daemon
+
+Create a persistent Docker volume for checkpoint state:
+
+```sh
+docker volume create quicknet-relayer-state
+```
+
+Then run the daemon:
+
+```sh
+docker run \
+  --detach \
+  --name quicknet-relayer \
+  --env-file .env \
+  -v quicknet-relayer-state:/state \
+  drand-quicknet-relayer \
+  daemon \
+  --network robinhood-testnet
+```
+
+The container defaults to:
+
+```text
+QUICKNET_CHECKPOINT_FILE=/state/checkpoint.json
+```
+
+Checkpoint state should be persisted outside the disposable container
+filesystem.
+
+Each independently operated relayer instance should use its own checkpoint
+volume. Do not share one checkpoint volume between concurrently running
+relayers.
+
+The relayer process runs as the non-root `node` user. Fresh Docker named
+volumes mounted at `/state` are initialized with suitable ownership.
+
+When using a host bind mount instead of a named volume, the host directory
+must be writable by UID `1000`.
+
+### Logs and shutdown
+
+Logs are written to stdout/stderr:
+
+```sh
+docker logs -f quicknet-relayer
+```
+
+Detailed logging can be enabled at runtime with:
+
+```sh
+-e QUICKNET_LOG_LEVEL=debug
+```
+
+Stop the daemon with:
+
+```sh
+docker stop quicknet-relayer
+```
+
+Docker sends `SIGTERM`, which the daemon handles gracefully before exiting
+and releasing its checkpoint lock.
+
+A stopped container can be restarted with:
+
+```sh
+docker start quicknet-relayer
+```
+
+When a durable checkpoint already exists, it takes precedence over the
+configured initial start block.
+
+### Built-in deployments
+
+Canonical deployment manifests required by built-in network presets are
+packaged with the image.
+
+The image does not select a network at build time. Network selection and
+operator-specific configuration are provided at runtime. The same image can
+therefore be used with any supported built-in or custom EVM network
+configuration.
 
 ## Choosing `QUICKNET_START_BLOCK`
 
@@ -485,8 +592,6 @@ For a newly deployed consumer, this can normally be its deployment block.
 Do not set the start block later than requests that still need to be processed.
 
 Once a durable checkpoint exists for the consumer, the checkpoint takes precedence over the configured initial start block.
-
----
 
 ## Request processing
 
@@ -588,8 +693,6 @@ pnpm --filter @based-labs/drand-quicknet-relayer test
 pnpm --filter @based-labs/drand-quicknet-relayer typecheck
 pnpm --filter @based-labs/drand-quicknet-relayer build
 ```
-
----
 
 ## Live finality smoke test
 
@@ -720,8 +823,6 @@ This exists for chains where meaningful `safe` or `finalized` tags are unavailab
 
 A supported network should only use a finality mechanism whose semantics have been verified for that network and RPC infrastructure.
 
----
-
 ## Registry verification
 
 Before starting, the relayer verifies the complete configured registry-to-oracle deployment identity.
@@ -760,8 +861,6 @@ This prevents the relayer from silently servicing a registry or verifier that do
 
 The deployment manifest is part of the relayer's trust root. Runtime verification proves that the deployed contracts match the supplied manifest;
 it does not independently establish that the manifest itself identifies the canonical deployment intended by the operator.
-
----
 
 ## Verifier trust
 
