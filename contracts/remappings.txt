@@ -1,1 +1,2 @@
 forge-std/=lib/forge-std/src/
+bls-solidity/=lib/bls-solidity/src/
