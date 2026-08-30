@@ -3,11 +3,11 @@ pragma solidity 0.8.36;
 
 import {
     DrandQuicknetBeaconRegistry
-} from "../src/DrandQuicknetBeaconRegistry.sol";
+} from "../../src/DrandQuicknetBeaconRegistry.sol";
 
-import {RegistryTestBase} from "./utils/RegistryTestBase.sol";
+import {RegistryIntegrationTestBase} from "./RegistryIntegrationTestBase.sol";
 
-contract DrandQuicknetBeaconRegistryIntegrationTest is RegistryTestBase {
+contract DrandQuicknetBeaconRegistryIntegrationTest is RegistryIntegrationTestBase {
     uint64 internal constant ROUND_1 = 20_791_007;
     uint64 internal constant ROUND_2 = 20_905_307;
     uint64 internal constant LIVE_ROUND = 31_089_008;

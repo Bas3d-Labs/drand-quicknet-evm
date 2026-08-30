@@ -25,14 +25,21 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
     }
 
     function test_ConstantsMatchDeploymentManifest() public view {
+        string memory path = string.concat(
+            vm.projectRoot(),
+            "/../deployments/robinhood-testnet.json"
+        );
+
+        string memory json = vm.readFile(path);
+
         assertEq(
             uint256(registry.GENESIS_TIMESTAMP()),
-            deploymentJson.readUint(".quicknet.genesisTimestamp")
+            json.readUint(".quicknet.genesisTimestamp")
         );
 
         assertEq(
             uint256(registry.PERIOD_SECONDS()),
-            deploymentJson.readUint(".quicknet.periodSeconds")
+            json.readUint(".quicknet.periodSeconds")
         );
     }
 
