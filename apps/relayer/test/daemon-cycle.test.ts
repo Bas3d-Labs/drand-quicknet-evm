@@ -103,6 +103,7 @@ function caughtUpResult(
     latestBlock: 1_500n,
     durableBlock: 1_200n,
     durableNextBlock: 1_201n,
+    durableHeadRegressed: false,
     softCursor: {
       nextBlock: softNextBlock,
     },
@@ -121,6 +122,7 @@ function processedResult(
     latestBlock: 1_500n,
     durableBlock: 1_200n,
     durableNextBlock: 1_201n,
+    durableHeadRegressed: false,
     softCursor: {
       nextBlock: softNextBlock,
     },

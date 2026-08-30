@@ -61,6 +61,7 @@ export interface RunDaemonIterationResult {
   latestBlock: bigint;
   durableBlock: bigint;
   durableNextBlock: bigint;
+  durableHeadRegressed: boolean;
   softCursor: SoftScanCursor;
   durableScan: ProcessedDaemonScan | undefined;
   softScan: ProcessedDaemonScan | undefined;
@@ -79,41 +80,47 @@ export async function runDaemonIteration(
     finality: options.finality,
   });
 
-  validateDurableCheckpoint(checkpoint, heads);
+  const durableHeadRegressed =
+    checkpoint !== undefined &&
+    checkpoint > 0n &&
+    heads.durableBlock < checkpoint - 1n;
 
   let durableScan: ProcessedDaemonScan | undefined;
-  const durableResult = await scanQuicknetRequests({
-    publicClient: options.publicClient,
-    consumers: [
-      options.consumer,
-    ],
-    nextBlock: durableNextBlock,
-    throughBlock: heads.durableBlock,
-    maxBlockRange: options.maxBlockRange,
-  });
-
-  if (durableResult.status === 'scanned') {
-    const processing = await processQuicknetRequests({
+  
+  if (hasDurableBlocksToScan(durableNextBlock, heads.durableBlock)) {
+    const durableResult = await scanQuicknetRequests({
       publicClient: options.publicClient,
-      walletClient: options.walletClient,
-      account: options.account,
-      deployment: options.deployment,
-      requests: durableResult.requests,
+      consumers: [
+        options.consumer,
+      ],
+      nextBlock: durableNextBlock,
+      throughBlock: heads.durableBlock,
+      maxBlockRange: options.maxBlockRange,
     });
 
-    await options.checkpointStore.save(
-      options.consumer,
-      durableResult.nextBlock,
-    );
+    if (durableResult.status === 'scanned') {
+      const processing = await processQuicknetRequests({
+        publicClient: options.publicClient,
+        walletClient: options.walletClient,
+        account: options.account,
+        deployment: options.deployment,
+        requests: durableResult.requests,
+      });
 
-    durableNextBlock = durableResult.nextBlock;
+      await options.checkpointStore.save(
+        options.consumer,
+        durableResult.nextBlock,
+      );
 
-    durableScan = {
-      fromBlock: durableResult.fromBlock,
-      toBlock: durableResult.toBlock,
-      nextBlock: durableResult.nextBlock,
-      processing,
-    };
+      durableNextBlock = durableResult.nextBlock;
+
+      durableScan = {
+        fromBlock: durableResult.fromBlock,
+        toBlock: durableResult.toBlock,
+        nextBlock: durableResult.nextBlock,
+        processing,
+      };
+    }
   }
 
   const softNextBlock = getSoftNextBlock(
@@ -163,6 +170,7 @@ export async function runDaemonIteration(
     consumer: options.consumer,
     heads,
     durableNextBlock,
+    durableHeadRegressed,
     softCursor,
     durableScan,
     softScan,
@@ -173,6 +181,7 @@ interface CreateResultOptions {
   consumer: Address;
   heads: ChainHeads;
   durableNextBlock: bigint;
+  durableHeadRegressed: boolean;
   softCursor: SoftScanCursor;
   durableScan:
     ProcessedDaemonScan |
@@ -197,6 +206,7 @@ function createResult(
     latestBlock: options.heads.latestBlock,
     durableBlock: options.heads.durableBlock,
     durableNextBlock: options.durableNextBlock,
+    durableHeadRegressed: options.durableHeadRegressed,
     softCursor: options.softCursor,
     durableScan: options.durableScan,
     softScan: options.softScan,
@@ -238,16 +248,9 @@ function validateOptions(
   }
 }
 
-function validateDurableCheckpoint(
-  checkpoint: bigint | undefined,
-  heads: ChainHeads,
-): void {
-  if (checkpoint === undefined || checkpoint === 0n) {
-    return;
-  }
-
-  const lastDurableBlock = checkpoint - 1n;
-  if (heads.durableBlock < lastDurableBlock) {
-    throw new Error(`Durable block ${heads.durableBlock} is behind persisted checkpoint block ${lastDurableBlock}.`);
-  }
+function hasDurableBlocksToScan(
+  durableNextBlock: bigint,
+  durableBlock: bigint,
+): boolean {
+  return durableNextBlock <= durableBlock;
 }

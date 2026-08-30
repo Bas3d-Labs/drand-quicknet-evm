@@ -101,6 +101,7 @@ function caughtUpCycle(): RunDaemonCycleResult {
           latestBlock: 1_500n,
           durableBlock: 1_200n,
           durableNextBlock: 1_201n,
+          durableHeadRegressed: false,
           softCursor: {
             nextBlock: 1_501n,
           },
@@ -124,6 +125,7 @@ function processedCycle(): RunDaemonCycleResult {
           latestBlock: 1_500n,
           durableBlock: 1_200n,
           durableNextBlock: 1_201n,
+          durableHeadRegressed: false,
           softCursor: {
             nextBlock: 1_301n,
           },
@@ -638,6 +640,7 @@ describe('runDaemon', () => {
               latestBlock: 1_500n,
               durableBlock: 1_200n,
               durableNextBlock: 1_201n,
+              durableHeadRegressed: false,
               softCursor: {
                 nextBlock: 1_301n,
               },
@@ -810,6 +813,7 @@ describe('runDaemon', () => {
               latestBlock: 1_500n,
               durableBlock: 1_200n,
               durableNextBlock: 1_201n,
+              durableHeadRegressed: false,
               softCursor: {
                 nextBlock: 1_301n,
               },

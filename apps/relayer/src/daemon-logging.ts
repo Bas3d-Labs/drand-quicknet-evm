@@ -29,9 +29,9 @@ export interface DaemonLogger {
 export function createDaemonLogger(
   options: CreateDaemonLoggerOptions,
 ): DaemonLogger {
-  const heartbeatIntervalMs = 
+  const heartbeatIntervalMs =
     options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
-  if (!Number.isSafeInteger(heartbeatIntervalMs) || heartbeatIntervalMs <=0) {
+  if (!Number.isSafeInteger(heartbeatIntervalMs) || heartbeatIntervalMs <= 0) {
     throw new Error('heartbeatIntervalMs must be a positive safe integer.');
   }
 
@@ -51,7 +51,7 @@ export function createDaemonLogger(
       } catch (error) {
         logLoggingFailure(options.logger, error);
       }
-    }
+    },
   };
 }
 
@@ -71,6 +71,15 @@ function logCycle(
     }
 
     const iteration = consumer.iteration;
+    if (iteration.durableHeadRegressed) {
+      logger.warn({
+        event: 'durable_head_regressed',
+        consumer: consumer.consumer.address,
+        durableBlock: iteration.durableBlock.toString(),
+        durableNextBlock: iteration.durableNextBlock.toString(),
+      }, 'Durable head is behind persisted checkpoint');
+    }
+
     if (iteration.durableScan !== undefined) {
       logScanRounds(
         logger,
@@ -79,7 +88,7 @@ function logCycle(
         iteration.durableScan,
       );
 
-      logger.info({
+      logger.debug({
         event: 'checkpoint_advanced',
         consumer: consumer.consumer.address,
         fromBlock: iteration.durableScan.fromBlock.toString(),

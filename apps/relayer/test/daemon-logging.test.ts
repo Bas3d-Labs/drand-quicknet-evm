@@ -62,6 +62,7 @@ const VALIDATED_CONSUMER_B: ValidatedQuicknetConsumer = {
 const loggerMocks = {
   debug: vi.fn(),
   info: vi.fn(),
+  warn: vi.fn(),
   error: vi.fn(),
 };
 
@@ -76,6 +77,7 @@ function createIteration(
     latestBlock: 1_000n,
     durableBlock: 900n,
     durableNextBlock: 901n,
+    durableHeadRegressed: false,
     softCursor: {
       nextBlock: 1_001n,
     },
@@ -177,6 +179,7 @@ describe('createDaemonLogger', () => {
   beforeEach(() => {
     loggerMocks.debug.mockReset();
     loggerMocks.info.mockReset();
+    loggerMocks.warn.mockReset();
     loggerMocks.error.mockReset();
   });
 
@@ -299,11 +302,8 @@ describe('createDaemonLogger', () => {
 
     expect(
       loggerMocks.debug,
-    ).toHaveBeenCalledOnce();
-
-    expect(
-      loggerMocks.debug,
-    ).toHaveBeenCalledWith(
+    ).toHaveBeenNthCalledWith(
+      1,
       {
         event: 'round_already_stored',
         consumer: CONSUMER_A,
@@ -311,6 +311,12 @@ describe('createDaemonLogger', () => {
         round: ROUND.toString(),
       },
       'Quicknet round already stored',
+    );
+
+    expect(
+      loggerMocks.debug,
+    ).toHaveBeenCalledTimes(
+      2
     );
   });
 
@@ -377,7 +383,7 @@ describe('createDaemonLogger', () => {
     );
 
     expect(
-      loggerMocks.info,
+      loggerMocks.debug,
     ).toHaveBeenCalledWith(
       {
         event: 'checkpoint_advanced',
@@ -412,11 +418,10 @@ describe('createDaemonLogger', () => {
     );
 
     expect(
-      loggerMocks.info,
+      loggerMocks.debug,
     ).not.toHaveBeenCalledWith(
       expect.objectContaining({
-        event:
-          'checkpoint_advanced',
+        event: 'checkpoint_advanced',
       }),
       expect.anything(),
     );
@@ -647,6 +652,7 @@ describe('createDaemonLogger', () => {
               latestBlock: 2_000n,
               durableBlock: 1_900n,
               durableNextBlock: 1_901n,
+              durableHeadRegressed: false,
               softCursor: {
                 nextBlock: 2_001n,
               },
@@ -729,9 +735,8 @@ describe('createDaemonLogger', () => {
     );
 
     expect(
-      loggerMocks.info,
-    ).toHaveBeenNthCalledWith(
-      2,
+      loggerMocks.debug,
+    ).toHaveBeenCalledWith(
       expect.objectContaining({
         fromBlock: '9007199254740994',
         toBlock: '9007199254740995',
@@ -803,5 +808,130 @@ describe('createDaemonLogger', () => {
           ),
         ),
     ).not.toThrow();
+  });
+
+  it('warns when the durable head regresses behind the checkpoint', () => {
+    const iteration =
+      createIteration({
+        durableHeadRegressed: true,
+        durableBlock: 1_250n,
+        durableNextBlock: 1_301n,
+      });
+
+    const daemonLogger =
+      createDaemonLogger({
+        logger: LOGGER,
+        now: () => 0,
+      });
+
+    daemonLogger.onCycle(
+      createSuccessfulCycle(
+        iteration,
+      ),
+    );
+
+    expect(
+      loggerMocks.warn,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      loggerMocks.warn,
+    ).toHaveBeenCalledWith(
+      {
+        event: 'durable_head_regressed',
+        consumer: CONSUMER_A,
+        durableBlock: '1250',
+        durableNextBlock: '1301',
+      },
+      'Durable head is behind persisted checkpoint',
+    );
+
+    expect(
+      loggerMocks.error,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('does not warn when the durable head has not regressed', () => {
+    const iteration =
+      createIteration({
+        durableHeadRegressed: false,
+      });
+
+    const daemonLogger =
+      createDaemonLogger({
+        logger: LOGGER,
+        now: () => 0,
+      });
+
+    daemonLogger.onCycle(
+      createSuccessfulCycle(
+        iteration,
+      ),
+    );
+
+    expect(
+      loggerMocks.warn,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('reports a consumer as healthy during a durable head regression', () => {
+    let currentTime = 0;
+
+    const daemonLogger =
+      createDaemonLogger({
+        logger: LOGGER,
+        heartbeatIntervalMs: 1_000,
+        now: () => currentTime,
+      });
+
+    const iteration =
+      createIteration({
+        latestBlock: 1_500n,
+        durableBlock: 1_250n,
+        durableNextBlock: 1_301n,
+        durableHeadRegressed: true,
+        softCursor: {
+          nextBlock: 1_501n,
+        },
+      });
+
+    currentTime = 1_000;
+
+    daemonLogger.onCycle(
+      createSuccessfulCycle(
+        iteration,
+      ),
+    );
+
+    expect(
+      loggerMocks.warn,
+    ).toHaveBeenCalledWith(
+      {
+        event: 'durable_head_regressed',
+        consumer: CONSUMER_A,
+        durableBlock: '1250',
+        durableNextBlock: '1301',
+      },
+      'Durable head is behind persisted checkpoint',
+    );
+
+    expect(
+      loggerMocks.info,
+    ).toHaveBeenCalledWith(
+      {
+        event: 'heartbeat',
+        consumers: [
+          {
+            consumer: CONSUMER_A,
+            status: 'healthy',
+            latestBlock: '1500',
+            durableBlock: '1250',
+            durableNextBlock: '1301',
+            softNextBlock: '1501',
+          },
+        ],
+      },
+      'Relayer daemon healthy',
+    );
   });
 });
