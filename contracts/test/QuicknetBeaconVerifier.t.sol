@@ -174,28 +174,25 @@ contract QuicknetBeaconVerifierTest is Test {
         );
     }
 
-    function test_isCanonical_rejectsInvalidLengths()
+    function test_rejectsValidLookingInvalidSignatureLengths()
         public
         view
     {
-        assertFalse(verifier.isCanonical(new bytes(0)));
-        assertFalse(verifier.isCanonical(new bytes(47)));
-        assertFalse(verifier.isCanonical(new bytes(49)));
-        assertFalse(verifier.isCanonical(new bytes(95)));
-        assertFalse(verifier.isCanonical(new bytes(96)));
-        assertFalse(verifier.isCanonical(new bytes(97)));
-    }
+        _assertNonCanonicalRejected(
+            new bytes(0)
+        );
 
-    function test_verifyBeacon_rejectsNonCanonicalLengths()
-        public
-        view
-    {
-        _assertRejected(new bytes(0));
-        _assertRejected(new bytes(47));
-        _assertRejected(new bytes(49));
-        _assertRejected(new bytes(95));
-        _assertRejected(new bytes(96));
-        _assertRejected(new bytes(97));
+        _assertNonCanonicalRejected(
+            _validLookingSignatureWithLength(47)
+        );
+
+        _assertNonCanonicalRejected(
+            _validLookingSignatureWithLength(49)
+        );
+
+        _assertNonCanonicalRejected(
+            _validLookingSignatureWithLength(96)
+        );
     }
 
     function test_isCanonical_rejectsCompressionBitClear()
@@ -420,6 +417,214 @@ contract QuicknetBeaconVerifierTest is Test {
     }
 
     // ---------------------------------------------------------------------
+    // Fuzz properties
+    // ---------------------------------------------------------------------
+
+    function testFuzz_rejectsValidLookingNon48ByteLengths(
+        uint8 length
+    )
+        public
+        view
+    {
+        vm.assume(length != 48);
+
+        bytes memory signature =
+            _validLookingSignatureWithLength(
+                length
+            );
+
+        assertFalse(
+            verifier.isCanonical(
+                signature
+            )
+        );
+
+        _assertRejected(signature);
+    }
+
+    function testFuzz_isCanonical_signBitDoesNotAffectCanonicality(
+        bytes32 first,
+        bytes16 second
+    )
+        public
+        view
+    {
+        bytes memory signature =
+            _signature48(
+                first,
+                second
+            );
+
+        bytes memory flippedSignature =
+            _signature48(
+                first,
+                second
+            );
+
+        flippedSignature[0] =
+            bytes1(
+                uint8(flippedSignature[0]) ^
+                0x20
+            );
+
+        assertEq(
+            verifier.isCanonical(signature),
+            verifier.isCanonical(flippedSignature)
+        );
+    }
+
+    function testFuzz_isCanonical_matchesFieldBoundForValidFlags(
+        uint128 rawXHi,
+        uint256 xLo,
+        bool sign
+    )
+        public
+        view
+    {
+        uint128 xHi = rawXHi & MAX_X_HI;
+
+        uint128 flags =
+            uint128(0x80) << 120;
+
+        if (sign) {
+            flags |=
+                uint128(0x20) << 120;
+        }
+
+        bytes memory signature =
+            abi.encodePacked(
+                bytes16(xHi | flags),
+                bytes32(xLo)
+            );
+
+        bool belowP =
+            xHi < P_HI ||
+            (
+                xHi == P_HI &&
+                xLo < P_LO
+            );
+
+        assertEq(
+            verifier.isCanonical(signature),
+            belowP
+        );
+    }
+
+    function testFuzz_verifyBeacon_canonicalCandidateReturnsConsistentResult(
+        uint64 round,
+        bytes32 first,
+        bytes16 second
+    )
+        public
+        view
+    {
+        vm.assume(round != 0);
+
+        bytes memory signature =
+            _signature48(
+                first,
+                second
+            );
+
+        signature[0] =
+            bytes1(
+                (
+                    uint8(signature[0]) &
+                    0x3f
+                ) |
+                0x80
+            );
+
+        vm.assume(
+            verifier.isCanonical(
+                signature
+            )
+        );
+
+        (
+            bool success,
+            bytes memory returnData
+        ) = _callVerifyWithGas(
+            AMPLE_VERIFY_GAS,
+            round,
+            signature
+        );
+
+        assertTrue(success);
+        assertEq(returnData.length, 64);
+
+        (
+            bool verified,
+            bytes32 randomness
+        ) = abi.decode(
+            returnData,
+            (bool, bytes32)
+        );
+
+        if (verified) {
+            assertEq(
+                randomness,
+                sha256(signature)
+            );
+
+            return;
+        }
+
+        assertEq(
+            randomness,
+            bytes32(0)
+        );
+    }
+
+    function testFuzz_verifyBeacon_roundZeroAlwaysRejects(
+        bytes memory signature
+    )
+        public
+        view
+    {
+        (
+            bool verified,
+            bytes32 randomness
+        ) = verifier.verifyBeacon(
+            0,
+            signature
+        );
+
+        assertFalse(verified);
+        assertEq(randomness, bytes32(0));
+    }
+
+    function testFuzz_verifyBeacon_rejectsSingleBitKatMutation(
+        uint16 rawBitIndex
+    )
+        public
+        view
+    {
+        uint256 bitIndex =
+            uint256(rawBitIndex) % 384;
+
+        bytes memory signature =
+            _katSignature();
+
+        uint256 byteIndex =
+            bitIndex / 8;
+
+        uint8 bitMask =
+            uint8(
+                uint256(1) <<
+                (bitIndex % 8)
+            );
+
+        signature[byteIndex] =
+            bytes1(
+                uint8(signature[byteIndex]) ^
+                bitMask
+            );
+
+        _assertRejected(signature);
+    }
+
+    // ---------------------------------------------------------------------
     // Caller gas handling
     // ---------------------------------------------------------------------
 
@@ -451,7 +656,7 @@ contract QuicknetBeaconVerifierTest is Test {
         assertEq(randomness, KAT_RANDOMNESS);
     }
 
-    function test_verifyBeacon_guardPrecedesCurrentKatSuccessBand()
+    function test_verifyBeacon_guardPrecedesKatSuccessBand()
         public
         view
     {
@@ -478,6 +683,29 @@ contract QuicknetBeaconVerifierTest is Test {
                 .InsufficientVerifierGas
                 .selector
         );
+
+        (
+            success,
+            returnData
+        ) = _callVerifyWithGas(
+            minimumSuccessfulGas,
+            KAT_ROUND,
+            _katSignature()
+        );
+
+        assertTrue(success);
+        assertEq(returnData.length, 64);
+
+        (
+            bool verified,
+            bytes32 randomness
+        ) = abi.decode(
+            returnData,
+            (bool, bytes32)
+        );
+
+        assertTrue(verified);
+        assertEq(randomness, KAT_RANDOMNESS);
     }
 
     function test_verifyBeacon_severeGasStarvationHasNoRevertData()
@@ -749,6 +977,49 @@ contract QuicknetBeaconVerifierTest is Test {
 
         assembly {
             selector := mload(add(returnData, 0x20))
+        }
+    }
+
+    function _signature48(
+        bytes32 first,
+        bytes16 second
+    )
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return abi.encodePacked(
+            first,
+            second
+        );
+    }
+
+    function _assertNonCanonicalRejected(
+        bytes memory signature
+    )
+        internal
+        view
+    {
+        assertFalse(
+            verifier.isCanonical(
+                signature
+            )
+        );
+
+        _assertRejected(signature);
+    }
+
+    function _validLookingSignatureWithLength(
+        uint256 length
+    )
+        internal
+        pure
+        returns (bytes memory signature)
+    {
+        signature = new bytes(length);
+
+        if (length > 0) {
+            signature[0] = 0x80;
         }
     }
 
