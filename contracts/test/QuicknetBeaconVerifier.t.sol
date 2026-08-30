@@ -6,6 +6,10 @@ import {
 } from "forge-std/Test.sol";
 
 import {
+    QuicknetBeaconVerifier
+} from "../src/verifiers/QuicknetBeaconVerifier.sol";
+
+import {
     QuicknetBeaconVerifierHarness
 } from "./mocks/QuicknetBeaconVerifierHarness.sol";
 
@@ -28,6 +32,9 @@ contract QuicknetBeaconVerifierTest is Test {
 
     uint128 internal constant MAX_X_HI =
         0x1fffffffffffffffffffffffffffffff;
+
+    uint256 internal constant AMPLE_VERIFY_GAS = 2_000_000;
+    uint256 internal constant STARVED_VERIFY_GAS = 1_000;
 
     QuicknetBeaconVerifierHarness internal verifier;
 
@@ -54,6 +61,10 @@ contract QuicknetBeaconVerifierTest is Test {
     //
     // Caller gas handling:
     // - Explicit gas-band tests.
+    //
+    // Pairing gas-cap forwarding:
+    // - Guard-band and constrained invalid-input tests.
+    // - Focused review of work between the gas guard and STATICCALL.
     //
     // Precompile ABI / execution-environment invariants:
     // - Focused low-level code review.
@@ -388,6 +399,164 @@ contract QuicknetBeaconVerifierTest is Test {
     }
 
     // ---------------------------------------------------------------------
+    // Caller gas handling
+    // ---------------------------------------------------------------------
+
+    function test_verifyBeacon_succeedsWithAmpleGas()
+        public
+        view
+    {
+        (
+            bool success,
+            bytes memory returnData
+        ) = _callVerifyWithGas(
+            AMPLE_VERIFY_GAS,
+            KAT_ROUND,
+            _katSignature()
+        );
+
+        assertTrue(success);
+        assertEq(returnData.length, 64);
+
+        (
+            bool verified,
+            bytes32 randomness
+        ) = abi.decode(
+            returnData,
+            (bool, bytes32)
+        );
+
+        assertTrue(verified);
+        assertEq(randomness, KAT_RANDOMNESS);
+    }
+
+    function test_verifyBeacon_guardPrecedesCurrentKatSuccessBand()
+        public
+        view
+    {
+        uint256 minimumSuccessfulGas =
+            _minimumSuccessfulKatGas();
+
+        assertGt(minimumSuccessfulGas, 0);
+
+        (
+            bool success,
+            bytes memory returnData
+        ) = _callVerifyWithGas(
+            minimumSuccessfulGas - 1,
+            KAT_ROUND,
+            _katSignature()
+        );
+
+        assertFalse(success);
+        assertEq(returnData.length, 4);
+
+        assertEq(
+            _revertSelector(returnData),
+            QuicknetBeaconVerifier
+                .InsufficientVerifierGas
+                .selector
+        );
+    }
+
+    function test_verifyBeacon_severeGasStarvationHasNoRevertData()
+        public
+        view
+    {
+        (
+            bool success,
+            bytes memory returnData
+        ) = _callVerifyWithGas(
+            STARVED_VERIFY_GAS,
+            KAT_ROUND,
+            _katSignature()
+        );
+
+        assertFalse(success);
+        assertEq(returnData.length, 0);
+    }
+
+    function test_verifyBeacon_invalidCandidateReturnsFalseWithAmpleGas()
+        public
+        view
+    {
+        (
+            bool success,
+            bytes memory returnData
+        ) = _callVerifyWithGas(
+            AMPLE_VERIFY_GAS,
+            KAT_ROUND,
+            _offSubgroupPointEncoding()
+        );
+
+        assertTrue(success);
+        assertEq(returnData.length, 64);
+
+        (
+            bool verified,
+            bytes32 randomness
+        ) = abi.decode(
+            returnData,
+            (bool, bytes32)
+        );
+
+        assertFalse(verified);
+        assertEq(randomness, bytes32(0));
+    }
+
+    function test_verifyBeacon_guardPrecedesInvalidCandidateCompletionBand()
+        public
+        view
+    {
+        uint256 minimumCompletedGas =
+            _minimumCompletedInvalidCandidateGas();
+
+        assertGt(minimumCompletedGas, 0);
+
+        (
+            bool success,
+            bytes memory returnData
+        ) = _callVerifyWithGas(
+            minimumCompletedGas - 1,
+            KAT_ROUND,
+            _offSubgroupPointEncoding()
+        );
+
+        assertFalse(success);
+        assertEq(returnData.length, 4);
+
+        assertEq(
+            _revertSelector(returnData),
+            QuicknetBeaconVerifier
+                .InsufficientVerifierGas
+                .selector
+        );
+
+        (
+            success,
+            returnData
+        ) = _callVerifyWithGas(
+            minimumCompletedGas,
+            KAT_ROUND,
+            _offSubgroupPointEncoding()
+        );
+
+        assertTrue(success);
+        assertEq(returnData.length, 64);
+
+        (
+            bool verified,
+            bytes32 randomness
+        ) = abi.decode(
+            returnData,
+            (bool, bytes32)
+        );
+
+        assertFalse(verified);
+        assertEq(randomness, bytes32(0));
+    }
+
+    // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
 
@@ -453,5 +622,174 @@ contract QuicknetBeaconVerifierTest is Test {
 
         assertFalse(verified);
         assertEq(randomness, bytes32(0));
+    }
+
+    function _minimumSuccessfulKatGas()
+        internal
+        view
+        returns (uint256)
+    {
+        uint256 low;
+        uint256 high = AMPLE_VERIFY_GAS;
+
+        assertTrue(
+            _katSucceedsWithGas(high)
+        );
+
+        while (low + 1 < high) {
+            uint256 middle =
+                low + (high - low) / 2;
+
+            if (_katSucceedsWithGas(middle)) {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+
+        return high;
+    }
+
+    function _katSucceedsWithGas(
+        uint256 gasLimit
+    )
+        internal
+        view
+        returns (bool)
+    {
+        (
+            bool success,
+            bytes memory returnData
+        ) = _callVerifyWithGas(
+            gasLimit,
+            KAT_ROUND,
+            _katSignature()
+        );
+
+        if (
+            !success ||
+            returnData.length != 64
+        ) {
+            return false;
+        }
+
+        (
+            bool verified,
+            bytes32 randomness
+        ) = abi.decode(
+            returnData,
+            (bool, bytes32)
+        );
+
+        return
+            verified &&
+            randomness == KAT_RANDOMNESS;
+    }
+
+    function _callVerifyWithGas(
+        uint256 gasLimit,
+        uint64 round,
+        bytes memory signature
+    )
+        internal
+        view
+        returns (
+            bool success,
+            bytes memory returnData
+        )
+    {
+        bytes memory callData =
+            abi.encodeWithSelector(
+                QuicknetBeaconVerifier
+                    .verifyBeacon
+                    .selector,
+                round,
+                signature
+            );
+
+        return
+            address(verifier).staticcall{
+                gas: gasLimit
+            }(
+                callData
+            );
+    }
+
+    function _revertSelector(
+        bytes memory returnData
+    )
+        internal
+        pure
+        returns (bytes4 selector)
+    {
+        if (returnData.length < 4) {
+            return bytes4(0);
+        }
+
+        assembly {
+            selector := mload(add(returnData, 0x20))
+        }
+    }
+
+    function _minimumCompletedInvalidCandidateGas()
+        internal
+        view
+        returns (uint256)
+    {
+        uint256 low;
+        uint256 high = AMPLE_VERIFY_GAS;
+
+        assertTrue(
+            _invalidCandidateCompletesWithGas(high)
+        );
+
+        while (low + 1 < high) {
+            uint256 middle =
+                low + (high - low) / 2;
+
+            if (_invalidCandidateCompletesWithGas(middle)) {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+
+        return high;
+    }
+
+    function _invalidCandidateCompletesWithGas(
+        uint256 gasLimit
+    )
+        internal
+        view
+        returns (bool)
+    {
+        (
+            bool success,
+            bytes memory returnData
+        ) = _callVerifyWithGas(
+            gasLimit,
+            KAT_ROUND,
+            _offSubgroupPointEncoding()
+        );
+
+        if (
+            !success ||
+            returnData.length != 64
+        ) {
+            return false;
+        }
+
+        (
+            bool verified,
+            bytes32 randomness
+        ) = abi.decode(
+            returnData,
+            (bool, bytes32)
+        );
+
+        return
+            !verified &&
+            randomness == bytes32(0);
     }
 }
