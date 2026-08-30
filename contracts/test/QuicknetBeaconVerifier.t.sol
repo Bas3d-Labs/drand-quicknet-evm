@@ -349,6 +349,45 @@ contract QuicknetBeaconVerifierTest is Test {
     }
 
     // ---------------------------------------------------------------------
+    // Curve and subgroup validation
+    // ---------------------------------------------------------------------
+
+    function test_offSubgroupPointIsCanonicalButDoesNotVerify()
+        public
+        view
+    {
+        // This encoding decompresses to P = (0, 2).
+        //
+        // P is on y^2 = x^3 + 4. Since the doubling slope at x = 0 is zero,
+        // 2P = (0, -2) = -P, so 3P is infinity. P therefore has order 3
+        // and cannot belong to the prime-order BLS12-381 G1 subgroup.
+        bytes memory pointEncoding =
+            _offSubgroupPointEncoding();
+
+        assertTrue(
+            verifier.isCanonical(
+                pointEncoding
+            )
+        );
+
+        (
+            uint128 xHi,
+            uint256 xLo,
+            uint128 yHi,
+            uint256 yLo
+        ) = verifier.decompressG1(
+            pointEncoding
+        );
+
+        assertEq(xHi, 0);
+        assertEq(xLo, 0);
+        assertEq(yHi, 0);
+        assertEq(yLo, 2);
+
+        _assertRejected(pointEncoding);
+    }
+
+    // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
 
@@ -372,6 +411,17 @@ contract QuicknetBeaconVerifierTest is Test {
             hex"a38ab268d58c04ce2d22b8317e4b66ec"
             hex"da5fa8841c7215bf7733af8dbaed6c5e"
             hex"7d8d60b77817294a64b891f719bc1b40";
+    }
+
+    function _offSubgroupPointEncoding()
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return
+            hex"80000000000000000000000000000000"
+            hex"00000000000000000000000000000000"
+            hex"00000000000000000000000000000000";
     }
 
     function _assertRejected(
