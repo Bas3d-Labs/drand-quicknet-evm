@@ -34,10 +34,12 @@ import {
 ///      the submitted candidate is not a valid Quicknet beacon.
 ///
 ///      Required BLS12-381 execution compatibility is checked by the
-///      constructor KAT. Deployment tooling and monitoring should repeat
-///      the same KAT against the live deployed verifier.
+///      constructor's two-sided self-test. Deployment tooling and monitoring
+///      should repeat the same acceptance and rejection checks against the
+///      live deployed verifier.
 contract QuicknetBeaconVerifier is IQuicknetBeaconVerifier {
-    error SelfTestFailed();
+    error PositiveSelfTestFailed();
+    error NegativeSelfTestFailed();
     error InsufficientVerifierGas();
     error InvalidPairingResponse();
 
@@ -85,11 +87,21 @@ contract QuicknetBeaconVerifier is IQuicknetBeaconVerifier {
     uint256 internal constant NEG_G2_Y1_LO =
         0x993923066dddaf1040bc3ff59f825c78df74f2d75467e25e0f55f8a00fa030ed;
 
+    /// @dev The constructor self-test exercises both acceptance and rejection
+    ///      through the complete verification path.
     constructor() {
         bytes memory signature =
             hex"b44679b9a59af2ec876b1a6b1ad52ea9"
             hex"b1615fc3982b19576350f93447cb1125"
             hex"e342b73a8dd2bacbe47e4b6b63ed5e39";
+
+        bytes memory negativeSignature =
+            abi.encodePacked(signature);
+
+        negativeSignature[0] =
+            bytes1(
+                uint8(negativeSignature[0]) ^ 0x20
+            );
 
         (
             bool verified,
@@ -104,7 +116,22 @@ contract QuicknetBeaconVerifier is IQuicknetBeaconVerifier {
             randomness !=
                 0xfe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd
         ) {
-            revert SelfTestFailed();
+            revert PositiveSelfTestFailed();
+        }
+
+        (
+            verified,
+            randomness
+        ) = _verifyBeacon(
+            1000,
+            negativeSignature
+        );
+
+        if (
+            verified ||
+            randomness != bytes32(0)
+        ) {
+            revert NegativeSelfTestFailed();
         }
     }
 

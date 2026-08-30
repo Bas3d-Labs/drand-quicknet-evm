@@ -68,9 +68,9 @@ contract QuicknetBeaconVerifierTest is Test {
     //
     // Precompile ABI / execution-environment invariants:
     // - Focused low-level code review.
-    // - Constructor KAT.
-    // - Post-deployment live KAT.
-    // - Recurring operational canary.
+    // - Two-sided constructor self-test.
+    // - Post-deployment acceptance/rejection KAT.
+    // - Recurring acceptance/rejection canary.
     //
     // Nonconforming precompile behavior is intentionally not modeled by
     // replacing reserved precompile addresses with test doubles.
@@ -136,6 +136,27 @@ contract QuicknetBeaconVerifierTest is Test {
 
         assertFalse(verified);
         assertEq(randomness, bytes32(0));
+    }
+
+    function test_xBitTamperIsCanonicalButDoesNotVerify()
+        public
+        view
+    {
+        bytes memory signature = _katSignature();
+
+        signature[47] =
+            bytes1(
+                uint8(signature[47]) ^
+                0x01
+            );
+
+        assertTrue(
+            verifier.isCanonical(
+                signature
+            )
+        );
+
+        _assertRejected(signature);
     }
 
     // ---------------------------------------------------------------------
