@@ -1,23 +1,22 @@
-name: drand-quicknet-evm CI
+name: Integration Tests
 
 on:
-  pull_request:
-  push:
-    branches:
-      - ci
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: integration-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: Build and Test
+  contracts:
+    name: Robinhood Testnet integration contracts
     runs-on: ubuntu-latest
+
+    env:
+      ROBINHOOD_TESTNET_RPC_URL: ${{ secrets.ROBINHOOD_TESTNET_RPC_URL }}
 
     steps:
       - name: Checkout
@@ -26,7 +25,7 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      - name: Setup pnpm and nodejs
+      - name: Set up pnpm and Node.js
         uses: pnpm/setup@v2
         with:
           cache: true
@@ -38,7 +37,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: v1.8.1
+          version: stable
 
       - name: Show tool versions
         run: |
@@ -46,5 +45,12 @@ jobs:
           pnpm --version
           forge --version
 
-      - name: Check
-        run: pnpm check
+      - name: Check RPC configuration
+        run: |
+          if [ -z "$ROBINHOOD_TESTNET_RPC_URL" ]; then
+            echo "::error::ROBINHOOD_TESTNET_RPC_URL secret is not configured"
+            exit 1
+          fi
+
+      - name: Run contract integration tests
+        run: pnpm run test:contracts:integration
