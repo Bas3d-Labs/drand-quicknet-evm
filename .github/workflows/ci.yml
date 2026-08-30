@@ -1,0 +1,50 @@
+name: drand-quicknet-evm CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - ci
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Setup pnpm and nodejs
+        uses: pnpm/setup@v2
+        with:
+          cache: true
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.9.1
+
+      - name: Show tool versions
+        run: |
+          node --version
+          pnpm --version
+          forge --version
+
+      - name: Check
+        run: pnpm check

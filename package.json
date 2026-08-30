@@ -19,12 +19,19 @@
     "typecheck": "pnpm build:quicknet && pnpm build:registry-sdk && pnpm -r typecheck",
     "typecheck:quicknet": "pnpm --filter @based-labs/drand-quicknet typecheck",
     "typecheck:registry-sdk": "pnpm --filter @based-labs/drand-quicknet-registry typecheck",
-    "typecheck:relayer": "pnpm --filter @based-labs/drand-quicknet-relayer typecheck"
+    "typecheck:relayer": "pnpm --filter @based-labs/drand-quicknet-relayer typecheck",
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "check:relayer": "pnpm build:quicknet && pnpm build:registry-sdk && pnpm test:relayer && pnpm typecheck:relayer && pnpm build:relayer"
   },
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
       "version": "^11.13.1",
+      "onFail": "download"
+    },
+    "runtime": {
+      "name": "node",
+      "version": "24",
       "onFail": "download"
     }
   },
