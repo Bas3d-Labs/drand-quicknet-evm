@@ -15,6 +15,20 @@ contract QuicknetBeaconVerifierTest is Test {
     bytes32 internal constant KAT_RANDOMNESS =
         0xfe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd;
 
+    uint64 internal constant ALIAS_KAT_ROUND = 13_335;
+
+    bytes32 internal constant ALIAS_KAT_RANDOMNESS =
+        0xf4eb2e59448d155b1bc34337f2a4160ac5005429644ba61134779a8b8c6087b6;
+
+    uint128 internal constant P_HI =
+        0x1a0111ea397fe69a4b1ba7b6434bacd7;
+
+    uint256 internal constant P_LO =
+        0x64774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab;
+
+    uint128 internal constant MAX_X_HI =
+        0x1fffffffffffffffffffffffffffffff;
+
     QuicknetBeaconVerifierHarness internal verifier;
 
     function setUp() public {
@@ -246,6 +260,94 @@ contract QuicknetBeaconVerifierTest is Test {
         _assertRejected(signature);
     }
 
+    function test_isCanonical_rejectsXPlusPAlias()
+        public
+        view
+    {
+        bytes memory signature = _aliasKatSignature();
+
+        assertTrue(
+            verifier.isCanonical(
+                signature
+            )
+        );
+
+        (
+            bool verified,
+            bytes32 randomness
+        ) = verifier.verifyBeacon(
+            ALIAS_KAT_ROUND,
+            signature
+        );
+
+        assertTrue(verified);
+        assertEq(randomness, ALIAS_KAT_RANDOMNESS);
+        assertEq(sha256(signature), ALIAS_KAT_RANDOMNESS);
+
+        uint256 wordA;
+        uint256 xLo;
+
+        assembly {
+            wordA := mload(add(signature, 0x20))
+            xLo := mload(add(signature, 0x30))
+        }
+
+        uint128 xHi =
+            uint128(wordA >> 128) &
+            MAX_X_HI;
+
+        uint256 aliasLo;
+
+        unchecked {
+            aliasLo = xLo + P_LO;
+        }
+
+        uint128 carry;
+
+        if (aliasLo < xLo) {
+            carry = 1;
+        }
+
+        uint128 aliasHi =
+            xHi + P_HI + carry;
+
+        // The alias is only meaningful if x + p still fits within the
+        // 381 coordinate bits and does not enter the reserved flag bits.
+        assertLe(aliasHi, MAX_X_HI);
+
+        uint128 flags =
+            uint128(
+                uint8(signature[0]) &
+                0xe0
+            ) << 120;
+
+        bytes memory aliasSignature =
+            abi.encodePacked(
+                bytes16(aliasHi | flags),
+                bytes32(aliasLo)
+            );
+
+        assertEq(aliasSignature.length, 48);
+
+        // Secondary sanity check. Eligibility was established above before
+        // the original C/I/S bits were restored.
+        assertEq(
+            uint8(aliasSignature[0]) & 0xe0,
+            uint8(signature[0]) & 0xe0
+        );
+
+        assertFalse(
+            verifier.isCanonical(
+                aliasSignature
+            )
+        );
+
+        _assertRejectedAtRound(
+            ALIAS_KAT_ROUND,
+            aliasSignature
+        );
+    }
+
     // ---------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------
@@ -261,7 +363,31 @@ contract QuicknetBeaconVerifierTest is Test {
             hex"e342b73a8dd2bacbe47e4b6b63ed5e39";
     }
 
+    function _aliasKatSignature()
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return
+            hex"a38ab268d58c04ce2d22b8317e4b66ec"
+            hex"da5fa8841c7215bf7733af8dbaed6c5e"
+            hex"7d8d60b77817294a64b891f719bc1b40";
+    }
+
     function _assertRejected(
+        bytes memory signature
+    )
+        internal
+        view
+    {
+        _assertRejectedAtRound(
+            KAT_ROUND,
+            signature
+        );
+    }
+
+    function _assertRejectedAtRound(
+        uint64 round,
         bytes memory signature
     )
         internal
@@ -271,7 +397,7 @@ contract QuicknetBeaconVerifierTest is Test {
             bool verified,
             bytes32 randomness
         ) = verifier.verifyBeacon(
-            KAT_ROUND,
+            round,
             signature
         );
 
