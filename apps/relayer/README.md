@@ -13,9 +13,9 @@ event QuicknetRandomnessRequested(
 When a consumer requests a Quicknet round, the relayer:
 
 1. Discovers the request on-chain.
-2. Fetches the exact requested round from drand.
-3. Decompresses and validates the beacon off-chain.
-4. Checks whether that round is already stored.
+2. Checks whether that exact round is already stored.
+3. Fetches the exact requested round from drand if necessary.
+4. Parses and decompresses the beacon off-chain.
 5. Simulates the registry submission.
 6. Submits the beacon if necessary.
 
@@ -31,8 +31,9 @@ Consumer
 Relayer
    │
    ├── discover request
-   ├── fetch exact drand round
-   ├── validate/decompress locally
+   ├── check exact round in registry
+   ├── fetch exact drand round if missing
+   ├── parse/decompress locally
    ├── simulate registry submission
    │
    ▼
@@ -40,7 +41,7 @@ DrandQuicknetBeaconRegistry
    │
    │ verifyNormalized(round, signature)
    ▼
-DrandOracleQuicknetV1
+DrandOracleQuicknet
    │
    ▼
 stored normalized beacon
@@ -57,8 +58,6 @@ There is no:
 - reroll
 - relayer-selected round
 - first-relayer-wins randomness choice
-
-
 
 ## Commands
 
@@ -95,10 +94,14 @@ The relayer is permissionless. Correctness is enforced on-chain by `DrandQuickne
 A malicious relayer cannot:
 
 - forge a valid drand beacon
-- substitute another round for the requested round
-- alter stored randomness
+- cause a correctly implemented consumer to settle using a different round
+- alter stored randomness for an exact round
 - overwrite an already stored beacon
-- choose between multiple valid outcomes
+- choose between multiple outcomes for the committed round
+
+A relayer may submit valid beacons for unrelated rounds to the permissionless
+registry, but a correctly implemented consumer reads only the exact round it
+committed to.
 
 A malicious relayer may:
 
@@ -133,7 +136,7 @@ If drand round `R` cannot currently be fetched, that is a liveness condition. It
 
 The daemon separates **low-latency discovery** from **durable checkpointing**.
 
-On Robinhood Chain, the configured durable boundary is the RPC `safe` head.
+On Robinhood Chain Testnet, the configured durable boundary is the RPC `safe` head.
 
 ```text
                          latest
@@ -183,6 +186,40 @@ is configured statically as network security policy.
 
 Finality is not operator-configurable through an environment variable.
 
+### Non-monotonic durable heads
+
+RPC infrastructure may occasionally report a durable head that is behind the
+daemon's already-persisted durable progress.
+
+The daemon never moves its durable checkpoint backward.
+
+If the configured durable head temporarily regresses, the daemon:
+
+- preserves the existing durable checkpoint
+- skips durable scanning for that cycle
+- continues soft/latest scanning
+- emits a `durable_head_regressed` warning
+- resumes durable scanning from the exact persisted checkpoint once the
+  durable head catches up
+
+A temporary durable-head regression is therefore treated as an RPC/finality
+observation rather than a consumer-processing failure.
+
+For example:
+
+```text
+persisted durableNextBlock = 109638510
+RPC safe head              = 109636509
+        ↓
+preserve durableNextBlock = 109638510
+continue soft scan
+emit durable_head_regressed
+        ↓ safe recovers
+resume durable scan from 109638510
+```
+
+The checkpoint is never rewound to match a stale RPC response.
+
 ### Restart behavior
 
 Because the soft cursor is intentionally memory-only, restarting the daemon causes the non-durable region to be scanned again.
@@ -221,8 +258,6 @@ A reorg of non-durable history may temporarily delay discovery of a replacement 
 
 In other words: `latest` is safe enough to act on, but not safe enough to forget.
 
-Future versions may add block-hash anchoring to detect soft reorgs earlier. The current checkpoint model does not depend on that optimization.
-
 ## Checkpoints
 
 Checkpoints are maintained per consumer.
@@ -243,9 +278,9 @@ Example:
 {
   "version": 1,
   "chainId": 46630,
-  "registry": "0x37362343d9eE1EfCC9293C611FA10A994C02f75F",
+  "registry": "0x1111111111111111111111111111111111111111",
   "consumers": {
-    "0x8ceb97CA6550b750185497dF7b1148384c619372": {
+    "0x2222222222222222222222222222222222222222": {
       "nextBlock": "99706403"
     }
   }
@@ -276,6 +311,9 @@ The daemon:
 - validates consumer addresses and stored values when loading
 - rejects duplicate normalized consumer addresses
 - never persists the soft scan cursor
+- never moves a durable checkpoint backward
+- tolerates temporary durable-head regressions without failing soft processing
+- acquires an exclusive checkpoint lock before daemon processing begins
 
 If the process crashes before a durable checkpoint write, that range is replayed after restart.
 
@@ -403,6 +441,39 @@ pnpm --filter @based-labs/drand-quicknet-relayer \
 
 The daemon exits cleanly on `SIGINT` or `SIGTERM`.
 
+### Logging
+
+The default log level is `info`.
+
+Set `QUICKNET_LOG_LEVEL=debug` to enable detailed daemon progress:
+
+```sh
+QUICKNET_LOG_LEVEL=debug \
+pnpm --filter @based-labs/drand-quicknet-relayer \
+  start daemon \
+  --network robinhood-testnet
+```
+
+Important structured events include:
+
+* `round_imported`
+* `durable_head_regressed`
+* `consumer_failed`
+* `heartbeat`
+* `checkpoint_advanced`
+* `round_already_stored`
+
+`round_imported` and `heartbeat` are emitted at info level.
+
+`checkpoint_advanced` and `round_already_stored` are emitted at debug level.
+
+`durable_head_regressed` is emitted at warn level.
+
+`consumer_failed` is emitted at error level.
+
+A temporary durable-head regression does not mark the consumer as failed.
+The consumer remains healthy unless request processing itself fails.
+
 ---
 
 ## Choosing `QUICKNET_START_BLOCK`
@@ -441,7 +512,7 @@ for each exact round
       fetch drand
           │
           ▼
-      validate/decompress
+      parse/decompress
           │
           ▼
       simulate transaction
@@ -590,6 +661,27 @@ checkpoint nextBlock = safe + 1
 
 This validated both low-latency soft processing and durable canonical replay.
 
+### Durable-head regression recovery
+
+Robinhood Testnet public RPC infrastructure has also been observed returning
+temporarily non-monotonic `safe` heads across successive requests.
+
+In one live daemon run:
+
+```text
+checkpoint advanced through:  109638509
+persisted nextBlock:          109638510
+later reported safe head:     109636509
+```
+
+The daemon emitted: `durable_head_regressed` without `consumer_failed`.
+
+Soft/latest processing continued, and when the durable RPC view recovered,
+the daemon resumed from `fromBlock = 109638510` rather than rewinding or
+skipping durable history.
+
+The consumer remained healthy throughout the regression.
+
 ## Finality policies
 
 The relayer supports several finality policy primitives:
@@ -632,27 +724,42 @@ A supported network should only use a finality mechanism whose semantics have be
 
 ## Registry verification
 
-Before starting, the relayer verifies the configured registry deployment.
+Before starting, the relayer verifies the complete configured registry-to-oracle deployment identity.
 
-The deployment manifest includes:
+The registry SDK represents the trusted deployment as:
 
 ```ts
 interface RegistryDeployment {
   chainId: number;
   address: Address;
   runtimeCodehash: Hex;
+  oracleAddress: Address;
+  oracleRuntimeCodehash: Hex;
 }
 ```
 
-The relayer checks:
+The relayer verifies:
 
-- connected chain ID;
-- configured registry address;
-- runtime bytecode hash.
+```text
+connected chain ID matches
+        +
+registry exists
+        +
+registry runtime codehash matches
+        +
+registry oracle() matches expected oracle
+        +
+registry oracleCodehash() matches expected oracle codehash
+        +
+oracle exists
+        +
+oracle runtime codehash matches
+```
 
-This prevents silently operating against the wrong contract deployment.
+This prevents the relayer from silently servicing a registry or verifier that does not match the trusted deployment manifest.
 
-The deployment manifest is the source of truth for supported registry deployments.
+The deployment manifest is part of the relayer's trust root. Runtime verification proves that the deployed contracts match the supplied manifest;
+it does not independently establish that the manifest itself identifies the canonical deployment intended by the operator.
 
 ---
 
@@ -660,11 +767,21 @@ The deployment manifest is the source of truth for supported registry deployment
 
 The registry relies on an immutable external Quicknet verifier.
 
-The verifier deployment is pinned by runtime code hash.
+The verifier is separately deployed and treated as an external cryptographic
+dependency. The registry pins its oracle address and runtime codehash, while
+the deployment manifest independently specifies the expected oracle address
+and runtime codehash.
 
-A runtime code hash proves the runtime bytecode at that address matches the expected deployment. It should not be treated as sufficient protection for a mutable proxy or a contract whose critical behavior can be changed through storage.
+The verifier source is not vendored into this repository. Operators should
+verify the deployed bytecode against the trusted manifest and referenced
+upstream source revision.
 
-Accepted verifier deployments should therefore be non-upgradeable and should not expose mutable security-critical configuration.
+A runtime codehash is only a meaningful identity guarantee for immutable
+runtime behavior. Accepted verifier deployments should therefore be
+non-upgradeable and should not expose mutable security-critical configuration.
+
+Verifier changes should be represented as new trusted deployments rather than
+silently changing the verifier behind an existing registry.
 
 ## Multiple relayers
 
@@ -697,18 +814,26 @@ Do not share one checkpoint file between concurrently running processes.
 
 ## Operational assumptions
 
-The file checkpoint store assumes a single process owns its checkpoint file. It provides atomic replacement but is not intended to be a distributed database.
+The daemon uses a checkpoint lock to prevent concurrent relayer processes from
+owning the same checkpoint lineage.
+
+The checkpoint file remains local single-process state rather than a
+distributed coordination mechanism. Separate relayer operators should use
+independent checkpoint files.
 
 Production operators should also monitor:
 
 - RPC availability
 - drand endpoint availability
 - relayer account balance
-- transaction failures
+- `consumer_failed`
+- `durable_head_regressed`
+- `round_imported`
 - checkpoint advancement
 - distance between `latest` and the durable head
+- distance between the durable head and durable checkpoint
 - requests that remain unprocessed
-- daemon process health
+- daemon heartbeat/process health
 
 ## Liveness vs fairness
 
