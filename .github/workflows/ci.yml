@@ -48,3 +48,31 @@ jobs:
 
       - name: Check
         run: pnpm check
+  
+  relayer-container:
+    name: Relayer container builds
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Build relayer container
+        run: |
+          docker build \
+            --file apps/relayer/Dockerfile \
+            --tag drand-quicknet-relayer:ci \
+            .
+      - name: Verify relayer container
+        run: |
+          docker run --rm \
+            --entrypoint sh \
+            drand-quicknet-relayer:ci \
+            -c '
+              test -f dist/cli.js &&
+              test -d node_modules &&
+              test -d /home/deployments
+            '
