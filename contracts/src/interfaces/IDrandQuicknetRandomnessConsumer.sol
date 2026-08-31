@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.36;
 
-/// @title IQuicknetRandomnessConsumer
+/// @title IDrandQuicknetRandomnessConsumer
 /// @notice Minimal interface used by Quicknet relayers to discover and
 ///         validate randomness consumers.
 /// @dev
@@ -17,7 +17,7 @@ pragma solidity 0.8.36;
 ///
 /// Emitting this event does not grant the relayer any authority over settlement,
 /// outcome selection, callbacks, or application state.
-interface IQuicknetRandomnessConsumer {
+interface IDrandQuicknetRandomnessConsumer {
     /// @notice Emitted when a consumer commits an action to an exact
     ///         Quicknet round.
     /// @param round The exact Quicknet round the consumer has committed to.

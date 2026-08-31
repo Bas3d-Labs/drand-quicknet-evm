@@ -14,8 +14,8 @@ import {
 } from "../../src/DrandQuicknetBeaconRegistry.sol";
 
 import {
-    IQuicknetBeaconVerifier
-} from "../../src/interfaces/IQuicknetBeaconVerifier.sol";
+    IDrandQuicknetBeaconVerifier
+} from "../../src/interfaces/IDrandQuicknetBeaconVerifier.sol";
 
 abstract contract RegistryIntegrationTestBase is Test {
     using stdJson for string;
@@ -27,7 +27,7 @@ abstract contract RegistryIntegrationTestBase is Test {
     address internal verifierAddress;
     bytes32 internal expectedVerifierCodehash;
 
-    IQuicknetBeaconVerifier internal verifier;
+    IDrandQuicknetBeaconVerifier internal verifier;
     DrandQuicknetBeaconRegistry internal registry;
 
     function setUp() public virtual {
@@ -77,7 +77,7 @@ abstract contract RegistryIntegrationTestBase is Test {
         );
 
         verifier =
-            IQuicknetBeaconVerifier(
+            IDrandQuicknetBeaconVerifier(
                 verifierAddress
             );
 

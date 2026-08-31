@@ -241,9 +241,9 @@ latestScheduledRound()
 `getBeacon(round)` is the strict read and reverts when the round is absent.
 `isStored(round)` can be used for a non-reverting availability check.
 
-### `QuicknetRandomnessConsumer`
+### `DrandQuicknetRandomnessConsumer`
 
-`QuicknetRandomnessConsumer` provides a canonical base implementation for
+`DrandQuicknetRandomnessConsumer` provides a canonical base implementation for
 applications consuming registry randomness.
 
 It:
@@ -539,7 +539,7 @@ A configured consumer or deployment list is therefore an **operator policy**, no
 The project defines a minimal consumer demand signal:
 
 ```solidity
-interface IQuicknetRandomnessConsumer {
+interface IDrandQuicknetRandomnessConsumer {
     event QuicknetRandomnessRequested(
         uint64 indexed round
     );

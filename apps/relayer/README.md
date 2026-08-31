@@ -41,7 +41,7 @@ DrandQuicknetBeaconRegistry
    │
    │ verifyBeacon(round, signature)
    ▼
-QuicknetBeaconVerifier
+DrandQuicknetBeaconVerifier
    │
    │ verified + sha256(signature)
    ▼
@@ -94,7 +94,7 @@ None of these commands allows round substitution.
 ## Security model
 
 The relayer is permissionless. Correctness is enforced on-chain by
-`DrandQuicknetBeaconRegistry` and `QuicknetBeaconVerifier`.
+`DrandQuicknetBeaconRegistry` and `DrandQuicknetBeaconVerifier`.
 
 A malicious relayer cannot:
 
@@ -660,7 +660,7 @@ The relayer forwards the canonical 48-byte compressed BLS signature returned
 for the requested Quicknet round unchanged to `DrandQuicknetBeaconRegistry`.
 
 The registry delegates cryptographic verification to
-`QuicknetBeaconVerifier`:
+`DrandQuicknetBeaconVerifier`:
 
 ```text
 canonical 48-byte Quicknet signature
@@ -669,7 +669,7 @@ canonical 48-byte Quicknet signature
 DrandQuicknetBeaconRegistry
         │
         ▼
-QuicknetBeaconVerifier.verifyBeacon(round, signature)
+DrandQuicknetBeaconVerifier.verifyBeacon(round, signature)
         │
         ├── invalid ──► submission reverts
         │
@@ -921,7 +921,7 @@ canonical deployment intended by the operator.
 
 ## Verifier trust
 
-The registry relies on an immutable external `QuicknetBeaconVerifier`
+The registry relies on an immutable external `DrandQuicknetBeaconVerifier`
 deployment.
 
 The registry pins the verifier address and runtime codehash. The deployment

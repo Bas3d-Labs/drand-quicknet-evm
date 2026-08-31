@@ -6,11 +6,11 @@ import {
 } from "bls-solidity/libraries/BLS2.sol";
 
 import {
-    QuicknetBeaconVerifier
-} from "../../src/verifiers/QuicknetBeaconVerifier.sol";
+    DrandQuicknetBeaconVerifier
+} from "../../src/verifiers/DrandQuicknetBeaconVerifier.sol";
 
-contract QuicknetBeaconVerifierHarness
-    is QuicknetBeaconVerifier
+contract DrandQuicknetBeaconVerifierHarness
+    is DrandQuicknetBeaconVerifier
 {
     function isCanonical(
         bytes memory signature

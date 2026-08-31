@@ -4,17 +4,17 @@ pragma solidity 0.8.36;
 import {Script} from "forge-std/Script.sol";
 
 import {
-    QuicknetBeaconVerifier
-} from "../src/verifiers/QuicknetBeaconVerifier.sol";
+    DrandQuicknetBeaconVerifier
+} from "../src/verifiers/DrandQuicknetBeaconVerifier.sol";
 
 contract DeployVerifier is Script {
     function run()
         external
-        returns (QuicknetBeaconVerifier verifier)
+        returns (DrandQuicknetBeaconVerifier verifier)
     {
         vm.startBroadcast();
 
-        verifier = new QuicknetBeaconVerifier();
+        verifier = new DrandQuicknetBeaconVerifier();
 
         vm.stopBroadcast();
     }

@@ -9,8 +9,8 @@ import {
 } from "../src/DrandQuicknetBeaconRegistry.sol";
 
 import {
-    QuicknetBeaconVerifier
-} from "../src/verifiers/QuicknetBeaconVerifier.sol";
+    DrandQuicknetBeaconVerifier
+} from "../src/verifiers/DrandQuicknetBeaconVerifier.sol";
 
 import {RegistryTestBase} from "./utils/RegistryTestBase.sol";
 
@@ -146,8 +146,8 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
     {
         uint64 round = 1000;
 
-        QuicknetBeaconVerifier realVerifier =
-            new QuicknetBeaconVerifier();
+        DrandQuicknetBeaconVerifier realVerifier =
+            new DrandQuicknetBeaconVerifier();
 
         address realVerifierAddress =
             address(realVerifier);

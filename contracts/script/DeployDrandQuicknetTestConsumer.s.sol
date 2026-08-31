@@ -3,19 +3,19 @@ pragma solidity 0.8.36;
 
 import {Script} from "forge-std/Script.sol";
 import {
-    QuicknetTestConsumer
-} from "../test/mocks/QuicknetTestConsumer.sol";
+    DrandQuicknetTestConsumer
+} from "../test/mocks/DrandQuicknetTestConsumer.sol";
 
-contract DeployQuicknetTestConsumer is Script {
+contract DeployDrandQuicknetTestConsumer is Script {
     function run()
         external
-        returns (QuicknetTestConsumer consumer)
+        returns (DrandQuicknetTestConsumer consumer)
     {
         address registry = vm.envAddress("QUICKNET_REGISTRY_ADDRESS");
 
         vm.startBroadcast();
 
-        consumer = new QuicknetTestConsumer(registry);
+        consumer = new DrandQuicknetTestConsumer(registry);
 
         vm.stopBroadcast();
     }
