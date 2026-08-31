@@ -21,16 +21,20 @@ import {
 ///         round sufficiently before that round's scheduled time, under
 ///         the normal drand threshold-honesty assumption.
 ///
-///         `minimumLeadRounds` declares the minimum future-round lead
-///         expected by this registry deployment. Consumers with their own
-///         security floor must first authenticate the registry deployment
-///         and require `minimumLeadRounds` to meet that floor.
+///         `minimumLeadRounds` declares the minimum supported future-round
+///         lead for this registry deployment.
 ///
-///         After authenticating the registry deployment, consumers should
-///         require `minimumLeadRounds` to meet or exceed their immutable
-///         local security floor. A new commitment must then target a round
-///         at least `minimumLeadRounds` ahead of the authenticated
-///         `latestScheduledRound()`.
+///         Consumers MUST authenticate the registry deployment before
+///         trusting this value. Each consumer then chooses its own lead,
+///         which MUST be greater than or equal to the authenticated
+///         `minimumLeadRounds`.
+///
+///         Applications may choose a larger lead to satisfy additional
+///         application-specific inclusion latency, reorg/finality, or
+///         safety-margin requirements.
+///
+///         A new commitment must target a round at least the consumer's
+///         chosen lead ahead of the authenticated `latestScheduledRound()`.
 ///
 ///         Size the required lead according to the consumer's chain and
 ///         threat model, including relevant timestamp uncertainty and
@@ -77,19 +81,16 @@ import {
 ///      4. DOMAIN SEPARATION
 ///         The stored randomness is application-neutral and identical on
 ///         every chain where the same Quicknet round is imported.
-///         Consumers should derive application-specific randomness. e.g.:
 ///
-///             bytes32 seed = keccak256(abi.encode(
-///                 DOMAIN_TAG,
-///                 block.chainid,
-///                 address(this),
-///                 campaignId,
-///                 drawId,
-///                 randomness
-///             ));
+///         Consumers SHOULD derive application-specific randomness using a
+///         domain-separated construction that binds the application,
+///         consumer, request, and exact committed round. The
+///         `DrandQuicknetRandomnessConsumer` base contract provides the
+///         canonical Based Labs derivation for this purpose.
 ///
-///         Omit block.chainid only when identical cross-chain results are
-///         intentionally desired.
+///         Cross-chain consumers that intentionally require identical
+///         results must define that behavior explicitly rather than
+///         accidentally omitting chain-specific domain separation.
 ///
 ///      5. REGISTRY STORAGE IS NOT A KNOWABILITY BOUNDARY
 ///         A Quicknet round has a scheduled time (`roundScheduledTime`),
@@ -128,8 +129,9 @@ contract DrandQuicknetBeaconRegistry is
 
     /// @dev round => official drand randomness.
     ///      bytes32(0) represents "not stored".
-    ///      Verified zero randomness is deliberately rejected so zero
-    ///      can serve as the unstored sentinel.
+    ///      The registry defends this sentinel locally. Nonzero SHA-256
+    ///      output is a cryptographic near-certainty, not a verifier
+    ///      specification guarantee.
     mapping(uint64 round => bytes32 randomness) private _beacons;
 
     /// @param verifier_ Quicknet verifier used by this registry.

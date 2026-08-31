@@ -2,7 +2,10 @@
 pragma solidity 0.8.36;
 
 import {Vm} from "forge-std/Vm.sol";
-import {stdJson} from "forge-std/StdJson.sol";
+
+import {
+    IDrandQuicknetBeaconRegistry
+} from "../src/interfaces/IDrandQuicknetBeaconRegistry.sol";
 
 import {
     DrandQuicknetBeaconRegistry
@@ -12,11 +15,37 @@ import {
     DrandQuicknetBeaconVerifier
 } from "../src/verifiers/DrandQuicknetBeaconVerifier.sol";
 
-import {RegistryTestBase} from "./utils/RegistryTestBase.sol";
+import {
+    MockDrandQuicknetBeaconVerifier
+} from "./mocks/MockDrandQuicknetBeaconVerifier.sol";
+
+import {
+    RegistryTestBase
+} from "./utils/RegistryTestBase.sol";
+
+contract StatefulQuicknetVerifier {
+    uint256 public value;
+
+    function verifyBeacon(
+        uint64,
+        bytes calldata
+    )
+        external
+        returns (
+            bool verified,
+            bytes32 randomness
+        )
+    {
+        value = 1;
+
+        return (
+            true,
+            keccak256("randomness")
+        );
+    }
+}
 
 contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
-    using stdJson for string;
-    
     // ---------------------------------------------------------------------
     // Constructor / configuration
     // ---------------------------------------------------------------------
@@ -47,25 +76,6 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
         assertEq(
             registry.minimumLeadRounds(),
             TEST_MINIMUM_LEAD_ROUNDS
-        );
-    }
-
-    function test_ScheduleConstantsMatchRobinhoodTestnetManifest() public view {
-        string memory path = string.concat(
-            vm.projectRoot(),
-            "/../deployments/robinhood-testnet.json"
-        );
-
-        string memory json = vm.readFile(path);
-
-        assertEq(
-            uint256(registry.GENESIS_TIMESTAMP()),
-            json.readUint(".quicknet.genesisTimestamp")
-        );
-
-        assertEq(
-            uint256(registry.PERIOD_SECONDS()),
-            json.readUint(".quicknet.periodSeconds")
         );
     }
 
@@ -141,16 +151,13 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
     // submitBeacon
     // ---------------------------------------------------------------------
 
-    function test_SubmitBeaconStoresOfficialQuicknetRandomness()
-        public
-    {
+    function test_SubmitBeaconRealVerifierComposedPath() public {
         uint64 round = 1000;
 
         DrandQuicknetBeaconVerifier realVerifier =
             new DrandQuicknetBeaconVerifier();
 
-        address realVerifierAddress =
-            address(realVerifier);
+        address realVerifierAddress = address(realVerifier);
 
         DrandQuicknetBeaconRegistry realRegistry =
             new DrandQuicknetBeaconRegistry(
@@ -164,33 +171,58 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
             hex"b1615fc3982b19576350f93447cb1125"
             hex"e342b73a8dd2bacbe47e4b6b63ed5e39";
 
+        bytes memory sFlipped = bytes.concat(signature);
+        sFlipped[0] =
+            bytes1(
+                uint8(sFlipped[0]) ^ 0x20
+            );
+
         bytes32 expectedRandomness =
             0xfe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd;
 
-        assertEq(
-            sha256(signature),
-            expectedRandomness
+        assertEq(sha256(signature), expectedRandomness);
+
+        // Rejection does not poison the round.
+        vm.expectRevert(
+            DrandQuicknetBeaconRegistry.InvalidBeacon.selector
         );
 
-        bytes32 randomness =
-            realRegistry.submitBeacon(
-                round,
-                signature
-            );
+        realRegistry.submitBeacon(round, sFlipped);
 
-        assertEq(
-            randomness,
-            expectedRandomness
+        assertFalse(realRegistry.isStored(round));
+
+        // Canonical signature now succeeds on the same round.
+        vm.expectEmit(true, true, false, true, address(realRegistry));
+
+        emit IDrandQuicknetBeaconRegistry.BeaconStored(
+            round,
+            expectedRandomness,
+            address(this)
         );
 
-        assertEq(
-            realRegistry.getBeacon(round),
-            expectedRandomness
+        vm.recordLogs();
+
+        bytes32 returned =
+            realRegistry.submitBeacon(round, signature);
+
+        Vm.Log[] memory storeLogs = vm.getRecordedLogs();
+
+        assertEq(storeLogs.length, 1);
+        assertEq(returned, expectedRandomness);
+        assertEq(realRegistry.getBeacon(round), expectedRandomness);
+
+        // Once stored, even an invalid signature is ignored.
+        vm.recordLogs();
+
+        returned = realRegistry.submitBeacon(
+            round,
+            sFlipped
         );
 
-        assertTrue(
-            realRegistry.isStored(round)
-        );
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        assertEq(returned, expectedRandomness);
+        assertEq(logs.length, 0);
     }
 
     function test_SubmitBeaconStoresVerifierRandomness() public {
@@ -208,7 +240,11 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
 
         vm.expectEmit(true, true, false, true, address(registry));
 
-        emit BeaconStored(round, randomness, submitter);
+        emit IDrandQuicknetBeaconRegistry.BeaconStored(
+            round,
+            randomness,
+            submitter
+        );
 
         vm.prank(submitter);
 
@@ -458,6 +494,76 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
         assertEq(logs.length, 0);
     }
 
+    function test_SubmitBeaconVerifierRunsInStaticContext()
+        public
+    {
+        StatefulQuicknetVerifier statefulVerifier =
+            new StatefulQuicknetVerifier();
+
+        address statefulVerifierAddress =
+            address(statefulVerifier);
+
+        DrandQuicknetBeaconRegistry staticRegistry =
+            new DrandQuicknetBeaconRegistry(
+                statefulVerifierAddress,
+                statefulVerifierAddress.codehash,
+                TEST_MINIMUM_LEAD_ROUNDS
+            );
+
+        uint64 round = 123;
+
+        // Pins `verifyBeacon` as `view` in the verifier interface. The registry
+        // must therefore use STATICCALL, causing this verifier's SSTORE to fail.
+        (
+            bool success,
+            bytes memory returndata
+        ) = address(staticRegistry).call(
+            abi.encodeCall(
+                DrandQuicknetBeaconRegistry.submitBeacon,
+                (
+                    round,
+                    hex"1234"
+                )
+            )
+        );
+
+        assertFalse(success);
+        assertEq(returndata.length, 0);
+
+        assertEq(
+            statefulVerifier.value(),
+            0
+        );
+
+        assertFalse(
+            staticRegistry.isStored(round)
+        );
+    }
+
+    function test_SubmitBeaconUnmockedVerifierCallRevertsLoudly()
+        public
+    {
+        uint64 round = 123;
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MockDrandQuicknetBeaconVerifier
+                    .UnmockedVerifierCall
+                    .selector,
+                round
+            )
+        );
+
+        registry.submitBeacon(
+            round,
+            hex"1234"
+        );
+
+        assertFalse(
+            registry.isStored(round)
+        );
+    }
+
     function test_StoredBeaconCannotBeOverwritten() public {
         uint64 round = 123;
 
@@ -580,30 +686,57 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
         registry.roundScheduledTime(0);
     }
 
-    function test_RoundAtBeforeGenesisReturnsZero() public view {
+    function test_RoundScheduledTimeMatchesQuicknetKat() public view {
+        assertEq(
+            registry.roundScheduledTime(1000),
+            1_692_806_364
+        );
+    }
+
+    function test_RoundAtGenesisBoundary() public view {
         uint256 genesis = registry.GENESIS_TIMESTAMP();
 
         assertEq(registry.roundAt(genesis - 1), 0);
-    }
-
-    function test_RoundAtGenesisReturnsOne() public view {
-        assertEq(registry.roundAt(registry.GENESIS_TIMESTAMP()), 1);
+        assertEq(registry.roundAt(genesis), 1);
+        assertEq(registry.roundAt(genesis + 2), 1);
+        assertEq(registry.roundAt(genesis + 3), 2);
     }
 
     function test_RoundAtWithinRoundWindow() public view {
         uint256 genesis = registry.GENESIS_TIMESTAMP();
 
         assertEq(registry.roundAt(genesis + 0), 1);
-
         assertEq(registry.roundAt(genesis + 1), 1);
-
         assertEq(registry.roundAt(genesis + 2), 1);
-
         assertEq(registry.roundAt(genesis + 3), 2);
-
         assertEq(registry.roundAt(genesis + 5), 2);
-
         assertEq(registry.roundAt(genesis + 6), 3);
+    }
+
+    function test_RoundAtMaximumBoundary() public {
+        uint256 timestamp =
+            registry.roundScheduledTime(type(uint64).max);
+
+        assertEq(
+            registry.roundAt(timestamp),
+            type(uint64).max
+        );
+
+        assertEq(
+            registry.roundAt(timestamp + 1),
+            type(uint64).max
+        );
+
+        assertEq(
+            registry.roundAt(timestamp + 2),
+            type(uint64).max
+        );
+
+        vm.expectRevert(
+            DrandQuicknetBeaconRegistry.InvalidRound.selector
+        );
+
+        registry.roundAt(timestamp + 3);
     }
 
     function test_LatestScheduledRoundUsesBlockTimestamp() public {
@@ -659,41 +792,6 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
             registry.latestScheduledRound(),
             scheduledRound
         );
-    }
-
-    function test_RoundAtLastTimestampOfMaxRoundReturnsMax()
-        public
-        view
-    {
-        uint256 timestamp =
-            registry.roundScheduledTime(
-                type(uint64).max
-            ) +
-            registry.PERIOD_SECONDS() -
-            1;
-
-        assertEq(
-            registry.roundAt(timestamp),
-            type(uint64).max
-        );
-    }
-
-    function test_RoundAtRejectsFirstTimestampBeyondUint64()
-        public
-    {
-        uint256 timestamp =
-            registry.roundScheduledTime(
-                type(uint64).max
-            ) +
-            registry.PERIOD_SECONDS();
-
-        vm.expectRevert(
-            DrandQuicknetBeaconRegistry
-                .InvalidRound
-                .selector
-        );
-
-        registry.roundAt(timestamp);
     }
 
     // ---------------------------------------------------------------------

@@ -23,8 +23,7 @@ abstract contract RegistryTestBase is Test {
 
     address internal verifierAddress;
     bytes32 internal expectedVerifierCodehash;
-
-    IDrandQuicknetBeaconVerifier internal verifier;
+    
     DrandQuicknetBeaconRegistry internal registry;
 
     address internal submitter =
@@ -32,12 +31,6 @@ abstract contract RegistryTestBase is Test {
 
     address internal otherSubmitter =
         makeAddr("otherSubmitter");
-
-    event BeaconStored(
-        uint64 indexed round,
-        bytes32 randomness,
-        address indexed submitter
-    );
 
     error MockVerifierFailure();
 
@@ -50,8 +43,6 @@ abstract contract RegistryTestBase is Test {
 
         verifierAddress = address(mockVerifier);
         expectedVerifierCodehash = verifierAddress.codehash;
-
-        verifier = IDrandQuicknetBeaconVerifier(verifierAddress);
 
         registry = new DrandQuicknetBeaconRegistry(
             verifierAddress,
