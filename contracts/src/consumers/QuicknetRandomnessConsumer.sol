@@ -55,11 +55,10 @@ import {
 ///         `expectedRegistryCodehash_` coming from an independently trusted
 ///         deployment manifest or equivalent source.
 ///
-///         Deployment metadata SHOULD also identify the registry's expected
-///         oracle address and oracle runtime codehash. Deployment validation
-///         SHOULD verify `oracle()` and `oracleCodehash()` against that
-///         trusted metadata so the full consumer -> registry -> oracle trust
-///         chain can be audited.
+///         Consumers SHOULD authenticate the registry deployment against
+///         an expected runtime codehash before trusting deployment metadata
+///         such as `minimumLeadRounds`, `verifier()`, or
+///         `verifierCodehash()`.
 ///
 ///      This contract performs no drand signature verification itself.
 ///      Verification is delegated entirely to the configured registry.
