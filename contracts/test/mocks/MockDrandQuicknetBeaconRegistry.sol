@@ -13,8 +13,9 @@ contract MockDrandQuicknetBeaconRegistry is
     error InvalidSignature();
     error UnexpectedCall();
 
-    address public override oracle;
-    bytes32 public override oracleCodehash;
+    address public override verifier;
+    bytes32 public override verifierCodehash;
+    uint64 public override minimumLeadRounds;
 
     uint64 private _latestScheduledRound;
 
@@ -28,11 +29,13 @@ contract MockDrandQuicknetBeaconRegistry is
     uint256 public verificationCount;
 
     constructor(
-        address oracle_,
-        bytes32 oracleCodehash_
+        address verifier_,
+        bytes32 verifierCodehash_,
+        uint64 minimumLeadRounds_
     ) {
-        oracle = oracle_;
-        oracleCodehash = oracleCodehash_;
+        verifier = verifier_;
+        verifierCodehash = verifierCodehash_;
+        minimumLeadRounds = minimumLeadRounds_;
     }
 
     function setLatestScheduledRound(
@@ -98,8 +101,6 @@ contract MockDrandQuicknetBeaconRegistry is
 
         randomness = _beacons[round];
 
-        // Match the real registry's important idempotency behavior:
-        // once stored, the signature is not examined.
         if (randomness != bytes32(0)) {
             return randomness;
         }
@@ -117,8 +118,6 @@ contract MockDrandQuicknetBeaconRegistry is
             )
         );
 
-        // The real registry uses zero as the "not stored" sentinel.
-        // Avoid producing zero in the mock as well.
         if (randomness == bytes32(0)) {
             randomness = bytes32(uint256(1));
         }
@@ -186,8 +185,6 @@ contract MockDrandQuicknetBeaconRegistry is
             revert InvalidRound();
         }
 
-        // Schedule accuracy is not important for consumer unit tests.
-        // Returning the round itself makes assertions deterministic.
         return uint256(round);
     }
 

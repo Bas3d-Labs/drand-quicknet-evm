@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.36;
 
-import {IDrandOracleQuicknet} from "./interfaces/IDrandOracleQuicknet.sol";
+import {
+    IDrandQuicknetBeaconRegistry
+} from "./interfaces/IDrandQuicknetBeaconRegistry.sol";
+
+import {
+    IQuicknetBeaconVerifier
+} from "./interfaces/IQuicknetBeaconVerifier.sol";
 
 /// @title DrandQuicknetBeaconRegistry
 /// @notice Permissionless cache of cryptographically verified drand
@@ -13,20 +19,27 @@ import {IDrandOracleQuicknet} from "./interfaces/IDrandOracleQuicknet.sol";
 ///      1. FUTURE-ROUND COMMITMENT
 ///         Bind every randomness-consuming action to one specific future
 ///         round sufficiently before that round's scheduled time, under
-///         the normal drand threshold-honesty assumption. Use a lead
-///         margin rather than relying on a bare scheduled-time boundary:
+///         the normal drand threshold-honesty assumption.
 ///
-///             if (targetRound <
-///                 registry.latestScheduledRound() + MIN_LEAD_ROUNDS)
-///             {
-///                 revert TooLate();
-///             }
+///         `minimumLeadRounds` declares the minimum future-round lead
+///         expected by this registry deployment. Consumers with their own
+///         security floor must first authenticate the registry deployment
+///         and require `minimumLeadRounds` to meet that floor.
 ///
-///         Size MIN_LEAD_ROUNDS according to the consumer's chain and
+///         After authenticating the registry deployment, consumers should
+///         require `minimumLeadRounds` to meet or exceed their immutable
+///         local security floor. A new commitment must then target a round
+///         at least `minimumLeadRounds` ahead of the authenticated
+///         `latestScheduledRound()`.
+///
+///         Size the required lead according to the consumer's chain and
 ///         threat model, including relevant timestamp uncertainty and
-///         desired finality/reorg margin. If targetRound is selected
-///         off-chain before transaction submission, transaction
-///         inclusion latency must also be accounted for.
+///         desired finality/reorg margin. If the target round is selected
+///         off-chain before transaction submission, transaction inclusion
+///         latency must also be accounted for.
+///
+///         `minimumLeadRounds` is not enforced by `submitBeacon`. Valid past,
+///         current, and future rounds may all be cached permissionlessly.
 ///
 ///      2. ROUND SELECTION MUST NOT DEPEND ON REGISTRY AVAILABILITY
 ///         Consumers must never select a randomness round based on which
@@ -89,8 +102,11 @@ import {IDrandOracleQuicknet} from "./interfaces/IDrandOracleQuicknet.sol";
 ///         proves that the value was unknowable beforehand. A colluding
 ///         drand signing threshold could additionally know an unchained
 ///         future beacon before its scheduled time.
-contract DrandQuicknetBeaconRegistry {
-    error InvalidOracle();
+contract DrandQuicknetBeaconRegistry is
+    IDrandQuicknetBeaconRegistry
+{
+    error InvalidVerifier();
+    error InvalidMinimumLeadRounds();
     error InvalidRound();
     error InvalidBeacon();
     error BeaconUnavailable(uint64 round);
@@ -101,58 +117,57 @@ contract DrandQuicknetBeaconRegistry {
     /// @notice Seconds between consecutive scheduled Quicknet rounds.
     uint64 public constant PERIOD_SECONDS = 3;
 
-    /// @notice Immutable drand Quicknet verifier.
-    IDrandOracleQuicknet public immutable oracle;
+    /// @inheritdoc IDrandQuicknetBeaconRegistry
+    address public immutable override verifier;
 
-    /// @notice Expected runtime bytecode hash of `oracle`.
-    bytes32 public immutable oracleCodehash;
+    /// @inheritdoc IDrandQuicknetBeaconRegistry
+    bytes32 public immutable override verifierCodehash;
 
-    /// @dev round => canonical normalized beacon hash.
+    /// @inheritdoc IDrandQuicknetBeaconRegistry
+    uint64 public immutable override minimumLeadRounds;
+
+    /// @dev round => official drand randomness.
     ///      bytes32(0) represents "not stored".
-    ///      A verified zero hash is deliberately rejected so zero
+    ///      Verified zero randomness is deliberately rejected so zero
     ///      can serve as the unstored sentinel.
     mapping(uint64 round => bytes32 randomness) private _beacons;
-    
-    /// @notice Emitted the first time a round is stored.
-    ///
-    /// @dev Not emitted for an idempotent submission of an already
-    ///      stored round.
-    event BeaconStored(
-        uint64 indexed round, bytes32 randomness, address indexed submitter
-    );
 
-    /// @param oracle_ Quicknet verifier used by this registry.
-    /// @param oracleCodehash_ Expected runtime bytecode hash of `oracle_`.    
+    /// @param verifier_ Quicknet verifier used by this registry.
+    /// @param verifierCodehash_ Expected runtime bytecode hash of `verifier_`.
+    /// @param minimumLeadRounds_ Minimum future-round lead declared by this
+    ///        registry deployment.
     constructor(
-        address oracle_,
-        bytes32 oracleCodehash_
-    )
-    {
-        if (oracle_.code.length == 0) {
-            revert InvalidOracle();
+        address verifier_,
+        bytes32 verifierCodehash_,
+        uint64 minimumLeadRounds_
+    ) {
+        if (verifier_.code.length == 0) {
+            revert InvalidVerifier();
         }
 
         if (
-            oracleCodehash_ == bytes32(0) ||
-            oracle_.codehash != oracleCodehash_
+            verifierCodehash_ == bytes32(0) ||
+            verifier_.codehash != verifierCodehash_
         ) {
-            revert InvalidOracle();
+            revert InvalidVerifier();
         }
 
-        oracle = IDrandOracleQuicknet(oracle_);
-        oracleCodehash = oracleCodehash_;
+        if (minimumLeadRounds_ == 0) {
+            revert InvalidMinimumLeadRounds();
+        }
+
+        verifier = verifier_;
+        verifierCodehash = verifierCodehash_;
+        minimumLeadRounds = minimumLeadRounds_;
     }
 
-    /// @notice Verifies and caches a Quicknet beacon.
-    /// @dev Idempotent. If the round has already been verified,
-    ///      the cached value is returned without examining `signature`.
-    ///      Both 48-byte compressed and 96-byte uncompressed Quicknet
-    ///      signatures may be accepted by the underlying oracle.
+    /// @inheritdoc IDrandQuicknetBeaconRegistry
     function submitBeacon(
         uint64 round,
         bytes calldata signature
     )
         external
+        override
         returns (bytes32 randomness)
     {
         if (round == 0) {
@@ -165,26 +180,40 @@ contract DrandQuicknetBeaconRegistry {
             return randomness;
         }
 
-        (bool verified, bytes32 normalizedRoundHash,) =
-            oracle.verifyNormalized(round, signature);
+        bool verified;
 
-        if (!verified || normalizedRoundHash == bytes32(0)) {
+        (
+            verified,
+            randomness
+        ) = IQuicknetBeaconVerifier(
+            verifier
+        ).verifyBeacon(
+            round,
+            signature
+        );
+
+        if (!verified || randomness == bytes32(0)) {
             revert InvalidBeacon();
         }
 
-        randomness = normalizedRoundHash;
         _beacons[round] = randomness;
 
-        emit BeaconStored(round, randomness, msg.sender);
+        emit BeaconStored(
+            round,
+            randomness,
+            msg.sender
+        );
 
         return randomness;
     }
 
-    /// @notice Returns the verified randomness for `round`.
-    /// @dev Reverts if the round has not been cached.
-    function getBeacon(uint64 round)
+    /// @inheritdoc IDrandQuicknetBeaconRegistry
+    function getBeacon(
+        uint64 round
+    )
         external
         view
+        override
         returns (bytes32 randomness)
     {
         if (round == 0) {
@@ -198,29 +227,49 @@ contract DrandQuicknetBeaconRegistry {
         }
     }
 
-    /// @notice Returns true if `round` has already been verified and stored.
-    function isStored(uint64 round) external view returns (bool) {
+    /// @inheritdoc IDrandQuicknetBeaconRegistry
+    function isStored(
+        uint64 round
+    )
+        external
+        view
+        override
+        returns (bool)
+    {
+        if (round == 0) {
+            return false;
+        }
+
         return _beacons[round] != bytes32(0);
     }
 
-    /// @notice Returns the scheduled Unix timestamp for `round`.
-    /// @dev This is Quicknet schedule arithmetic only. It does not
-    ///      prove that the beacon was actually published at this exact
-    ///      time, nor that it could not have been known earlier by a
-    ///      colluding drand signing threshold.
-    function roundScheduledTime(uint64 round) public pure returns (uint256) {
+    /// @inheritdoc IDrandQuicknetBeaconRegistry
+    function roundScheduledTime(
+        uint64 round
+    )
+        public
+        pure
+        override
+        returns (uint256)
+    {
         if (round == 0) {
             revert InvalidRound();
         }
 
         return
-            uint256(GENESIS_TIMESTAMP) + uint256(round - 1)
-                * uint256(PERIOD_SECONDS);
+            uint256(GENESIS_TIMESTAMP) +
+            uint256(round - 1) * uint256(PERIOD_SECONDS);
     }
 
-    /// @notice Returns the latest Quicknet round scheduled at or
-    ///         before `timestamp`.
-    function roundAt(uint256 timestamp) public pure returns (uint64) {
+    /// @inheritdoc IDrandQuicknetBeaconRegistry
+    function roundAt(
+        uint256 timestamp
+    )
+        public
+        pure
+        override
+        returns (uint64)
+    {
         if (timestamp < uint256(GENESIS_TIMESTAMP)) {
             return 0;
         }
@@ -235,11 +284,13 @@ contract DrandQuicknetBeaconRegistry {
         return uint64(round);
     }
 
-    /// @notice Returns the latest Quicknet round whose scheduled time
-    ///         has passed according to this chain's block.timestamp.
-    /// @dev This is not a proof of beacon availability or first
-    ///      knowability, only a schedule helper.
-    function latestScheduledRound() external view returns (uint64) {
+    /// @inheritdoc IDrandQuicknetBeaconRegistry
+    function latestScheduledRound()
+        external
+        view
+        override
+        returns (uint64)
+    {
         return roundAt(block.timestamp);
     }
 }

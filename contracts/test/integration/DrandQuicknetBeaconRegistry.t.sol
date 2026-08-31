@@ -8,121 +8,84 @@ import {
 import {RegistryIntegrationTestBase} from "./RegistryIntegrationTestBase.sol";
 
 contract DrandQuicknetBeaconRegistryIntegrationTest is RegistryIntegrationTestBase {
-    uint64 internal constant ROUND_1 = 20_791_007;
-    uint64 internal constant ROUND_2 = 20_905_307;
+    uint64 internal constant KAT_ROUND = 1000;
+    uint64 internal constant SECOND_KNOWN_ROUND = 13_335;
     uint64 internal constant LIVE_ROUND = 31_089_008;
 
-    bytes32 internal constant LIVE_NORMALIZED_HASH =
-        0x9b81abb093df33375d039627e697083932b2d07ea75f7add4aa3389a13370b17;
+    bytes32 internal constant KAT_RANDOMNESS_HASH =
+        0xfe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd;
 
-    function test_RealOracleAcceptsCompressedSignature() public {
-        bytes memory signature = _sig1Compressed();
+    bytes32 internal constant LIVE_RANDOMNESS=
+        0xce7b0bc26c2f2f969bb4fa4ceb074fd13baed8557659ac0ea1af0b589c68d8bf;
 
-        (bool verified, bytes32 normalized,) =
-            oracle.verifyNormalized(ROUND_1, signature);
+    function test_RealVerifierAcceptsKatSignature() public {
+        bytes memory signature = _katSignature();
 
-        assertTrue(verified);
-        assertNotEq(normalized, bytes32(0));
-
-        bytes32 stored = registry.submitBeacon(ROUND_1, signature);
-
-        assertEq(stored, normalized);
-
-        assertEq(registry.getBeacon(ROUND_1), normalized);
-    }
-
-    function test_RealOracleAcceptsUncompressedSignature() public {
-        bytes memory signature = _sig1Uncompressed();
-
-        (bool verified, bytes32 normalized,) =
-            oracle.verifyNormalized(ROUND_1, signature);
+        (
+            bool verified,
+            bytes32 randomness
+        ) = verifier.verifyBeacon(
+            KAT_ROUND,
+            signature
+        );
 
         assertTrue(verified);
-        assertNotEq(normalized, bytes32(0));
+        assertEq(randomness, KAT_RANDOMNESS_HASH);
+        assertEq(randomness, sha256(signature));
 
-        bytes32 stored = registry.submitBeacon(ROUND_1, signature);
+        bytes32 stored = registry.submitBeacon(KAT_ROUND, signature);
 
-        assertEq(stored, normalized);
+        assertEq(stored, randomness);
+        assertEq(
+            registry.getBeacon(KAT_ROUND),
+            randomness
+        );
     }
 
-    function test_CompressedAndUncompressedNormalizeIdentically() public {
-        bytes memory compressed = _sig1Compressed();
+    function test_LiveKnownVectorMatchesExpectedRandomness() public {
+        bytes memory signature = _liveSignature();
 
-        bytes memory uncompressed = _sig1Uncompressed();
-
-        (bool compressedVerified, bytes32 compressedHash,) =
-            oracle.verifyNormalized(ROUND_1, compressed);
-
-        (bool uncompressedVerified, bytes32 uncompressedHash,) =
-            oracle.verifyNormalized(ROUND_1, uncompressed);
-
-        assertTrue(compressedVerified);
-        assertTrue(uncompressedVerified);
-
-        assertEq(compressedHash, uncompressedHash);
-
-        DrandQuicknetBeaconRegistry compressedRegistry =
-            new DrandQuicknetBeaconRegistry(
-                oracleAddress,
-                expectedOracleCodehash
-            );
-
-        DrandQuicknetBeaconRegistry uncompressedRegistry =
-            new DrandQuicknetBeaconRegistry(
-                oracleAddress,
-                expectedOracleCodehash
-            );
-
-        bytes32 fromCompressed =
-            compressedRegistry.submitBeacon(ROUND_1, compressed);
-
-        bytes32 fromUncompressed =
-            uncompressedRegistry.submitBeacon(ROUND_1, uncompressed);
-
-        assertEq(fromCompressed, fromUncompressed);
-
-        assertEq(fromCompressed, compressedHash);
-    }
-
-    function test_LiveKnownVectorMatchesExpectedHash() public {
-        bytes memory signature = _liveCompressedSignature();
-
-        (bool verified, bytes32 normalized,) =
-            oracle.verifyNormalized(LIVE_ROUND, signature);
+        (
+            bool verified,
+            bytes32 randomness
+        ) = verifier.verifyBeacon(
+            LIVE_ROUND,
+            signature
+        );
 
         assertTrue(verified);
-
-        assertEq(normalized, LIVE_NORMALIZED_HASH);
+        assertEq(randomness, LIVE_RANDOMNESS);
+        assertEq(randomness, sha256(signature));
 
         bytes32 stored = registry.submitBeacon(LIVE_ROUND, signature);
 
-        assertEq(stored, LIVE_NORMALIZED_HASH);
-
-        assertEq(registry.getBeacon(LIVE_ROUND), LIVE_NORMALIZED_HASH);
-    }
-
-    function test_SecondKnownVectorVerifies() public {
-        bytes memory signature = _sig2Uncompressed();
-
-        (bool verified, bytes32 normalized,) =
-            oracle.verifyNormalized(ROUND_2, signature);
-
-        assertTrue(verified);
-        assertNotEq(normalized, bytes32(0));
-
-        assertEq(registry.submitBeacon(ROUND_2, signature), normalized);
+        assertEq(stored, LIVE_RANDOMNESS);
+        assertEq(
+            registry.getBeacon(LIVE_ROUND),
+            LIVE_RANDOMNESS
+        );
     }
 
     function test_SignatureForDifferentRoundRejected() public {
-        bytes memory signature = _sig1Compressed();
+        bytes memory signature = _katSignature();
+        uint64 wrongRound = KAT_ROUND + 1;
 
-        uint64 wrongRound = ROUND_1 + 1;
-
-        (bool verified,,) = oracle.verifyNormalized(wrongRound, signature);
+        (
+            bool verified,
+            bytes32 randomness
+        ) = verifier.verifyBeacon(
+            wrongRound,
+            signature
+        );
 
         assertFalse(verified);
+        assertEq(randomness, bytes32(0));
 
-        vm.expectRevert(DrandQuicknetBeaconRegistry.InvalidBeacon.selector);
+        vm.expectRevert(
+            DrandQuicknetBeaconRegistry
+                .InvalidBeacon
+                .selector
+        );
 
         registry.submitBeacon(wrongRound, signature);
 
@@ -130,42 +93,67 @@ contract DrandQuicknetBeaconRegistryIntegrationTest is RegistryIntegrationTestBa
     }
 
     function test_MalformedSignatureCannotStoreBeacon() public {
-        uint64 round = ROUND_1;
-
-        (bool success,) = address(registry)
-            .call(
-                abi.encodeWithSelector(
-                    DrandQuicknetBeaconRegistry.submitBeacon.selector,
-                    round,
-                    hex"01"
-                )
-            );
-
-        // The exact revert may originate from the verifier's
-        // signature decoding rather than the registry itself.
-        assertFalse(success);
-
-        assertFalse(registry.isStored(round));
-    }
-
-    // A corrupted compressed G1 point may reach the EIP-2537
-    // pairing precompile and trigger a PrecompileError. Such an
-    // error can consume all gas forwarded to the precompile.
-    function test_BitFlippedSignatureCannotStoreBeacon() public {
-        bytes memory signature = _sig1Compressed();
-
-        signature[20] = bytes1(uint8(signature[20]) ^ 0x01);
-
-        (bool success,) = address(registry).call{gas: 1_000_000}(
-            abi.encodeWithSelector(
-                DrandQuicknetBeaconRegistry.submitBeacon.selector,
-                ROUND_1,
-                signature
-            )
+        vm.expectRevert(
+            DrandQuicknetBeaconRegistry
+                .InvalidBeacon
+                .selector
         );
 
-        assertFalse(success);
+        registry.submitBeacon(KAT_ROUND, hex"01");
 
-        assertFalse(registry.isStored(ROUND_1));
+        assertFalse(registry.isStored(KAT_ROUND));
+    }
+
+    function test_SFlippedSignatureCannotStoreBeacon() public {
+        bytes memory signature = _katSignature();
+
+        signature[0] = bytes1(
+            uint8(signature[0]) ^ 0x20
+        );
+
+        (
+            bool verified,
+            bytes32 randomness
+        ) = verifier.verifyBeacon(
+            KAT_ROUND,
+            signature
+        );
+
+        assertFalse(verified);
+        assertEq(randomness, bytes32(0));
+
+        vm.expectRevert(
+            DrandQuicknetBeaconRegistry
+                .InvalidBeacon
+                .selector
+        );
+
+        registry.submitBeacon(KAT_ROUND, signature);
+
+        assertFalse(registry.isStored(KAT_ROUND));
+    }
+
+    function test_SecondKnownVectorVerifies() public {
+        bytes memory signature = _secondKnownSignature();
+
+        (
+            bool verified,
+            bytes32 randomness
+        ) = verifier.verifyBeacon(
+            SECOND_KNOWN_ROUND,
+            signature
+        );
+
+        assertTrue(verified);
+        assertNotEq(randomness, bytes32(0));
+        assertEq(randomness, sha256(signature));
+
+        assertEq(
+            registry.submitBeacon(
+                SECOND_KNOWN_ROUND,
+                signature
+            ),
+            randomness
+        );
     }
 }

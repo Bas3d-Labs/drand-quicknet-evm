@@ -1,27 +1,37 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.36;
 
-import {Test} from "forge-std/Test.sol";
 import {
-    MockDrandOracleQuicknet
-} from "../mocks/MockDrandOracleQuicknet.sol";
+    Test
+} from "forge-std/Test.sol";
+
 import {
-    ITestDrandOracleQuicknet
-} from "../interfaces/ITestDrandOracleQuicknet.sol";
+    IQuicknetBeaconVerifier
+} from "../../src/interfaces/IQuicknetBeaconVerifier.sol";
+
 import {
     DrandQuicknetBeaconRegistry
 } from "../../src/DrandQuicknetBeaconRegistry.sol";
 
+import {
+    MockQuicknetBeaconVerifier
+} from "../mocks/MockQuicknetBeaconVerifier.sol";
+
 /// @dev Shared deterministic setup for registry unit tests.
 abstract contract RegistryTestBase is Test {
-    address internal oracleAddress;
-    bytes32 internal expectedOracleCodehash;
+    uint64 internal constant TEST_MINIMUM_LEAD_ROUNDS = 5;
 
-    ITestDrandOracleQuicknet internal oracle;
+    address internal verifierAddress;
+    bytes32 internal expectedVerifierCodehash;
+
+    IQuicknetBeaconVerifier internal verifier;
     DrandQuicknetBeaconRegistry internal registry;
 
-    address internal submitter = makeAddr("submitter");
-    address internal otherSubmitter = makeAddr("otherSubmitter");
+    address internal submitter =
+        makeAddr("submitter");
+
+    address internal otherSubmitter =
+        makeAddr("otherSubmitter");
 
     event BeaconStored(
         uint64 indexed round,
@@ -29,18 +39,24 @@ abstract contract RegistryTestBase is Test {
         address indexed submitter
     );
 
-    function setUp() public virtual {
-        MockDrandOracleQuicknet mockOracle =
-            new MockDrandOracleQuicknet();
+    error MockVerifierFailure();
 
-        oracleAddress = address(mockOracle);
-        expectedOracleCodehash = oracleAddress.codehash;
+    function setUp()
+        public
+        virtual
+    {
+        MockQuicknetBeaconVerifier mockVerifier =
+            new MockQuicknetBeaconVerifier();
 
-        oracle = ITestDrandOracleQuicknet(oracleAddress);
+        verifierAddress = address(mockVerifier);
+        expectedVerifierCodehash = verifierAddress.codehash;
+
+        verifier = IQuicknetBeaconVerifier(verifierAddress);
 
         registry = new DrandQuicknetBeaconRegistry(
-            oracleAddress,
-            expectedOracleCodehash
+            verifierAddress,
+            expectedVerifierCodehash,
+            TEST_MINIMUM_LEAD_ROUNDS
         );
     }
 
@@ -48,35 +64,44 @@ abstract contract RegistryTestBase is Test {
         uint64 round,
         bytes memory signature,
         bool verified,
-        bytes32 normalizedRoundHash,
-        bytes32 chainScopedHash
+        bytes32 randomness
     )
         internal
     {
         vm.mockCall(
-            oracleAddress,
+            verifierAddress,
             abi.encodeWithSelector(
-                ITestDrandOracleQuicknet.verifyNormalized.selector,
+                IQuicknetBeaconVerifier
+                    .verifyBeacon
+                    .selector,
                 round,
                 signature
             ),
             abi.encode(
                 verified,
-                normalizedRoundHash,
-                chainScopedHash
+                randomness
             )
         );
     }
 
-    function _sig1Compressed() internal pure returns (bytes memory) {
-        return hex"8d2c8bbc37170dbacc5e280a21d4e195cff5f32a19fd6a58633fa4e4670478b5fb39bc13dd8f8c4372c5a76191198ac5";
-    }
-
-    function _sig1Uncompressed() internal pure returns (bytes memory) {
-        return hex"0d2c8bbc37170dbacc5e280a21d4e195cff5f32a19fd6a58633fa4e4670478b5fb39bc13dd8f8c4372c5a76191198ac50823ff37364b4060af65c7ec4dde05a428e4a444713680d95c34a4b109f112af1792643c742b75d85940c4bdcfdfbfa1";
-    }
-
-    function _sig2Uncompressed() internal pure returns (bytes memory) {
-        return hex"0a60486975062d9f06633c284cf1a7b46fb343f56f329f180530ca40a9e86320244f4fbfc37ae866cf25ef499665a31f08c61b5471ed86344d6b347d1b0e1a4146877a57c28507448678d8249521d91be74cd5a44fb6fce5f869b235e085ebe6";
+    function _mockVerifyRevert(
+        uint64 round,
+        bytes memory signature
+    )
+        internal
+    {
+        vm.mockCallRevert(
+            verifierAddress,
+            abi.encodeWithSelector(
+                IQuicknetBeaconVerifier
+                    .verifyBeacon
+                    .selector,
+                round,
+                signature
+            ),
+            abi.encodeWithSelector(
+                MockVerifierFailure.selector
+            )
+        );
     }
 }

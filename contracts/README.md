@@ -390,8 +390,6 @@ cast call \
   --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
 ```
 
-The value must equal the oracle's `normalizedRoundHash` for the same round.
-
 ## Record the deployment
 
 After deployment, update the corresponding manifest.
