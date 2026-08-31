@@ -8,21 +8,20 @@ import {
 contract MockDrandQuicknetBeaconVerifier is
     IDrandQuicknetBeaconVerifier
 {
+    error UnmockedVerifierCall(uint64 round);
+
     function verifyBeacon(
-        uint64,
+        uint64 round,
         bytes calldata
     )
         external
         pure
         override
         returns (
-            bool verified,
-            bytes32 randomness
+            bool,
+            bytes32
         )
     {
-        return (
-            false,
-            bytes32(0)
-        );
+        revert UnmockedVerifierCall(round);
     }
 }

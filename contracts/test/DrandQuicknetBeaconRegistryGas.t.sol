@@ -26,7 +26,7 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
     // Reference-EVM regression ceiling only. This is not a portable gas
     // requirement for other EVM chains or deployments.
     uint256 internal constant REFERENCE_SUBMIT_GAS_CEILING = 700_000;
-    
+
     uint256 internal constant STARVATION_GAS = 1_000;
 
     bytes32 internal constant KAT_RANDOMNESS =
@@ -55,6 +55,12 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
             minimumGas
         );
 
+        assertLe(
+            minimumGas,
+            REFERENCE_SUBMIT_GAS_CEILING,
+            "submitBeacon gas requirement exceeded reference ceiling"
+        );
+
         assertGt(minimumGas, STARVATION_GAS);
 
         // Exact discovered boundary succeeds.
@@ -71,8 +77,11 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
         // The probe wrapper reverts all registry state after every probe.
         assertFalse(registry.isStored(KAT_ROUND));
 
-        // One gas below the success boundary should reach the verifier's
-        // explicit gas guard and bubble its semantic error unchanged.
+        // In the current reference implementation, the verifier gas
+        // guard is the binding late-stage threshold. One gas below the
+        // measured success boundary therefore reaches and bubbles
+        // InsufficientVerifierGas. This assertion intentionally detects
+        // changes to that composed-path behavior.
         (
             success,
             returndataLength,
@@ -198,6 +207,9 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
         );
     }
 
+    // gasProbe always reverts so each probe rolls back beacon state and
+    // EIP-2929 access warming introduced inside the probe. Binary-search
+    // iterations therefore measure the same unstored, cold composed path.
     function gasProbe(
         uint256 gasLimit
     )

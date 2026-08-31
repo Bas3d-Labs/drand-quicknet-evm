@@ -2,7 +2,10 @@
 pragma solidity 0.8.36;
 
 import {Vm} from "forge-std/Vm.sol";
-import {stdJson} from "forge-std/StdJson.sol";
+
+import {
+    IDrandQuicknetBeaconRegistry
+} from "../src/interfaces/IDrandQuicknetBeaconRegistry.sol";
 
 import {
     DrandQuicknetBeaconRegistry
@@ -12,11 +15,37 @@ import {
     DrandQuicknetBeaconVerifier
 } from "../src/verifiers/DrandQuicknetBeaconVerifier.sol";
 
-import {RegistryTestBase} from "./utils/RegistryTestBase.sol";
+import {
+    MockDrandQuicknetBeaconVerifier
+} from "./mocks/MockDrandQuicknetBeaconVerifier.sol";
+
+import {
+    RegistryTestBase
+} from "./utils/RegistryTestBase.sol";
+
+contract StatefulQuicknetVerifier {
+    uint256 public value;
+
+    function verifyBeacon(
+        uint64,
+        bytes calldata
+    )
+        external
+        returns (
+            bool verified,
+            bytes32 randomness
+        )
+    {
+        value = 1;
+
+        return (
+            true,
+            keccak256("randomness")
+        );
+    }
+}
 
 contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
-    using stdJson for string;
-
     // ---------------------------------------------------------------------
     // Constructor / configuration
     // ---------------------------------------------------------------------
@@ -142,10 +171,11 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
             hex"b1615fc3982b19576350f93447cb1125"
             hex"e342b73a8dd2bacbe47e4b6b63ed5e39";
 
-        bytes memory sFlipped =
-            hex"944679b9a59af2ec876b1a6b1ad52ea9"
-            hex"b1615fc3982b19576350f93447cb1125"
-            hex"e342b73a8dd2bacbe47e4b6b63ed5e39";
+        bytes memory sFlipped = bytes.concat(signature);
+        sFlipped[0] =
+            bytes1(
+                uint8(sFlipped[0]) ^ 0x20
+            );
 
         bytes32 expectedRandomness =
             0xfe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd;
@@ -164,7 +194,7 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
         // Canonical signature now succeeds on the same round.
         vm.expectEmit(true, true, false, true, address(realRegistry));
 
-        emit BeaconStored(
+        emit IDrandQuicknetBeaconRegistry.BeaconStored(
             round,
             expectedRandomness,
             address(this)
@@ -210,7 +240,11 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
 
         vm.expectEmit(true, true, false, true, address(registry));
 
-        emit BeaconStored(round, randomness, submitter);
+        emit IDrandQuicknetBeaconRegistry.BeaconStored(
+            round,
+            randomness,
+            submitter
+        );
 
         vm.prank(submitter);
 
@@ -458,6 +492,76 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
 
         // Idempotent submissions do not emit another BeaconStored event.
         assertEq(logs.length, 0);
+    }
+
+    function test_SubmitBeaconVerifierRunsInStaticContext()
+        public
+    {
+        StatefulQuicknetVerifier statefulVerifier =
+            new StatefulQuicknetVerifier();
+
+        address statefulVerifierAddress =
+            address(statefulVerifier);
+
+        DrandQuicknetBeaconRegistry staticRegistry =
+            new DrandQuicknetBeaconRegistry(
+                statefulVerifierAddress,
+                statefulVerifierAddress.codehash,
+                TEST_MINIMUM_LEAD_ROUNDS
+            );
+
+        uint64 round = 123;
+
+        // Pins `verifyBeacon` as `view` in the verifier interface. The registry
+        // must therefore use STATICCALL, causing this verifier's SSTORE to fail.
+        (
+            bool success,
+            bytes memory returndata
+        ) = address(staticRegistry).call(
+            abi.encodeCall(
+                DrandQuicknetBeaconRegistry.submitBeacon,
+                (
+                    round,
+                    hex"1234"
+                )
+            )
+        );
+
+        assertFalse(success);
+        assertEq(returndata.length, 0);
+
+        assertEq(
+            statefulVerifier.value(),
+            0
+        );
+
+        assertFalse(
+            staticRegistry.isStored(round)
+        );
+    }
+
+    function test_SubmitBeaconUnmockedVerifierCallRevertsLoudly()
+        public
+    {
+        uint64 round = 123;
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MockDrandQuicknetBeaconVerifier
+                    .UnmockedVerifierCall
+                    .selector,
+                round
+            )
+        );
+
+        registry.submitBeacon(
+            round,
+            hex"1234"
+        );
+
+        assertFalse(
+            registry.isStored(round)
+        );
     }
 
     function test_StoredBeaconCannotBeOverwritten() public {
