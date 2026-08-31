@@ -17,7 +17,27 @@ import {
     MockDrandQuicknetBeaconRegistry
 } from "./mocks/MockDrandQuicknetBeaconRegistry.sol";
 
-contract UnrelatedContract {}
+contract RegistryLookalike {
+    function minimumLeadRounds()
+        external
+        pure
+        returns (uint64)
+    {
+        return 10;
+    }
+}
+
+contract RevertingMinimumLeadRegistry {
+    error MinimumLeadGetterCalled();
+
+    function minimumLeadRounds()
+        external
+        pure
+        returns (uint64)
+    {
+        revert MinimumLeadGetterCalled();
+    }
+}
 
 contract DrandQuicknetRandomnessConsumerTest is Test {
     uint64 internal constant LEAD_ROUNDS = 10;
@@ -151,6 +171,22 @@ contract DrandQuicknetRandomnessConsumerTest is Test {
         );
     }
 
+    function test_constructor_rejectsZeroLeadBeforeRegistryValidation()
+        public
+    {
+        vm.expectRevert(
+            DrandQuicknetRandomnessConsumer
+                .InvalidQuicknetLeadRounds
+                .selector
+        );
+
+        new MockDrandQuicknetRandomnessConsumer(
+            address(0xBEEF),
+            bytes32(0),
+            0
+        );
+    }
+
     function test_constructor_revertsForZeroLeadRounds()
         public
     {
@@ -170,23 +206,129 @@ contract DrandQuicknetRandomnessConsumerTest is Test {
     function test_constructor_codehashDoesNotValidateRegistrySemantics()
         public
     {
-        UnrelatedContract unrelated = new UnrelatedContract();
+        RegistryLookalike lookalike = new RegistryLookalike();
 
-        MockDrandQuicknetRandomnessConsumer unrelatedConsumer =
+        MockDrandQuicknetRandomnessConsumer lookalikeConsumer =
             new MockDrandQuicknetRandomnessConsumer(
-                address(unrelated),
-                address(unrelated).codehash,
+                address(lookalike),
+                address(lookalike).codehash,
                 LEAD_ROUNDS
             );
 
         assertEq(
-            unrelatedConsumer.quicknetBeaconRegistry(),
-            address(unrelated)
+            lookalikeConsumer.quicknetBeaconRegistry(),
+            address(lookalike)
         );
 
         assertEq(
-            unrelatedConsumer.quicknetBeaconRegistryCodehash(),
-            address(unrelated).codehash
+            lookalikeConsumer.quicknetBeaconRegistryCodehash(),
+            address(lookalike).codehash
+        );
+
+        assertEq(
+            lookalikeConsumer.quicknetLeadRounds(),
+            LEAD_ROUNDS
+        );
+    }
+
+    function test_constructor_revertsForLeadBelowRegistryMinimum()
+        public
+    {
+        uint64 leadRounds = LEAD_ROUNDS - 1;
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DrandQuicknetRandomnessConsumer
+                    .QuicknetLeadBelowRegistryMinimum
+                    .selector,
+                leadRounds,
+                LEAD_ROUNDS
+            )
+        );
+
+        _deployConsumer(
+            registry,
+            leadRounds
+        );
+    }
+
+    function test_constructor_acceptsLeadEqualToRegistryMinimum()
+        public
+    {
+        MockDrandQuicknetRandomnessConsumer equalConsumer =
+            _deployConsumer(
+                registry,
+                LEAD_ROUNDS
+            );
+
+        assertEq(
+            equalConsumer.quicknetLeadRounds(),
+            LEAD_ROUNDS
+        );
+    }
+
+    function test_constructor_preservesLeadAboveRegistryMinimum()
+        public
+    {
+        uint64 leadRounds = 20;
+
+        MockDrandQuicknetRandomnessConsumer largerLeadConsumer =
+            _deployConsumer(
+                registry,
+                leadRounds
+            );
+
+        assertEq(
+            largerLeadConsumer.quicknetLeadRounds(),
+            leadRounds
+        );
+    }
+
+    function test_constructor_authenticatesCodehashBeforeReadingMinimumLead()
+        public
+    {
+        RevertingMinimumLeadRegistry revertingRegistry =
+            new RevertingMinimumLeadRegistry();
+
+        bytes32 wrongCodehash =
+            keccak256(
+                "wrong-codehash"
+            );
+
+        assertNotEq(
+            wrongCodehash,
+            address(revertingRegistry).codehash
+        );
+
+        vm.expectRevert(
+            DrandQuicknetRandomnessConsumer
+                .InvalidQuicknetBeaconRegistryCodehash
+                .selector
+        );
+
+        new MockDrandQuicknetRandomnessConsumer(
+            address(revertingRegistry),
+            wrongCodehash,
+            LEAD_ROUNDS
+        );
+    }
+
+    function test_constructor_bubblesMinimumLeadRevertAfterAuthentication()
+        public
+    {
+        RevertingMinimumLeadRegistry revertingRegistry =
+            new RevertingMinimumLeadRegistry();
+
+        vm.expectRevert(
+            RevertingMinimumLeadRegistry
+                .MinimumLeadGetterCalled
+                .selector
+        );
+
+        new MockDrandQuicknetRandomnessConsumer(
+            address(revertingRegistry),
+            address(revertingRegistry).codehash,
+            LEAD_ROUNDS
         );
     }
 
@@ -310,15 +452,65 @@ contract DrandQuicknetRandomnessConsumerTest is Test {
         );
     }
 
+    function test_request_rejectsDuplicateRequestIdWithoutOverwritingRound()
+        public
+    {
+        uint256 requestId = 42;
+
+        registry.setLatestScheduledRound(100);
+
+        uint64 firstRound =
+            consumer.request(requestId);
+
+        assertEq(
+            firstRound,
+            110
+        );
+
+        registry.setLatestScheduledRound(500);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MockDrandQuicknetRandomnessConsumer
+                    .RequestAlreadyExists
+                    .selector,
+                requestId
+            )
+        );
+
+        consumer.request(requestId);
+
+        assertEq(
+            consumer.requestRounds(requestId),
+            firstRound
+        );
+
+        assertNotEq(
+            firstRound,
+            510
+        );
+    }
+
     function testFuzz_request_usesLatestScheduledRoundPlusLead(
         uint64 latest,
         uint64 lead
     )
         public
     {
-        vm.assume(lead != 0);
-        vm.assume(
-            latest <= type(uint64).max - lead
+        lead = uint64(
+            bound(
+                uint256(lead),
+                uint256(LEAD_ROUNDS),
+                uint256(type(uint64).max)
+            )
+        );
+
+        latest = uint64(
+            bound(
+                uint256(latest),
+                0,
+                uint256(type(uint64).max - lead)
+            )
         );
 
         MockDrandQuicknetRandomnessConsumer fuzzConsumer =
@@ -336,6 +528,11 @@ contract DrandQuicknetRandomnessConsumerTest is Test {
             latest + lead
         );
 
+        assertGt(
+            round,
+            0
+        );
+
         assertEq(
             fuzzConsumer.requestRounds(1),
             round
@@ -348,9 +545,23 @@ contract DrandQuicknetRandomnessConsumerTest is Test {
     )
         public
     {
-        vm.assume(lead != 0);
-        vm.assume(
-            latest > type(uint64).max - lead
+        lead = uint64(
+            bound(
+                uint256(lead),
+                uint256(LEAD_ROUNDS),
+                uint256(type(uint64).max)
+            )
+        );
+
+        uint256 minimumOverflowingLatest =
+            uint256(type(uint64).max) - uint256(lead) + 1;
+
+        latest = uint64(
+            bound(
+                uint256(latest),
+                minimumOverflowingLatest,
+                uint256(type(uint64).max)
+            )
         );
 
         MockDrandQuicknetRandomnessConsumer fuzzConsumer =

@@ -10,6 +10,7 @@ import {
 contract MockDrandQuicknetRandomnessConsumer is
     DrandQuicknetRandomnessConsumer
 {
+    error RequestAlreadyExists(uint256 requestId);
     error RequestNotFound(uint256 requestId);
 
     mapping(uint256 requestId => uint64 round) public requestRounds;
@@ -31,6 +32,10 @@ contract MockDrandQuicknetRandomnessConsumer is
         external
         returns (uint64 round)
     {
+        if (requestRounds[requestId] != 0) {
+            revert RequestAlreadyExists(requestId);
+        }
+
         round = _requestQuicknetRandomness();
         requestRounds[requestId] = round;
     }
