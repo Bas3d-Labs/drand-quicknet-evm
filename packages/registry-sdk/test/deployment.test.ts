@@ -20,21 +20,24 @@ import {
 import {
   CHAIN_ID,
   DEPLOYMENT,
-  ORACLE_ADDRESS,
-  ORACLE_RUNTIME_CODE,
-  ORACLE_RUNTIME_CODEHASH,
+  MINIMUM_LEAD_ROUNDS,
   REGISTRY_ADDRESS,
-  RUNTIME_CODE,
-  RUNTIME_CODEHASH,
+  REGISTRY_RUNTIME_CODE,
+  REGISTRY_RUNTIME_CODEHASH,
+  VERIFIER_ADDRESS,
+  VERIFIER_RUNTIME_CODE,
+  VERIFIER_RUNTIME_CODEHASH,
 } from './fixtures.js';
 
 const OTHER_CHAIN_ID = CHAIN_ID + 1;
 
-const OTHER_ORACLE_ADDRESS: Address =
+const OTHER_VERIFIER_ADDRESS: Address =
   '0x3333333333333333333333333333333333333333';
 
 const WRONG_RUNTIME_CODE: Hex = '0x6003600055';
 const WRONG_RUNTIME_CODEHASH = keccak256(WRONG_RUNTIME_CODE);
+
+const OTHER_MINIMUM_LEAD_ROUNDS = MINIMUM_LEAD_ROUNDS + 1n;
 
 describe('verifyRegistryDeployment', () => {
   const getChainId =
@@ -66,11 +69,11 @@ describe('verifyRegistryDeployment', () => {
         address: Address;
       }) => {
         if (address === REGISTRY_ADDRESS) {
-          return RUNTIME_CODE;
+          return REGISTRY_RUNTIME_CODE;
         }
 
-        if (address === ORACLE_ADDRESS) {
-          return ORACLE_RUNTIME_CODE;
+        if (address === VERIFIER_ADDRESS) {
+          return VERIFIER_RUNTIME_CODE;
         }
 
         return undefined;
@@ -83,12 +86,16 @@ describe('verifyRegistryDeployment', () => {
       }: {
         functionName: string;
       }) => {
-        if (functionName === 'oracle') {
-          return ORACLE_ADDRESS;
+        if (functionName === 'verifier') {
+          return VERIFIER_ADDRESS;
         }
 
-        if (functionName === 'oracleCodehash') {
-          return ORACLE_RUNTIME_CODEHASH;
+        if (functionName === 'verifierCodehash') {
+          return VERIFIER_RUNTIME_CODEHASH;
+        }
+
+        if (functionName === 'minimumLeadRounds') {
+          return MINIMUM_LEAD_ROUNDS;
         }
 
         throw new Error(`Unexpected function: ${functionName}`);
@@ -111,20 +118,27 @@ describe('verifyRegistryDeployment', () => {
     });
 
     expect(getCode).toHaveBeenCalledWith({
-      address: ORACLE_ADDRESS,
+      address: VERIFIER_ADDRESS,
     });
 
     expect(readContract).toHaveBeenCalledWith(
       expect.objectContaining({
         address: REGISTRY_ADDRESS,
-        functionName: 'oracle',
+        functionName: 'verifier',
       }),
     );
 
     expect(readContract).toHaveBeenCalledWith(
       expect.objectContaining({
         address: REGISTRY_ADDRESS,
-        functionName: 'oracleCodehash',
+        functionName: 'verifierCodehash',
+      }),
+    );
+
+    expect(readContract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        address: REGISTRY_ADDRESS,
+        functionName: 'minimumLeadRounds',
       }),
     );
   });
@@ -192,15 +206,15 @@ describe('verifyRegistryDeployment', () => {
         DEPLOYMENT,
       ),
     ).rejects.toThrow(
-      `Registry runtime codehash mismatch: expected ${RUNTIME_CODEHASH}, received ${WRONG_RUNTIME_CODEHASH}`
+      `Registry runtime codehash mismatch: expected ${REGISTRY_RUNTIME_CODEHASH}, received ${WRONG_RUNTIME_CODEHASH}`
     );
 
     expect(readContract).not.toHaveBeenCalled();
   });
 
-  it('rejects a registry oracle address mismatch', async () => {
+  it('rejects a registry verifier address mismatch', async () => {
     readContract.mockResolvedValueOnce(
-      OTHER_ORACLE_ADDRESS,
+      OTHER_VERIFIER_ADDRESS,
     );
 
     await expect(
@@ -209,14 +223,14 @@ describe('verifyRegistryDeployment', () => {
         DEPLOYMENT,
       ),
     ).rejects.toThrow(
-      `Registry oracle address mismatch: expected ${ORACLE_ADDRESS}, received ${OTHER_ORACLE_ADDRESS}`
+      `Registry verifier address mismatch: expected ${VERIFIER_ADDRESS}, received ${OTHER_VERIFIER_ADDRESS}`
     );
   });
 
-  it('rejects a registry oracle codehash mismatch', async () => {
+  it('rejects a registry verifier codehash mismatch', async () => {
     readContract
       .mockResolvedValueOnce(
-        ORACLE_ADDRESS,
+        VERIFIER_ADDRESS,
       )
       .mockResolvedValueOnce(
         WRONG_RUNTIME_CODEHASH,
@@ -228,14 +242,36 @@ describe('verifyRegistryDeployment', () => {
         DEPLOYMENT,
       ),
     ).rejects.toThrow(
-      `Registry oracle codehash mismatch: expected ${ORACLE_RUNTIME_CODEHASH}, received ${WRONG_RUNTIME_CODEHASH}`
+      `Registry verifier codehash mismatch: expected ${VERIFIER_RUNTIME_CODEHASH}, received ${WRONG_RUNTIME_CODEHASH}`
     );
   });
 
-  it('rejects an oracle address without code', async () => {
+  it('rejects a registry minimum lead rounds mismatch', async () => {
+    readContract
+      .mockResolvedValueOnce(
+        VERIFIER_ADDRESS,
+      )
+      .mockResolvedValueOnce(
+        VERIFIER_RUNTIME_CODEHASH,
+      )
+      .mockResolvedValueOnce(
+        OTHER_MINIMUM_LEAD_ROUNDS,
+      );
+
+    await expect(
+      verifyRegistryDeployment(
+        client,
+        DEPLOYMENT,
+      ),
+    ).rejects.toThrow(
+      `Registry minimumLeadRounds mismatch: expected ${MINIMUM_LEAD_ROUNDS}, received ${OTHER_MINIMUM_LEAD_ROUNDS}`
+    );
+  });
+
+  it('rejects a verifier address without code', async () => {
     getCode
       .mockResolvedValueOnce(
-        RUNTIME_CODE,
+        REGISTRY_RUNTIME_CODE,
       )
       .mockResolvedValueOnce(
         undefined,
@@ -247,14 +283,14 @@ describe('verifyRegistryDeployment', () => {
         DEPLOYMENT,
       ),
     ).rejects.toThrow(
-      `No contract deployed at oracle address ${ORACLE_ADDRESS}`
+      `No contract deployed at verifier address ${VERIFIER_ADDRESS}`
     );
   });
 
-  it('rejects empty oracle code', async () => {
+  it('rejects empty verifier code', async () => {
     getCode
       .mockResolvedValueOnce(
-        RUNTIME_CODE,
+        REGISTRY_RUNTIME_CODE,
       )
       .mockResolvedValueOnce(
         '0x',
@@ -266,14 +302,14 @@ describe('verifyRegistryDeployment', () => {
         DEPLOYMENT,
       ),
     ).rejects.toThrow(
-      `No contract deployed at oracle address ${ORACLE_ADDRESS}`
+      `No contract deployed at verifier address ${VERIFIER_ADDRESS}`
     );
   });
 
-  it('rejects an oracle runtime codehash mismatch', async () => {
+  it('rejects a verifier runtime codehash mismatch', async () => {
     getCode
       .mockResolvedValueOnce(
-        RUNTIME_CODE,
+        REGISTRY_RUNTIME_CODE,
       )
       .mockResolvedValueOnce(
         WRONG_RUNTIME_CODE,
@@ -285,7 +321,7 @@ describe('verifyRegistryDeployment', () => {
         DEPLOYMENT,
       ),
     ).rejects.toThrow(
-      `Oracle runtime codehash mismatch: expected ${ORACLE_RUNTIME_CODEHASH}, received ${WRONG_RUNTIME_CODEHASH}`
+      `Verifier runtime codehash mismatch: expected ${VERIFIER_RUNTIME_CODEHASH}, received ${WRONG_RUNTIME_CODEHASH}`
     );
   });
 });

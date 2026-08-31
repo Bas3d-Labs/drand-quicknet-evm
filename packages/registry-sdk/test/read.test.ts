@@ -22,13 +22,14 @@ import {
 import {
   CHAIN_ID,
   DEPLOYMENT,
-  ORACLE_ADDRESS,
-  ORACLE_RUNTIME_CODE,
-  ORACLE_RUNTIME_CODEHASH,
+  MINIMUM_LEAD_ROUNDS,
   RANDOMNESS,
   REGISTRY_ADDRESS,
+  REGISTRY_RUNTIME_CODE,
   ROUND,
-  RUNTIME_CODE,
+  VERIFIER_ADDRESS,
+  VERIFIER_RUNTIME_CODE,
+  VERIFIER_RUNTIME_CODEHASH,
 } from './fixtures.js';
 
 describe('createRegistryReader', () => {
@@ -46,12 +47,16 @@ describe('createRegistryReader', () => {
         }: {
           functionName: string;
         }) => {
-          if (functionName === 'oracle') {
-            return ORACLE_ADDRESS;
+          if (functionName === 'verifier') {
+            return VERIFIER_ADDRESS;
           }
 
-          if (functionName === 'oracleCodehash') {
-            return ORACLE_RUNTIME_CODEHASH;
+          if (functionName === 'verifierCodehash') {
+            return VERIFIER_RUNTIME_CODEHASH;
+          }
+
+          if (functionName === 'minimumLeadRounds') {
+            return MINIMUM_LEAD_ROUNDS;
           }
 
           throw new Error(`Unexpected function: ${functionName}`);
@@ -69,11 +74,11 @@ describe('createRegistryReader', () => {
           address: Address;
         }) => {
           if (address === REGISTRY_ADDRESS) {
-            return RUNTIME_CODE;
+            return REGISTRY_RUNTIME_CODE;
           }
 
-          if (address === ORACLE_ADDRESS) {
-            return ORACLE_RUNTIME_CODE;
+          if (address === VERIFIER_ADDRESS) {
+            return VERIFIER_RUNTIME_CODE;
           }
 
           return undefined;
@@ -85,17 +90,6 @@ describe('createRegistryReader', () => {
       getChainId,
       getCode,
     } as unknown as PublicClient;
-  });
-
-  it('exposes the deployment', () => {
-    const registry = createRegistryReader({
-      client,
-      deployment: DEPLOYMENT,
-    });
-
-    expect(registry.deployment).toBe(
-      DEPLOYMENT,
-    );
   });
 
   it('exposes the deployment', () => {
@@ -134,7 +128,7 @@ describe('createRegistryReader', () => {
     ).toHaveBeenCalledWith({
       address: REGISTRY_ADDRESS,
       abi: drandQuicknetBeaconRegistryAbi,
-      functionName: 'oracle',
+      functionName: 'verifier',
     });
 
     expect(
@@ -142,19 +136,27 @@ describe('createRegistryReader', () => {
     ).toHaveBeenCalledWith({
       address: REGISTRY_ADDRESS,
       abi: drandQuicknetBeaconRegistryAbi,
-      functionName: 'oracleCodehash',
+      functionName: 'verifierCodehash',
+    });
+
+    expect(
+      readContract,
+    ).toHaveBeenCalledWith({
+      address: REGISTRY_ADDRESS,
+      abi: drandQuicknetBeaconRegistryAbi,
+      functionName: 'minimumLeadRounds',
     });
 
     expect(
       getCode,
     ).toHaveBeenCalledWith({
-      address: ORACLE_ADDRESS,
+      address: VERIFIER_ADDRESS,
     });
   });
 
-  it('reads the oracle address', async () => {
+  it('reads the verifier address', async () => {
     readContract.mockResolvedValue(
-      ORACLE_ADDRESS,
+      VERIFIER_ADDRESS,
     );
 
     const registry = createRegistryReader({
@@ -163,19 +165,19 @@ describe('createRegistryReader', () => {
     });
 
     await expect(
-      registry.oracle(),
-    ).resolves.toBe(ORACLE_ADDRESS);
+      registry.verifier(),
+    ).resolves.toBe(VERIFIER_ADDRESS);
 
     expect(readContract).toHaveBeenCalledWith({
       address: REGISTRY_ADDRESS,
       abi: drandQuicknetBeaconRegistryAbi,
-      functionName: 'oracle',
+      functionName: 'verifier',
     });
   });
 
-  it('reads the oracle codehash', async () => {
+  it('reads the verifier codehash', async () => {
     readContract.mockResolvedValue(
-      ORACLE_RUNTIME_CODEHASH,
+      VERIFIER_RUNTIME_CODEHASH,
     );
 
     const registry = createRegistryReader({
@@ -184,9 +186,9 @@ describe('createRegistryReader', () => {
     });
 
     await expect(
-      registry.oracleCodehash(),
+      registry.verifierCodehash(),
     ).resolves.toBe(
-      ORACLE_RUNTIME_CODEHASH,
+      VERIFIER_RUNTIME_CODEHASH,
     );
 
     expect(
@@ -194,7 +196,32 @@ describe('createRegistryReader', () => {
     ).toHaveBeenCalledWith({
       address: REGISTRY_ADDRESS,
       abi: drandQuicknetBeaconRegistryAbi,
-      functionName: 'oracleCodehash',
+      functionName: 'verifierCodehash',
+    });
+  });
+
+  it('reads the minimum lead rounds', async () => {
+    readContract.mockResolvedValue(
+      MINIMUM_LEAD_ROUNDS,
+    );
+
+    const registry = createRegistryReader({
+      client,
+      deployment: DEPLOYMENT,
+    });
+
+    await expect(
+      registry.minimumLeadRounds(),
+    ).resolves.toBe(
+      MINIMUM_LEAD_ROUNDS,
+    );
+
+    expect(
+      readContract,
+    ).toHaveBeenCalledWith({
+      address: REGISTRY_ADDRESS,
+      abi: drandQuicknetBeaconRegistryAbi,
+      functionName: 'minimumLeadRounds',
     });
   });
 

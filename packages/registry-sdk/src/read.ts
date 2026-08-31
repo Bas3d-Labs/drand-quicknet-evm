@@ -23,6 +23,7 @@ export function createRegistryReader(
   options: CreateRegistryReaderOptions,
 ) {
   const { client, deployment } = options;
+
   const contract = {
     address: deployment.address,
     abi: drandQuicknetBeaconRegistryAbi,
@@ -38,17 +39,24 @@ export function createRegistryReader(
       );
     },
 
-    oracle() {
+    verifier() {
       return client.readContract({
         ...contract,
-        functionName: 'oracle',
+        functionName: 'verifier',
       });
     },
 
-    oracleCodehash() {
+    verifierCodehash() {
       return client.readContract({
         ...contract,
-        functionName: 'oracleCodehash',
+        functionName: 'verifierCodehash',
+      });
+    },
+
+    minimumLeadRounds() {
+      return client.readContract({
+        ...contract,
+        functionName: 'minimumLeadRounds',
       });
     },
 

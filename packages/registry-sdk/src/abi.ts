@@ -7,14 +7,19 @@ export const drandQuicknetBeaconRegistryAbi = [
     type: 'constructor',
     inputs: [
       {
-        name: 'oracle_',
+        name: 'verifier_',
         type: 'address',
         internalType: 'address',
       },
       {
-        name: 'oracleCodehash_',
+        name: 'verifierCodehash_',
         type: 'bytes32',
         internalType: 'bytes32',
+      },
+      {
+        name: 'minimumLeadRounds_',
+        type: 'uint64',
+        internalType: 'uint64',
       },
     ],
     stateMutability: 'nonpayable',
@@ -98,26 +103,13 @@ export const drandQuicknetBeaconRegistryAbi = [
   },
   {
     type: 'function',
-    name: 'oracle',
+    name: 'minimumLeadRounds',
     inputs: [],
     outputs: [
       {
         name: '',
-        type: 'address',
-        internalType: 'contract IDrandOracleQuicknet',
-      },
-    ],
-    stateMutability: 'view',
-  },
-  {
-    type: 'function',
-    name: 'oracleCodehash',
-    inputs: [],
-    outputs: [
-      {
-        name: '',
-        type: 'bytes32',
-        internalType: 'bytes32',
+        type: 'uint64',
+        internalType: 'uint64',
       },
     ],
     stateMutability: 'view',
@@ -185,6 +177,32 @@ export const drandQuicknetBeaconRegistryAbi = [
     stateMutability: 'nonpayable',
   },
   {
+    type: 'function',
+    name: 'verifier',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'address',
+        internalType: 'address',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'verifierCodehash',
+    inputs: [],
+    outputs: [
+      {
+        name: '',
+        type: 'bytes32',
+        internalType: 'bytes32',
+      },
+    ],
+    stateMutability: 'view',
+  },
+  {
     type: 'event',
     name: 'BeaconStored',
     inputs: [
@@ -227,12 +245,17 @@ export const drandQuicknetBeaconRegistryAbi = [
   },
   {
     type: 'error',
-    name: 'InvalidOracle',
+    name: 'InvalidMinimumLeadRounds',
     inputs: [],
   },
   {
     type: 'error',
     name: 'InvalidRound',
+    inputs: [],
+  },
+  {
+    type: 'error',
+    name: 'InvalidVerifier',
     inputs: [],
   },
 ] as const satisfies Abi;
