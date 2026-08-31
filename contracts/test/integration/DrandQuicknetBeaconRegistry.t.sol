@@ -15,8 +15,8 @@ contract DrandQuicknetBeaconRegistryIntegrationTest is RegistryIntegrationTestBa
     bytes32 internal constant KAT_RANDOMNESS_HASH =
         0xfe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd;
 
-    bytes32 internal constant LIVE_RANDOMNESS_HASH =
-        0x9b81abb093df33375d039627e697083932b2d07ea75f7add4aa3389a13370b17;
+    bytes32 internal constant LIVE_RANDOMNESS=
+        0xce7b0bc26c2f2f969bb4fa4ceb074fd13baed8557659ac0ea1af0b589c68d8bf;
 
     function test_RealVerifierAcceptsKatSignature() public {
         bytes memory signature = _katSignature();
@@ -54,15 +54,15 @@ contract DrandQuicknetBeaconRegistryIntegrationTest is RegistryIntegrationTestBa
         );
 
         assertTrue(verified);
-        assertEq(randomness, LIVE_RANDOMNESS_HASH);
+        assertEq(randomness, LIVE_RANDOMNESS);
         assertEq(randomness, sha256(signature));
 
         bytes32 stored = registry.submitBeacon(LIVE_ROUND, signature);
 
-        assertEq(stored, LIVE_RANDOMNESS_HASH);
+        assertEq(stored, LIVE_RANDOMNESS);
         assertEq(
             registry.getBeacon(LIVE_ROUND),
-            LIVE_RANDOMNESS_HASH
+            LIVE_RANDOMNESS
         );
     }
 

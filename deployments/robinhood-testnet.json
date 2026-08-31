@@ -6,18 +6,17 @@
     "periodSeconds": 3
   },
   "verifier": {
-    "address": "0x692100c4863adAED9f560F6Ce982cF878F083e93",
-    "runtimeCodehash": "0x78faa56ca608db8a19cfb3bb052f11fedbaa14fb1ce74db58044db99246b4cfc",
-    "sourceRepository": "Zodomo/DrandVerifier",
-    "sourceCommit": "ccf2336ae51efd85208b29e7b7a10cb53db2f01f"
+    "address": "0xD8Ce9C6cdaB77481A0296D8A3a4D8f5DF2aFd304",
+    "runtimeCodehash": "0x376671c30a5a67c24afd7cb1091a31cf1392e4c03efb232445cd7e60abdfb8d1",
+    "sourceCommit": "6be4ea82329735465d2e322971633c337bcae60c"
   },
   "registry": {
     "address": "0xEc2a718F4D1B18c8315794A24Fe90622400A40de",
-    "runtimeCodehash": "0x19ef2338aa49f196ed6ceea377ee52c8674899edb2280f20145768cf30c8f699",
+    "runtimeCodehash": "0xf6c0741631232abaf9e4087b24dd35e36c78b4761668e588fd74a235f5e52262",
     "minimumLeadRounds": 5,
-    "deploymentTx": "0x8a0398a81b6e33349a70d4260860bc02830558e2a8c19aa49bc111574360a160",
-    "deploymentBlock": 99860908,
-    "sourceCommit": "d3d541edabc5f52c60b135c4a9b1f387440a3c54",
+    "deploymentTx": "0xed0e3a213a738d0b3383099798f41bd0b08b4a0a0ad02b7b7228f37535358e7d",
+    "deploymentBlock": 110327324,
+    "sourceCommit": "6be4ea82329735465d2e322971633c337bcae60c",
     "build": {
       "solc": "0.8.36",
       "optimizer": true,
