@@ -7,7 +7,6 @@ This package provides:
 - Quicknet round/time calculations
 - Beacon fetching with endpoint failover
 - Compressed signature parsing
-- BLS signature decompression
 - Quicknet constants and types
 
 ## Installation
@@ -79,21 +78,6 @@ const scheduledTime = roundScheduledTime(round);
 
 `roundScheduledTime()` throws for round `0n`.
 
-### Decompress a Quicknet signature
-
-Quicknet beacon signatures are returned in compressed form.
-
-```ts
-import {
-  decompressSignature,
-  fetchBeacon,
-} from '@based-labs/drand-quicknet';
-
-const beacon = await fetchBeacon(31_250_000n);
-
-const uncompressed = decompressSignature(beacon.signature);
-```
-
 ### Parse a compressed signature
 
 ```ts
@@ -101,7 +85,7 @@ import {
   parseCompressedSignature,
 } from '@based-labs/drand-quicknet';
 
-const signature =parseCompressedSignature('...');
+const signature = parseCompressedSignature('...');
 ```
 
 The parser validates that the value is a 48-byte hexadecimal Quicknet signature and returns a branded `CompressedSignature`.
@@ -132,21 +116,22 @@ Quicknet currently uses a 3-second period.
 - `fetchBeaconFromEndpoint(endpoint, round)`
 - `roundAt(timestamp)`
 - `roundScheduledTime(round)`
-- `decompressSignature(signature)`
 - `parseCompressedSignature(signature)`
 
 ### Types
 
 - `QuicknetBeacon`
 - `CompressedSignature`
-- `UncompressedSignature`
 - `Hex`
 
 ## Verification
 
-This package fetches, validates the shape of, and manipulates Quicknet beacon data. It does **not** cryptographically verify a beacon signature.
+This package fetches Quicknet beacon data and validates its expected shape,
+including canonical 48-byte compressed signatures. It does **not**
+cryptographically verify beacon signatures.
 
-For EVM applications using the Based Labs Quicknet beacon registry, see [`@based-labs/drand-quicknet-registry`](https://www.npmjs.com/package/@based-labs/drand-quicknet-registry).
+For EVM applications using the Based Labs Quicknet beacon registry, see
+[`@based-labs/drand-quicknet-registry`](https://www.npmjs.com/package/@based-labs/drand-quicknet-registry).
 
 ## License
 

@@ -6,13 +6,11 @@ import {
 } from 'vitest';
 
 import {
-  decompressSignature,
   parseCompressedSignature,
 } from '../src/signature.js';
 
 import type {
   CompressedSignature,
-  UncompressedSignature,
 } from '../src/types.js';
 import { QUICKNET_VECTORS } from './fixtures.js';
 
@@ -127,82 +125,5 @@ describe('parseCompressedSignature', () => {
     ).toBe(
       `0x${signature}`,
     );
-  });
-});
-
-describe('decompressSignature', () => {
-  it('decompresses a known Quicknet signature exactly', () => {
-    const compressed = parseCompressedSignature(
-      VECTOR.compressedSignature,
-    );
-
-    expect(
-      decompressSignature(compressed),
-    ).toBe(VECTOR.uncompressedSignature);
-  });
-
-  it('returns an UncompressedSignature', () => {
-    const compressed = parseCompressedSignature(
-      VECTOR.compressedSignature,
-    );
-
-    const uncompressed =
-      decompressSignature(compressed);
-
-    expectTypeOf(
-      uncompressed,
-    ).toEqualTypeOf<UncompressedSignature>();
-  });
-
-  it('returns exactly 96 bytes', () => {
-    const compressed = parseCompressedSignature(
-      VECTOR.compressedSignature,
-    );
-
-    const uncompressed =
-      decompressSignature(compressed);
-
-    const hex = uncompressed.slice(2);
-
-    expect(hex.length).toBe(96 * 2);
-  });
-
-  it('returns lowercase 0x-prefixed hex', () => {
-    const compressed = parseCompressedSignature(
-      VECTOR.compressedSignature.toUpperCase(),
-    );
-
-    const uncompressed =
-      decompressSignature(compressed);
-
-    expect(
-      uncompressed.startsWith('0x'),
-    ).toBe(true);
-
-    expect(uncompressed).toBe(
-      uncompressed.toLowerCase(),
-    );
-  });
-
-  it('rejects an invalid compressed point', () => {
-    const compressed =
-      parseCompressedSignature(
-        '00'.repeat(48),
-      );
-
-    expect(() =>
-      decompressSignature(compressed),
-    ).toThrow();
-  });
-
-  it('rejects an out-of-range compressed point encoding', () => {
-    const compressed =
-      parseCompressedSignature(
-        'ff'.repeat(48),
-      );
-
-    expect(() =>
-      decompressSignature(compressed),
-    ).toThrow();
   });
 });
