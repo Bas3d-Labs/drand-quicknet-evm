@@ -23,7 +23,7 @@ interface IDrandQuicknetBeaconRegistry {
         view
         returns (bytes32);
 
-    /// @notice Returns the minimum future-round lead declared by this
+    /// @notice Returns the minimum supported consumer lead for this
     ///         registry deployment.
     function minimumLeadRounds()
         external
@@ -32,7 +32,11 @@ interface IDrandQuicknetBeaconRegistry {
 
     /// @notice Verifies and caches a Quicknet beacon.
     /// @dev Idempotent. If `round` has already been stored, returns the
-    ///      cached randomness without examining `signature`.
+    ///      cached randomness without examining `signature` or invoking the
+    ///      verifier.
+    ///
+    ///      For an unstored round, reverts from the configured verifier are
+    ///      propagated unchanged.
     function submitBeacon(
         uint64 round,
         bytes calldata signature
