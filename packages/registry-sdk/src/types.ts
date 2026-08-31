@@ -8,23 +8,26 @@ import {
 
 import type {
   CompressedSignature,
-  UncompressedSignature,
 } from '@based-labs/drand-quicknet';
+
+const MAX_UINT64 = (1n << 64n) - 1n;
 
 export interface RegistryDeployment {
   chainId: number;
   address: Address;
   runtimeCodehash: Hex;
-  oracleAddress: Address;
-  oracleRuntimeCodehash: Hex;
+  verifierAddress: Address;
+  verifierRuntimeCodehash: Hex;
+  minimumLeadRounds: bigint;
 }
 
 export interface CreateRegistryDeploymentOptions {
   chainId: unknown;
   address: unknown;
   runtimeCodehash: unknown;
-  oracleAddress: unknown;
-  oracleRuntimeCodehash: unknown;
+  verifierAddress: unknown;
+  verifierRuntimeCodehash: unknown;
+  minimumLeadRounds: unknown;
 }
 
 export const RegistryDeployment = {
@@ -35,8 +38,9 @@ export const RegistryDeployment = {
       chainId,
       address,
       runtimeCodehash,
-      oracleAddress,
-      oracleRuntimeCodehash,
+      verifierAddress,
+      verifierRuntimeCodehash,
+      minimumLeadRounds,
     } = options;
 
     if (
@@ -44,32 +48,41 @@ export const RegistryDeployment = {
       !Number.isSafeInteger(chainId) ||
       chainId <= 0
     ) {
-      throw new Error('Registry deployment chainId must be a positive safe integer.');
+      throw new Error(
+        'Registry deployment chainId must be a positive safe integer.'
+      );
     }
 
-    if (typeof address !== 'string') {
-      throw new Error('Registry deployment address must be a valid address.');
-    }
-    
     const normalizedAddress = normalizeAddress(
       address,
       'Registry deployment address'
     );
 
-    const normalizedOracleAddress = normalizeAddress(
-      oracleAddress,
-        'Registry deployment oracleAddress'
+    const normalizedVerifierAddress = normalizeAddress(
+      verifierAddress,
+      'Registry deployment verifierAddress'
     );
 
-    validateCodehash(runtimeCodehash, 'Registry deployment runtimeCodehash');
-    validateCodehash(oracleRuntimeCodehash, 'Registry deployment oracleRuntimeCodehash');
+    validateCodehash(
+      runtimeCodehash,
+      'Registry deployment runtimeCodehash'
+    );
+
+    validateCodehash(
+      verifierRuntimeCodehash,
+      'Registry deployment verifierRuntimeCodehash'
+    );
+
+    const normalizedMinimumLeadRounds =
+      normalizeMinimumLeadRounds(minimumLeadRounds);
 
     return {
       chainId,
       address: normalizedAddress,
       runtimeCodehash,
-      oracleAddress: normalizedOracleAddress,
-      oracleRuntimeCodehash,
+      verifierAddress: normalizedVerifierAddress,
+      verifierRuntimeCodehash,
+      minimumLeadRounds: normalizedMinimumLeadRounds,
     };
   },
 };
@@ -104,6 +117,34 @@ function validateCodehash(
   }
 }
 
-export type RegistrySignature =
-  | CompressedSignature
-  | UncompressedSignature;
+function normalizeMinimumLeadRounds(
+  value: unknown,
+): bigint {
+  let normalized: bigint;
+
+  if (typeof value === 'bigint') {
+    normalized = value;
+  } else if (
+    typeof value === 'number' &&
+    Number.isSafeInteger(value)
+  ) {
+    normalized = BigInt(value);
+  } else {
+    throw new Error(
+      'Registry deployment minimumLeadRounds must be a positive uint64.'
+    );
+  }
+
+  if (
+    normalized <= 0n ||
+    normalized > MAX_UINT64
+  ) {
+    throw new Error(
+      'Registry deployment minimumLeadRounds must be a positive uint64.'
+    );
+  }
+
+  return normalized;
+}
+
+export type RegistrySignature = CompressedSignature;

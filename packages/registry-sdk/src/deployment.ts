@@ -26,61 +26,82 @@ export async function verifyRegistryDeployment(
     );
   }
 
-  const code = await client.getCode({
+  const registryCode = await client.getCode({
     address: deployment.address
   });
-  if (code === undefined || code === '0x') {
+  if (registryCode === undefined || registryCode === '0x') {
     throw new Error(
       `No contract deployed at registry address ${deployment.address}`
     );
   }
 
-  const runtimeCodehash = keccak256(code);
-  if (runtimeCodehash.toLowerCase() !== deployment.runtimeCodehash.toLowerCase()) {
-    throw new Error(
-      `Registry runtime codehash mismatch: expected ${deployment.runtimeCodehash}, received ${runtimeCodehash}`
-    );
-  }
-
-  const oracleAddress = await client.readContract({
-    address: deployment.address,
-    abi: drandQuicknetBeaconRegistryAbi,
-    functionName: 'oracle',
-  });
-  if (getAddress(oracleAddress) !== deployment.oracleAddress) {
-    throw new Error(
-      `Registry oracle address mismatch: expected ${deployment.oracleAddress}, received ${oracleAddress}`
-    );
-  }
-
-  const oracleCodehash = await client.readContract({
-    address: deployment.address,
-    abi: drandQuicknetBeaconRegistryAbi,
-    functionName: 'oracleCodehash',
-  });
+  const registryRuntimeCodehash = keccak256(registryCode);
   if (
-    oracleCodehash.toLowerCase() !== 
-    deployment.oracleRuntimeCodehash.toLowerCase()
+    registryRuntimeCodehash.toLowerCase() !== 
+    deployment.runtimeCodehash.toLowerCase()
   ) {
     throw new Error(
-      `Registry oracle codehash mismatch: expected ${deployment.oracleRuntimeCodehash}, received ${oracleCodehash}`
+      `Registry runtime codehash mismatch: expected ${deployment.runtimeCodehash}, received ${registryRuntimeCodehash}`
     );
   }
 
-  const oracleCode = await client.getCode({
-    address: deployment.oracleAddress,
+  const verifierAddress = await client.readContract({
+    address: deployment.address,
+    abi: drandQuicknetBeaconRegistryAbi,
+    functionName: 'verifier',
   });
-  if (oracleCode === undefined || oracleCode === '0x') {
-    throw new Error(`No contract deployed at oracle address ${deployment.oracleAddress}`);
+
+  if (getAddress(verifierAddress) !== deployment.verifierAddress) {
+    throw new Error(
+      `Registry verifier address mismatch: expected ${deployment.verifierAddress}, received ${verifierAddress}`
+    );
   }
 
-  const actualOracleCodehash = keccak256(oracleCode);
+  const verifierCodehash = await client.readContract({
+    address: deployment.address,
+    abi: drandQuicknetBeaconRegistryAbi,
+    functionName: 'verifierCodehash',
+  });
+
   if (
-    actualOracleCodehash.toLowerCase() !== 
-    deployment.oracleRuntimeCodehash.toLowerCase()
+    verifierCodehash.toLowerCase() !==
+    deployment.verifierRuntimeCodehash.toLowerCase()
   ) {
     throw new Error(
-      `Oracle runtime codehash mismatch: expected ${deployment.oracleRuntimeCodehash}, received ${actualOracleCodehash}`
+      `Registry verifier codehash mismatch: expected ${deployment.verifierRuntimeCodehash}, received ${verifierCodehash}`
+    );
+  }
+
+  const minimumLeadRounds = await client.readContract({
+    address: deployment.address,
+    abi: drandQuicknetBeaconRegistryAbi,
+    functionName: 'minimumLeadRounds',
+  });
+
+  if (minimumLeadRounds !== deployment.minimumLeadRounds) {
+    throw new Error(
+      `Registry minimumLeadRounds mismatch: expected ${deployment.minimumLeadRounds}, received ${minimumLeadRounds}`
+    );
+  }
+
+  const verifierCode = await client.getCode({
+    address: deployment.verifierAddress,
+  });
+
+  if (verifierCode === undefined || verifierCode === '0x') {
+    throw new Error(
+      `No contract deployed at verifier address ${deployment.verifierAddress}`
+    );
+  }
+
+  const actualVerifierCodehash = keccak256(verifierCode);
+
+  if (
+    actualVerifierCodehash.toLowerCase() !==
+    deployment.verifierRuntimeCodehash.toLowerCase()
+  ) {
+    throw new Error(
+      `Verifier runtime codehash mismatch: expected ${deployment.verifierRuntimeCodehash}, received ${actualVerifierCodehash}`
     );
   }
 }
