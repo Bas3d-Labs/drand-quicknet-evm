@@ -2,11 +2,11 @@
 pragma solidity 0.8.36;
 
 import {
-    IQuicknetBeaconVerifier
-} from "../../src/interfaces/IQuicknetBeaconVerifier.sol";
+    IDrandQuicknetBeaconVerifier
+} from "../../src/interfaces/IDrandQuicknetBeaconVerifier.sol";
 
-contract MockQuicknetBeaconVerifier is
-    IQuicknetBeaconVerifier
+contract MockDrandQuicknetBeaconVerifier is
+    IDrandQuicknetBeaconVerifier
 {
     function verifyBeacon(
         uint64,

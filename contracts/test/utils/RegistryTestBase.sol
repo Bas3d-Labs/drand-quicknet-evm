@@ -6,16 +6,16 @@ import {
 } from "forge-std/Test.sol";
 
 import {
-    IQuicknetBeaconVerifier
-} from "../../src/interfaces/IQuicknetBeaconVerifier.sol";
+    IDrandQuicknetBeaconVerifier
+} from "../../src/interfaces/IDrandQuicknetBeaconVerifier.sol";
 
 import {
     DrandQuicknetBeaconRegistry
 } from "../../src/DrandQuicknetBeaconRegistry.sol";
 
 import {
-    MockQuicknetBeaconVerifier
-} from "../mocks/MockQuicknetBeaconVerifier.sol";
+    MockDrandQuicknetBeaconVerifier
+} from "../mocks/MockDrandQuicknetBeaconVerifier.sol";
 
 /// @dev Shared deterministic setup for registry unit tests.
 abstract contract RegistryTestBase is Test {
@@ -24,7 +24,7 @@ abstract contract RegistryTestBase is Test {
     address internal verifierAddress;
     bytes32 internal expectedVerifierCodehash;
 
-    IQuicknetBeaconVerifier internal verifier;
+    IDrandQuicknetBeaconVerifier internal verifier;
     DrandQuicknetBeaconRegistry internal registry;
 
     address internal submitter =
@@ -45,13 +45,13 @@ abstract contract RegistryTestBase is Test {
         public
         virtual
     {
-        MockQuicknetBeaconVerifier mockVerifier =
-            new MockQuicknetBeaconVerifier();
+        MockDrandQuicknetBeaconVerifier mockVerifier =
+            new MockDrandQuicknetBeaconVerifier();
 
         verifierAddress = address(mockVerifier);
         expectedVerifierCodehash = verifierAddress.codehash;
 
-        verifier = IQuicknetBeaconVerifier(verifierAddress);
+        verifier = IDrandQuicknetBeaconVerifier(verifierAddress);
 
         registry = new DrandQuicknetBeaconRegistry(
             verifierAddress,
@@ -71,7 +71,7 @@ abstract contract RegistryTestBase is Test {
         vm.mockCall(
             verifierAddress,
             abi.encodeWithSelector(
-                IQuicknetBeaconVerifier
+                IDrandQuicknetBeaconVerifier
                     .verifyBeacon
                     .selector,
                 round,
@@ -93,7 +93,7 @@ abstract contract RegistryTestBase is Test {
         vm.mockCallRevert(
             verifierAddress,
             abi.encodeWithSelector(
-                IQuicknetBeaconVerifier
+                IDrandQuicknetBeaconVerifier
                     .verifyBeacon
                     .selector,
                 round,

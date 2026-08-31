@@ -6,8 +6,8 @@ import {
 } from "./interfaces/IDrandQuicknetBeaconRegistry.sol";
 
 import {
-    IQuicknetBeaconVerifier
-} from "./interfaces/IQuicknetBeaconVerifier.sol";
+    IDrandQuicknetBeaconVerifier
+} from "./interfaces/IDrandQuicknetBeaconVerifier.sol";
 
 /// @title DrandQuicknetBeaconRegistry
 /// @notice Permissionless cache of cryptographically verified drand
@@ -185,7 +185,7 @@ contract DrandQuicknetBeaconRegistry is
         (
             verified,
             randomness
-        ) = IQuicknetBeaconVerifier(
+        ) = IDrandQuicknetBeaconVerifier(
             verifier
         ).verifyBeacon(
             round,

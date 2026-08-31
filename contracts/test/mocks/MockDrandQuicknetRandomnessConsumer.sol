@@ -2,13 +2,13 @@
 pragma solidity 0.8.36;
 
 import {
-    QuicknetRandomnessConsumer
-} from "../../src/consumers/QuicknetRandomnessConsumer.sol";
+    DrandQuicknetRandomnessConsumer
+} from "../../src/consumers/DrandQuicknetRandomnessConsumer.sol";
 
-/// @title MockQuicknetRandomnessConsumer
-/// @notice Test-only consumer exposing QuicknetRandomnessConsumer internals.
-contract MockQuicknetRandomnessConsumer is
-    QuicknetRandomnessConsumer
+/// @title MockDrandQuicknetRandomnessConsumer
+/// @notice Test-only consumer exposing DrandQuicknetRandomnessConsumer internals.
+contract MockDrandQuicknetRandomnessConsumer is
+    DrandQuicknetRandomnessConsumer
 {
     error RequestNotFound(uint256 requestId);
 
@@ -18,7 +18,7 @@ contract MockQuicknetRandomnessConsumer is
         address registry_,
         bytes32 expectedRegistryCodehash_,
         uint64 leadRounds_
-    ) QuicknetRandomnessConsumer(
+    ) DrandQuicknetRandomnessConsumer(
         registry_, 
         expectedRegistryCodehash_, 
         leadRounds_

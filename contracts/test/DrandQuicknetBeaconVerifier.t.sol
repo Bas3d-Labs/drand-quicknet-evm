@@ -6,14 +6,14 @@ import {
 } from "forge-std/Test.sol";
 
 import {
-    QuicknetBeaconVerifier
-} from "../src/verifiers/QuicknetBeaconVerifier.sol";
+    DrandQuicknetBeaconVerifier
+} from "../src/verifiers/DrandQuicknetBeaconVerifier.sol";
 
 import {
-    QuicknetBeaconVerifierHarness
-} from "./mocks/QuicknetBeaconVerifierHarness.sol";
+    DrandQuicknetBeaconVerifierHarness
+} from "./mocks/DrandQuicknetBeaconVerifierHarness.sol";
 
-contract QuicknetBeaconVerifierTest is Test {
+contract DrandQuicknetBeaconVerifierTest is Test {
     uint64 internal constant KAT_ROUND = 1000;
 
     bytes32 internal constant KAT_RANDOMNESS =
@@ -37,11 +37,10 @@ contract QuicknetBeaconVerifierTest is Test {
     uint256 internal constant STARVED_VERIFY_GAS = 1_000;
     uint256 internal constant REFERENCE_KAT_GAS_CEILING = 800_000;
 
-    QuicknetBeaconVerifierHarness internal verifier;
+    DrandQuicknetBeaconVerifierHarness internal verifier;
 
     function setUp() public {
-        verifier =
-            new QuicknetBeaconVerifierHarness();
+        verifier = new DrandQuicknetBeaconVerifierHarness();
     }
 
     // ---------------------------------------------------------------------
@@ -737,7 +736,7 @@ contract QuicknetBeaconVerifierTest is Test {
 
         assertEq(
             _revertSelector(returnData),
-            QuicknetBeaconVerifier
+            DrandQuicknetBeaconVerifier
                 .InsufficientVerifierGas
                 .selector
         );
@@ -834,7 +833,7 @@ contract QuicknetBeaconVerifierTest is Test {
 
         assertEq(
             _revertSelector(returnData),
-            QuicknetBeaconVerifier
+            DrandQuicknetBeaconVerifier
                 .InsufficientVerifierGas
                 .selector
         );
@@ -1007,7 +1006,7 @@ contract QuicknetBeaconVerifierTest is Test {
     {
         bytes memory callData =
             abi.encodeWithSelector(
-                QuicknetBeaconVerifier
+                DrandQuicknetBeaconVerifier
                     .verifyBeacon
                     .selector,
                 round,

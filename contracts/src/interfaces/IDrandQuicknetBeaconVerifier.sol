@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.36;
 
-/// @title IQuicknetBeaconVerifier
+/// @title IDrandQuicknetBeaconVerifier
 /// @notice Verifies canonical drand Quicknet beacon signatures.
-interface IQuicknetBeaconVerifier {
+interface IDrandQuicknetBeaconVerifier {
     function verifyBeacon(
         uint64 round,
         bytes calldata signature

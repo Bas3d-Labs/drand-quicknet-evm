@@ -6,10 +6,10 @@ import {
 } from "bls-solidity/libraries/BLS2.sol";
 
 import {
-    IQuicknetBeaconVerifier
-} from "../interfaces/IQuicknetBeaconVerifier.sol";
+    IDrandQuicknetBeaconVerifier
+} from "../interfaces/IDrandQuicknetBeaconVerifier.sol";
 
-/// @title QuicknetBeaconVerifier
+/// @title DrandQuicknetBeaconVerifier
 /// @notice Verifies canonical drand Quicknet BLS12-381 beacons.
 ///
 /// @dev For a nonzero Quicknet round, this verifier accepts only the
@@ -37,7 +37,7 @@ import {
 ///      constructor's two-sided self-test. Deployment tooling and monitoring
 ///      should repeat the same acceptance and rejection checks against the
 ///      live deployed verifier.
-contract QuicknetBeaconVerifier is IQuicknetBeaconVerifier {
+contract DrandQuicknetBeaconVerifier is IDrandQuicknetBeaconVerifier {
     error PositiveSelfTestFailed();
     error NegativeSelfTestFailed();
     error InsufficientVerifierGas();

@@ -6,10 +6,10 @@ import {
 } from "../interfaces/IDrandQuicknetBeaconRegistry.sol";
 
 import {
-    IQuicknetRandomnessConsumer
-} from "../interfaces/IQuicknetRandomnessConsumer.sol";
+    IDrandQuicknetRandomnessConsumer
+} from "../interfaces/IDrandQuicknetRandomnessConsumer.sol";
 
-/// @title QuicknetRandomnessConsumer
+/// @title DrandQuicknetRandomnessConsumer
 /// @notice Reusable base contract for consumers of a drand Quicknet
 ///         beacon registry.
 ///
@@ -62,8 +62,8 @@ import {
 ///
 ///      This contract performs no drand signature verification itself.
 ///      Verification is delegated entirely to the configured registry.
-abstract contract QuicknetRandomnessConsumer is 
-    IQuicknetRandomnessConsumer
+abstract contract DrandQuicknetRandomnessConsumer is 
+    IDrandQuicknetRandomnessConsumer
 {
     error InvalidQuicknetBeaconRegistry();
     error InvalidQuicknetBeaconRegistryCodehash();
@@ -75,7 +75,7 @@ abstract contract QuicknetRandomnessConsumer is
             "based-labs.drand-quicknet.consumer.seed.v1"
         );
 
-    /// @inheritdoc IQuicknetRandomnessConsumer
+    /// @inheritdoc IDrandQuicknetRandomnessConsumer
     address public immutable override quicknetBeaconRegistry;
 
     /// @notice Runtime bytecode hash attested for `quicknetBeaconRegistry`.

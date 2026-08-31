@@ -6,12 +6,12 @@ import {
 } from "forge-std/Test.sol";
 
 import {
-    QuicknetRandomnessConsumer
-} from "../src/consumers/QuicknetRandomnessConsumer.sol";
+    DrandQuicknetRandomnessConsumer
+} from "../src/consumers/DrandQuicknetRandomnessConsumer.sol";
 
 import {
-    MockQuicknetRandomnessConsumer
-} from "./mocks/MockQuicknetRandomnessConsumer.sol";
+    MockDrandQuicknetRandomnessConsumer
+} from "./mocks/MockDrandQuicknetRandomnessConsumer.sol";
 
 import {
     MockDrandQuicknetBeaconRegistry
@@ -19,7 +19,7 @@ import {
 
 contract UnrelatedContract {}
 
-contract QuicknetRandomnessConsumerTest is Test {
+contract DrandQuicknetRandomnessConsumerTest is Test {
     uint64 internal constant LEAD_ROUNDS = 10;
 
     bytes32 internal constant PACK_DOMAIN =
@@ -49,7 +49,7 @@ contract QuicknetRandomnessConsumerTest is Test {
         0x1ec91054743783996cd7e4abc7845f3124a2257d232d913004cb3390eeb0ea8a;
 
     MockDrandQuicknetBeaconRegistry internal registry;
-    MockQuicknetRandomnessConsumer internal consumer;
+    MockDrandQuicknetRandomnessConsumer internal consumer;
 
     event QuicknetRandomnessRequested(
         uint64 indexed round
@@ -98,12 +98,12 @@ contract QuicknetRandomnessConsumerTest is Test {
         address noCode = address(0xBEEF);
 
         vm.expectRevert(
-            QuicknetRandomnessConsumer
+            DrandQuicknetRandomnessConsumer
                 .InvalidQuicknetBeaconRegistry
                 .selector
         );
 
-        new MockQuicknetRandomnessConsumer(
+        new MockDrandQuicknetRandomnessConsumer(
             noCode,
             bytes32(uint256(1)),
             LEAD_ROUNDS
@@ -123,12 +123,12 @@ contract QuicknetRandomnessConsumerTest is Test {
         );
 
         vm.expectRevert(
-            QuicknetRandomnessConsumer
+            DrandQuicknetRandomnessConsumer
                 .InvalidQuicknetBeaconRegistryCodehash
                 .selector
         );
 
-        new MockQuicknetRandomnessConsumer(
+        new MockDrandQuicknetRandomnessConsumer(
             address(registry),
             wrongCodehash,
             LEAD_ROUNDS
@@ -139,12 +139,12 @@ contract QuicknetRandomnessConsumerTest is Test {
         public
     {
         vm.expectRevert(
-            QuicknetRandomnessConsumer
+            DrandQuicknetRandomnessConsumer
                 .InvalidQuicknetBeaconRegistryCodehash
                 .selector
         );
 
-        new MockQuicknetRandomnessConsumer(
+        new MockDrandQuicknetRandomnessConsumer(
             address(registry),
             bytes32(0),
             LEAD_ROUNDS
@@ -155,12 +155,12 @@ contract QuicknetRandomnessConsumerTest is Test {
         public
     {
         vm.expectRevert(
-            QuicknetRandomnessConsumer
+            DrandQuicknetRandomnessConsumer
                 .InvalidQuicknetLeadRounds
                 .selector
         );
 
-        new MockQuicknetRandomnessConsumer(
+        new MockDrandQuicknetRandomnessConsumer(
             address(registry),
             address(registry).codehash,
             0
@@ -172,8 +172,8 @@ contract QuicknetRandomnessConsumerTest is Test {
     {
         UnrelatedContract unrelated = new UnrelatedContract();
 
-        MockQuicknetRandomnessConsumer unrelatedConsumer =
-            new MockQuicknetRandomnessConsumer(
+        MockDrandQuicknetRandomnessConsumer unrelatedConsumer =
+            new MockDrandQuicknetRandomnessConsumer(
                 address(unrelated),
                 address(unrelated).codehash,
                 LEAD_ROUNDS
@@ -255,7 +255,7 @@ contract QuicknetRandomnessConsumerTest is Test {
         );
 
         vm.expectRevert(
-            QuicknetRandomnessConsumer
+            DrandQuicknetRandomnessConsumer
                 .QuicknetRoundOverflow
                 .selector
         );
@@ -321,7 +321,7 @@ contract QuicknetRandomnessConsumerTest is Test {
             latest <= type(uint64).max - lead
         );
 
-        MockQuicknetRandomnessConsumer fuzzConsumer =
+        MockDrandQuicknetRandomnessConsumer fuzzConsumer =
             _deployConsumer(
                 registry,
                 lead
@@ -353,7 +353,7 @@ contract QuicknetRandomnessConsumerTest is Test {
             latest > type(uint64).max - lead
         );
 
-        MockQuicknetRandomnessConsumer fuzzConsumer =
+        MockDrandQuicknetRandomnessConsumer fuzzConsumer =
             _deployConsumer(
                 registry,
                 lead
@@ -362,7 +362,7 @@ contract QuicknetRandomnessConsumerTest is Test {
         registry.setLatestScheduledRound(latest);
 
         vm.expectRevert(
-            QuicknetRandomnessConsumer
+            DrandQuicknetRandomnessConsumer
                 .QuicknetRoundOverflow
                 .selector
         );
@@ -648,7 +648,7 @@ contract QuicknetRandomnessConsumerTest is Test {
     function test_deriveSeed_differsAcrossConsumers()
         public
     {
-        MockQuicknetRandomnessConsumer
+        MockDrandQuicknetRandomnessConsumer
             secondConsumer =
                 _deployConsumer(
                     registry,
@@ -802,8 +802,8 @@ contract QuicknetRandomnessConsumerTest is Test {
             address(consumer).code
         );
 
-        MockQuicknetRandomnessConsumer fixedConsumer =
-            MockQuicknetRandomnessConsumer(
+        MockDrandQuicknetRandomnessConsumer fixedConsumer =
+            MockDrandQuicknetRandomnessConsumer(
                 V1_VECTOR_CONSUMER
             );
 
@@ -927,7 +927,7 @@ contract QuicknetRandomnessConsumerTest is Test {
     {
         vm.expectRevert(
             abi.encodeWithSelector(
-                MockQuicknetRandomnessConsumer
+                MockDrandQuicknetRandomnessConsumer
                     .RequestNotFound
                     .selector,
                 42
@@ -987,11 +987,11 @@ contract QuicknetRandomnessConsumerTest is Test {
     )
         internal
         returns (
-            MockQuicknetRandomnessConsumer
+            MockDrandQuicknetRandomnessConsumer
         )
     {
         return
-            new MockQuicknetRandomnessConsumer(
+            new MockDrandQuicknetRandomnessConsumer(
                 address(registry_),
                 address(registry_).codehash,
                 leadRounds_

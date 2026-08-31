@@ -9,8 +9,8 @@ import {
 } from "../src/DrandQuicknetBeaconRegistry.sol";
 
 import {
-    IQuicknetBeaconVerifier
-} from "../src/interfaces/IQuicknetBeaconVerifier.sol";
+    IDrandQuicknetBeaconVerifier
+} from "../src/interfaces/IDrandQuicknetBeaconVerifier.sol";
 
 contract DeployRegistry is Script {
     using stdJson for string;
@@ -71,7 +71,7 @@ contract DeployRegistry is Script {
         (
             bool verified,
             bytes32 randomness
-        ) = IQuicknetBeaconVerifier(verifier).verifyBeacon(
+        ) = IDrandQuicknetBeaconVerifier(verifier).verifyBeacon(
             KAT_ROUND,
             signature
         );
@@ -87,7 +87,7 @@ contract DeployRegistry is Script {
         (
             bool negativeVerified,
             bytes32 negativeRandomness
-        ) = IQuicknetBeaconVerifier(verifier).verifyBeacon(
+        ) = IDrandQuicknetBeaconVerifier(verifier).verifyBeacon(
             KAT_ROUND,
             signature
         );
