@@ -15,7 +15,7 @@ When a consumer requests a Quicknet round, the relayer:
 1. Discovers the request on-chain.
 2. Checks whether that exact round is already stored.
 3. Fetches the exact requested round from drand if necessary.
-4. Parses and decompresses the beacon off-chain.
+4. Uses the beacon's canonical 48-byte compressed signature.
 5. Simulates the registry submission.
 6. Submits the beacon if necessary.
 
@@ -33,18 +33,22 @@ Relayer
    ├── discover request
    ├── check exact round in registry
    ├── fetch exact drand round if missing
-   ├── parse/decompress locally
+   ├── use canonical compressed signature
    ├── simulate registry submission
    │
    ▼
 DrandQuicknetBeaconRegistry
    │
-   │ verifyNormalized(round, signature)
+   │ verifyBeacon(round, signature)
    ▼
-DrandOracleQuicknet
+QuicknetBeaconVerifier
+   │
+   │ verified + sha256(signature)
+   ▼
+DrandQuicknetBeaconRegistry
    │
    ▼
-stored normalized beacon
+stored official drand randomness
 ```
 
 The relayer never chooses the randomness round.
@@ -89,7 +93,8 @@ None of these commands allows round substitution.
 
 ## Security model
 
-The relayer is permissionless. Correctness is enforced on-chain by `DrandQuicknetBeaconRegistry` and the configured drand verifier.
+The relayer is permissionless. Correctness is enforced on-chain by
+`DrandQuicknetBeaconRegistry` and `QuicknetBeaconVerifier`.
 
 A malicious relayer cannot:
 
@@ -379,9 +384,14 @@ Round scheduling is:
 roundAt(timestamp) = floor((timestamp - genesis) / 3) + 1
 ```
 
-Consumers should choose a sufficiently future round so the commitment is fixed before the beacon becomes knowable.
+Consumers must commit to a sufficiently future round so all outcome-sensitive
+state is fixed before the beacon becomes knowable. The registry exposes an
+immutable `minimumLeadRounds` value as authenticated deployment metadata for
+consumer safety policy.
 
-The relayer does not enforce application-specific commitment timing. That is a consumer security responsibility.
+The relayer does not enforce `minimumLeadRounds` when submitting beacons.
+Submission remains permissionless; commitment timing is a consumer security
+responsibility.
 
 ## Running the daemon
 
@@ -614,10 +624,10 @@ for each exact round
     └── missing
           │
           ▼
-      fetch drand
+      fetch exact drand round
           │
           ▼
-      parse/decompress
+      use canonical signature
           │
           ▼
       simulate transaction
@@ -646,15 +656,40 @@ Changing endpoints never permits changing rounds.
 
 ## Signature handling
 
-Quicknet BLS signatures may be represented in compressed or uncompressed form.
+The relayer forwards the canonical 48-byte compressed BLS signature returned
+for the requested Quicknet round unchanged to `DrandQuicknetBeaconRegistry`.
 
-The relayer prefers off-chain decompression and submits the uncompressed point to the verifier because this is substantially cheaper on the target EVM environment than performing decompression on-chain.
+The registry delegates cryptographic verification to
+`QuicknetBeaconVerifier`:
 
-Malformed points are rejected locally before broadcast when possible.
+```text
+canonical 48-byte Quicknet signature
+        │
+        ▼
+DrandQuicknetBeaconRegistry
+        │
+        ▼
+QuicknetBeaconVerifier.verifyBeacon(round, signature)
+        │
+        ├── invalid ──► submission reverts
+        │
+        └── valid
+              │
+              ▼
+        sha256(signature)
+              │
+              ▼
+       official drand randomness
+```
 
-The relayer also simulates the registry transaction before submitting it.
+For a valid Quicknet beacon, the randomness stored by the registry is exactly
+the official drand randomness derived as `sha256(signature)`.
 
-This protects the relayer account from wasting gas on obviously reverting transactions.
+The relayer simulates the registry transaction before broadcasting it.
+
+This protects the relayer account from spending gas on a transaction that is
+already known to revert. Cryptographic correctness remains enforced on-chain
+by the verifier rather than trusted to the relayer.
 
 ## Transaction retry policy
 
@@ -825,7 +860,8 @@ A supported network should only use a finality mechanism whose semantics have be
 
 ## Registry verification
 
-Before starting, the relayer verifies the complete configured registry-to-oracle deployment identity.
+Before starting, the relayer verifies the complete configured
+registry-to-verifier deployment identity.
 
 The registry SDK represents the trusted deployment as:
 
@@ -834,8 +870,9 @@ interface RegistryDeployment {
   chainId: number;
   address: Address;
   runtimeCodehash: Hex;
-  oracleAddress: Address;
-  oracleRuntimeCodehash: Hex;
+  verifierAddress: Address;
+  verifierRuntimeCodehash: Hex;
+  minimumLeadRounds: bigint;
 }
 ```
 
@@ -843,37 +880,56 @@ The relayer verifies:
 
 ```text
 connected chain ID matches
-        +
+        │
+        ▼
 registry exists
-        +
+        │
+        ▼
 registry runtime codehash matches
-        +
-registry oracle() matches expected oracle
-        +
-registry oracleCodehash() matches expected oracle codehash
-        +
-oracle exists
-        +
-oracle runtime codehash matches
+        │
+        ▼
+registry verifier() matches expected verifier
+        │
+        ▼
+registry verifierCodehash() matches expected verifier codehash
+        │
+        ▼
+registry minimumLeadRounds() matches expected value
+        │
+        ▼
+verifier exists
+        │
+        ▼
+verifier runtime codehash matches
 ```
 
-This prevents the relayer from silently servicing a registry or verifier that does not match the trusted deployment manifest.
+The registry runtime bytecode is authenticated before the relayer trusts
+values returned by `verifier()`, `verifierCodehash()`, or
+`minimumLeadRounds()`.
 
-The deployment manifest is part of the relayer's trust root. Runtime verification proves that the deployed contracts match the supplied manifest;
-it does not independently establish that the manifest itself identifies the canonical deployment intended by the operator.
+This prevents the relayer from silently servicing a registry or verifier that
+does not match the trusted deployment manifest.
+
+`minimumLeadRounds` is authenticated deployment metadata. It does not restrict
+permissionless beacon submission and is not used by the relayer to decide
+whether a requested round may be imported.
+
+The deployment manifest is part of the relayer's trust root. Runtime
+verification proves that the deployed contracts match the supplied manifest;
+it does not independently establish that the manifest itself identifies the
+canonical deployment intended by the operator.
 
 ## Verifier trust
 
-The registry relies on an immutable external Quicknet verifier.
+The registry relies on an immutable external `QuicknetBeaconVerifier`
+deployment.
 
-The verifier is separately deployed and treated as an external cryptographic
-dependency. The registry pins its oracle address and runtime codehash, while
-the deployment manifest independently specifies the expected oracle address
-and runtime codehash.
+The registry pins the verifier address and runtime codehash. The deployment
+manifest independently specifies the expected verifier address and runtime
+codehash, and the relayer verifies both relationships before operating.
 
-The verifier source is not vendored into this repository. Operators should
-verify the deployed bytecode against the trusted manifest and referenced
-upstream source revision.
+The verifier implementation is maintained as part of this repository and
+uses a pinned `bls-solidity` dependency for BLS12-381 operations.
 
 A runtime codehash is only a meaningful identity guarantee for immutable
 runtime behavior. Accepted verifier deployments should therefore be
@@ -881,6 +937,11 @@ non-upgradeable and should not expose mutable security-critical configuration.
 
 Verifier changes should be represented as new trusted deployments rather than
 silently changing the verifier behind an existing registry.
+
+Verifier compatibility is also an execution-environment property. A target
+EVM chain must provide the precompiles and semantics required by the verifier.
+Support for a deployment should therefore be validated on each target EVM
+chain rather than inferred solely from bytecode identity.
 
 ## Multiple relayers
 
