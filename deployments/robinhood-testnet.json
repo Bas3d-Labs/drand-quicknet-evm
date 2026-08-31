@@ -6,23 +6,27 @@
     "periodSeconds": 3
   },
   "verifier": {
-    "address": "0xD8Ce9C6cdaB77481A0296D8A3a4D8f5DF2aFd304",
-    "runtimeCodehash": "0x376671c30a5a67c24afd7cb1091a31cf1392e4c03efb232445cd7e60abdfb8d1",
-    "sourceCommit": "6be4ea82329735465d2e322971633c337bcae60c"
+    "contract": "DrandQuicknetBeaconVerifier",
+    "address": "0x90427e40e7D6f60425D29474a85595C4d8EE6B95",
+    "runtimeCodehash": "0x55ed5b7bad08ed41842bc0bd1c1e431609f0ece0c441aaa25d29c6f660febe63",
+    "deploymentTx": "0x47219e339c3f3c4bb80efb4346a0e4c729de82884f6ef4fe0870a124f4273c61",
+    "deploymentBlock": 110445901,
+    "sourceCommit": "f6f51cb85e73257e8025fd0492c1acf262bbe24a"
   },
   "registry": {
-    "address": "0xEc2a718F4D1B18c8315794A24Fe90622400A40de",
-    "runtimeCodehash": "0xf6c0741631232abaf9e4087b24dd35e36c78b4761668e588fd74a235f5e52262",
+    "contract": "DrandQuicknetBeaconRegistry",
+    "address": "0x8d35b4d5f952dc339f99BF8207da48643123cd26",
+    "runtimeCodehash": "0x3a03827a0343a262f3e5ac092f12a56d527afde0ee6bd749377a41898c4f437c",
     "minimumLeadRounds": 5,
-    "deploymentTx": "0xed0e3a213a738d0b3383099798f41bd0b08b4a0a0ad02b7b7228f37535358e7d",
-    "deploymentBlock": 110327324,
-    "sourceCommit": "6be4ea82329735465d2e322971633c337bcae60c",
-    "build": {
-      "solc": "0.8.36",
-      "optimizer": true,
-      "optimizerRuns": 200,
-      "viaIR": false,
-      "evmVersion": "osaka"
-    }
+    "deploymentTx": "0x7f7128ad6d20bfbfea4f1d98c5490629fa04ae8d1ec756dbd1fc6e45f891e863",
+    "deploymentBlock": 110448589,
+    "sourceCommit": "f6f51cb85e73257e8025fd0492c1acf262bbe24a"
+  },
+  "build": {
+    "solc": "0.8.36",
+    "optimizer": true,
+    "optimizerRuns": 200,
+    "viaIR": false,
+    "evmVersion": "osaka"
   }
 }
