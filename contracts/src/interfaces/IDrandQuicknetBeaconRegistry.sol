@@ -12,11 +12,23 @@ interface IDrandQuicknetBeaconRegistry {
     );
 
     /// @notice Returns the configured Quicknet verifier address.
-    /// @dev The verifier implementation is external to this interface.
-    function oracle() external view returns (address);
+    function verifier()
+        external
+        view
+        returns (address);
 
-    /// @notice Returns the runtime bytecode hash expected for `oracle`.
-    function oracleCodehash() external view returns (bytes32);
+    /// @notice Returns the expected runtime bytecode hash of `verifier`.
+    function verifierCodehash()
+        external
+        view
+        returns (bytes32);
+
+    /// @notice Returns the minimum future-round lead declared by this
+    ///         registry deployment.
+    function minimumLeadRounds()
+        external
+        view
+        returns (uint64);
 
     /// @notice Verifies and caches a Quicknet beacon.
     /// @dev Idempotent. If `round` has already been stored, returns the

@@ -58,7 +58,8 @@ contract QuicknetRandomnessConsumerTest is Test {
     function setUp() public {
         registry = new MockDrandQuicknetBeaconRegistry(
             address(0x1234),
-            bytes32(uint256(0x5678))
+            bytes32(uint256(0x5678)),
+            LEAD_ROUNDS
         );
 
         consumer = _deployConsumer(
