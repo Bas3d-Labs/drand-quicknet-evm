@@ -16,22 +16,30 @@ import {
 /// @dev Consumer integration requirements:
 ///
 ///      1. SAFE LEAD MARGIN
-///         `quicknetLeadRounds` is fixed at deployment and MUST be sized
-///         for the target chain and application. It must cover relevant
-///         timestamp slack, inclusion latency, reorg/finality margin, and
-///         an additional safety buffer, measured in Quicknet's 3-second
-///         rounds.
+///         The constructor authenticates the configured registry before
+///         reading its immutable `minimumLeadRounds`.
 ///
-///         The base contract can enforce that the configured lead is
-///         nonzero, but it cannot determine the correct security margin
-///         for an arbitrary target chain. Integrators should use the
-///         recommended lead published with the registry deployment
-///         metadata or a larger value.
+///         The consumer supplies a local minimum acceptable lead as a
+///         deployment-time safety floor. Construction reverts if the
+///         authenticated registry's configured minimum is below that
+///         floor.
+///
+///         `quicknetLeadRounds` is set to the authenticated registry value
+///         and is used for all subsequent round commitments.
+///
+///         The base contract cannot determine the correct safety floor for
+///         an arbitrary target chain or application. Integrators MUST
+///         choose a local floor that covers the relevant timestamp slack,
+///         inclusion latency, reorg/finality margin, and safety buffer.
 ///
 ///      2. EXACT-ROUND PERSISTENCE
 ///         The exact round returned by `_requestQuicknetRandomness()` MUST
 ///         be persisted with the application request. Settlement MUST use
 ///         only that stored round.
+///
+///         Any application identifier used to persist the committed round
+///         MUST NOT be reused. Applications must reject attempts to
+///         overwrite the round associated with an existing request.
 ///
 ///         Registry availability must never influence round selection.
 ///         A missing round is a liveness condition and MUST NOT cause
@@ -48,26 +56,31 @@ import {
 ///
 ///      4. REGISTRY ATTESTATION
 ///         Construction verifies that the configured registry has the
-///         expected runtime bytecode hash. This attests that the configured
-///         address contains the bytecode expected by the deployment.
+///         expected runtime bytecode hash before reading any registry
+///         metadata.
+///
+///         Only after successful authentication does the constructor trust
+///         the registry's immutable `minimumLeadRounds`.
 ///
 ///         The security value of this check depends on
 ///         `expectedRegistryCodehash_` coming from an independently trusted
 ///         deployment manifest or equivalent source.
 ///
-///         Consumers SHOULD authenticate the registry deployment against
-///         an expected runtime codehash before trusting deployment metadata
-///         such as `minimumLeadRounds`, `verifier()`, or
-///         `verifierCodehash()`.
+///         The authenticated registry bytecode also commits to the verifier
+///         configuration and Quicknet schedule encoded by that deployment.
 ///
 ///      This contract performs no drand signature verification itself.
 ///      Verification is delegated entirely to the configured registry.
-abstract contract DrandQuicknetRandomnessConsumer is 
+abstract contract DrandQuicknetRandomnessConsumer is
     IDrandQuicknetRandomnessConsumer
 {
     error InvalidQuicknetBeaconRegistry();
     error InvalidQuicknetBeaconRegistryCodehash();
     error InvalidQuicknetLeadRounds();
+    error QuicknetLeadBelowRegistryMinimum(
+        uint64 leadRounds,
+        uint64 minimumLeadrounds
+    );
     error QuicknetRoundOverflow();
 
     bytes32 internal constant QUICKNET_SEED_DOMAIN =
@@ -81,8 +94,7 @@ abstract contract DrandQuicknetRandomnessConsumer is
     /// @notice Runtime bytecode hash attested for `quicknetBeaconRegistry`.
     bytes32 public immutable quicknetBeaconRegistryCodehash;
 
-    /// @notice Fixed number of Quicknet rounds between request-time
-    ///         schedule position and the committed target round.
+    /// @notice Authenticated registry lead used when committing Quicknet rounds.
     uint64 public immutable quicknetLeadRounds;
 
     constructor(
@@ -90,18 +102,30 @@ abstract contract DrandQuicknetRandomnessConsumer is
         bytes32 expectedRegistryCodehash_,
         uint64 leadRounds_
     ) {
+        if (leadRounds_ == 0) {
+            revert InvalidQuicknetLeadRounds();
+        }
+
         if (quicknetBeaconRegistry_.code.length == 0) {
             revert InvalidQuicknetBeaconRegistry();
         }
 
-        if (expectedRegistryCodehash_ == bytes32(0) ||
+        if (
+            expectedRegistryCodehash_ == bytes32(0) ||
             quicknetBeaconRegistry_.codehash != expectedRegistryCodehash_
         ) {
             revert InvalidQuicknetBeaconRegistryCodehash();
         }
 
-        if (leadRounds_ == 0) {
-            revert InvalidQuicknetLeadRounds();
+        IDrandQuicknetBeaconRegistry registry =
+            IDrandQuicknetBeaconRegistry(quicknetBeaconRegistry_);
+
+        uint64 registryMinimum = registry.minimumLeadRounds();
+        if (leadRounds_ < registryMinimum) {
+            revert QuicknetLeadBelowRegistryMinimum(
+                leadRounds_,
+                registryMinimum
+            );
         }
 
         quicknetBeaconRegistry = quicknetBeaconRegistry_;
@@ -113,9 +137,8 @@ abstract contract DrandQuicknetRandomnessConsumer is
     ///
     /// @return round Exact Quicknet round committed by the consumer.
     ///
-    /// @dev The application chooses its own lead policy. The base
-    /// contract only requires the committed round to be strictly in
-    /// the future.
+    /// @dev Uses the authenticated registry lead fixed during construction.
+    ///      Registry availability does not influence round selection.
     function _requestQuicknetRandomness()
         internal
         returns (uint64 round)
@@ -198,8 +221,8 @@ abstract contract DrandQuicknetRandomnessConsumer is
             )
         );
     }
-    
-    // @notice Returns whether the exact Quicknet round has been stored.
+
+    /// @notice Returns whether the exact Quicknet round has been stored.
     function _isQuicknetBeaconStored(
         uint64 round
     )
@@ -216,8 +239,6 @@ abstract contract DrandQuicknetRandomnessConsumer is
         view
         returns (IDrandQuicknetBeaconRegistry)
     {
-        return IDrandQuicknetBeaconRegistry(
-            quicknetBeaconRegistry
-        );
+        return IDrandQuicknetBeaconRegistry(quicknetBeaconRegistry);
     }
 }
