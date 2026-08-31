@@ -1,16 +1,17 @@
-import { 
-  createRegistryReader, 
-  type RegistryDeployment, 
-  submitBeacon 
+import {
+  createRegistryReader,
+  type RegistryDeployment,
+  submitBeacon,
 } from '@based-labs/drand-quicknet-registry';
+
 import type {
   Account,
   Hex,
   PublicClient,
   WalletClient,
 } from 'viem';
+
 import {
-  decompressSignature,
   fetchBeacon,
   type QuicknetBeacon,
 } from '@based-labs/drand-quicknet';
@@ -38,7 +39,7 @@ export type ImportQuicknetRoundResult =
     };
 
 export async function importQuicknetRound(
-  options: ImportQuicknetRoundOptions
+  options: ImportQuicknetRoundOptions,
 ): Promise<ImportQuicknetRoundResult> {
   const {
     publicClient,
@@ -76,7 +77,7 @@ export async function importQuicknetRound(
     );
   }
 
-  const signature = decompressSignature(beacon.signature);
+  const signature = beacon.signature;
 
   const { hash, randomness: simulatedRandomness } = await submitBeacon({
     publicClient,

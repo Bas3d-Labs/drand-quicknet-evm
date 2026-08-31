@@ -47,7 +47,7 @@ export const CustomNetworkDescriptor = {
         'version',
         'name',
         'chain',
-        'oracle',
+        'verifier',
         'registry',
         'finality',
       ],
@@ -59,15 +59,18 @@ export const CustomNetworkDescriptor = {
 
     const name = parseNetworkName(value.name);
     const chain = parseChain(value.chain);
-    const oracle = parseOracle(value.oracle);
+    const verifier = parseVerifier(value.verifier);
     const registry = parseRegistry(value.registry);
+
     const deployment = RegistryDeployment.create({
       chainId: chain.id,
       address: registry.address,
       runtimeCodehash: registry.runtimeCodehash,
-      oracleAddress: oracle.address,
-      oracleRuntimeCodehash: oracle.runtimeCodehash,
+      verifierAddress: verifier.address,
+      verifierRuntimeCodehash: verifier.runtimeCodehash,
+      minimumLeadRounds: registry.minimumLeadRounds,
     });
+
     const finality = FinalityPolicy.parseJson(value.finality);
 
     return {
@@ -78,7 +81,7 @@ export const CustomNetworkDescriptor = {
       finality,
     };
   },
-}
+};
 
 export async function loadCustomNetworkDescriptor(
   filePath: string,
@@ -107,7 +110,7 @@ export async function loadCustomNetworkDescriptor(
   return CustomNetworkDescriptor.parseJson(value);
 }
 
-interface OracleDescriptor {
+interface VerifierDescriptor {
   address: unknown;
   runtimeCodehash: unknown;
 }
@@ -115,6 +118,7 @@ interface OracleDescriptor {
 interface RegistryDescriptor {
   address: unknown;
   runtimeCodehash: unknown;
+  minimumLeadRounds: unknown;
 }
 
 function parseNetworkName(
@@ -145,16 +149,26 @@ function parseChain(
     !Number.isSafeInteger(value.id) ||
     value.id <= 0
   ) {
-    throw new Error('Custom network config chain.id must be a positive safe integer.');
+    throw new Error(
+      'Custom network config chain.id must be a positive safe integer.'
+    );
   }
 
-  if (typeof value.name !== 'string' || value.name.trim().length === 0) {
-    throw new Error('Custom network config chain.name must be a non-empty string.');
+  if (
+    typeof value.name !== 'string' || 
+    value.name.trim().length === 0
+  ) {
+    throw new Error(
+      'Custom network config chain.name must be a non-empty string.'
+    );
   }
 
   const nativeCurrency = parseNativeCurrency(value.nativeCurrency);
-  
-  if (value.testnet !== undefined && typeof value.testnet !== 'boolean') {
+
+  if (
+    value.testnet !== undefined && 
+    typeof value.testnet !== 'boolean'
+  ) {
     throw new Error('Custom network config chain.testnet must be a boolean.');
   }
 
@@ -206,14 +220,19 @@ function parseNativeCurrency(
   };
 }
 
-function parseOracle(
+function parseVerifier(
   value: unknown,
-): OracleDescriptor {
+): VerifierDescriptor {
   if (!isObject(value)) {
-    throw new Error('Custom network config oracle must be an object.');
+    throw new Error(
+      'Custom network config verifier must be an object.'
+    );
   }
 
-  assertExactKeys(value, ['address', 'runtimeCodehash']);
+  assertExactKeys(
+    value,
+    ['address', 'runtimeCodehash'],
+  );
 
   return {
     address: value.address,
@@ -225,14 +244,24 @@ function parseRegistry(
   value: unknown,
 ): RegistryDescriptor {
   if (!isObject(value)) {
-    throw new Error('Custom network config registry must be an object.');
+    throw new Error(
+      'Custom network config registry must be an object.'
+    );
   }
 
-  assertExactKeys(value, ['address', 'runtimeCodehash']);
+  assertExactKeys(
+    value,
+    [
+      'address',
+      'runtimeCodehash',
+      'minimumLeadRounds',
+    ],
+  );
 
   return {
     address: value.address,
     runtimeCodehash: value.runtimeCodehash,
+    minimumLeadRounds: value.minimumLeadRounds,
   };
 }
 

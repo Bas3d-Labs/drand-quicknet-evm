@@ -27,13 +27,16 @@ import {
 const REGISTRY_ADDRESS =
   '0x1111111111111111111111111111111111111111';
 
-const RUNTIME_CODEHASH =
+const REGISTRY_RUNTIME_CODEHASH =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
-const ORACLE_ADDRESS = '0x2222222222222222222222222222222222222222';
+const VERIFIER_ADDRESS = '0x2222222222222222222222222222222222222222';
 
-const ORACLE_RUNTIME_CODEHASH =
+const VERIFIER_RUNTIME_CODEHASH =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+const MINIMUM_LEAD_ROUNDS = 5;
+const NORMALIZED_MINIMUM_LEAD_ROUNDS = 5n;
 
 const temporaryDirectories: string[] = [];
 
@@ -74,9 +77,10 @@ describe('CustomNetworkDescriptor.parseJson', () => {
       deployment: {
         chainId: 12_345,
         address: REGISTRY_ADDRESS,
-        runtimeCodehash: RUNTIME_CODEHASH,
-        oracleAddress: ORACLE_ADDRESS,
-        oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+        runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+        verifierAddress: VERIFIER_ADDRESS,
+        verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
+        minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
       },
       finality: {
         type: 'safe',
@@ -242,8 +246,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects a missing root field', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     delete config.registry;
 
@@ -258,11 +261,9 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects an unexpected root field', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
-    config.rpcUrl =
-      'https://rpc.example.com';
+    config.rpcUrl = 'https://rpc.example.com';
 
     expect(
       () =>
@@ -275,8 +276,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects an unsupported version', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     config.version = 2;
 
@@ -291,8 +291,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects a non-string network name', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     config.name = 123;
 
@@ -307,8 +306,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects an empty network name', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     config.name = '   ';
 
@@ -323,8 +321,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects a non-object chain config', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     config.chain = 'invalid';
 
@@ -339,8 +336,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects a missing chain field', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const chain =
       config.chain as Record<
@@ -361,8 +357,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects an unexpected chain field', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const chain =
       config.chain as Record<
@@ -384,8 +379,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects chain ID zero', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const chain =
       config.chain as Record<
@@ -406,8 +400,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects a negative chain ID', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const chain =
       config.chain as Record<
@@ -428,8 +421,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects a fractional chain ID', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const chain =
       config.chain as Record<
@@ -450,8 +442,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects a chain ID larger than the safe integer range', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const chain =
       config.chain as Record<
@@ -473,8 +464,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects an empty chain name', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const chain =
       config.chain as Record<
@@ -495,8 +485,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects a non-boolean testnet value', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const chain =
       config.chain as Record<
@@ -517,8 +506,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects a non-object native currency', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const chain =
       config.chain as Record<
@@ -540,8 +528,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects a missing native currency field', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const nativeCurrency =
       getNativeCurrency(
@@ -561,8 +548,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects an unexpected native currency field', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const nativeCurrency =
       getNativeCurrency(
@@ -583,8 +569,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects an empty native currency name', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const nativeCurrency =
       getNativeCurrency(
@@ -604,8 +589,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects an empty native currency symbol', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const nativeCurrency =
       getNativeCurrency(
@@ -625,8 +609,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('allows zero native currency decimals', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const nativeCurrency =
       getNativeCurrency(
@@ -645,8 +628,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('allows 255 native currency decimals', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const nativeCurrency =
       getNativeCurrency(
@@ -665,8 +647,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects negative native currency decimals', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const nativeCurrency =
       getNativeCurrency(
@@ -686,8 +667,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects native currency decimals above 255', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const nativeCurrency =
       getNativeCurrency(
@@ -707,8 +687,7 @@ describe('CustomNetworkDescriptor.parseJson', () => {
   });
 
   it('rejects fractional native currency decimals', () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     const nativeCurrency =
       getNativeCurrency(
@@ -727,11 +706,10 @@ describe('CustomNetworkDescriptor.parseJson', () => {
     );
   });
 
-  it('rejects a missing oracle root field', () => {
-    const config =
-      createValidConfig();
+  it('rejects a missing verifier root field', () => {
+    const config = createValidConfig();
 
-    delete config.oracle;
+    delete config.verifier;
 
     expect(
       () =>
@@ -739,13 +717,13 @@ describe('CustomNetworkDescriptor.parseJson', () => {
           config,
         ),
     ).toThrow(
-      'Missing custom network config field: oracle.'
+      'Missing custom network config field: verifier.'
     );
   });
-  
-  it('rejects a non-object oracle config', () => {
+
+  it('rejects a non-object verifier config', () => {
     const config = createValidConfig();
-    config.oracle = 'invalid';
+    config.verifier = 'invalid';
 
     expect(
       () =>
@@ -753,20 +731,20 @@ describe('CustomNetworkDescriptor.parseJson', () => {
           config,
         ),
     ).toThrow(
-      'Custom network config oracle must be an object.'
+      'Custom network config verifier must be an object.'
     );
   });
 
-  it('rejects a missing oracle field', () => {
+  it('rejects a missing verifier field', () => {
     const config = createValidConfig();
 
-    const oracle =
-      config.oracle as Record<
+    const verifier =
+      config.verifier as Record<
         string,
         unknown
       >;
 
-    delete oracle.address;
+    delete verifier.address;
 
     expect(
       () =>
@@ -778,16 +756,16 @@ describe('CustomNetworkDescriptor.parseJson', () => {
     );
   });
 
-  it('rejects an unexpected oracle field', () => {
+  it('rejects an unexpected verifier field', () => {
     const config = createValidConfig();
 
-    const oracle =
-      config.oracle as Record<
+    const verifier =
+      config.verifier as Record<
         string,
         unknown
       >;
 
-    oracle.chainId = 12_345;
+    verifier.chainId = 12_345;
 
     expect(
       () =>
@@ -799,16 +777,16 @@ describe('CustomNetworkDescriptor.parseJson', () => {
     );
   });
 
-  it('propagates invalid oracle address failures', () => {
+  it('propagates invalid verifier address failures', () => {
     const config = createValidConfig();
 
-    const oracle =
-      config.oracle as Record<
+    const verifier =
+      config.verifier as Record<
         string,
         unknown
       >;
 
-    oracle.address =
+    verifier.address =
       '0x1234';
 
     expect(
@@ -817,20 +795,20 @@ describe('CustomNetworkDescriptor.parseJson', () => {
           config,
         ),
     ).toThrow(
-      'Registry deployment oracleAddress must be a valid address.'
+      'Registry deployment verifierAddress must be a valid address.'
     );
   });
 
-  it('propagates invalid oracle runtime codehash failures', () => {
+  it('propagates invalid verifier runtime codehash failures', () => {
     const config = createValidConfig();
 
-    const oracle =
-      config.oracle as Record<
+    const verifier =
+      config.verifier as Record<
         string,
         unknown
       >;
 
-    oracle.runtimeCodehash =
+    verifier.runtimeCodehash =
       '0x1234';
 
     expect(
@@ -839,7 +817,51 @@ describe('CustomNetworkDescriptor.parseJson', () => {
           config,
         ),
     ).toThrow(
-      'Registry deployment oracleRuntimeCodehash must be a 32-byte hex value.'
+      'Registry deployment verifierRuntimeCodehash must be a 32-byte hex value.'
+    );
+  });
+
+  it('rejects a missing registry minimumLeadRounds', () => {
+    const config =
+      createValidConfig();
+
+    const registry =
+      config.registry as Record<
+        string,
+        unknown
+      >;
+
+    delete registry.minimumLeadRounds;
+
+    expect(
+      () =>
+        CustomNetworkDescriptor.parseJson(
+          config,
+        ),
+    ).toThrow(
+      'Missing custom network config field: minimumLeadRounds.'
+    );
+  });
+
+  it('propagates invalid registry minimumLeadRounds failures', () => {
+    const config =
+      createValidConfig();
+
+    const registry =
+      config.registry as Record<
+        string,
+        unknown
+      >;
+
+    registry.minimumLeadRounds = 0;
+
+    expect(
+      () =>
+        CustomNetworkDescriptor.parseJson(
+          config,
+        ),
+    ).toThrow(
+      'Registry deployment minimumLeadRounds must be a positive uint64.'
     );
   });
 
@@ -993,9 +1015,10 @@ describe('loadCustomNetworkDescriptor', () => {
       deployment: {
         chainId: 12_345,
         address: REGISTRY_ADDRESS,
-        runtimeCodehash: RUNTIME_CODEHASH,
-        oracleAddress: ORACLE_ADDRESS,
-        oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+        runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+        verifierAddress: VERIFIER_ADDRESS,
+        verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
+        minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
       },
       finality: {
         type: 'safe',
@@ -1004,8 +1027,7 @@ describe('loadCustomNetworkDescriptor', () => {
   });
 
   it('rejects a missing custom network config file', async () => {
-    const directory =
-      await createTemporaryDirectory();
+    const directory = await createTemporaryDirectory();
 
     const filePath =
       join(
@@ -1038,8 +1060,7 @@ describe('loadCustomNetworkDescriptor', () => {
   });
 
   it('propagates config validation failures after loading', async () => {
-    const config =
-      createValidConfig();
+    const config = createValidConfig();
 
     config.version = 2;
 
@@ -1077,13 +1098,14 @@ function createValidConfig(): Record<
       },
       testnet: false,
     },
-    oracle: {
-      address: ORACLE_ADDRESS,
-      runtimeCodehash: ORACLE_RUNTIME_CODEHASH,
+    verifier: {
+      address: VERIFIER_ADDRESS,
+      runtimeCodehash: VERIFIER_RUNTIME_CODEHASH,
     },
     registry: {
       address: REGISTRY_ADDRESS,
-      runtimeCodehash: RUNTIME_CODEHASH,
+      runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+      minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
     },
     finality: {
       type: 'safe',

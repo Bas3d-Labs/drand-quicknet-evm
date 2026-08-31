@@ -19,6 +19,7 @@ import {
 } from 'viem/chains';
 
 import type {
+  Address,
   Hex,
 } from 'viem';
 
@@ -62,35 +63,45 @@ const RPC_URL = 'https://rpc.example.com';
 const CUSTOM_RPC_URL = 'https://custom-rpc.example.com';
 const PRIVATE_KEY = `0x${'11'.repeat(32)}` as Hex;
 
-const REGISTRY_ADDRESS = '0x1111111111111111111111111111111111111111';
-const RUNTIME_CODEHASH =
+const CUSTOM_CHAIN_ID = 12_345;
+
+const REGISTRY_ADDRESS: Address =
+  '0x1111111111111111111111111111111111111111';
+
+const REGISTRY_RUNTIME_CODEHASH: Hex =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
-const ORACLE_ADDRESS = '0x2222222222222222222222222222222222222222';
-const ORACLE_RUNTIME_CODEHASH =
+const VERIFIER_ADDRESS: Address =
+  '0x2222222222222222222222222222222222222222';
+
+const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+const MINIMUM_LEAD_ROUNDS = 5n;
 
 const REGISTRY_DEPLOYMENT: RegistryDeployment = {
   chainId: robinhoodTestnet.id,
   address: REGISTRY_ADDRESS,
-  runtimeCodehash: RUNTIME_CODEHASH,
-  oracleAddress: ORACLE_ADDRESS,
-  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+  runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+  verifierAddress: VERIFIER_ADDRESS,
+  verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
+  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 const CUSTOM_REGISTRY_DEPLOYMENT: RegistryDeployment = {
-  chainId: 12_345,
+  chainId: CUSTOM_CHAIN_ID,
   address: REGISTRY_ADDRESS,
-  runtimeCodehash: RUNTIME_CODEHASH,
-  oracleAddress: ORACLE_ADDRESS,
-  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+  runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+  verifierAddress: VERIFIER_ADDRESS,
+  verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
+  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 const CUSTOM_NETWORK_DESCRIPTOR: CustomNetworkDescriptor = {
   version: 1,
   name: 'example-mainnet',
   chain: {
-    id: 12_345,
+    id: CUSTOM_CHAIN_ID,
     name: 'Example Chain',
     nativeCurrency: {
       name: 'Example',
@@ -99,8 +110,7 @@ const CUSTOM_NETWORK_DESCRIPTOR: CustomNetworkDescriptor = {
     },
     testnet: false,
   },
-  deployment:
-    CUSTOM_REGISTRY_DEPLOYMENT,
+  deployment: CUSTOM_REGISTRY_DEPLOYMENT,
   finality: {
     type: 'confirmations',
     confirmations: 20n,
@@ -130,10 +140,8 @@ function createEnvironment(
   >
 > {
   return {
-    ROBINHOOD_TESTNET_RPC_URL:
-      RPC_URL,
-    QUICKNET_RPC_URL:
-      CUSTOM_RPC_URL,
+    ROBINHOOD_TESTNET_RPC_URL: RPC_URL,
+    QUICKNET_RPC_URL: CUSTOM_RPC_URL,
     PRIVATE_KEY,
     ...overrides,
   };
@@ -286,7 +294,7 @@ describe('loadRelayerConfig', () => {
       await loadRelayerConfig({
         source: {
           type: 'preset',
-            network: 'robinhood-testnet',
+          network: 'robinhood-testnet',
         },
         env: createEnvironment(),
       });
@@ -501,7 +509,7 @@ describe('loadRelayerConfig', () => {
       expect(
         config.chain.id,
       ).toBe(
-        12_345,
+        CUSTOM_CHAIN_ID,
       );
 
       expect(

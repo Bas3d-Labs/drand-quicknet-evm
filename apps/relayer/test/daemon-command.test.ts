@@ -6,6 +6,7 @@ import {
   vi,
 } from 'vitest';
 import type {
+  Address,
   Hex,
   PublicClient,
   WalletClient,
@@ -174,27 +175,38 @@ import {
   validateQuicknetConsumers,
 } from '../src/validate-consumers.js';
 
-const CONSUMER_A = '0x1111111111111111111111111111111111111111';
-const CONSUMER_B = '0x2222222222222222222222222222222222222222';
+const CONSUMER_A: Address =
+'0x1111111111111111111111111111111111111111';
 
-const REGISTRY_ADDRESS = '0x3333333333333333333333333333333333333333';
+const CONSUMER_B: Address =
+  '0x2222222222222222222222222222222222222222';
 
-const RUNTIME_CODEHASH: Hex =
-  '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const CHAIN_ID = 12345;
 
 const PRIVATE_KEY =
   '0x1111111111111111111111111111111111111111111111111111111111111111';
   
-const ORACLE_ADDRESS = '0x5555555555555555555555555555555555555555';
-const ORACLE_RUNTIME_CODEHASH =
+const REGISTRY_ADDRESS: Address =
+  '0x3333333333333333333333333333333333333333';
+
+const REGISTRY_RUNTIME_CODEHASH: Hex =
+  '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+const VERIFIER_ADDRESS: Address =
+  '0x5555555555555555555555555555555555555555';
+
+const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
+const MINIMUM_LEAD_ROUNDS = 5n;
+
 const DEPLOYMENT: RegistryDeployment = {
-  chainId: robinhoodTestnet.id,
+  chainId: CHAIN_ID,
   address: REGISTRY_ADDRESS,
-  runtimeCodehash: RUNTIME_CODEHASH,
-  oracleAddress: ORACLE_ADDRESS,
-  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+  runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+  verifierAddress: VERIFIER_ADDRESS,
+  verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
+  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 const ACCOUNT = privateKeyToAccount(PRIVATE_KEY);

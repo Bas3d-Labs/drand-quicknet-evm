@@ -6,11 +6,11 @@ import { readFile } from 'node:fs/promises';
 
 interface DeploymentManifest {
   chainId?: unknown;
-  oracle?: unknown;
+  verifier?: unknown;
   registry?: unknown;
 }
 
-interface OracleManifest {
+interface VerifierManifest {
   address?: unknown;
   runtimeCodehash?: unknown;
 }
@@ -18,6 +18,7 @@ interface OracleManifest {
 interface RegistryManifest {
   address?: unknown;
   runtimeCodehash?: unknown;
+  minimumLeadRounds?: unknown;
 }
 
 export interface LoadRegistryDeploymentOptions {
@@ -78,14 +79,15 @@ export function parseRegistryDeployment(
   options: ParseRegistryDeploymentOptions = {},
 ): RegistryDeployment {
   const manifest = parseDeploymentManifest(value);
-  const oracle = parseOracleManifest(manifest.oracle);
+  const verifier = parseVerifierManifest(manifest.verifier);
   const registry = parseRegistryManifest(manifest.registry);
   const deployment = RegistryDeployment.create({
     chainId: manifest.chainId,
     address: registry.address,
+    minimumLeadRounds: registry.minimumLeadRounds,
     runtimeCodehash: registry.runtimeCodehash,
-    oracleAddress: oracle.address,
-    oracleRuntimeCodehash: oracle.runtimeCodehash,
+    verifierAddress: verifier.address,
+    verifierRuntimeCodehash: verifier.runtimeCodehash,
   });
 
   if (
@@ -112,12 +114,12 @@ function parseDeploymentManifest(
   return value;
 }
 
-function parseOracleManifest(
+function parseVerifierManifest(
   value: unknown,
-): OracleManifest {
+): VerifierManifest {
   if (!isObject(value)) {
     throw new Error(
-      'Invalid deployment manifest: oracle must be an object.'
+      'Invalid deployment manifest: verifier must be an object.'
     );
   }
 
