@@ -39,23 +39,32 @@ import {
 const CONSUMER_A: Address = '0x1111111111111111111111111111111111111111';
 const CONSUMER_B: Address = '0x2222222222222222222222222222222222222222';
 
-const REGISTRY_ADDRESS: Address = '0x3333333333333333333333333333333333333333';
-const OTHER_REGISTRY_ADDRESS: Address =
-  '0x4444444444444444444444444444444444444444';
+const CHAIN_ID = 12345;
 
-const RUNTIME_CODEHASH: Hex =
+const REGISTRY_ADDRESS: Address =
+  '0x3333333333333333333333333333333333333333';
+
+const REGISTRY_RUNTIME_CODEHASH: Hex =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
   
-const ORACLE_ADDRESS = '0x5555555555555555555555555555555555555555';
-const ORACLE_RUNTIME_CODEHASH =
+const OTHER_REGISTRY_ADDRESS: Address =
+  '0x4444444444444444444444444444444444444444';
+  
+const VERIFIER_ADDRESS: Address =
+  '0x5555555555555555555555555555555555555555';
+
+const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
+const MINIMUM_LEAD_ROUNDS = 5n;
+
 const DEPLOYMENT: RegistryDeployment = {
-  chainId: 46630,
+  chainId: CHAIN_ID,
   address: REGISTRY_ADDRESS,
-  runtimeCodehash: RUNTIME_CODEHASH,
-  oracleAddress: ORACLE_ADDRESS,
-  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+  runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+  verifierAddress: VERIFIER_ADDRESS,
+  verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
+  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 const LOWERCASE_CONSUMER = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';

@@ -38,22 +38,26 @@ const CHAIN_ID = 46630;
 const REGISTRY_ADDRESS: Address =
   '0x1111111111111111111111111111111111111111';
 
-const RUNTIME_CODEHASH: Hex =
+const REGISTRY_RUNTIME_CODEHASH: Hex =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
-const ORACLE_ADDRESS: Address = '0x2222222222222222222222222222222222222222';
-const ORACLE_RUNTIME_CODEHASH: Hex =
+const VERIFIER_ADDRESS: Address = '0x2222222222222222222222222222222222222222';
+const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+const MINIMUM_LEAD_ROUNDS = 5;
+const NORMALIZED_MINIMUM_LEAD_ROUNDS = 5n;
 
 const VALID_MANIFEST = {
   chainId: CHAIN_ID,
-  oracle: {
-    address: ORACLE_ADDRESS,
-    runtimeCodehash: ORACLE_RUNTIME_CODEHASH,
+  verifier: {
+    address: VERIFIER_ADDRESS,
+    runtimeCodehash: VERIFIER_RUNTIME_CODEHASH,
   },
   registry: {
     address: REGISTRY_ADDRESS,
-    runtimeCodehash: RUNTIME_CODEHASH,
+    runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+    minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
   },
 };
 
@@ -80,9 +84,10 @@ describe('parseRegistryDeployment', () => {
     ).toEqual({
       chainId: CHAIN_ID,
       address: REGISTRY_ADDRESS,
-      runtimeCodehash: RUNTIME_CODEHASH,
-      oracleAddress: ORACLE_ADDRESS,
-      oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+      minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
+      runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+      verifierAddress: VERIFIER_ADDRESS,
+      verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
     });
   });
 
@@ -98,9 +103,10 @@ describe('parseRegistryDeployment', () => {
     ).toEqual({
       chainId: CHAIN_ID,
       address: REGISTRY_ADDRESS,
-      runtimeCodehash: RUNTIME_CODEHASH,
-      oracleAddress: ORACLE_ADDRESS,
-      oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+      minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
+      runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+      verifierAddress: VERIFIER_ADDRESS,
+      verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
     });
   });
 
@@ -146,7 +152,7 @@ describe('parseRegistryDeployment', () => {
   it('rejects a missing chainId', () => {
     expect(() =>
       parseRegistryDeployment({
-        oracle: VALID_MANIFEST.oracle,
+        verifier: VALID_MANIFEST.verifier,
         registry: VALID_MANIFEST.registry,
       }),
     ).toThrow(
@@ -213,7 +219,7 @@ describe('parseRegistryDeployment', () => {
     expect(() =>
       parseRegistryDeployment({
         chainId: CHAIN_ID,
-        oracle: VALID_MANIFEST.oracle,
+        verifier: VALID_MANIFEST.verifier,
       }),
     ).toThrow(
       'Invalid deployment manifest: registry must be an object.'
@@ -224,7 +230,7 @@ describe('parseRegistryDeployment', () => {
     expect(() =>
       parseRegistryDeployment({
         chainId: CHAIN_ID,
-        oracle: VALID_MANIFEST.oracle,
+        verifier: VALID_MANIFEST.verifier,
         registry: null,
       }),
     ).toThrow(
@@ -236,7 +242,7 @@ describe('parseRegistryDeployment', () => {
     expect(() =>
       parseRegistryDeployment({
         chainId: CHAIN_ID,
-        oracle: VALID_MANIFEST.oracle,
+        verifier: VALID_MANIFEST.verifier,
         registry: [],
       }),
     ).toThrow(
@@ -249,7 +255,8 @@ describe('parseRegistryDeployment', () => {
       parseRegistryDeployment({
         ...VALID_MANIFEST,
         registry: {
-          runtimeCodehash: RUNTIME_CODEHASH,
+          runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+          minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
         },
       }),
     ).toThrow(
@@ -262,9 +269,8 @@ describe('parseRegistryDeployment', () => {
       parseRegistryDeployment({
         ...VALID_MANIFEST,
         registry: {
+          ...VALID_MANIFEST.registry,
           address: 123,
-          runtimeCodehash:
-            RUNTIME_CODEHASH,
         },
       }),
     ).toThrow(
@@ -277,9 +283,8 @@ describe('parseRegistryDeployment', () => {
       parseRegistryDeployment({
         ...VALID_MANIFEST,
         registry: {
+          ...VALID_MANIFEST.registry,
           address: '0x1234',
-          runtimeCodehash:
-            RUNTIME_CODEHASH,
         },
       }),
     ).toThrow(
@@ -295,8 +300,8 @@ describe('parseRegistryDeployment', () => {
       parseRegistryDeployment({
         ...VALID_MANIFEST,
         registry: {
+          ...VALID_MANIFEST.registry,
           address: lowercaseAddress,
-          runtimeCodehash: RUNTIME_CODEHASH,
         },
       });
 
@@ -313,6 +318,7 @@ describe('parseRegistryDeployment', () => {
         ...VALID_MANIFEST,
         registry: {
           address: REGISTRY_ADDRESS,
+          minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
         },
       }),
     ).toThrow(
@@ -325,7 +331,7 @@ describe('parseRegistryDeployment', () => {
       parseRegistryDeployment({
         ...VALID_MANIFEST,
         registry: {
-          address: REGISTRY_ADDRESS,
+          ...VALID_MANIFEST.registry,
           runtimeCodehash: 123,
         },
       }),
@@ -339,7 +345,7 @@ describe('parseRegistryDeployment', () => {
       parseRegistryDeployment({
         ...VALID_MANIFEST,
         registry: {
-          address: REGISTRY_ADDRESS,
+          ...VALID_MANIFEST.registry,
           runtimeCodehash: 'aa'.repeat(32),
         },
       }),
@@ -353,7 +359,7 @@ describe('parseRegistryDeployment', () => {
       parseRegistryDeployment({
         ...VALID_MANIFEST,
         registry: {
-          address: REGISTRY_ADDRESS,
+          ...VALID_MANIFEST.registry,
           runtimeCodehash: `0x${'aa'.repeat(31)}`,
         },
       }),
@@ -367,7 +373,7 @@ describe('parseRegistryDeployment', () => {
       parseRegistryDeployment({
         ...VALID_MANIFEST,
         registry: {
-          address: REGISTRY_ADDRESS,
+          ...VALID_MANIFEST.registry,
           runtimeCodehash: `0x${'aa'.repeat(33)}`,
         },
       }),
@@ -381,7 +387,7 @@ describe('parseRegistryDeployment', () => {
       parseRegistryDeployment({
         ...VALID_MANIFEST,
         registry: {
-          address: REGISTRY_ADDRESS,
+          ...VALID_MANIFEST.registry,
           runtimeCodehash: `0x${'gg'.repeat(32)}`,
         },
       }),
@@ -390,55 +396,83 @@ describe('parseRegistryDeployment', () => {
     );
   });
 
-  it('rejects a missing oracle object', () => {
+  it('rejects a missing verifier object', () => {
     expect(() =>
       parseRegistryDeployment({
         chainId: CHAIN_ID,
         registry: VALID_MANIFEST.registry,
       }),
     ).toThrow(
-      'Invalid deployment manifest: oracle must be an object.'
+      'Invalid deployment manifest: verifier must be an object.'
     );
   });
 
-  it('rejects a missing oracle address', () => {
+  it('rejects a missing verifier address', () => {
     expect(() =>
       parseRegistryDeployment({
         ...VALID_MANIFEST,
-        oracle: {
-          runtimeCodehash: ORACLE_RUNTIME_CODEHASH,
+        verifier: {
+          runtimeCodehash: VERIFIER_RUNTIME_CODEHASH,
         },
       }),
     ).toThrow(
-      'Registry deployment oracleAddress must be a valid address.'
+      'Registry deployment verifierAddress must be a valid address.'
     );
   });
 
-  it('rejects an invalid oracle address', () => {
+  it('rejects an invalid verifier address', () => {
     expect(() =>
       parseRegistryDeployment({
         ...VALID_MANIFEST,
-        oracle: {
+        verifier: {
           address: '0x1234',
-          runtimeCodehash: ORACLE_RUNTIME_CODEHASH,
+          runtimeCodehash: VERIFIER_RUNTIME_CODEHASH,
         },
       }),
     ).toThrow(
-      'Registry deployment oracleAddress must be a valid address.'
+      'Registry deployment verifierAddress must be a valid address.'
     );
   });
 
-  it('rejects an invalid oracle runtime codehash', () => {
+  it('rejects an invalid verifier runtime codehash', () => {
     expect(() =>
       parseRegistryDeployment({
         ...VALID_MANIFEST,
-        oracle: {
-          address: ORACLE_ADDRESS,
+        verifier: {
+          address: VERIFIER_ADDRESS,
           runtimeCodehash: '0x1234',
         },
       }),
     ).toThrow(
-      'Registry deployment oracleRuntimeCodehash must be a 32-byte hex value.'
+      'Registry deployment verifierRuntimeCodehash must be a 32-byte hex value.'
+    );
+  });
+
+  it('rejects a missing minimumLeadRounds', () => {
+    expect(() =>
+      parseRegistryDeployment({
+        ...VALID_MANIFEST,
+        registry: {
+          address: REGISTRY_ADDRESS,
+          runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+        },
+      })
+    ).toThrow(
+      'Registry deployment minimumLeadRounds must be a positive uint64.'
+    );
+  });
+
+  it('rejects zero minimumLeadRounds', () => {
+    expect(() =>
+      parseRegistryDeployment({
+        ...VALID_MANIFEST,
+        registry: {
+          ...VALID_MANIFEST.registry,
+          minimumLeadRounds: 0,
+        },
+      })
+    ).toThrow(
+      'Registry deployment minimumLeadRounds must be a positive uint64.'
     );
   });
 
@@ -448,8 +482,8 @@ describe('parseRegistryDeployment', () => {
         ...VALID_MANIFEST,
         deploymentBlock: 123_456,
         sourceCommit: 'abcdef',
-        oracle: {
-          ...VALID_MANIFEST.oracle,
+        verifier: {
+          ...VALID_MANIFEST.verifier,
           extraMetadata: 'ignored',
         },
         registry: {
@@ -460,9 +494,10 @@ describe('parseRegistryDeployment', () => {
     ).toEqual({
       chainId: CHAIN_ID,
       address: REGISTRY_ADDRESS,
-      runtimeCodehash: RUNTIME_CODEHASH,
-      oracleAddress: ORACLE_ADDRESS,
-      oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+      minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
+      runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+      verifierAddress: VERIFIER_ADDRESS,
+      verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
     });
   });
 });
@@ -487,9 +522,10 @@ describe('loadRegistryDeployment', () => {
     ).resolves.toEqual({
       chainId: CHAIN_ID,
       address: REGISTRY_ADDRESS,
-      runtimeCodehash: RUNTIME_CODEHASH,
-      oracleAddress: ORACLE_ADDRESS,
-      oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+      minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
+      runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+      verifierAddress: VERIFIER_ADDRESS,
+      verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
     });
   });
 
@@ -507,10 +543,11 @@ describe('loadRegistryDeployment', () => {
       }),
     ).resolves.toEqual({
       chainId: CHAIN_ID,
+      minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
       address: REGISTRY_ADDRESS,
-      runtimeCodehash: RUNTIME_CODEHASH,
-      oracleAddress: ORACLE_ADDRESS,
-      oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+      runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+      verifierAddress: VERIFIER_ADDRESS,
+      verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
     });
   });
 

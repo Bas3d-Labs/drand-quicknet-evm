@@ -16,7 +16,6 @@ import type {
 
 import type {
   CompressedSignature,
-  UncompressedSignature,
 } from '@based-labs/drand-quicknet';
 
 import type {
@@ -25,7 +24,6 @@ import type {
 
 const quicknetMocks = vi.hoisted(() => ({
   fetchBeacon: vi.fn(),
-  decompressSignature: vi.fn(),
 }));
 
 const registryMocks = vi.hoisted(() => ({
@@ -52,16 +50,13 @@ const CHAIN_ID = 46630;
 const REGISTRY_ADDRESS: Address = '0x1111111111111111111111111111111111111111';
 const ACCOUNT_ADDRESS: Address = '0x2222222222222222222222222222222222222222';
 
-const RUNTIME_CODEHASH: Hex =
+const REGISTRY_RUNTIME_CODEHASH: Hex =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 const ROUND = 20_791_007n;
 
 const COMPRESSED_SIGNATURE =
   `0x${'11'.repeat(48)}` as CompressedSignature;
-
-const UNCOMPRESSED_SIGNATURE =
-  `0x${'22'.repeat(96)}` as UncompressedSignature;
 
 const RANDOMNESS: Hex =
   '0x3333333333333333333333333333333333333333333333333333333333333333';
@@ -75,18 +70,21 @@ const SUBMITTED_TRANSACTION_HASH: Hex =
 const RECEIPT_TRANSACTION_HASH: Hex =
   '0x6666666666666666666666666666666666666666666666666666666666666666';
   
-const ORACLE_ADDRESS = '0x5555555555555555555555555555555555555555';
-const ORACLE_RUNTIME_CODEHASH =
+const VERIFIER_ADDRESS = '0x5555555555555555555555555555555555555555';
+const VERIFIER_RUNTIME_CODEHASH =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+const MINIMUM_LEAD_ROUNDS = 5n;
 
 const RECEIPT_BLOCK_NUMBER = 123_456n;
 
 const DEPLOYMENT: RegistryDeployment = {
   chainId: CHAIN_ID,
   address: REGISTRY_ADDRESS,
-  runtimeCodehash: RUNTIME_CODEHASH,
-  oracleAddress: ORACLE_ADDRESS,
-  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+  runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+  verifierAddress: VERIFIER_ADDRESS,
+  verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
+  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 describe('importQuicknetRound', () => {
@@ -123,10 +121,6 @@ describe('importQuicknetRound', () => {
       round: ROUND,
       signature: COMPRESSED_SIGNATURE,
     });
-
-    quicknetMocks.decompressSignature.mockReturnValue(
-      UNCOMPRESSED_SIGNATURE,
-    );
 
     registryMocks.submitBeacon.mockResolvedValue({
       hash: SUBMITTED_TRANSACTION_HASH,
@@ -259,10 +253,6 @@ describe('importQuicknetRound', () => {
     ).not.toHaveBeenCalled();
 
     expect(
-      quicknetMocks.decompressSignature,
-    ).not.toHaveBeenCalled();
-
-    expect(
       registryMocks.submitBeacon,
     ).not.toHaveBeenCalled();
 
@@ -292,12 +282,8 @@ describe('importQuicknetRound', () => {
     await expect(
       importRound(),
     ).rejects.toThrow(
-      `Quicknet round mismatch: requested ${ROUND}, received ${ROUND + 1n}`,
+      `Quicknet round mismatch: requested ${ROUND}, received ${ROUND + 1n}.`,
     );
-
-    expect(
-      quicknetMocks.decompressSignature,
-    ).not.toHaveBeenCalled();
 
     expect(
       registryMocks.submitBeacon,
@@ -316,59 +302,21 @@ describe('importQuicknetRound', () => {
     ).rejects.toBe(error);
 
     expect(
-      quicknetMocks.decompressSignature,
-    ).not.toHaveBeenCalled();
-
-    expect(
       registryMocks.submitBeacon,
     ).not.toHaveBeenCalled();
   });
 
-  it('decompresses the fetched signature before submission', async () => {
+  it('submits the fetched compressed signature', async () => {
     await importRound();
 
     expect(
-      quicknetMocks.decompressSignature,
-    ).toHaveBeenCalledOnce();
-
-    expect(
-      quicknetMocks.decompressSignature,
+      registryMocks.submitBeacon,
     ).toHaveBeenCalledWith(
-      COMPRESSED_SIGNATURE,
+      expect.objectContaining({
+        round: ROUND,
+        signature: COMPRESSED_SIGNATURE,
+      }),
     );
-
-    expect(
-      registryMocks.submitBeacon,
-    ).toHaveBeenCalledWith({
-      publicClient,
-      walletClient,
-      deployment: DEPLOYMENT,
-      account,
-      round: ROUND,
-      signature: UNCOMPRESSED_SIGNATURE,
-    });
-  });
-
-  it('does not submit when signature decompression fails', async () => {
-    const error = new Error('Invalid compressed point');
-
-    quicknetMocks.decompressSignature.mockImplementation(
-      () => {
-        throw error;
-      },
-    );
-
-    await expect(
-      importRound(),
-    ).rejects.toBe(error);
-
-    expect(
-      registryMocks.submitBeacon,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      waitForTransactionReceipt,
-    ).not.toHaveBeenCalled();
   });
 
   it('propagates registry submission failures', async () => {
@@ -596,9 +544,11 @@ describe('importQuicknetRound', () => {
     ).not.toHaveBeenCalled();
 
     expect(
-      quicknetMocks.decompressSignature,
+      registryMocks.submitBeacon,
     ).toHaveBeenCalledWith(
-      COMPRESSED_SIGNATURE,
+      expect.objectContaining({
+        signature: COMPRESSED_SIGNATURE,
+      }),
     );
 
     expect(result.status).toBe(
@@ -646,10 +596,6 @@ describe('importQuicknetRound', () => {
       quicknetMocks.fetchBeacon,
     );
 
-    const decompressOrder = firstInvocationOrder(
-      quicknetMocks.decompressSignature,
-    );
-
     const submitOrder = firstInvocationOrder(
       registryMocks.submitBeacon,
     );
@@ -669,10 +615,6 @@ describe('importQuicknetRound', () => {
     );
 
     expect(fetchOrder).toBeLessThan(
-      decompressOrder,
-    );
-
-    expect(decompressOrder).toBeLessThan(
       submitOrder,
     );
 

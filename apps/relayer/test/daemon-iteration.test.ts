@@ -68,18 +68,27 @@ import {
   scanQuicknetRequests,
 } from '../src/request-scanner.js';
 
-const CONSUMER: Address = '0x1111111111111111111111111111111111111111';
-const REGISTRY_ADDRESS: Address = '0x2222222222222222222222222222222222222222';
-
-const RUNTIME_CODEHASH: Hex =
-  '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const CONSUMER: Address =
+  '0x1111111111111111111111111111111111111111';
 
 const TRANSACTION_HASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
-const ORACLE_ADDRESS = '0x5555555555555555555555555555555555555555';
-const ORACLE_RUNTIME_CODEHASH =
+const CHAIN_ID = 12345;
+
+const REGISTRY_ADDRESS: Address =
+  '0x2222222222222222222222222222222222222222';
+
+const REGISTRY_RUNTIME_CODEHASH: Hex =
+  '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+const VERIFIER_ADDRESS: Address =
+  '0x5555555555555555555555555555555555555555';
+
+const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+
+const MINIMUM_LEAD_ROUNDS = 5n;
 
 const PUBLIC_CLIENT = {} as PublicClient;
 const WALLET_CLIENT = {} as WalletClient;
@@ -90,11 +99,12 @@ const FINALITY: FinalityPolicy = {
 };
 
 const DEPLOYMENT: RegistryDeployment = {
-  chainId: 46630,
+  chainId: CHAIN_ID,
   address: REGISTRY_ADDRESS,
-  runtimeCodehash: RUNTIME_CODEHASH,
-  oracleAddress: ORACLE_ADDRESS,
-  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+  runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+  verifierAddress: VERIFIER_ADDRESS,
+  verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
+  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 const REQUEST: QuicknetRandomnessRequest = {

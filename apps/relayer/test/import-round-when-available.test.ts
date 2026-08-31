@@ -64,35 +64,42 @@ import {
   importQuicknetRoundWhenAvailable,
 } from '../src/import-round-when-available.js';
 
-const CHAIN_ID = 46_630;
+const CHAIN_ID = 12345;
 
-const REGISTRY_ADDRESS: Address = '0x1111111111111111111111111111111111111111';
+const REGISTRY_ADDRESS: Address =
+  '0x1111111111111111111111111111111111111111';
 
-const ACCOUNT_ADDRESS: Address = '0x2222222222222222222222222222222222222222';
-
-const RUNTIME_CODEHASH: Hex =
+const REGISTRY_RUNTIME_CODEHASH: Hex =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
-const ROUND = 31_089_008n;
+const ACCOUNT_ADDRESS: Address =
+  '0x2222222222222222222222222222222222222222';
 
-const COMPRESSED_SIGNATURE = `0x${'11'.repeat(48)}` as CompressedSignature;
+const VERIFIER_ADDRESS: Address =
+  '0x5555555555555555555555555555555555555555';
+
+const VERIFIER_RUNTIME_CODEHASH: Hex =
+  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+const MINIMUM_LEAD_ROUNDS = 5n;
 
 const RANDOMNESS: Hex =
   '0x3333333333333333333333333333333333333333333333333333333333333333';
 
 const TRANSACTION_HASH: Hex =
   '0x4444444444444444444444444444444444444444444444444444444444444444';
-  
-const ORACLE_ADDRESS = '0x5555555555555555555555555555555555555555';
-const ORACLE_RUNTIME_CODEHASH =
-  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+const ROUND = 31_089_008n;
+
+const COMPRESSED_SIGNATURE = `0x${'11'.repeat(48)}` as CompressedSignature;
 
 const DEPLOYMENT: RegistryDeployment = {
   chainId: CHAIN_ID,
   address: REGISTRY_ADDRESS,
-  runtimeCodehash: RUNTIME_CODEHASH,
-  oracleAddress: ORACLE_ADDRESS,
-  oracleRuntimeCodehash: ORACLE_RUNTIME_CODEHASH,
+  runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+  verifierAddress: VERIFIER_ADDRESS,
+  verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
+  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 const BEACON: QuicknetBeacon = {
