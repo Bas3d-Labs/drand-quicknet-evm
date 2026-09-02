@@ -47,3 +47,23 @@ chainAdapter:
 
 deploymentManifest: '../../../deployments/robinhood-testnet.json'
 ---
+
+<a id="security-assumptions"></a>
+## Security assumptions
+
+This profile uses the Robinhood Testnet sequencer as the L2 timestamp
+authority.
+
+Protocol-valid sequencer timestamps may be stale within the applicable
+Arbitrum Nitro timestamp envelope. The configured minimum lead therefore
+provides a chain-clock-relative unpredictability margin and does not make
+the commitment independent of sequencer timestamp authority.
+
+This profile also assumes the sequencer preserves the required ordering
+and history integrity for commitments. Fraud-proof availability does not
+remove this assumption for the fast L2 commitment path.
+
+These timestamp-authority and history-integrity assumptions are accepted
+for Robinhood Testnet. A production deployment must either explicitly
+accept the equivalent assumptions or use a parent-chain-anchored
+precommitment model.
