@@ -21,43 +21,19 @@ import type {
   ChainProfile,
 } from './profile.js';
 
-export type DeploymentCheckStatus =
-  | 'MATCH'
-  | 'DRIFT'
-  | 'ERROR'
-  | 'SKIPPED';
+import {
+  aggregateCheckStatuses,
+  type AggregateStatus,
+  type CheckResult,
+} from './check.js';
 
-export type DeploymentStatus =
-  | 'MATCH'
-  | 'DRIFT'
-  | 'ERROR';
+export type DeploymentStatus = AggregateStatus;
 
 export type DeploymentCheck<
   TExpected,
-  TObserved = TExpected
-> =
-  | {
-      status: 'MATCH';
-      expected: TExpected;
-      observed: TObserved;
-    }
-  | {
-      status: 'DRIFT';
-      expected: TExpected;
-      observed: TObserved;
-      reason: string;
-    }
-  | {
-      status: 'ERROR';
-      expected: TExpected;
-      error: string;
-    }
-  | {
-      status: 'SKIPPED';
-      expected: TExpected;
-      reason: string;
-    };
-  
+  TObserved = TExpected,
+> = CheckResult<TExpected, TObserved>;
+
 export interface DeploymentChecks {
   registryRuntimeCodehash: DeploymentCheck<
     Hex,
@@ -199,21 +175,11 @@ function skippedMinimumLeadRounds(
 function aggregateDeploymentStatus(
   checks: DeploymentChecks,
 ): DeploymentStatus {
-  const statuses = [
+  return aggregateCheckStatuses([
     checks.registryRuntimeCodehash.status,
     checks.verifierRuntimeCodehash.status,
     checks.registryMinimumLeadRounds.status,
-  ];
-
-  if (statuses.includes('ERROR')) {
-    return 'ERROR';
-  }
-
-  if (statuses.includes('DRIFT')) {
-    return 'DRIFT';
-  }
-
-  return 'MATCH';
+  ]);
 }
 
 export async function checkDeployment(
@@ -223,7 +189,7 @@ export async function checkDeployment(
 
   const observedChainId = await verifyRpcChainId(
     client,
-    input.profile.chainId
+    input.profile.chainId,
   );
 
   const snapshot = await pinChainSnapshot(client);
@@ -255,7 +221,7 @@ export async function checkDeployment(
     );
   } else {
     registryMinimumLeadRounds = skippedMinimumLeadRounds(
-      expectedMinimumLeadRounds
+      expectedMinimumLeadRounds,
     );
   }
 

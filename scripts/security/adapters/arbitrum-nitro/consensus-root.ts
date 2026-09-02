@@ -16,29 +16,26 @@ import {
   verifyRpcChainId,
 } from '../../core/client.js';
 
-export type ConsensusRootStatus =
-  | 'MATCH'
-  | 'DRIFT'
-  | 'ERROR';
+import type {
+  AggregateStatus,
+  DriftCheckResult,
+  ErrorCheckResult,
+  MatchCheckResult,
+} from '../../core/check.js';
+
+export type ConsensusRootStatus = AggregateStatus;
 
 export type ConsensusRootCheck =
-  | {
-      status: 'MATCH';
-      expected: ApprovedWasmModuleRoot[];
-      observed: Hex;
-      matched: ApprovedWasmModuleRoot;
-    }
-  | {
-      status: 'DRIFT';
-      expected: ApprovedWasmModuleRoot[];
-      observed: Hex;
-      reason: string;
-    }
-  | {
-      status: 'ERROR';
-      expected: ApprovedWasmModuleRoot[];
-      error: string;
-    };
+  | (
+      MatchCheckResult<
+        ApprovedWasmModuleRoot[],
+        Hex
+      > & {
+        matched: ApprovedWasmModuleRoot;
+      }
+    )
+  | DriftCheckResult<ApprovedWasmModuleRoot[], Hex>
+  | ErrorCheckResult<ApprovedWasmModuleRoot[]>;
 
 export interface ConsensusRootCheckResult {
   status: ConsensusRootStatus;
@@ -77,8 +74,10 @@ function findApprovedRoot(
   approvedRoots: ApprovedWasmModuleRoot[],
   observed: Hex,
 ): ApprovedWasmModuleRoot | undefined {
+  const normalizedObserved = observed.toLowerCase();
+
   return approvedRoots.find(
-    approved => approved.root === observed
+    approved => approved.root === normalizedObserved
   );
 }
 

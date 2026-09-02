@@ -17,36 +17,18 @@ import {
   verifyRpcChainId,
 } from '../../core/client.js';
 
-export type TimestampEnvelopeStatus =
-  | 'MATCH'
-  | 'DRIFT'
-  | 'ERROR';
+import {
+  aggregateCheckStatuses,
+  type AggregateStatus,
+  type CheckResult,
+} from '../../core/check.js';
+
+export type TimestampEnvelopeStatus = AggregateStatus;
 
 export type TimestampEnvelopeCheck<
   TExpected,
   TObserved = TExpected,
-> =
-  | {
-      status: 'MATCH';
-      expected: TExpected;
-      observed: TObserved;
-    }
-  | {
-      status: 'DRIFT';
-      expected: TExpected;
-      observed: TObserved;
-      reason: string;
-    }
-  | {
-      status: 'ERROR';
-      expected: TExpected;
-      error: string;
-    }
-  | {
-      status: 'SKIPPED';
-      expected: TExpected;
-      reason: string;
-    };
+> = CheckResult<TExpected, TObserved>;
 
 export interface ObservedMaxTimeVariation {
   delayBlocks: bigint;
@@ -222,25 +204,6 @@ function skippedMaxTimeVariation(
   };
 }
 
-function aggregateTimestampEnvelopeStatus(
-  checks: TimestampEnvelopeChecks,
-): TimestampEnvelopeStatus {
-  const statuses = [
-    checks.sequencerInbox.status,
-    checks.maxTimeVariation.status,
-  ];
-
-  if (statuses.includes('ERROR')) {
-    return 'ERROR';
-  }
-
-  if (statuses.includes('DRIFT')) {
-    return 'DRIFT';
-  }
-
-  return 'MATCH';
-}
-
 export async function checkTimestampEnvelopeAtSnapshot(
   input: CheckTimestampEnvelopeAtSnapshotInput,
 ): Promise<TimestampEnvelopeCheckResult> {
@@ -276,7 +239,10 @@ export async function checkTimestampEnvelopeAtSnapshot(
   };
 
   return {
-    status: aggregateTimestampEnvelopeStatus(checks),
+    status: aggregateCheckStatuses([
+      checks.sequencerInbox.status,
+      checks.maxTimeVariation.status,
+    ]),
     observedChainId: input.observedChainId,
     snapshot: input.snapshot,
     checks,
