@@ -2,7 +2,9 @@
 
 This document defines the required structure and semantics for chain security profiles used by `drand-quicknet-evm`.
 
-A chain profile records the chain-specific security assumptions, timing policy, mutable external dependencies, and evidence required to justify deployment of the Quicknet infrastructure on a particular EVM network.
+A chain profile records the chain-specific security assumptions, timing policy,
+mutable external dependencies, and verification requirements for deployment of
+the Quicknet infrastructure on a particular EVM network.
 
 ## Normative configuration
 
@@ -10,15 +12,25 @@ The YAML front matter is normative for machine consumers.
 
 The Markdown body explains and justifies the normative configuration.
 
-Changes to expected state MUST update both the front matter and the corresponding security explanation in the same revision.
+Changes to normative profile state MUST update both the front matter and the
+corresponding security explanation in the same revision.
+
+Changes to deployed artifact identity or provenance MUST update the deployment
+manifest and any corresponding documentation in the same revision.
 
 Derived quantities MUST NOT be duplicated in front matter when they can be computed from normative inputs.
 
-Each normative value SHOULD have one authoritative home. Values mirrored from deployed infrastructure or external chain state are verified against their live source rather than duplicated into additional configuration files.
+Each normative value SHOULD have one authoritative home.
+
+Expected values mirrored from deployed infrastructure or external chain state
+SHOULD be verified against their live source rather than duplicated across
+multiple configuration files.
 
 ## Required front matter
 
-A profile MUST define:
+A profile MUST define the following top-level structure. The `chainAdapter`
+block shown here is schematic; its `config` MUST satisfy the schema for the
+selected chain family:
 
 ```yaml
 profileVersion: 1
@@ -46,8 +58,8 @@ monitoring:
     critical: 8
 
 chainAdapter:
-  type: arbitrum-nitro
-  config: {}
+  type: <chain-family>
+  config: <chain-family-specific configuration>
 
 deploymentManifest: '../../../deployments/example-network.json'
 ```
@@ -55,6 +67,32 @@ deploymentManifest: '../../../deployments/example-network.json'
 `timestampFreshnessReserveSeconds` belongs under `timing` because it is infrastructure security policy, not a property of the drand beacon.
 
 `minimumLeadRounds` is the normative infrastructure floor. It MUST NOT be duplicated into the deployment manifest.
+
+Valid synthetic Nitro example:
+
+```yaml
+chainAdapter:
+  type: arbitrum-nitro
+  config:
+    parentChain:
+      name: example-parent
+      chainId: 54321
+      slotSeconds: 12
+      requireTimeVariationSlotParity: true
+
+    rollup: '0x1234567890abcdef1234567890abcdef12345678'
+    expectedSequencerInbox: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd'
+
+    expectedMaxTimeVariation:
+      delayBlocks: 100
+      futureBlocks: 10
+      delaySeconds: 1200
+      futureSeconds: 120
+
+    approvedWasmModuleRoots:
+      - consensusRelease: example-release
+        root: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+```
 
 ## Timing derivation
 
@@ -74,7 +112,14 @@ timestampSkewViolationSeconds =
 
 The reserve MUST be smaller than the minimum chain-clock lead.
 
-When timestamp-skew monitoring is configured:
+When `timestampAuthority` is `sequencer`,
+`monitoring.timestampSkewSeconds` is required.
+
+For security models that do not use sequencer timestamp authority,
+`monitoring.timestampSkewSeconds` MAY be omitted. The top-level `monitoring`
+object remains part of the profile schema.
+
+When timestamp-skew monitoring is present:
 
 ```text
 warning < critical < timestampSkewViolationSeconds
@@ -144,6 +189,33 @@ The assumption that protocol-valid sequencing, withholding, ordering, or history
 
 Assumptions A2 and B concern protocol-valid sequencer behavior. A fraud-proof regime, whether permissioned or permissionless, does not by itself discharge them.
 
+### Supported security models
+
+The security-model fields form a coherent pair rather than independent
+capabilities.
+
+For the sequencer-clock fast path:
+
+```yaml
+securityModel:
+  timestampAuthority: sequencer
+  historyIntegrityAssumption: trusted-sequencer
+```
+
+For a parent-chain-anchored path:
+
+```yaml
+securityModel:
+  timestampAuthority: parent-chain-consensus
+  historyIntegrityAssumption: parent-chain-precommitted
+```
+
+A profile MUST NOT combine `sequencer` timestamp authority with
+`parent-chain-precommitted` history integrity.
+
+A profile MUST NOT combine `parent-chain-consensus` timestamp authority with
+`trusted-sequencer` history integrity.
+
 ## Chain adapters
 
 Chain-family-specific fields belong beneath:
@@ -151,8 +223,10 @@ Chain-family-specific fields belong beneath:
 ```yaml
 chainAdapter:
   type: <family>
-  config: {}
+  config: <chain-family-specific configuration>
 ```
+
+`chainAdapter.config` MUST satisfy the schema associated with the selected `chainAdapter.type`.
 
 Generic profile validation MUST complete before chain-adapter-specific validation.
 
@@ -177,15 +251,41 @@ The referenced file MUST:
 
 Manifest resolution and validation are local operations and MUST complete before any RPC access.
 
-The deployment manifest records only infrastructure owned by `drand-quicknet-evm`. It MUST NOT contain downstream consumer deployments.
+The deployment manifest records the durable deployment identity and provenance
+of infrastructure owned by `drand-quicknet-evm`.
 
-## Evidence classes
+For each owned deployment, it records:
 
-Security evidence is divided into three classes.
+* contract address
+* expected runtime codehash
+* deployment transaction hash
+* deployment block number
 
-### Live-state mirrors
+The deployment manifest MUST NOT contain:
 
-Values whose expected state is committed and whose live value can be re-read and compared.
+* downstream consumer deployments
+* `minimumLeadRounds`
+* live-state observation blocks or timestamps
+* KAT results
+* gas measurements
+* recurring monitoring state
+
+The profile is the normative home for infrastructure security policy such as
+`minimumLeadRounds`.
+
+The deployment manifest is the normative home for deployed artifact identity.
+
+Live verification compares current chain state against these committed
+expectations.
+
+## Verification and provenance classes
+
+Security-relevant information is divided into three classes.
+
+### Expected live state
+
+Values whose expected state is committed locally and whose live value can be
+re-read and compared.
 
 Examples include:
 
@@ -195,36 +295,61 @@ Examples include:
 * mutable chain configuration
 * active consensus module roots
 
+Expected values may come from different authoritative local sources.
+
+For example:
+
+* deployment artifact identity belongs in the deployment manifest
+* infrastructure timing policy belongs in the chain profile
+* chain-family-specific expected state belongs in `chainAdapter.config`
+
 ### Historical provenance
 
-Immutable facts about how or when an artifact or attestation was produced.
+Immutable facts identifying how an owned deployment was created.
 
 Examples include:
 
 * deployment transaction hashes
 * deployment block numbers
-* dated evidence blocks
 
-These are recorded once and are not treated as mutable live state.
+Historical provenance is recorded in the deployment manifest and is not treated
+as mutable live state.
 
-### Re-executable attestations
+### Re-executable verification
 
-Procedures whose initial execution is recorded as deployment evidence and whose equivalent verification can later be repeated.
+Some security properties are established by procedures rather than by storing
+an attestation result in the deployment manifest.
 
-The recurring drand KAT canary is the scheduled form of the deployment-time KAT attestation, not a distinct security procedure.
+Examples include:
 
-The gas attestation's recurring equivalent is normally the reference suite's gas-ceiling assertion in CI rather than an operations canary.
+* runtime-code verification
+* registry configuration verification
+* chain timestamp-envelope verification
+* consensus-root verification
+* drand known-answer tests
 
-## Dated evidence
+Where appropriate, these procedures may later be run continuously or
+periodically as operational canaries.
 
-Evidence derived from chain state SHOULD record both:
+The deployment manifest does not store the result of those executions.
+
+## Pinned live observations
+
+Live verification SHOULD pin related observations to an explicit block so that
+one check does not accidentally compare state from different chain snapshots.
+
+A reported live snapshot SHOULD include:
 
 ```text
 block number
 block timestamp
 ```
 
-All observations making up one evidence snapshot MUST be pinned to the same block.
+These values describe the verification run. They are not normative deployment
+manifest fields.
+
+All observations belonging to one logical snapshot MUST use the same pinned
+block whenever the underlying RPC interface permits it.
 
 A complete Nitro verification run therefore normally contains two snapshots:
 
@@ -236,6 +361,9 @@ parent-chain snapshot
     timestamp-envelope check
     consensus-root check
 ```
+
+Checks sharing the same observation instrument SHOULD reuse the same pinned
+snapshot rather than independently selecting blocks.
 
 ## Status taxonomy
 
@@ -339,7 +467,7 @@ Programmatic chain verification uses viem.
 
 ## Onboarding tiers
 
-### Tier 1 — Required
+### Tier 1: Required
 
 The profile is structurally and semantically complete.
 
@@ -353,13 +481,15 @@ Tooling MUST be able to establish locally that:
 * the deployment manifest resolves and validates
 * chain-adapter configuration validates
 
-### Tier 2 — Attested
+### Tier 2: Verified
 
-One-shot deployment and chain-state verification procedures exist and have been successfully exercised.
+One-shot deployment and chain-state verification procedures exist and have been
+successfully exercised.
 
-Tier 2 is an operational claim and cannot be proven solely by loading the profile.
+Tier 2 is an operational claim and cannot be proven solely by loading the
+profile.
 
-### Tier 3 — Production hardening
+### Tier 3: Production hardening
 
 Recurring watches and alerting are operational.
 
