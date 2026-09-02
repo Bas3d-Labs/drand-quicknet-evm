@@ -61,11 +61,9 @@ describe('validateArbitrumNitroConfig', () => {
     const config = validConfig();
 
     config.rollup = ROLLUP.toLowerCase();
-    config.expectedSequencerInbox =
-      SEQUENCER_INBOX.toLowerCase();
+    config.expectedSequencerInbox = SEQUENCER_INBOX.toLowerCase();
 
-    const validated =
-      validateArbitrumNitroConfig(config);
+    const validated = validateArbitrumNitroConfig(config);
 
     expect(validated.rollup).toBe(
       getAddress(ROLLUP),
@@ -80,8 +78,7 @@ describe('validateArbitrumNitroConfig', () => {
     const config = validConfig();
 
     config.rollup = ROLLUP.toLowerCase();
-    config.expectedSequencerInbox =
-      SEQUENCER_INBOX.toLowerCase();
+    config.expectedSequencerInbox = SEQUENCER_INBOX.toLowerCase();
 
     expect(
       () => validateArbitrumNitroConfig(config),
@@ -91,8 +88,7 @@ describe('validateArbitrumNitroConfig', () => {
   it('rejects an invalid mixed-case address checksum', () => {
     const config = validConfig();
 
-    config.rollup =
-      '0xdc5F8E399DBd8a9F5F87AeC4C23Beb12431b386d';
+    config.rollup = '0xdc5F8E399DBd8a9F5F87AeC4C23Beb12431b386d';
 
     expect(
       () => validateArbitrumNitroConfig(config),
@@ -129,8 +125,7 @@ describe('validateArbitrumNitroConfig', () => {
   it('rejects a non-hex WASM root', () => {
     const config = validConfig();
 
-    config.approvedWasmModuleRoots[0]!.root =
-      'not-hex';
+    config.approvedWasmModuleRoots[0]!.root = 'not-hex';
 
     expect(
       () => validateArbitrumNitroConfig(config),
@@ -142,9 +137,7 @@ describe('validateArbitrumNitroConfig', () => {
 
   it('rejects a WASM root that is not bytes32', () => {
     const config = validConfig();
-
-    config.approvedWasmModuleRoots[0]!.root =
-      '0x1234';
+    config.approvedWasmModuleRoots[0]!.root = '0x1234';
 
     expect(
       () => validateArbitrumNitroConfig(config),
@@ -172,8 +165,7 @@ describe('validateArbitrumNitroConfig', () => {
   it('rejects a duplicate approved WASM root case-insensitively', () => {
     const config = validConfig();
 
-    const upperRoot =
-      `0x${CONSENSUS_V61_ROOT.slice(2).toUpperCase()}`;
+    const upperRoot = `0x${CONSENSUS_V61_ROOT.slice(2).toUpperCase()}`;
 
     config.approvedWasmModuleRoots.push({
       consensusRelease: 'consensus-v62',
@@ -259,8 +251,7 @@ describe('validateArbitrumNitroConfig', () => {
   it('rejects delay block/second parity mismatch', () => {
     const config = validConfig();
 
-    config.expectedMaxTimeVariation.delaySeconds =
-      345599;
+    config.expectedMaxTimeVariation.delaySeconds = 345599;
 
     expect(
       () => validateArbitrumNitroConfig(config),
@@ -274,8 +265,7 @@ describe('validateArbitrumNitroConfig', () => {
   it('rejects future block/second parity mismatch', () => {
     const config = validConfig();
 
-    config.expectedMaxTimeVariation.futureSeconds =
-      3599;
+    config.expectedMaxTimeVariation.futureSeconds = 3599;
 
     expect(
       () => validateArbitrumNitroConfig(config),
@@ -289,14 +279,9 @@ describe('validateArbitrumNitroConfig', () => {
   it('allows parity mismatch when parity validation is disabled', () => {
     const config = validConfig();
 
-    config.parentChain.requireTimeVariationSlotParity =
-      false;
-
-    config.expectedMaxTimeVariation.delaySeconds =
-      1;
-
-    config.expectedMaxTimeVariation.futureSeconds =
-      2;
+    config.parentChain.requireTimeVariationSlotParity = false;
+    config.expectedMaxTimeVariation.delaySeconds = 1;
+    config.expectedMaxTimeVariation.futureSeconds = 2;
 
     expect(
       () => validateArbitrumNitroConfig(config),
