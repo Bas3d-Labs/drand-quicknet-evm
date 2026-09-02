@@ -2,7 +2,7 @@ profileVersion: 1
 
 network: robinhood-testnet
 chainId: 46630
-onboardingTier: 1
+onboardingTier: 2
 documentation: './robinhood-testnet.md'
 
 randomness:
