@@ -57,7 +57,7 @@ function parseArguments(
 function profileNetworkFromFilename(
   filename: string,
 ): string {
-  const suffix = '.md';
+  const suffix = '.yaml';
   if (!filename.endsWith(suffix)) {
     throw new Error(`profile filename must end with ${suffix}: ${filename}.`)
   }
@@ -77,11 +77,7 @@ async function discoverProfilePaths(): Promise<string[]> {
       continue;
     }
 
-    if (!entry.name.endsWith('.md')) {
-      continue;
-    }
-
-    if (entry.name === 'TEMPLATE.md') {
+    if (!entry.name.endsWith('.yaml')) {
       continue;
     }
 

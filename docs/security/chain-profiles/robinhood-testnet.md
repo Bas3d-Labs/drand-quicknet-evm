@@ -1,69 +1,71 @@
----
-profileVersion: 1
+# Robinhood Testnet Security Profile
 
-network: robinhood-testnet
-chainId: 46630
-onboardingTier: 2
-
-randomness:
-  beacon: drand-quicknet
-  periodSeconds: 3
-
-timing:
-  minimumLeadRounds: 5
-  timestampFreshnessReserveSeconds: 3
-
-securityModel:
-  timestampAuthority: sequencer
-  historyIntegrityAssumption: trusted-sequencer
-  assumptionsSection: security-assumptions
-
-monitoring:
-  timestampSkewSeconds:
-    warning: 5
-    critical: 8
-
-chainAdapter:
-  type: arbitrum-nitro
-  config:
-    parentChain:
-      name: ethereum-sepolia
-      chainId: 11155111
-      slotSeconds: 12
-      requireTimeVariationSlotParity: true
-
-    rollup: '0xdc5F8E399DBd8a9F5F87AeC4C23Beb12431b386D'
-    expectedSequencerInbox: '0xA0D9dB3DC9791D54b5183C1C1866eFe1eCA7D414'
-
-    expectedMaxTimeVariation:
-      delayBlocks: 28800
-      futureBlocks: 300
-      delaySeconds: 345600
-      futureSeconds: 3600
-
-    approvedWasmModuleRoots:
-      - consensusRelease: consensus-v61
-        root: '0xc10cd7ec6acaf1c441a3f6bd0900ad20f15855ba775a96f1939118cbc629dc97'
-
-deploymentManifest: '../../../deployments/robinhood-testnet.json'
----
+Configuration: [`robinhood-testnet.yaml`](./robinhood-testnet.yaml)
 
 <a id="security-assumptions"></a>
 ## Security assumptions
 
-This profile uses the Robinhood Testnet sequencer as the L2 timestamp
-authority.
+Robinhood Testnet uses the sequencer-clock fast path
+(`sequencer` timestamp authority, `trusted-sequencer` history integrity).
 
-Protocol-valid sequencer timestamps may be stale within the applicable
-Arbitrum Nitro timestamp envelope. The configured minimum lead therefore
-provides a chain-clock-relative unpredictability margin and does not make
-the commitment independent of sequencer timestamp authority.
+### A1: Protocol timestamp validity
 
-This profile also assumes the sequencer preserves the required ordering
-and history integrity for commitments. Fraud-proof availability does not
-remove this assumption for the fast L2 commitment path.
+The configured Nitro time-variation envelope is:
 
-These timestamp-authority and history-integrity assumptions are accepted
-for Robinhood Testnet. A production deployment must either explicitly
-accept the equivalent assumptions or use a parent-chain-anchored
-precommitment model.
+```text
+delayBlocks:   28800
+futureBlocks:    300
+delaySeconds: 345600
+futureSeconds:  3600
+```
+
+With Ethereum Sepolia's 12-second slots, the block- and second-based limits
+agree; the backward protocol-valid allowance is 96 hours.
+
+These timestamp semantics were source-traced at Nitro commit `dfab1de`,
+including `arbstate/inbox.go` and `arbos/block_processor.go`, as part of the
+consensus-v61/ArbOS 61 provenance reviewed for this profile.
+
+The approved `consensus-v61` root in `chainAdapter.config` is the committed
+expected value for the separate live consensus-root check.
+
+### A2: Sequencer timestamp freshness
+
+For Quicknet period 3 seconds and `minimumLeadRounds = 5`, the reference
+consumer's mechanical chain-clock lead at commitment inclusion is 13–15
+seconds.
+
+With `timestampFreshnessReserveSeconds = 3`, the timestamp-skew violation
+boundary is 10 seconds.
+
+A1 does not establish A2: the protocol-valid backward allowance exceeds this
+boundary by a factor of 34,560.
+
+The warning (5 seconds) and critical (8 seconds) thresholds drive the skew
+monitor. Observed compliance is a canary for A2, not proof that the assumption
+always holds.
+
+### B: Sequencing and history integrity
+
+This profile assumes that protocol-valid sequencing, withholding, ordering, and
+history-selection discretion is not conditioned on subsequently learned drand
+outputs.
+
+### Testnet acceptance
+
+A2 and B are explicitly accepted for Robinhood Testnet. Fraud-proof
+availability does not by itself discharge either assumption.
+
+### Mainnet gate
+
+A production deployment must either explicitly accept the equivalent A2 and B
+assumptions or use the parent-chain-anchored model:
+
+```yaml
+securityModel:
+  timestampAuthority: parent-chain-consensus
+  historyIntegrityAssumption: parent-chain-precommitted
+```
+
+Increasing `minimumLeadRounds` alone does not remove the sequencing/history
+assumption.

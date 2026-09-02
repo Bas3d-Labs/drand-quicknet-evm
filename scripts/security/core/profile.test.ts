@@ -23,7 +23,8 @@ import {
 
 import {
   loadChainProfile,
-  parseChainProfileMarkdown,
+  parseChainProfileYaml,
+  parseProfileDocumentation,
 } from './profile.js';
 
 const NETWORK = 'example-network';
@@ -68,16 +69,17 @@ interface ProfileFixtureOptions {
   network?: string;
   chainId?: number;
   onboardingTier?: number;
-  timestampFreshnessReserveSeconds?: number;
+  documentation?: string;
   timestampAuthority?: string;
   historyIntegrityAssumption?: string;
   assumptionsSection?: string;
   monitoring?: string;
+  minimumLeadRounds?: number;
+  timestampFreshnessReserveSeconds?: number;
   deploymentManifest?: string;
   adapterType?: string;
   extraRoot?: string;
   extraRandomness?: string;
-  body?: string;
 }
 
 interface ManifestFixtureOptions {
@@ -87,45 +89,56 @@ interface ManifestFixtureOptions {
 
 interface FileFixtureOptions {
   profile?: ProfileFixtureOptions;
+  documentation?: string;
   manifest?: ManifestFixtureOptions;
-  manifestMode?: 'file' | 'missing' | 'directory' | 'malformed-json';
+  documentationMode?:
+    | 'file'
+    | 'missing'
+    | 'directory';
+  manifestMode?:
+    | 'file'
+    | 'missing'
+    | 'directory'
+    | 'malformed-json';
 }
 
 interface FileFixture {
   root: string;
   profilePath: string;
+  documentationPath: string;
   manifestPath: string;
 }
 
-function defaultProfileBody(): string {
-  return `<a id="security-assumptions"></a>
-
-## Security assumptions
-
-Example assumptions.
-`;
-}
-
-function profileFixture(
+function profileYamlFixture(
   options: ProfileFixtureOptions = {},
 ): string {
-  const profileVersion = options.profileVersion ?? 1;
+  const profileVersion =
+    options.profileVersion ?? 1;
 
-  const network = options.network ?? NETWORK;
-  const chainId = options.chainId ?? CHAIN_ID;
+  const network =
+    options.network ?? NETWORK;
 
-  const onboardingTier = options.onboardingTier ?? 2;
+  const chainId =
+    options.chainId ?? CHAIN_ID;
 
-  const timestampFreshnessReserveSeconds =
-    options.timestampFreshnessReserveSeconds ?? 3;
+  const onboardingTier =
+    options.onboardingTier ?? 1;
 
-  const timestampAuthority = options.timestampAuthority ?? 'sequencer';
+  const documentation =
+    options.documentation
+    ?? './example-network.md';
+
+  const timestampAuthority =
+    options.timestampAuthority
+    ?? 'sequencer';
 
   const historyIntegrityAssumption =
-    options.historyIntegrityAssumption ?? 'trusted-sequencer';
+    options.historyIntegrityAssumption
+    ?? 'trusted-sequencer';
 
   const assumptionsSection =
-    options.assumptionsSection ?? 'security-assumptions';
+    options.assumptionsSection
+    ?? 'security-assumptions';
 
   const monitoring =
     options.monitoring
@@ -134,30 +147,39 @@ function profileFixture(
     warning: 5
     critical: 8`;
 
+  const minimumLeadRounds =
+    options.minimumLeadRounds ?? 5;
+
+  const timestampFreshnessReserveSeconds =
+    options.timestampFreshnessReserveSeconds ?? 3;
+
   const deploymentManifest =
     options.deploymentManifest
     ?? '../../../deployments/example-network.json';
 
-  const adapterType = options.adapterType ?? 'arbitrum-nitro';
+  const adapterType =
+    options.adapterType ?? 'arbitrum-nitro';
 
-  const extraRoot =  options.extraRoot ?? '';
+  const extraRoot =
+    options.extraRoot ?? '';
 
-  const extraRandomness =  options.extraRandomness ?? '';
+  const extraRandomness =
+    options.extraRandomness ?? '';
 
-  const body = options.body ?? defaultProfileBody();
+  return `profileVersion: ${profileVersion}
 
-  return `---
-profileVersion: ${profileVersion}
 network: ${network}
 chainId: ${chainId}
 onboardingTier: ${onboardingTier}
-${extraRoot}
-randomness:
+
+documentation: '${documentation}'
+
+${extraRoot}randomness:
   beacon: drand-quicknet
   periodSeconds: 3
 ${extraRandomness}
 timing:
-  minimumLeadRounds: 5
+  minimumLeadRounds: ${minimumLeadRounds}
   timestampFreshnessReserveSeconds: ${timestampFreshnessReserveSeconds}
 
 securityModel:
@@ -175,23 +197,32 @@ chainAdapter:
       chainId: 54321
       slotSeconds: 12
       requireTimeVariationSlotParity: true
+
     rollup: '${ROLLUP}'
     expectedSequencerInbox: '${SEQUENCER_INBOX}'
+
     expectedMaxTimeVariation:
       delayBlocks: 100
       futureBlocks: 10
       delaySeconds: 1200
       futureSeconds: 120
+
     approvedWasmModuleRoots:
       - consensusRelease: example-release
         root: '${WASM_ROOT}'
 
 deploymentManifest: '${deploymentManifest}'
----
+`;
+}
 
-# Example Network
+function documentationFixture(): string {
+  return `# Example Network Security Profile
 
-${body}`;
+<a id="security-assumptions"></a>
+## Security assumptions
+
+Example security assumptions.
+`;
 }
 
 function manifestFixture(
@@ -222,6 +253,14 @@ function manifestFixture(
   };
 }
 
+function parsedProfile(
+  options: ProfileFixtureOptions = {},
+) {
+  return parseChainProfileYaml(
+    profileYamlFixture(options),
+  ).profile;
+}
+
 async function createTemporaryDirectory(): Promise<string> {
   const directory = await mkdtemp(
     join(tmpdir(), 'drand-quicknet-profile-'),
@@ -235,7 +274,8 @@ async function createTemporaryDirectory(): Promise<string> {
 async function writeFileFixture(
   options: FileFixtureOptions = {},
 ): Promise<FileFixture> {
-  const root = await createTemporaryDirectory();
+  const root =
+    await createTemporaryDirectory();
 
   const profileDirectory = join(
     root,
@@ -265,6 +305,11 @@ async function writeFileFixture(
 
   const profilePath = join(
     profileDirectory,
+    'example-network.yaml',
+  );
+
+  const documentationPath = join(
+    profileDirectory,
     'example-network.md',
   );
 
@@ -275,34 +320,59 @@ async function writeFileFixture(
 
   await writeFile(
     profilePath,
-    profileFixture(options.profile),
+    profileYamlFixture(
+      options.profile,
+    ),
     'utf8',
   );
+
+  const documentationMode =
+    options.documentationMode ?? 'file';
+
+  if (documentationMode === 'file') {
+    await writeFile(
+      documentationPath,
+      options.documentation
+      ?? documentationFixture(),
+      'utf8',
+    );
+  } else if (documentationMode === 'directory') {
+    await mkdir(
+      documentationPath,
+      {
+        recursive: true,
+      },
+    );
+  }
 
   const manifestMode =
     options.manifestMode ?? 'file';
 
-  if (manifestMode === 'directory') {
+  if (manifestMode === 'file') {
+    await writeFile(
+      manifestPath,
+      JSON.stringify(
+        manifestFixture(
+          options.manifest,
+        ),
+        null,
+        2,
+      ),
+      'utf8',
+    );
+  } else if (manifestMode === 'directory') {
     await mkdir(
       manifestPath,
       {
         recursive: true,
       },
     );
-  } else if (manifestMode === 'malformed-json') {
+  } else if (
+    manifestMode === 'malformed-json'
+  ) {
     await writeFile(
       manifestPath,
       '{"manifestVersion":',
-      'utf8',
-    );
-  } else if (manifestMode === 'file') {
-    await writeFile(
-      manifestPath,
-      JSON.stringify(
-        manifestFixture(options.manifest),
-        null,
-        2,
-      ),
       'utf8',
     );
   }
@@ -310,6 +380,7 @@ async function writeFileFixture(
   return {
     root,
     profilePath,
+    documentationPath,
     manifestPath,
   };
 }
@@ -328,183 +399,187 @@ afterEach(async () => {
   temporaryDirectories.length = 0;
 });
 
-describe('parseChainProfileMarkdown', () => {
+describe('parseChainProfileYaml', () => {
   it('accepts a valid chain profile', () => {
     expect(
-      () => parseChainProfileMarkdown(
-        profileFixture(),
+      () => parseChainProfileYaml(
+        profileYamlFixture(),
       ),
     ).not.toThrow();
   });
 
+  it('returns the validated profile', () => {
+    const parsed =
+      parseChainProfileYaml(
+        profileYamlFixture(),
+      );
+
+    expect(parsed.profile.network).toBe(
+      NETWORK,
+    );
+
+    expect(parsed.profile.chainId).toBe(
+      CHAIN_ID,
+    );
+
+    expect(
+      parsed.profile.onboardingTier,
+    ).toBe(1);
+
+    expect(
+      parsed.profile.documentation,
+    ).toBe('./example-network.md');
+
+    expect(
+      parsed.profile.deploymentManifest,
+    ).toBe(
+      '../../../deployments/example-network.json',
+    );
+
+    expect(
+      parsed.profile.chainAdapter.type,
+    ).toBe('arbitrum-nitro');
+  });
+
   it('derives the minimum chain-clock lead', () => {
     const parsed =
-      parseChainProfileMarkdown(
-        profileFixture(),
+      parseChainProfileYaml(
+        profileYamlFixture(),
       );
 
     expect(
-      parsed.derivedTiming.minimumChainClockLeadSeconds,
+      parsed.derivedTiming
+        .minimumChainClockLeadSeconds,
     ).toBe(13);
   });
 
   it('derives the timestamp-skew violation boundary', () => {
     const parsed =
-      parseChainProfileMarkdown(
-        profileFixture(),
+      parseChainProfileYaml(
+        profileYamlFixture(),
       );
 
     expect(
-      parsed.derivedTiming.timestampSkewViolationSeconds,
+      parsed.derivedTiming
+        .timestampSkewViolationSeconds,
     ).toBe(10);
   });
 
+  it('rejects invalid YAML', () => {
+    expect(
+      () => parseChainProfileYaml(
+        'profileVersion: [',
+      ),
+    ).toThrow(
+      'profile contains invalid YAML:'
+    );
+  });
+
   it('rejects an unsupported profile version', () => {
-    const markdown = profileFixture({
+    const yaml = profileYamlFixture({
       profileVersion: 2,
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseChainProfileYaml(yaml),
     ).toThrow(
-      'profileVersion must be 1.',
+      'profileVersion must be 1.'
     );
   });
 
   it('rejects an unknown root key', () => {
-    const markdown = profileFixture({
-      extraRoot: 'unexpected: true\n',
+    const yaml = profileYamlFixture({
+      extraRoot: 'unexpected: true\n\n',
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseChainProfileYaml(yaml),
     ).toThrow(
-      'profile.unexpected is not supported.',
+      'profile.unexpected is not supported.'
     );
   });
 
   it('rejects the freshness reserve under randomness', () => {
-    const markdown = profileFixture({
+    const yaml = profileYamlFixture({
       extraRandomness:
         '  timestampFreshnessReserveSeconds: 3\n',
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseChainProfileYaml(yaml),
     ).toThrow(
       'randomness.timestampFreshnessReserveSeconds '
-      + 'is not supported.',
+      + 'is not supported.'
+    );
+  });
+
+  it('rejects an unsupported onboarding tier', () => {
+    const yaml = profileYamlFixture({
+      onboardingTier: 4,
+    });
+
+    expect(
+      () => parseChainProfileYaml(yaml),
+    ).toThrow(
+      'onboardingTier must be one of 1, 2, or 3.'
     );
   });
 
   it('rejects an unsupported chain adapter', () => {
-    const markdown = profileFixture({
+    const yaml = profileYamlFixture({
       adapterType: 'example-adapter',
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseChainProfileYaml(yaml),
     ).toThrow(
-      'unsupported chainAdapter.type: example-adapter.',
+      'unsupported chainAdapter.type: example-adapter.'
     );
   });
 
-  it('rejects a dangling assumptions section', () => {
-    const markdown = profileFixture({
-      assumptionsSection: 'missing-assumptions',
+  it('rejects an absolute documentation path', () => {
+    const yaml = profileYamlFixture({
+      documentation: resolve(
+        'example-network.md',
+      ),
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseChainProfileYaml(yaml),
     ).toThrow(
-      'securityModel.assumptionsSection '
-      + 'does not resolve: missing-assumptions',
+      'documentation must be a relative path.'
     );
   });
 
-  it('rejects duplicate explicit anchors', () => {
-    const markdown = profileFixture({
-      body: `<a id="security-assumptions"></a>
-
-## Security assumptions
-
-<a id="security-assumptions"></a>
-`,
+  it('rejects an absolute deployment manifest path', () => {
+    const yaml = profileYamlFixture({
+      deploymentManifest: resolve(
+        'example-network.json',
+      ),
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseChainProfileYaml(yaml),
     ).toThrow(
-      'duplicate explicit profile anchor: '
-      + 'security-assumptions',
-    );
-  });
-
-  it('does not resolve an anchor inside a fenced code block', () => {
-    const fence = '```';
-
-    const markdown = profileFixture({
-      body: `${fence}html
-<a id="security-assumptions"></a>
-${fence}
-`,
-    });
-
-    expect(
-      () => parseChainProfileMarkdown(markdown),
-    ).toThrow(
-      'securityModel.assumptionsSection '
-      + 'does not resolve: security-assumptions',
-    );
-  });
-
-  it('does not treat a fenced anchor as a duplicate', () => {
-    const fence = '```';
-
-    const markdown = profileFixture({
-      body: `<a id="security-assumptions"></a>
-
-## Security assumptions
-
-${fence}html
-<a id="security-assumptions"></a>
-${fence}
-`,
-    });
-
-    expect(
-      () => parseChainProfileMarkdown(markdown),
-    ).not.toThrow();
-  });
-
-  it('does not resolve an anchor inside inline code', () => {
-    const markdown = profileFixture({
-      body: '`<a id="security-assumptions"></a>`',
-    });
-
-    expect(
-      () => parseChainProfileMarkdown(markdown),
-    ).toThrow(
-      'securityModel.assumptionsSection '
-      + 'does not resolve: security-assumptions',
+      'deploymentManifest must be a relative path.'
     );
   });
 
   it('requires skew monitoring for sequencer timestamp authority', () => {
-    const markdown = profileFixture({
+    const yaml = profileYamlFixture({
       monitoring: 'monitoring: {}',
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseChainProfileYaml(yaml),
     ).toThrow(
       'monitoring.timestampSkewSeconds is required '
-      + 'when timestampAuthority is sequencer.',
+      + 'when timestampAuthority is sequencer.'
     );
   });
 
   it('accepts the parent-chain security model without skew monitoring', () => {
-    const markdown = profileFixture({
+    const yaml = profileYamlFixture({
       timestampAuthority:
         'parent-chain-consensus',
       historyIntegrityAssumption:
@@ -513,28 +588,28 @@ ${fence}
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseChainProfileYaml(yaml),
     ).not.toThrow();
   });
 
   it('rejects parent-chain precommitment with sequencer timestamps', () => {
-    const markdown = profileFixture({
+    const yaml = profileYamlFixture({
       timestampAuthority: 'sequencer',
       historyIntegrityAssumption:
         'parent-chain-precommitted',
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseChainProfileYaml(yaml),
     ).toThrow(
       'securityModel.historyIntegrityAssumption '
       + 'must be trusted-sequencer when '
-      + 'timestampAuthority is sequencer.',
+      + 'timestampAuthority is sequencer.'
     );
   });
 
   it('rejects trusted sequencer history with parent-chain timestamps', () => {
-    const markdown = profileFixture({
+    const yaml = profileYamlFixture({
       timestampAuthority:
         'parent-chain-consensus',
       historyIntegrityAssumption:
@@ -543,16 +618,16 @@ ${fence}
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseChainProfileYaml(yaml),
     ).toThrow(
       'securityModel.historyIntegrityAssumption '
       + 'must be parent-chain-precommitted when '
-      + 'timestampAuthority is parent-chain-consensus.',
+      + 'timestampAuthority is parent-chain-consensus.'
     );
   });
 
   it('rejects timestamp skew warning at or above critical', () => {
-    const markdown = profileFixture({
+    const yaml = profileYamlFixture({
       monitoring: `monitoring:
   timestampSkewSeconds:
     warning: 8
@@ -560,14 +635,14 @@ ${fence}
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseChainProfileYaml(yaml),
     ).toThrow(
-      'timestamp skew warning must be below critical.',
+      'timestamp skew warning must be below critical.'
     );
   });
 
   it('rejects critical skew at the derived violation boundary', () => {
-    const markdown = profileFixture({
+    const yaml = profileYamlFixture({
       monitoring: `monitoring:
   timestampSkewSeconds:
     warning: 5
@@ -575,44 +650,222 @@ ${fence}
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseChainProfileYaml(yaml),
     ).toThrow(
       'timestamp skew critical must be below '
-      + 'derived violation threshold (10s).',
+      + 'derived violation threshold (10s).'
     );
   });
 
   it('rejects a freshness reserve that consumes the entire lead', () => {
-    const markdown = profileFixture({
+    const yaml = profileYamlFixture({
       timestampFreshnessReserveSeconds: 13,
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseChainProfileYaml(yaml),
     ).toThrow(
       'timing.timestampFreshnessReserveSeconds '
       + 'must be smaller than the minimum '
-      + 'chain-clock lead.',
+      + 'chain-clock lead.'
     );
   });
+});
 
-  it('rejects an absolute deployment manifest path', () => {
-    const markdown = profileFixture({
-      deploymentManifest: resolve(
-        'example-network.json',
+describe('parseProfileDocumentation', () => {
+  it('accepts documentation containing the assumptions anchor', () => {
+    const profile = parsedProfile();
+
+    expect(
+      () => parseProfileDocumentation(
+        profile,
+        documentationFixture(),
       ),
+    ).not.toThrow();
+  });
+
+  it('returns the documentation and explicit anchors', () => {
+    const profile = parsedProfile();
+
+    const parsed =
+      parseProfileDocumentation(
+        profile,
+        documentationFixture(),
+      );
+
+    expect(
+      parsed.markdownBody,
+    ).toContain(
+      '# Example Network Security Profile',
+    );
+
+    expect(
+      parsed.anchors.has(
+        'security-assumptions',
+      ),
+    ).toBe(true);
+  });
+
+  it('normalizes CRLF line endings', () => {
+    const profile = parsedProfile();
+
+    const markdown = documentationFixture()
+      .replaceAll(
+        '\n',
+        '\r\n',
+      );
+
+    const parsed =
+      parseProfileDocumentation(
+        profile,
+        markdown,
+      );
+
+    expect(
+      parsed.markdownBody.includes('\r\n'),
+    ).toBe(false);
+  });
+
+  it('rejects a dangling assumptions section', () => {
+    const profile = parsedProfile({
+      assumptionsSection:
+        'missing-assumptions',
     });
 
     expect(
-      () => parseChainProfileMarkdown(markdown),
+      () => parseProfileDocumentation(
+        profile,
+        documentationFixture(),
+      ),
     ).toThrow(
-      'deploymentManifest must be a relative path.',
+      'securityModel.assumptionsSection '
+      + 'does not resolve: missing-assumptions'
+    );
+  });
+
+  it('rejects duplicate explicit anchors', () => {
+    const profile = parsedProfile();
+
+    const markdown = `# Example
+
+<a id="security-assumptions"></a>
+
+<a id="security-assumptions"></a>
+`;
+
+    expect(
+      () => parseProfileDocumentation(
+        profile,
+        markdown,
+      ),
+    ).toThrow(
+      'duplicate explicit profile anchor: '
+      + 'security-assumptions'
+    );
+  });
+
+  it('rejects invalid explicit anchor IDs', () => {
+    const profile = parsedProfile();
+
+    const markdown =
+      '<a id="Security-Assumptions"></a>';
+
+    expect(
+      () => parseProfileDocumentation(
+        profile,
+        markdown,
+      ),
+    ).toThrow(
+      'invalid explicit profile anchor: '
+      + 'Security-Assumptions'
+    );
+  });
+
+  it('does not resolve an anchor inside a fenced code block', () => {
+    const profile = parsedProfile();
+    const fence = '```';
+
+    const markdown = `# Example
+
+${fence}html
+<a id="security-assumptions"></a>
+${fence}
+`;
+
+    expect(
+      () => parseProfileDocumentation(
+        profile,
+        markdown,
+      ),
+    ).toThrow(
+      'securityModel.assumptionsSection '
+      + 'does not resolve: security-assumptions'
+    );
+  });
+
+  it('does not resolve an anchor inside a tilde-fenced code block', () => {
+    const profile = parsedProfile();
+    const fence = '~~~';
+
+    const markdown = `# Example
+
+${fence}html
+<a id="security-assumptions"></a>
+${fence}
+`;
+
+    expect(
+      () => parseProfileDocumentation(
+        profile,
+        markdown,
+      ),
+    ).toThrow(
+      'securityModel.assumptionsSection '
+      + 'does not resolve: security-assumptions'
+    );
+  });
+
+  it('does not treat a fenced anchor as a duplicate', () => {
+    const profile = parsedProfile();
+    const fence = '```';
+
+    const markdown = `# Example
+
+<a id="security-assumptions"></a>
+
+${fence}html
+<a id="security-assumptions"></a>
+${fence}
+`;
+
+    expect(
+      () => parseProfileDocumentation(
+        profile,
+        markdown,
+      ),
+    ).not.toThrow();
+  });
+
+  it('does not resolve an anchor inside inline code', () => {
+    const profile = parsedProfile();
+
+    const markdown =
+      '`<a id="security-assumptions"></a>`';
+
+    expect(
+      () => parseProfileDocumentation(
+        profile,
+        markdown,
+      ),
+    ).toThrow(
+      'securityModel.assumptionsSection '
+      + 'does not resolve: security-assumptions'
     );
   });
 });
 
 describe('loadChainProfile', () => {
-  it('loads the profile and its resolved deployment manifest', async () => {
+  it('loads the profile, documentation, and deployment manifest', async () => {
     const fixture =
       await writeFileFixture();
 
@@ -625,6 +878,12 @@ describe('loadChainProfile', () => {
       resolve(fixture.profilePath),
     );
 
+    expect(
+      loaded.documentationPath,
+    ).toBe(
+      resolve(fixture.documentationPath),
+    );
+
     expect(loaded.manifestPath).toBe(
       resolve(fixture.manifestPath),
     );
@@ -633,12 +892,12 @@ describe('loadChainProfile', () => {
       NETWORK,
     );
 
-    expect(loaded.manifest.network).toBe(
-      NETWORK,
-    );
-
     expect(loaded.profile.chainId).toBe(
       CHAIN_ID,
+    );
+
+    expect(loaded.manifest.network).toBe(
+      NETWORK,
     );
 
     expect(loaded.manifest.chainId).toBe(
@@ -646,12 +905,69 @@ describe('loadChainProfile', () => {
     );
 
     expect(
-      loaded.derivedTiming.minimumChainClockLeadSeconds,
+      loaded.anchors.has(
+        'security-assumptions',
+      ),
+    ).toBe(true);
+
+    expect(
+      loaded.derivedTiming
+        .minimumChainClockLeadSeconds,
     ).toBe(13);
 
     expect(
-      loaded.derivedTiming.timestampSkewViolationSeconds,
+      loaded.derivedTiming
+        .timestampSkewViolationSeconds,
     ).toBe(10);
+  });
+
+  it('rejects missing documentation', async () => {
+    const fixture =
+      await writeFileFixture({
+        documentationMode: 'missing',
+      });
+
+    await expect(
+      loadChainProfile(
+        fixture.profilePath,
+      ),
+    ).rejects.toThrow(
+      `documentation does not exist: ${fixture.documentationPath}`
+    );
+  });
+
+  it('rejects a documentation path that is not a file', async () => {
+    const fixture =
+      await writeFileFixture({
+        documentationMode: 'directory',
+      });
+
+    await expect(
+      loadChainProfile(
+        fixture.profilePath,
+      ),
+    ).rejects.toThrow(
+      `documentation is not a file: ${fixture.documentationPath}`
+    );
+  });
+
+  it('rejects documentation without the required assumptions anchor', async () => {
+    const fixture =
+      await writeFileFixture({
+        documentation: `# Example
+
+No explicit assumptions anchor.
+`,
+      });
+
+    await expect(
+      loadChainProfile(
+        fixture.profilePath,
+      ),
+    ).rejects.toThrow(
+      'securityModel.assumptionsSection '
+      + 'does not resolve: security-assumptions'
+    );
   });
 
   it('rejects a missing deployment manifest', async () => {
@@ -665,7 +981,7 @@ describe('loadChainProfile', () => {
         fixture.profilePath,
       ),
     ).rejects.toThrow(
-      `deploymentManifest does not exist: ${fixture.manifestPath}`,
+      `deploymentManifest does not exist: ${fixture.manifestPath}`
     );
   });
 
@@ -680,7 +996,7 @@ describe('loadChainProfile', () => {
         fixture.profilePath,
       ),
     ).rejects.toThrow(
-      `deploymentManifest is not a file: ${fixture.manifestPath}`,
+      `deploymentManifest is not a file: ${fixture.manifestPath}`
     );
   });
 
@@ -696,7 +1012,7 @@ describe('loadChainProfile', () => {
       ),
     ).rejects.toThrow(
       'deploymentManifest contains invalid JSON: '
-      + fixture.manifestPath,
+      + fixture.manifestPath
     );
   });
 
@@ -724,7 +1040,7 @@ describe('loadChainProfile', () => {
         fixture.profilePath,
       ),
     ).rejects.toThrow(
-      'manifest.unexpected is not supported.',
+      'manifest.unexpected is not supported.'
     );
   });
 
@@ -743,7 +1059,7 @@ describe('loadChainProfile', () => {
     ).rejects.toThrow(
       'deployment manifest network mismatch: '
       + `profile=${NETWORK} `
-      + 'manifest=different-network.',
+      + 'manifest=different-network.'
     );
   });
 
@@ -762,7 +1078,7 @@ describe('loadChainProfile', () => {
     ).rejects.toThrow(
       'deployment manifest chainId mismatch: '
       + `profile=${CHAIN_ID} `
-      + `manifest=${CHAIN_ID + 1}.`,
+      + `manifest=${CHAIN_ID + 1}.`
     );
   });
 });

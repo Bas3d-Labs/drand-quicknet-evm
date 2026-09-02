@@ -1,5 +1,6 @@
 import {
   readFile,
+  stat,
 } from 'node:fs/promises';
 
 import {
@@ -59,6 +60,7 @@ export interface ChainProfile {
   network: string;
   chainId: number;
   onboardingTier: OnboardingTier;
+  documentation: string;
 
   randomness: {
     beacon: 'drand-quicknet';
@@ -92,21 +94,22 @@ export interface DerivedTiming {
 
 export interface ParsedChainProfile {
   profile: ChainProfile;
+  derivedTiming: DerivedTiming;
+}
+
+export interface ParsedProfileDocumentation {
   markdownBody: string;
   anchors: ReadonlySet<string>;
-  derivedTiming: DerivedTiming;
 }
 
 export interface LoadedChainProfile
   extends ParsedChainProfile {
   profilePath: string;
+  documentationPath: string;
+  markdownBody: string;
+  anchors: ReadonlySet<string>;
   manifestPath: string;
   manifest: DeploymentManifest;
-}
-
-interface ParsedMarkdown {
-  frontMatter: unknown;
-  body: string;
 }
 
 const TIMESTAMP_AUTHORITIES =
@@ -225,57 +228,6 @@ function requireRelativePath(
   }
 
   return filePath;
-}
-
-function parseMarkdown(
-  markdown: string,
-): ParsedMarkdown {
-  const normalized = markdown.replaceAll(
-    '\r\n',
-    '\n',
-  );
-
-  if (!normalized.startsWith('---\n')) {
-    throw new Error(
-      'profile must begin with YAML front matter.',
-    );
-  }
-
-  const end = normalized.indexOf(
-    '\n---\n',
-    4,
-  );
-
-  if (end === -1) {
-    throw new Error(
-      'profile YAML front matter is not terminated.',
-    );
-  }
-
-  const yaml = normalized.slice(
-    4,
-    end,
-  );
-
-  let frontMatter: unknown;
-
-  try {
-    frontMatter = parseYaml(yaml);
-  } catch (error) {
-    if (error instanceof Error) {
-      throw new Error(
-        'profile contains invalid YAML: '
-        + error.message,
-      );
-    }
-
-    throw error;
-  }
-
-  return {
-    frontMatter,
-    body: normalized.slice(end + 5),
-  };
 }
 
 function stripInlineCode(
@@ -597,15 +549,17 @@ export function deriveTiming(
     - reserveSeconds;
 
   return {
-    minimumChainClockLeadSeconds: toSafeInteger(
-      minimumChainClockLeadSeconds,
-      'minimumChainClockLeadSeconds',
-    ),
+    minimumChainClockLeadSeconds:
+      toSafeInteger(
+        minimumChainClockLeadSeconds,
+        'minimumChainClockLeadSeconds',
+      ),
 
-    timestampSkewViolationSeconds: toSafeInteger(
-      timestampSkewViolationSeconds,
-      'timestampSkewViolationSeconds',
-    ),
+    timestampSkewViolationSeconds:
+      toSafeInteger(
+        timestampSkewViolationSeconds,
+        'timestampSkewViolationSeconds',
+      ),
   };
 }
 
@@ -640,20 +594,8 @@ function validateSecurityModelRelationships(
 
 function validateGenericRelationships(
   profile: ChainProfile,
-  anchors: ReadonlySet<string>,
 ): DerivedTiming {
-
   validateSecurityModelRelationships(profile);
-
-  const assumptionsSection = profile.securityModel.assumptionsSection;
-
-  if (!anchors.has(assumptionsSection)) {
-    throw new Error(
-      'securityModel.assumptionsSection '
-      + 'does not resolve: '
-      + assumptionsSection,
-    );
-  }
 
   const derivedTiming = deriveTiming(profile);
   if (
@@ -699,11 +641,25 @@ function validateGenericRelationships(
   return derivedTiming;
 }
 
+function validateDocumentationRelationships(
+  profile: ChainProfile,
+  anchors: ReadonlySet<string>,
+): void {
+  const assumptionsSection = profile.securityModel.assumptionsSection;
+
+  if (!anchors.has(assumptionsSection)) {
+    throw new Error(
+      'securityModel.assumptionsSection '
+      + 'does not resolve: '
+      + assumptionsSection,
+    );
+  }
+}
+
 function validateChainAdapter(
   value: unknown,
 ): ChainAdapterConfig {
   const path = 'chainAdapter';
-
   const chainAdapter = requireRecord(value, path);
 
   assertOnlyKeys(
@@ -729,9 +685,8 @@ function validateChainAdapter(
   );
 }
 
-function validateFrontMatter(
+function validateProfileConfig(
   value: unknown,
-  anchors: ReadonlySet<string>,
 ): {
   profile: ChainProfile;
   derivedTiming: DerivedTiming;
@@ -745,6 +700,7 @@ function validateFrontMatter(
       'network',
       'chainId',
       'onboardingTier',
+      'documentation',
       'randomness',
       'timing',
       'securityModel',
@@ -824,6 +780,7 @@ function validateFrontMatter(
   );
 
   const validatedMonitoring: ChainProfile['monitoring'] = {};
+
   if (
     monitoring.timestampSkewSeconds !== undefined
   ) {
@@ -850,9 +807,13 @@ function validateFrontMatter(
       root.onboardingTier,
     ),
 
+    documentation: requireRelativePath(
+      root.documentation,
+      'documentation',
+    ),
+
     randomness: {
       beacon: 'drand-quicknet',
-
       periodSeconds: requirePositiveInteger(
         randomness.periodSeconds,
         'randomness.periodSeconds',
@@ -865,20 +826,23 @@ function validateFrontMatter(
         'timing.minimumLeadRounds',
       ),
 
-      timestampFreshnessReserveSeconds: requireNonNegativeInteger(
-        timing.timestampFreshnessReserveSeconds,
-        'timing.timestampFreshnessReserveSeconds',
-      ),
+      timestampFreshnessReserveSeconds:
+        requireNonNegativeInteger(
+          timing.timestampFreshnessReserveSeconds,
+          'timing.timestampFreshnessReserveSeconds',
+        ),
     },
 
     securityModel: {
-      timestampAuthority: requireTimestampAuthority(
-        securityModel.timestampAuthority,
-      ),
+      timestampAuthority:
+        requireTimestampAuthority(
+          securityModel.timestampAuthority,
+        ),
 
-      historyIntegrityAssumption: requireHistoryIntegrityAssumption(
-        securityModel.historyIntegrityAssumption,
-      ),
+      historyIntegrityAssumption:
+        requireHistoryIntegrityAssumption(
+          securityModel.historyIntegrityAssumption,
+        ),
 
       assumptionsSection: requireAnchorId(
         securityModel.assumptionsSection,
@@ -898,10 +862,7 @@ function validateFrontMatter(
     ),
   };
 
-  const derivedTiming = validateGenericRelationships(
-    profile,
-    anchors,
-  );
+  const derivedTiming = validateGenericRelationships(profile);
 
   return {
     profile,
@@ -909,53 +870,109 @@ function validateFrontMatter(
   };
 }
 
-export function parseChainProfileMarkdown(
-  markdown: string,
+export function parseChainProfileYaml(
+  yaml: string,
 ): ParsedChainProfile {
-  const parsed = parseMarkdown(
-    markdown,
-  );
+  let parsed: unknown;
 
-  const anchors = collectExplicitAnchors(
-    parsed.body,
-  );
+  try {
+    parsed = parseYaml(yaml);
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(
+        `profile contains invalid YAML: ${error.message}`
+      );
+    }
 
-  const validated = validateFrontMatter(
-    parsed.frontMatter,
+    throw error;
+  }
+
+  return validateProfileConfig(parsed);
+}
+
+export function parseProfileDocumentation(
+  profile: ChainProfile,
+  markdown: string,
+): ParsedProfileDocumentation {
+  const markdownBody = markdown.replaceAll('\r\n', '\n');
+
+  const anchors = collectExplicitAnchors(markdownBody);
+
+  validateDocumentationRelationships(
+    profile,
     anchors,
   );
 
   return {
-    profile: validated.profile,
-    markdownBody: parsed.body,
+    markdownBody,
     anchors,
-    derivedTiming:
-      validated.derivedTiming,
   };
+}
+
+async function loadProfileDocumentation(
+  documentationPath: string,
+): Promise<string> {
+  let fileStat;
+
+  try {
+    fileStat = await stat(documentationPath);
+  } catch {
+    throw new Error(
+      `documentation does not exist: ${documentationPath}`,
+    );
+  }
+
+  if (!fileStat.isFile()) {
+    throw new Error(
+      `documentation is not a file: ${documentationPath}`,
+    );
+  }
+
+  try {
+    return await readFile(documentationPath, 'utf8');
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(
+        `failed to read documentation ${documentationPath}: ${error.message}`
+      );
+    }
+
+    throw error;
+  }
 }
 
 export async function loadChainProfile(
   profilePath: string,
 ): Promise<LoadedChainProfile> {
-  const absoluteProfilePath = resolve(profilePath);
-  const markdown = await readFile(
+  const absoluteProfilePath =
+    resolve(profilePath);
+
+  const yaml = await readFile(
     absoluteProfilePath,
     'utf8',
   );
 
-  const parsed = parseChainProfileMarkdown(
+  const parsed = parseChainProfileYaml(yaml);
+  const profileDirectory = dirname(absoluteProfilePath);
+
+  const documentationPath = resolve(
+    profileDirectory,
+    parsed.profile.documentation,
+  );
+
+  const markdown = await loadProfileDocumentation(documentationPath);
+
+  const documentation = parseProfileDocumentation(
+    parsed.profile,
     markdown,
   );
 
   const manifestPath = resolve(
-    dirname(absoluteProfilePath),
+    profileDirectory,
     parsed.profile.deploymentManifest,
   );
 
-  const manifest = await loadDeploymentManifest(
-    manifestPath,
-  );
-
+  const manifest = await loadDeploymentManifest(manifestPath);
   if (
     manifest.network !== parsed.profile.network
   ) {
@@ -979,10 +996,13 @@ export async function loadChainProfile(
   return {
     profilePath: absoluteProfilePath,
     profile: parsed.profile,
+    derivedTiming: parsed.derivedTiming,
+
+    documentationPath,
+    markdownBody: documentation.markdownBody,
+    anchors: documentation.anchors,
+
     manifestPath,
     manifest,
-    markdownBody: parsed.markdownBody,
-    anchors: parsed.anchors,
-    derivedTiming: parsed.derivedTiming,
   };
 }

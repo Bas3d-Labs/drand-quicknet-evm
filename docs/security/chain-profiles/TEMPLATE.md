@@ -8,9 +8,9 @@ the Quicknet infrastructure on a particular EVM network.
 
 ## Normative configuration
 
-The YAML front matter is normative for machine consumers.
+The profile YAML file is normative for machine consumers.
 
-The Markdown body explains and justifies the normative configuration.
+The referenced Markdown document explains and justifies the normative configuration.
 
 Changes to normative profile state MUST update both the front matter and the
 corresponding security explanation in the same revision.
@@ -38,6 +38,7 @@ profileVersion: 1
 network: example-network
 chainId: 12345
 onboardingTier: 1
+documentation: './example-network.md'
 
 randomness:
   beacon: drand-quicknet
