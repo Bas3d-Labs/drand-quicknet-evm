@@ -15,12 +15,12 @@
   },
   "registry": {
     "contract": "DrandQuicknetBeaconRegistry",
-    "address": "0x8d35b4d5f952dc339f99BF8207da48643123cd26",
-    "runtimeCodehash": "0x3a03827a0343a262f3e5ac092f12a56d527afde0ee6bd749377a41898c4f437c",
-    "minimumLeadRounds": 5,
-    "deploymentTx": "0x7f7128ad6d20bfbfea4f1d98c5490629fa04ae8d1ec756dbd1fc6e45f891e863",
-    "deploymentBlock": 110448589,
-    "sourceCommit": "f6f51cb85e73257e8025fd0492c1acf262bbe24a"
+    "address": "0x6e69C56D8D678aDeF8401adF1186c026A0915e2a",
+    "runtimeCodehash": "0x617b58699fa376a677b4c297169e4a66f74d605ee1bdf8de643431d5a752ecce",
+    "minimumLeadRounds": 3,
+    "deploymentTx": "0x43e32d7b9133807f6380b418b5f94ebf1b41c93970ecbdcdcfde0e24ec10edc1",
+    "deploymentBlock": 112100154,
+    "sourceCommit": "f566503de7c3ef65891cf990d4c5dc4b73f9d026"
   },
   "build": {
     "solc": "0.8.36",
