@@ -2,54 +2,71 @@
 
 Permissionless drand Quicknet randomness infrastructure for EVM chains.
 
-`drand-quicknet-evm` provides contracts, TypeScript libraries, and reference relayer tooling for making [drand Quicknet](https://drand.love/) randomness available on-chain.
+`drand-quicknet-evm` provides Solidity contracts, TypeScript libraries, reference
+relayer tooling, and chain-security verification tooling for making
+[drand Quicknet](https://drand.love/) randomness available to EVM applications.
 
-The core model is simple:
+The core model is:
 
 ```text
 drand Quicknet
       ↓
-DrandOracleQuicknet
+Quicknet verifier
       ↓
 DrandQuicknetBeaconRegistry
       ↓
-consumer contracts
+DrandQuicknetRandomnessConsumer
+      ↓
+applications
 ```
 
-Applications commit to an **exact future Quicknet round** before that round becomes knowable. Anyone may then submit the corresponding drand beacon to the shared registry.
+Applications commit to an **exact future Quicknet round before that round becomes
+knowable**.
 
-Relayers are permissionless couriers. They do not choose randomness, select fallback rounds, or control application settlement.
+Anyone may then submit the corresponding drand beacon to the shared registry.
+
+Relayers are permissionless couriers. They do not choose randomness, select
+fallback rounds, or control application settlement.
 
 ## Why?
 
-Many EVM applications need publicly verifiable randomness but cannot rely on a chain-specific VRF deployment.
+Many EVM applications need publicly verifiable randomness but cannot rely on a
+chain-specific VRF deployment or dedicated fulfillment service.
 
-drand provides a distributed randomness beacon with a deterministic publication schedule. Quicknet publishes a new beacon approximately every 3 seconds.
+drand provides a distributed randomness beacon with a deterministic publication
+schedule. Quicknet publishes a new beacon every approximately 3 seconds.
 
-This project provides the EVM-side infrastructure needed to safely use those beacons:
+This project provides the EVM-side infrastructure needed to use those beacons:
 
-* verify drand Quicknet signatures on-chain
-* normalize each beacon to one canonical randomness value
-* cache verified randomness by exact Quicknet round
-* let any account submit valid beacons
-* fetch and submit beacons using a reference TypeScript relayer
-* support future-round waiting and bounded drand API retries
-* support demand-driven relaying from consumer request events
+- verify drand Quicknet signatures on-chain
+- normalize valid beacons to canonical randomness
+- cache verified randomness by exact Quicknet round
+- let any account submit valid beacons
+- commit applications to future rounds before they become knowable
+- derive application-specific random seeds safely
+- fetch and submit beacons with a reference TypeScript relayer
+- relay only rounds actually requested by consumers
+- characterize chain-specific timing and sequencing assumptions
+- verify deployed infrastructure against committed expectations
 
-## Security model
+## Core security rule
 
-The most important rule is: **Consumers commit to an exact Quicknet round before that round becomes knowable, and settlement uses only that exact round.**
+The most important rule is:
 
-A consumer must never choose randomness based on which beacons happen to be available in the registry.
+> **A consumer commits to an exact future Quicknet round before that round
+> becomes knowable, and settlement uses only that exact round.**
+
+A consumer must never choose its randomness based on which beacons happen to be
+available.
 
 Unsafe patterns include:
 
-* latest stored round
-* first available round
-* latest available beacon
-* R, otherwise R + 1
-* retry with another round
-* pick among several stored rounds
+- latest stored round
+- first available round
+- latest available beacon
+- `R`, otherwise `R + 1`
+- retry with another round
+- choose among several stored rounds
 
 The safe flow is:
 
@@ -65,49 +82,8 @@ registry verifies and stores R
 consumer settles using exactly R
 ```
 
-If round `R` is temporarily unavailable, that is a **liveness problem**, not permission to use a different source of randomness.
-
-### Domain separation
-
-Applications should derive their own random seed from the stored beacon rather than using the registry value directly for every purpose.
-
-For example:
-
-```solidity
-bytes32 seed = keccak256(
-    abi.encode(
-        QUICKNET_SEED_DOMAIN,
-        applicationDomain,
-        block.chainid,
-        address(this),
-        uniqueRequestId,
-        round,
-        randomness
-    )
-);
-```
-
-`uniqueRequestId` must uniquely identify the application request. The exact
-Quicknet round is also included so that application outcomes remain bound to
-the committed beacon.
-
-This allows many applications and draws to safely consume the same Quicknet beacon without sharing application-level outcomes.
-
-### Relayer trust
-
-Relayers are not trusted randomness providers.
-
-The registry verifies every submitted drand signature on-chain. A malicious relayer may delay or refuse to submit a beacon, but it cannot create a valid alternative value for the committed round.
-
-The registry is intentionally permissionless:
-
-```text
-Relayer A ──┐
-Relayer B ──┼──> submitBeacon(R, signature)
-Relayer C ──┘
-```
-
-Whichever relayer submits a valid beacon first populates the same canonical value.
+If round `R` is temporarily unavailable, that is a **liveness problem**, not
+permission to choose another source of randomness.
 
 ## Architecture
 
@@ -116,10 +92,10 @@ Whichever relayer submits a valid beacon first populates the same canonical valu
                               │
                               │ beacon R
                               ▼
-                    DrandOracleQuicknet
+                       Quicknet verifier
                     BLS12-381 verification
                               │
-                              │ normalized hash
+                              │ canonical randomness
                               ▼
                 DrandQuicknetBeaconRegistry
                    mapping(round => randomness)
@@ -129,38 +105,357 @@ Whichever relayer submits a valid beacon first populates the same canonical valu
           Consumer A      Consumer B      Consumer C
 ```
 
-The reference relayer performs:
+The verifier, registry, consumers, and relayers intentionally have different
+trust roles.
 
-```text
-exact round R
-     ↓
-verify registry deployment
-     ↓
-already stored?
- ┌───┴────┐
- yes      no
- │         ↓
- │   wait until R is scheduled
- │         ↓
- │   fetch exact R
- │         ↓
- │   bounded HTTP retries
- │         ↓
- │   decompress signature off-chain
- │         ↓
- │   simulate submission
- │         ↓
- │   submit transaction
- │         ↓
- │   wait for receipt
- │         ↓
- │   verify stored randomness
- │
- ▼
-success
+### Verifier
+
+The verifier performs the cryptographic verification required to establish that
+a submitted beacon is valid drand Quicknet output.
+
+It is deployed separately from the registry.
+
+The registry pins the verifier identity so that an existing deployment cannot
+silently begin trusting a different cryptographic implementation.
+
+### Registry
+
+`DrandQuicknetBeaconRegistry` is a permissionless cache of verified Quicknet
+randomness:
+
+```solidity
+round => randomness
 ```
 
-The round is never changed during this process.
+Important properties:
+
+- submissions are permissionless
+- every new beacon is cryptographically verified
+- each exact round maps to one canonical value
+- previously stored rounds are idempotent
+- no owner chooses randomness
+- no relayer allowlist is required
+- no "latest randomness" settlement mechanism exists
+- reads are exact-round only
+
+Strict reads use:
+
+```solidity
+getBeacon(round)
+```
+
+Availability can be checked with:
+
+```solidity
+isStored(round)
+```
+
+The registry also exposes Quicknet schedule helpers and its configured minimum
+consumer lead.
+
+### Consumer base
+
+`DrandQuicknetRandomnessConsumer` provides the canonical application-facing
+integration.
+
+It:
+
+- pins the registry address
+- attests the registry runtime code at deployment
+- requires a configured future-round lead
+- requires that lead to be at least the registry's `minimumLeadRounds`
+- derives the requested round from the commitment transaction's inclusion time
+- emits `QuicknetRandomnessRequested(round)`
+- can persist request ID → exact round relationships
+- reads only the persisted exact round
+- derives domain-separated application seeds
+
+The target round is fixed at commitment inclusion.
+
+A delayed transaction therefore selects a correspondingly later future round;
+the consumer does not depend on when the transaction first entered a mempool.
+
+## Domain separation
+
+Applications should derive their own seed from the verified beacon rather than
+using the registry value directly for every purpose.
+
+The reference consumer derives seeds using inputs including:
+
+```text
+application domain
+unique request ID
+consumer address
+chain ID
+exact Quicknet round
+verified beacon randomness
+```
+
+This allows many applications and many requests to consume the same Quicknet
+beacon without sharing application-level outcomes.
+
+`uniqueRequestId` must uniquely identify the application request.
+
+## Relayer trust
+
+Relayers are not trusted randomness providers.
+
+The registry verifies every submitted beacon on-chain.
+
+A malicious relayer may delay or refuse to submit a beacon, but it cannot
+construct an alternative valid randomness value for the committed round.
+
+```text
+Relayer A ──┐
+Relayer B ──┼──> submitBeacon(R, signature)
+Relayer C ──┘
+```
+
+Whichever relayer successfully submits the exact beacon first populates the same
+canonical registry value.
+
+## Quicknet schedule
+
+The Quicknet schedule used by this project is deterministic:
+
+```text
+genesis: 1692803367
+period:  3 seconds
+```
+
+For a timestamp at or after genesis:
+
+```text
+roundAt(timestamp)
+```
+
+determines the corresponding Quicknet round.
+
+The appropriate number of future rounds is **chain dependent**.
+
+It must not be copied blindly from another network.
+
+## Minimum lead rounds
+
+A registry exposes:
+
+```solidity
+minimumLeadRounds()
+```
+
+Consumers using `DrandQuicknetRandomnessConsumer` must configure:
+
+```text
+quicknetLeadRounds >= minimumLeadRounds
+```
+
+For a 3-second Quicknet period, a lead of `L` rounds gives a mechanical
+chain-clock separation of:
+
+```text
+3L - 2 through 3L seconds
+```
+
+For example:
+
+```text
+L = 3  →  7–9 seconds
+L = 5  → 13–15 seconds
+```
+
+This is only the mechanical timing relationship to the chain clock.
+
+Whether that chain clock itself is sufficiently trustworthy depends on the
+security model of the chain.
+
+## Chain security profiles
+
+The contracts are designed to be EVM-chain-agnostic, but different EVM chains
+have different timestamp, sequencing, consensus, and parent-chain semantics.
+
+Chain profiles document and verify those network-specific assumptions.
+
+A profile answers questions such as:
+
+- which chain is being used?
+- who or what controls `block.timestamp`?
+- what history-selection or sequencing assumptions exist?
+- what minimum Quicknet lead should consumers use?
+- what parent-chain configuration is expected?
+- which verifier and registry deployment should be present?
+- which live chain values should match committed expectations?
+
+Profiles live under:
+
+```text
+docs/security/chain-profiles/
+```
+
+For example:
+
+```text
+docs/security/chain-profiles/
+  robinhood-testnet.yaml
+  robinhood-testnet.md
+```
+
+The YAML is the normative machine-readable configuration.
+
+The Markdown document explains the corresponding security assumptions.
+
+### Profiles are not an allowlist
+
+A chain does **not** need an upstream profile in this repository in order to use
+`drand-quicknet-evm`.
+
+Anyone may deploy the verifier, registry, relayer, and consumers on a compatible
+EVM chain.
+
+A profile instead means:
+
+> This repository contains an explicit security model and machine-verifiable
+> expectations for this particular network.
+
+Operators may maintain their own profiles and deployment manifests in a fork
+without requiring approval from Based Labs.
+
+## Chain-profile tiers
+
+Profiles use onboarding tiers to distinguish configured networks from networks
+that have also undergone live verification.
+
+Conceptually:
+
+```text
+Tier 1
+  configured and locally validated
+        ↓
+live verification succeeds
+        ↓
+machine-generated evidence
+        ↓
+Tier 2
+  live expectations verified at pinned chain snapshots
+```
+
+A Tier-2 report is historical evidence for a particular repository revision and
+particular chain snapshots.
+
+It does not prove that mutable chain state can never change later.
+
+## Security verification tooling
+
+Local profile validation is available with:
+
+```bash
+pnpm security:profile
+```
+
+This validates committed configuration without requiring RPC access.
+
+Security tooling can also verify live deployments:
+
+```bash
+pnpm security:check \
+  --network robinhood-testnet \
+  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL" \
+  --parent-rpc-url "$ETHEREUM_SEPOLIA_RPC_URL"
+```
+
+For the current Robinhood Testnet Nitro profile, the live verifier checks:
+
+```text
+L2
+├── registry runtime codehash
+├── verifier runtime codehash
+└── registry minimumLeadRounds
+
+parent chain
+├── Rollup.sequencerInbox()
+├── SequencerInbox.maxTimeVariation()
+└── Rollup.wasmModuleRoot()
+```
+
+The parent-chain checks use one shared pinned parent snapshot.
+
+Results are classified as:
+
+```text
+MATCH
+DRIFT
+ERROR
+SKIPPED
+```
+
+Aggregate CLI exit behavior is:
+
+```text
+MATCH → 0
+ERROR → 1
+DRIFT → 2
+```
+
+### Machine-generated verification reports
+
+A successful verification run can emit a versioned evidence record:
+
+```bash
+pnpm security:check \
+  --network robinhood-testnet \
+  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL" \
+  --parent-rpc-url "$ETHEREUM_SEPOLIA_RPC_URL" \
+  --report docs/security/verification/robinhood-testnet/<report>.json
+```
+
+Reports record:
+
+- report schema version
+- network and chain ID
+- verification timestamp
+- repository revision
+- worktree cleanliness
+- pinned chain observations
+- expected values
+- observed values
+- per-check status
+- aggregate status
+
+Large on-chain integers are serialized losslessly as decimal strings.
+
+Committed reports live under:
+
+```text
+docs/security/verification/
+```
+
+They are evidence, not mutable configuration.
+
+## Sequencer-based L2 assumptions
+
+For sequencer-based L2s, a future-round lead by itself does not establish every
+security property needed by a commitment scheme.
+
+The security analysis distinguishes between:
+
+```text
+A1 — protocol timestamp validity
+
+A2 — freshness of protocol-valid timestamps
+
+B  — sequencing and history integrity
+```
+
+A chain may permit timestamps that are protocol-valid but much older than the
+application's desired freshness bound.
+
+Similarly, increasing `minimumLeadRounds` does not eliminate the possibility
+that an authorized sequencer has discretion over ordering or history selection.
+
+Profiles make these assumptions explicit rather than hiding them behind a single
+"lead time" number.
+
+A stronger future deployment model may instead anchor the commitment on a parent
+chain before the target drand round becomes knowable.
 
 ## Repository structure
 
@@ -185,292 +480,63 @@ drand-quicknet-evm/
 │       └── @based-labs/drand-quicknet-relayer
 │
 ├── deployments/
+│
 ├── docs/
+│   └── security/
+│       ├── chain-profiles/
+│       └── verification/
+│
 ├── scripts/
+│   └── security/
+│       ├── core/
+│       └── adapters/
+│
 ├── package.json
 ├── README.md
 └── ...
 ```
 
-## Components
-
-### `DrandOracleQuicknet`
-
-The verifier is deployed separately from the registry and is treated as an external cryptographic dependency. The registry pins both its oracle address
-and runtime codehash.
-
-The verifier source is not vendored into this repository. Consumers and operators should verify the deployed oracle against the trusted deployment
-manifest and the referenced upstream source revision.
-
-Verifier upgrades require a new trusted deployment rather than silently changing the cryptographic implementation behind an existing registry.
-
-### `DrandQuicknetBeaconRegistry`
-
-The registry is a permissionless cache of verified Quicknet randomness:
-
-```solidity
-round => normalized randomness
-```
-
-Important properties:
-
-* submissions are permissionless
-* every new beacon is verified by the configured oracle
-* each exact round maps to one canonical normalized value
-* previously stored rounds are idempotent
-* no owner selects randomness
-* no relayer allowlist is required
-* no "latest randomness" settlement mechanism exists
-* consumers are responsible for committing to a future round safely
-
-The registry also exposes its pinned oracle identity:
-
-```solidity
-oracle()
-oracleCodehash()
-```
-
-It also exposes Quicknet schedule helpers such as:
-
-```solidity
-roundAt(timestamp)
-roundScheduledTime(round)
-latestScheduledRound()
-```
-
-`getBeacon(round)` is the strict read and reverts when the round is absent.
-`isStored(round)` can be used for a non-reverting availability check.
-
-### `DrandQuicknetRandomnessConsumer`
-
-`DrandQuicknetRandomnessConsumer` provides a canonical base implementation for
-applications consuming registry randomness.
-
-It:
-
-* pins the registry address immutably
-* verifies the expected registry runtime codehash at deployment
-* requires a nonzero future-round lead
-* requests an exact future Quicknet round
-* emits `QuicknetRandomnessRequested(round)`
-* reads only the exact requested round
-* provides application-domain seed derivation
-
-Applications must persist the exact requested round in application state.
-They must not reconstruct or replace that round later based on registry
-availability.
+## TypeScript packages
 
 ### `@based-labs/drand-quicknet`
 
-Low-level TypeScript tooling for Quicknet.
+Low-level Quicknet tooling.
 
-It provides:
-* Quicknet schedule constants
-* roundAt()
-* roundScheduledTime()
-* compressed signature parsing
-* Quicknet HTTP fetching
-* multi-endpoint failover
-* BLS G1 signature decompression
-* typed compressed/uncompressed signatures
+It provides functionality including:
 
-The relayer fetches drand's compressed 48-byte signature and decompresses it off-chain before submission.
+- Quicknet schedule constants
+- round calculations
+- compressed-signature parsing
+- Quicknet HTTP fetching
+- multi-endpoint failover
+- BLS signature decompression
+- typed compressed and uncompressed signatures
 
-Both compressed and uncompressed signatures normalize to the same registry randomness, but submitting the uncompressed representation avoids expensive on-chain point decompression.
+The reference relayer normally fetches drand's compressed signature and
+decompresses it locally before submission.
 
 ### `@based-labs/drand-quicknet-registry`
 
-TypeScript SDK for interacting with a registry deployment.
+TypeScript SDK for interacting with registry deployments.
 
-It provides:
-* registry ABI
-* deployment metadata types
-* runtime deployment verification
-* registry reads
-* submission simulation
-* beacon submission
+It provides functionality including:
 
-Before using a deployment, the SDK can verify:
+- registry ABI
+- deployment metadata types
+- runtime deployment verification
+- registry reads
+- submission simulation
+- beacon submission
 
-```text
-expected chain ID
-        +
-registry exists
-        +
-registry runtime bytecode hash matches manifest
-        +
-registry oracle() matches expected oracle
-        +
-registry oracleCodehash() matches expected oracle codehash
-        +
-oracle exists
-        +
-oracle runtime bytecode hash matches manifest
-```
+Runtime verification can establish that the configured deployment matches the
+identity recorded in the deployment manifest.
 
-The deployment manifest is therefore part of the trust root. Runtime
-verification proves that the deployed contracts match the supplied manifest;
-it does not independently prove that the manifest describes the canonical
-deployment intended by the application.
-
-### Reference relayer
-
-The reference relayer lives in:
-
-```text
-apps/relayer
-```
-
-The reference relayer supports exact-round one-shot imports as well as a
-long-running demand-driven daemon.
-
-`daemon` watches configured consumers for `QuicknetRandomnessRequested(round)` events:
-
-```bash
-pnpm --filter @based-labs/drand-quicknet-relayer start \
-  daemon \
-  --network robinhood-testnet
-```
-
-`import` attempts to import an exact round immediately:
-
-```bash
-pnpm --filter @based-labs/drand-quicknet-relayer start \
-  import \
-  --network robinhood-testnet \
-  --round 31089008
-```
-
-If the round is already stored, it exits successfully without sending another transaction.
-
-`import-when-available` also supports future rounds:
-
-```bash
-pnpm --filter @based-labs/drand-quicknet-relayer start \
-  import-when-available \
-  --network robinhood-testnet \
-  --round 31192648
-```
-
-Its behavior is:
-
-```text
-check registry
-      ↓
-wait until exact round R is scheduled
-      ↓
-retry fetching exact R for a bounded period
-      ↓
-import exact R
-```
-
-Only the public drand fetch stage is automatically retried.
-
-Transaction submission is **not blindly retried** because transaction state can become ambiguous after broadcast.
-
-## Quicknet schedule
-
-The Quicknet schedule used by this project is deterministic:
-
-```text
-genesis: 1692803367
-period:  3 seconds
-```
-
-For a timestamp at or after genesis:
-
-```text
-roundAt(timestamp)
-```
-
-determines the corresponding Quicknet round.
-
-Consumers should generally commit to a round sufficiently far in the future to ensure the commitment is finalized before the beacon can become knowable.
-
-The appropriate lead time is application and chain dependent.
-
-## Installation
-
-Requirements:
-
-```text
-Node.js
-pnpm
-Foundry
-```
-
-Install workspace dependencies from the repository root:
-
-```bash
-pnpm install
-```
-
-Build the TypeScript packages and relayer as needed:
-
-```bash
-pnpm run build:quicknet
-pnpm run build:registry-sdk
-pnpm run build:relayer
-```
-
-Build and test the Solidity contracts:
-
-```bash
-cd contracts
-forge build
-forge test
-```
-
-## Relayer configuration
-
-The relayer reads operator secrets and RPC configuration from environment variables.
-
-For Robinhood Chain Testnet:
-
-```dotenv
-ROBINHOOD_TESTNET_RPC_URL=https://...
-PRIVATE_KEY=0x...
-```
-
-The private key should belong to a dedicated relayer account with enough native currency to pay transaction fees.
-
-Do not give the relayer account application administration, treasury, upgrade, or custody privileges.
-
-For local development, the relayer currently loads the root `.env` through Node:
-
-```text
-node --env-file=../../.env ...
-```
-
-Never commit `.env` or private keys.
-
-### Logging
-
-The default log level is `info`.
-
-Set:
-
-```bash
-QUICKNET_LOG_LEVEL=debug \
-pnpm --filter @based-labs/drand-quicknet-relayer start \
-  daemon \
-  --network robinhood-testnet
-```
-
-Important daemon events include:
-
-* `round_imported`
-* `durable_head_regressed`
-* `consumer_failed`
-* `heartbeat`
-* `checkpoint_advanced`
-* `round_already_stored`
-
-`checkpoint_advanced` is emitted at debug level because it is routine high-volume operational progress.
+It does not independently establish that the manifest itself is the deployment
+an application intended to trust.
 
 ## Deployment manifests
 
-Canonical deployment metadata lives under:
+Deployment manifests live under:
 
 ```text
 deployments/
@@ -482,61 +548,118 @@ For example:
 deployments/robinhood-testnet.json
 ```
 
-A deployment manifest pins the complete trusted deployment identity, including:
-
-* chain ID
-* Quicknet schedule
-* oracle address
-* oracle runtime codehash
-* oracle source provenance
-* registry address
-* registry runtime codehash
-* registry deployment provenance
-* registry build settings
-
-The relayer validates the manifest and verifies both the registry and its pinned oracle before servicing the deployment.
-
-Deployment facts belong in manifests; operator-specific values such as RPC URLs and private keys belong in operator configuration.
-
-This separation is intended to support additional chains without hard-coding deployment addresses into relayer logic.
-
-## Current network support
-
-The reference configuration currently includes:
+A manifest intentionally contains only durable deployment identity and
+provenance, such as:
 
 ```text
-Robinhood Chain Testnet
+manifest version
+network
+chain ID
+
+registry
+  address
+  runtime codehash
+  deployment transaction
+  deployment block
+
+verifier
+  address
+  runtime codehash
+  deployment transaction
+  deployment block
 ```
 
-Additional compatible chains can be added by deploying and verifying the required oracle/registry infrastructure and publishing a deployment manifest.
+Policy belongs elsewhere.
 
-A chain definition existing in an EVM library does **not** by itself mean the chain is compatible with this verifier. The required cryptographic precompiles and verifier behavior must be available and tested.
-
-The long-term relayer design allows operators to service deployments beyond the repository's built-in network list.
-
-## Permissionless multi-chain model
-
-The protocol and reference software intentionally distinguish between:
+For example:
 
 ```text
-canonical deployment information
+minimumLeadRounds       → chain profile
+RPC URLs                → operator configuration
+private keys            → operator configuration
+security assumptions    → chain profile + documentation
 ```
 
-and:
+This separation avoids conflating immutable deployment facts with mutable
+network policy or operator-specific configuration.
+
+## Reference relayer
+
+The reference relayer lives in:
 
 ```text
-which deployments/consumers a particular operator chooses to fund
+apps/relayer
 ```
 
-Anyone may run a relayer.
+It supports exact-round one-shot imports, future-round imports, and a
+long-running demand-driven daemon.
 
-Operators choose which networks and applications they are willing to service because relaying consumes their RPC resources and transaction fees.
+### Exact round
 
-A configured consumer or deployment list is therefore an **operator policy**, not an on-chain relayer allowlist.
+```bash
+pnpm --filter @based-labs/drand-quicknet-relayer start \
+  import \
+  --network robinhood-testnet \
+  --round 31089008
+```
+
+If the round is already stored, the command succeeds without sending a duplicate
+transaction.
+
+### Future round
+
+```bash
+pnpm --filter @based-labs/drand-quicknet-relayer start \
+  import-when-available \
+  --network robinhood-testnet \
+  --round 31192648
+```
+
+The relayer:
+
+```text
+waits for exact R
+      ↓
+fetches exact R
+      ↓
+simulates exact R
+      ↓
+submits exact R
+```
+
+It never changes the requested round.
+
+### Demand-driven daemon
+
+```bash
+pnpm --filter @based-labs/drand-quicknet-relayer start \
+  daemon \
+  --network robinhood-testnet
+```
+
+The daemon watches configured consumers for:
+
+```solidity
+QuicknetRandomnessRequested(uint64 indexed round)
+```
+
+The event means:
+
+> Ensure exact Quicknet round `R` is available in this consumer's configured
+> registry.
+
+It does not authorize the relayer to:
+
+- choose another round
+- select an application outcome
+- settle the application
+- change application state
+- choose odds
+- issue refunds
 
 ## Consumer request standard
 
-The project defines a minimal consumer demand signal:
+The minimal demand signal is:
 
 ```solidity
 interface IDrandQuicknetRandomnessConsumer {
@@ -551,54 +674,16 @@ interface IDrandQuicknetRandomnessConsumer {
 }
 ```
 
-A consumer emits `QuicknetRandomnessRequested(R)` only after it has committed to exact round `R`.
+A consumer emits the event only after committing to exact round `R`.
 
-The event means:
+The reference daemon currently watches a configured set of consumers.
 
-> Ensure exact Quicknet round `R` is available in this consumer's configured beacon registry.
+Future discovery mechanisms may supply consumer addresses dynamically without
+changing the on-chain event standard.
 
-It does **not** authorize a relayer to:
+## Demand-driven daemon internals
 
-* choose another round
-* select an outcome
-* call application settlement
-* change application state
-* choose odds
-* issue refunds
-
-The reference daemon watches a configured list of consumer contracts.
-
-Future discovery mechanisms may supply consumer addresses dynamically without changing the event/interface standard.
-
-## Demand-driven daemon
-
-The daemon watches a configured set of consumer contracts for:
-
-```solidity
-QuicknetRandomnessRequested(uint64 indexed round)
-```
-
-It does not continuously import every Quicknet beacon.
-
-The high-level flow is:
-
-```text
-configured consumer
-       ↓
-QuicknetRandomnessRequested(R)
-       ↓
-deduplicate R
-       ↓
-registry already contains R?
-   ┌───────────┴───────────┐
-  yes                      no
-   │                        ↓
- done             import when available
-```
-
-### Soft and durable scanning
-
-The daemon maintains two scanning paths.
+The daemon maintains both low-latency and durable scanning paths.
 
 ```text
 latest head
@@ -622,29 +707,123 @@ request reconciliation
 persisted checkpoint
 ```
 
-On Robinhood Chain Testnet, the durable policy currently uses the chain's `safe` head.
+Soft progress is replayable.
 
-The persisted checkpoint means that every relevant block before `durableNextBlock` has been durably reconciled. Soft progress is intentionally not persisted. After restart, the daemon replays any non-durable region idempotently.
+Durable progress is persisted.
 
-This gives the daemon low-latency request handling without treating `latest` as durable history.
+A useful operational summary is:
 
-A useful operational summary is: `latest` is safe enough to act on, but not safe enough to forget.
+> `latest` is safe enough to act on, but not safe enough to forget.
 
-### Non-monotonic durable RPC heads
+### Durable-head regression
 
-RPC providers may occasionally return a durable head that is behind the daemon's already-persisted durable progress.
+An RPC provider may temporarily report a durable head behind already-persisted
+progress.
 
-The daemon never moves its durable checkpoint backward. If this occurs, it:
+The daemon never moves its durable checkpoint backward.
 
-* preserves the persisted checkpoint
-* skips durable scanning for that cycle
-* continues soft/latest processing
-* emits a `durable_head_regressed` warning
-* resumes durable scanning once the durable head catches up
+Instead it:
 
-A temporary durable-head regression is therefore treated as an RPC/finality observation rather than a consumer-processing failure.
+- preserves the checkpoint
+- skips durable scanning for that cycle
+- continues soft/latest processing
+- emits `durable_head_regressed`
+- resumes durable scanning once the durable head catches up
+
+## Relayer configuration
+
+Relayer RPC and signing configuration is operator-specific.
+
+For example:
+
+```dotenv
+ROBINHOOD_TESTNET_RPC_URL=https://...
+PRIVATE_KEY=0x...
+```
+
+Use a dedicated low-value relayer account with only enough native currency to
+pay transaction fees.
+
+Do not give the relayer account:
+
+- application administration privileges
+- treasury access
+- upgrade authority
+- custody privileges
+
+Never commit `.env` files or private keys.
+
+## Current upstream network support
+
+The repository currently contains an upstream security profile and deployment
+configuration for:
+
+```text
+Robinhood Chain Testnet
+```
+
+Its current profile uses:
+
+```text
+Quicknet period:       3 seconds
+minimumLeadRounds:     3
+chain-clock lead:      7–9 seconds
+```
+
+See the committed profile and deployment manifest for the authoritative current
+configuration.
+
+Additional compatible EVM chains can be used without waiting for upstream
+support.
+
+A new chain in the same adapter family may reuse the existing verification
+logic.
+
+A chain with materially different consensus, timestamp, or sequencing semantics
+should introduce an appropriate new security adapter rather than pretending to
+be a supported chain family.
+
+## Permissionless multi-chain model
+
+The project intentionally distinguishes between:
+
+```text
+protocol capability
+```
+
+and:
+
+```text
+which deployments a particular operator chooses to service
+```
+
+Anyone may:
+
+- deploy compatible infrastructure
+- run a relayer
+- maintain their own deployment manifest
+- maintain their own chain profile
+- operate against chains not included in the upstream repository
+
+Operator configuration is an operational policy, not an on-chain allowlist.
 
 ## Testing
+
+Run the security tooling:
+
+```bash
+pnpm security:profile
+pnpm typecheck:security
+pnpm test:security
+```
+
+Build and test Solidity contracts:
+
+```bash
+cd contracts
+forge build
+forge test
+```
 
 Run relayer tests:
 
@@ -652,7 +831,7 @@ Run relayer tests:
 pnpm run relayer:test
 ```
 
-Run relayer source and test typechecking:
+Run relayer typechecking:
 
 ```bash
 pnpm run relayer:typecheck
@@ -664,163 +843,132 @@ Build the relayer:
 pnpm run relayer:build
 ```
 
-The test suites cover areas including:
+Test coverage includes areas such as:
 
-* Quicknet HTTP parsing and endpoint failover
-* signature decompression
-* known Quicknet vectors
-* registry SDK reads and writes
-* deployment manifest validation
-* deployment runtime verification
-* relayer configuration
-* CLI parsing
-* exact-round import
-* future-round waiting
-* bounded beacon fetch retries
-* permissionless relayer races
-* already-stored idempotency
-* wait → fetch → import orchestration
-* consumer contract validation
-* demand-driven request scanning
-* soft/latest and durable/finality scanning
-* durable checkpoint persistence
-* checkpoint locking
-* restart/replay behavior
-* per-consumer failure isolation
-* durable-head regression handling
-* daemon structured logging and heartbeats
-
-## Live test status
-
-The registry, SDK, one-shot relayer paths, and demand-driven daemon have been exercised against Robinhood Chain Testnet.
-
-Live testing has covered:
-
-```text
-consumer request
-      ↓
-latest-head detection
-      ↓
-exact Quicknet round fetch
-      ↓
-off-chain signature decompression
-      ↓
-on-chain registry verification
-      ↓
-registry storage
-      ↓
-durable checkpoint reconciliation
-```
-
-The daemon has also been exercised against temporary non-monotonic `safe` head observations from public RPC infrastructure. Durable checkpoints are
-preserved while soft request processing continues.
-
-Re-running an exact-round import for an already stored beacon returned the existing value without sending another transaction, confirming that the
-composed import path is idempotent.
+- Quicknet HTTP parsing and endpoint failover
+- signature decompression
+- known Quicknet vectors
+- registry SDK reads and writes
+- deployment manifest validation
+- deployment runtime verification
+- exact-round import
+- future-round waiting
+- bounded beacon-fetch retries
+- permissionless relayer races
+- already-stored idempotency
+- consumer validation
+- demand-driven request scanning
+- soft/latest and durable scanning
+- checkpoint persistence and locking
+- restart/replay behavior
+- per-consumer failure isolation
+- durable-head regression handling
+- chain-profile validation
+- Nitro timestamp-envelope verification
+- Nitro consensus-root verification
+- machine verification reports
+- aggregate live verification orchestration
 
 ## Known-vector testing
 
-Known external Quicknet vectors are used to verify compatibility between drand, the TypeScript tooling, the on-chain verifier, and the registry.
+The repository contains known Quicknet-vector coverage used to verify
+compatibility across components.
 
-For example, Quicknet round `31089008` normalizes to:
-
-```text
-0x9b81abb093df33375d039627e697083932b2d07ea75f7add4aa3389a13370b17
-```
-
-The same normalized value must be produced regardless of whether the corresponding valid BLS signature is supplied in compressed or canonical uncompressed form.
+A dedicated production cryptographic KAT suite is a separate security-hardening
+milestone and should provide deterministic, offline known-answer coverage of the
+exact verifier path before production use.
 
 ## Operational guidance
 
 Relayer operators should:
 
-- use a dedicated low-value transaction-signing account
-- verify deployment runtime codehashes before servicing them
+- use a dedicated low-value signing account
+- verify deployment identity before servicing it
 - use independent RPC infrastructure where practical
-- never sponsor arbitrary user-supplied signature calldata without validation
-- fetch requested drand signatures from known Quicknet endpoints
-- decompress signatures locally before broadcasting
-- simulate registry submissions before sending transactions
-- service only the exact committed round
-- treat already-stored rounds as successful
-- avoid blindly retrying transactions after ambiguous broadcast failures
-- expect multiple independent relayers to race for the same request
-- use a dedicated checkpoint file for each daemon deployment
-- ensure only one daemon process owns a checkpoint lineage at a time
+- use multiple drand endpoints
+- fetch only requested exact rounds
+- decompress signatures locally where appropriate
+- simulate submissions before broadcasting
+- treat already-stored rounds as success
+- avoid blindly retrying ambiguous broadcasts
+- expect independent relayers to race
 - preserve durable checkpoints across restarts
-- never move a durable checkpoint backward because an RPC reports an older
-  durable head
-- treat soft/latest progress as replayable and idempotent
-- monitor `durable_head_regressed`, `consumer_failed`, and `heartbeat` events
+- never move durable checkpoints backward
+- monitor relayer lag, RPC health, and drand availability
+
+For sequencer-clock chains, operators should also monitor the chain-specific
+timestamp-freshness assumptions documented by the corresponding profile.
 
 ## Liveness vs randomness selection
 
-A key design goal is to keep liveness policy separate from randomness selection.
+Liveness policy must remain separate from randomness selection.
 
 If a relayer or drand endpoint is unavailable:
 
 ```text
-correct response:
-retry retrieving exact R
-      ↓
+correct:
+retry exact R
+    ↓
 wait for another relayer
-      ↓
-recover service for exact R
+    ↓
+recover exact R
 ```
 
 not:
 
 ```text
-unsafe response:
+unsafe:
 use another round
-      ↓
+    ↓
 use latest randomness
-      ↓
+    ↓
 reroll
-      ↓
+    ↓
 choose whichever beacon is available
 ```
 
-A delayed exact beacon preserves fairness. Selecting a replacement based on availability can introduce bias.
+A delayed exact beacon preserves the committed randomness source.
 
-## Auditing and production use
+Choosing a replacement based on availability can introduce bias.
 
-This project handles infrastructure that may ultimately determine outcomes with financial value.
+## Production use
 
-Before production deployment:
+This project may ultimately determine outcomes with financial value.
 
-1. Audit consumer commitment logic
-2. Audit registry integration
-3. Audit verifier assumptions
-4. Pin deployed bytecode
-5. Verify deployment manifests
-6. Test chain-specific precompile behavior
-7. Run independent relayers
-8. Test downtime/recovery behavior
-9. Monitor drand and RPC availability
+Before production deployment, high-priority work includes:
 
-The upstream verifier implementation used by the current deployment has not been treated as professionally audited solely by virtue of being open source.
+1. deterministic cryptographic known-answer testing
+2. independent review/audit of verifier, registry, and consumer logic
+3. explicit acceptance of the production chain's timing and sequencing model
+4. deployment and bytecode verification
+5. redundant relayer operation
+6. relayer restart and failure-recovery testing
+7. monitoring and alerting
+8. production deployment rehearsal
 
-Do not infer production safety from testnet operation alone.
-
-## License
-
-See [`LICENSE`](./LICENSE).
-
-Third-party components may be governed by their own licenses. In particular, verifier code should not be copied or relicensed without reviewing the upstream license terms.
+Chain-specific lead configuration must not be treated as a substitute for
+understanding the chain's sequencing and timestamp security model.
 
 ## Contributing
 
 Contributions are welcome, particularly around:
 
-- additional compatible EVM deployments
+- compatible EVM deployments
+- additional chain-security adapters
 - consumer integrations
 - relayer reliability
-- daemon operation
 - observability
 - deployment verification
-- test vectors
+- cryptographic test vectors
 - security review
-- open consumer discovery
+- consumer discovery
 
-Changes affecting exact-round commitment, verifier behavior, randomness normalization, or fallback policy should be treated as security-sensitive.
+Changes affecting any of the following should be treated as security-sensitive:
+
+- exact-round commitment
+- verifier behavior
+- randomness normalization
+- minimum-lead semantics
+- seed derivation
+- fallback policy
+- chain-security assumptions
