@@ -7,22 +7,26 @@
     "build:quicknet": "pnpm --filter @based-labs/drand-quicknet build",
     "build:registry-sdk": "pnpm --filter @based-labs/drand-quicknet-registry build",
     "build:relayer": "pnpm --filter @based-labs/drand-quicknet-relayer build",
-    "test": "pnpm test:contracts && pnpm -r test",
+    "test": "pnpm test:contracts && pnpm -r test && pnpm test:security",
     "test:contracts": "forge test --root contracts -vvv --no-match-path 'test/integration/**'",
     "test:contracts:integration": "forge test --root contracts -vvv --match-path 'test/integration/**'",
     "test:quicknet": "pnpm --filter @based-labs/drand-quicknet test",
     "test:registry-sdk": "pnpm --filter @based-labs/drand-quicknet-registry test",
     "test:relayer": "pnpm --filter @based-labs/drand-quicknet-relayer test",
+    "test:security": "vitest run scripts/security",
     "fmt": "pnpm fmt:contracts && pnpm -r fmt",
     "fmt:contracts:check": "forge fmt --root contracts --check",
     "fmt:contracts": "forge fmt --root contracts",
     "smoke:relayer": "./scripts/smoke-test-relayer.sh",
-    "typecheck": "pnpm build:quicknet && pnpm build:registry-sdk && pnpm -r typecheck",
+    "typecheck": "pnpm build:quicknet && pnpm build:registry-sdk && pnpm -r typecheck && pnpm typecheck:security",
     "typecheck:quicknet": "pnpm --filter @based-labs/drand-quicknet typecheck",
     "typecheck:registry-sdk": "pnpm --filter @based-labs/drand-quicknet-registry typecheck",
     "typecheck:relayer": "pnpm --filter @based-labs/drand-quicknet-relayer typecheck",
-    "check": "pnpm typecheck && pnpm test && pnpm build",
-    "check:relayer": "pnpm build:quicknet && pnpm build:registry-sdk && pnpm test:relayer && pnpm typecheck:relayer && pnpm build:relayer"
+    "typecheck:security": "tsc -p scripts/security/tsconfig.json",
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm security:profile",
+    "check:relayer": "pnpm build:quicknet && pnpm build:registry-sdk && pnpm test:relayer && pnpm typecheck:relayer && pnpm build:relayer",
+    "security:profile": "tsx scripts/security/profile.ts",
+    "security:check": "tsx scripts/security/check.ts"
   },
   "devEngines": {
     "packageManager": {
@@ -38,7 +42,10 @@
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
+    "tsx": "^4.23.13",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "viem": "2.55.11",
+    "vitest": "^4.1.10",
+    "yaml": "^2.9.0"
   }
 }

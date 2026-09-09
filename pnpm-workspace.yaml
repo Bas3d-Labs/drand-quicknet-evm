@@ -2,6 +2,9 @@ packages:
   - "packages/*"
   - "apps/*"
 
+allowBuilds:
+  esbuild: true
+
 injectWorkspacePackages: true
 syncInjectedDepsAfterScripts:
   - build

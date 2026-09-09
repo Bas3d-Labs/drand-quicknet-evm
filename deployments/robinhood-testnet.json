@@ -1,32 +1,21 @@
 {
-  "chainId": 46630,
+  "manifestVersion": 1,
   "network": "robinhood-testnet",
-  "quicknet": {
-    "genesisTimestamp": 1692803367,
-    "periodSeconds": 3
-  },
-  "verifier": {
-    "contract": "DrandQuicknetBeaconVerifier",
-    "address": "0x90427e40e7D6f60425D29474a85595C4d8EE6B95",
-    "runtimeCodehash": "0x55ed5b7bad08ed41842bc0bd1c1e431609f0ece0c441aaa25d29c6f660febe63",
-    "deploymentTx": "0x47219e339c3f3c4bb80efb4346a0e4c729de82884f6ef4fe0870a124f4273c61",
-    "deploymentBlock": 110445901,
-    "sourceCommit": "f6f51cb85e73257e8025fd0492c1acf262bbe24a"
-  },
+  "chainId": 46630,
   "registry": {
-    "contract": "DrandQuicknetBeaconRegistry",
     "address": "0x6e69C56D8D678aDeF8401adF1186c026A0915e2a",
     "runtimeCodehash": "0x617b58699fa376a677b4c297169e4a66f74d605ee1bdf8de643431d5a752ecce",
-    "minimumLeadRounds": 3,
-    "deploymentTx": "0x43e32d7b9133807f6380b418b5f94ebf1b41c93970ecbdcdcfde0e24ec10edc1",
-    "deploymentBlock": 112100154,
-    "sourceCommit": "f566503de7c3ef65891cf990d4c5dc4b73f9d026"
+    "deployment": {
+      "transactionHash": "0x43e32d7b9133807f6380b418b5f94ebf1b41c93970ecbdcdcfde0e24ec10edc1",
+      "blockNumber": 112100154
+    }
   },
-  "build": {
-    "solc": "0.8.36",
-    "optimizer": true,
-    "optimizerRuns": 200,
-    "viaIR": false,
-    "evmVersion": "osaka"
+  "verifier": {
+    "address": "0x90427e40e7D6f60425D29474a85595C4d8EE6B95",
+    "runtimeCodehash": "0x55ed5b7bad08ed41842bc0bd1c1e431609f0ece0c441aaa25d29c6f660febe63",
+    "deployment": {
+      "transactionHash": "0x47219e339c3f3c4bb80efb4346a0e4c729de82884f6ef4fe0870a124f4273c61",
+      "blockNumber": 110445901
+    }
   }
 }

@@ -1,0 +1,100 @@
+{
+  "reportVersion": 1,
+  "network": "robinhood-testnet",
+  "chainId": 46630,
+  "verificationTimestamp": "2026-09-09T21:49:36.510Z",
+  "repositoryRevision": "1c5eb68dc2dc8f61be71e34500875635024c9e1e",
+  "repositoryDirty": false,
+  "observations": [
+    {
+      "id": "l2",
+      "chainId": 46630,
+      "blockNumber": "116475717",
+      "blockTimestamp": "1788990576"
+    },
+    {
+      "id": "parent",
+      "chainId": 11155111,
+      "blockNumber": "11670674",
+      "blockTimestamp": "1788990576"
+    }
+  ],
+  "checks": [
+    {
+      "id": "deployment.registry-runtime-codehash",
+      "observationIds": [
+        "l2"
+      ],
+      "status": "MATCH",
+      "expected": "0x617b58699fa376a677b4c297169e4a66f74d605ee1bdf8de643431d5a752ecce",
+      "observed": "0x617b58699fa376a677b4c297169e4a66f74d605ee1bdf8de643431d5a752ecce"
+    },
+    {
+      "id": "deployment.verifier-runtime-codehash",
+      "observationIds": [
+        "l2"
+      ],
+      "status": "MATCH",
+      "expected": "0x55ed5b7bad08ed41842bc0bd1c1e431609f0ece0c441aaa25d29c6f660febe63",
+      "observed": "0x55ed5b7bad08ed41842bc0bd1c1e431609f0ece0c441aaa25d29c6f660febe63"
+    },
+    {
+      "id": "deployment.registry-minimum-lead-rounds",
+      "observationIds": [
+        "l2"
+      ],
+      "status": "MATCH",
+      "expected": "3",
+      "observed": "3"
+    },
+    {
+      "id": "arbitrum-nitro.sequencer-inbox",
+      "observationIds": [
+        "parent"
+      ],
+      "status": "MATCH",
+      "expected": "0xA0D9dB3DC9791D54b5183C1C1866eFe1eCA7D414",
+      "observed": "0xA0D9dB3DC9791D54b5183C1C1866eFe1eCA7D414"
+    },
+    {
+      "id": "arbitrum-nitro.max-time-variation",
+      "observationIds": [
+        "parent"
+      ],
+      "status": "MATCH",
+      "expected": {
+        "delayBlocks": "28800",
+        "futureBlocks": "300",
+        "delaySeconds": "345600",
+        "futureSeconds": "3600"
+      },
+      "observed": {
+        "delayBlocks": "28800",
+        "futureBlocks": "300",
+        "delaySeconds": "345600",
+        "futureSeconds": "3600"
+      }
+    },
+    {
+      "id": "arbitrum-nitro.wasm-module-root",
+      "observationIds": [
+        "parent"
+      ],
+      "status": "MATCH",
+      "expected": [
+        {
+          "consensusRelease": "consensus-v61",
+          "root": "0xc10cd7ec6acaf1c441a3f6bd0900ad20f15855ba775a96f1939118cbc629dc97"
+        }
+      ],
+      "observed": "0xc10cd7ec6acaf1c441a3f6bd0900ad20f15855ba775a96f1939118cbc629dc97",
+      "details": {
+        "matchedApprovedRoot": {
+          "consensusRelease": "consensus-v61",
+          "root": "0xc10cd7ec6acaf1c441a3f6bd0900ad20f15855ba775a96f1939118cbc629dc97"
+        }
+      }
+    }
+  ],
+  "aggregateStatus": "MATCH"
+}
