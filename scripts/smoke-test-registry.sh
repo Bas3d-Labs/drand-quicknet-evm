@@ -29,9 +29,10 @@ RPC_URL="$ROBINHOOD_TESTNET_RPC_URL"
 
 REGISTRY=$(jq -r '.registry.address' "$MANIFEST")
 EXPECTED_REGISTRY_CODEHASH=$(jq -r '.registry.runtimeCodehash' "$MANIFEST")
+EXPECTED_REGISTRY_MIN_LEAD_ROUNDS=$(jq -r '.registry.minimumLeadRounds' "$MANIFEST")
 
-ORACLE=$(jq -r '.oracle.address' "$MANIFEST")
-EXPECTED_ORACLE_CODEHASH=$(jq -r '.oracle.runtimeCodehash' "$MANIFEST")
+VERIFIER=$(jq -r '.verifier.address' "$MANIFEST")
+EXPECTED_VERIFIER_CODEHASH=$(jq -r '.verifier.runtimeCodehash' "$MANIFEST")
 
 EXPECTED_CHAIN_ID=$(jq -r '.chainId' "$MANIFEST")
 
@@ -66,54 +67,71 @@ if [ "${ACTUAL_REGISTRY_CODEHASH,,}" != "${EXPECTED_REGISTRY_CODEHASH,,}" ]; the
   exit 1
 fi
 
-ACTUAL_ORACLE_CODEHASH=$(
+ACTUAL_VERIFIER_CODEHASH=$(
   cast codehash \
-    "$ORACLE" \
+    "$VERIFIER" \
     --rpc-url "$RPC_URL"
 )
 
-if [ "${ACTUAL_ORACLE_CODEHASH,,}" != "${EXPECTED_ORACLE_CODEHASH,,}" ]; then
-  echo "Oracle runtime codehash mismatch"
-  echo "Expected: $EXPECTED_ORACLE_CODEHASH"
-  echo "Actual:   $ACTUAL_ORACLE_CODEHASH"
+if [ "${ACTUAL_VERIFIER_CODEHASH,,}" != "${EXPECTED_VERIFIER_CODEHASH,,}" ]; then
+  echo "Verifier runtime codehash mismatch"
+  echo "Expected: $EXPECTED_VERIFIER_CODEHASH"
+  echo "Actual:   $ACTUAL_VERIFIER_CODEHASH"
   exit 1
 fi
 
-REGISTRY_ORACLE=$(
+ACTUAL_REGISTRY_MIN_LEAD_ROUNDS=$(
+  cast call "$REGISTRY" \
+    "minimumLeadRounds()(uint64)" \
+    --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
+)
+
+if [ "${EXPECTED_REGISTRY_MIN_LEAD_ROUNDS,,}" != "${ACTUAL_REGISTRY_MIN_LEAD_ROUNDS,,}" ]; then
+  echo "Registry minimum lead rounds mismatch"
+  echo "Expected: $EXPECTED_REGISTRY_MIN_LEAD_ROUNDS"
+  echo "Actual:   $ACTUAL_REGISTRY_MIN_LEAD_ROUNDS"
+  exit 1
+fi
+
+REGISTRY_VERIFIER=$(
   cast call \
     "$REGISTRY" \
-    "oracle()(address)" \
+    "verifier()(address)" \
     --rpc-url "$RPC_URL" |
   awk '{print $1}'
 )
 
-if [ "${REGISTRY_ORACLE,,}" != "${ORACLE,,}" ]; then
-  echo "Registry oracle mismatch"
-  echo "Expected: $ORACLE"
-  echo "Actual:   $REGISTRY_ORACLE"
+if [ "${REGISTRY_VERIFIER,,}" != "${VERIFIER,,}" ]; then
+  echo "Registry verifier mismatch"
+  echo "Expected: $VERIFIER"
+  echo "Actual:   $REGISTRY_VERIFIER"
   exit 1
 fi
 
-REGISTRY_ORACLE_CODEHASH=$(
+REGISTRY_VERIFIER_CODEHASH=$(
   cast call \
     "$REGISTRY" \
-    "oracleCodehash()(bytes32)" \
+    "verifierCodehash()(bytes32)" \
     --rpc-url "$RPC_URL" |
   awk '{print $1}'
 )
 
-if [ "${REGISTRY_ORACLE_CODEHASH,,}" != "${EXPECTED_ORACLE_CODEHASH,,}" ]; then
-  echo "Registry oracle codehash mismatch"
-  echo "Expected: $EXPECTED_ORACLE_CODEHASH"
-  echo "Actual:   $REGISTRY_ORACLE_CODEHASH"
+if [ "${REGISTRY_VERIFIER_CODEHASH,,}" != "${EXPECTED_VERIFIER_CODEHASH,,}" ]; then
+  echo "Registry verifier codehash mismatch"
+  echo "Expected: $EXPECTED_VERIFIER_CODEHASH"
+  echo "Actual:   $REGISTRY_VERIFIER_CODEHASH"
   exit 1
 fi
 
-echo "Registry:          $REGISTRY"
-echo "Registry codehash: $ACTUAL_REGISTRY_CODEHASH"
-echo "Oracle:            $ORACLE"
-echo "Oracle codehash:   $ACTUAL_ORACLE_CODEHASH"
-echo "Chain:             $ACTUAL_CHAIN_ID"
+echo "Chain:                    $ACTUAL_CHAIN_ID"
+echo "Registry:                 $REGISTRY"
+echo "Registry codehash:        $ACTUAL_REGISTRY_CODEHASH"
+echo "Registry Min Lead Rounds: $ACTUAL_REGISTRY_MIN_LEAD_ROUNDS"
+echo ""
+
+echo "Verifier:                 $VERIFIER"
+echo "Verifier codehash:        $ACTUAL_VERIFIER_CODEHASH"
+echo ""
 
 # -------------------------------------------------------------------------
 # Select future Quicknet round
@@ -204,6 +222,7 @@ fi
 SIGNATURE="0x$SIGNATURE_HEX"
 
 echo "Signature: $SIGNATURE"
+echo ""
 
 # -------------------------------------------------------------------------
 # Simulate submission

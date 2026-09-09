@@ -10,7 +10,7 @@ randomness:
   periodSeconds: 3
 
 timing:
-  minimumLeadRounds: 5
+  minimumLeadRounds: 3
   timestampFreshnessReserveSeconds: 3
 
 securityModel:
@@ -20,8 +20,8 @@ securityModel:
 
 monitoring:
   timestampSkewSeconds:
-    warning: 5
-    critical: 8
+    warning: 2
+    critical: 3
 
 chainAdapter:
   type: arbitrum-nitro
