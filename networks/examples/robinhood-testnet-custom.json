@@ -11,13 +11,13 @@
     },
     "testnet": true
   },
-  "oracle": {
-    "address": "0x692100c4863adAED9f560F6Ce982cF878F083e93",
-    "runtimeCodehash": "0x78faa56ca608db8a19cfb3bb052f11fedbaa14fb1ce74db58044db99246b4cfc"
+  "verifier": {
+    "address": "0x90427e40e7D6f60425D29474a85595C4d8EE6B95",
+    "runtimeCodehash": "0x55ed5b7bad08ed41842bc0bd1c1e431609f0ece0c441aaa25d29c6f660febe63"
   },
   "registry": {
-    "address": "0xEc2a718F4D1B18c8315794A24Fe90622400A40de",
-    "runtimeCodehash": "0x19ef2338aa49f196ed6ceea377ee52c8674899edb2280f20145768cf30c8f699"
+    "address": "0x6e69C56D8D678aDeF8401adF1186c026A0915e2a",
+    "runtimeCodehash": "0x617b58699fa376a677b4c297169e4a66f74d605ee1bdf8de643431d5a752ecce"
   },
   "finality": {
     "type": "safe"

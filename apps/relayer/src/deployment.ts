@@ -18,7 +18,6 @@ interface VerifierManifest {
 interface RegistryManifest {
   address?: unknown;
   runtimeCodehash?: unknown;
-  minimumLeadRounds?: unknown;
 }
 
 export interface LoadRegistryDeploymentOptions {
@@ -84,7 +83,6 @@ export function parseRegistryDeployment(
   const deployment = RegistryDeployment.create({
     chainId: manifest.chainId,
     address: registry.address,
-    minimumLeadRounds: registry.minimumLeadRounds,
     runtimeCodehash: registry.runtimeCodehash,
     verifierAddress: verifier.address,
     verifierRuntimeCodehash: verifier.runtimeCodehash,

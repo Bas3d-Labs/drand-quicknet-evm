@@ -42,7 +42,7 @@ contract DeployRegistry is Script {
             json.readBytes32(".verifier.runtimeCodehash");
 
         uint256 minimumLeadRoundsValue =
-            json.readUint(".registry.minimumLeadRounds");
+            vm.envUint("MINIMUM_LEAD_ROUNDS");
 
         require(
             block.chainid == expectedChainId,

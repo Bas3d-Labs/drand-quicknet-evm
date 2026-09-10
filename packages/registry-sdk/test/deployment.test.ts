@@ -20,7 +20,6 @@ import {
 import {
   CHAIN_ID,
   DEPLOYMENT,
-  MINIMUM_LEAD_ROUNDS,
   REGISTRY_ADDRESS,
   REGISTRY_RUNTIME_CODE,
   REGISTRY_RUNTIME_CODEHASH,
@@ -36,8 +35,6 @@ const OTHER_VERIFIER_ADDRESS: Address =
 
 const WRONG_RUNTIME_CODE: Hex = '0x6003600055';
 const WRONG_RUNTIME_CODEHASH = keccak256(WRONG_RUNTIME_CODE);
-
-const OTHER_MINIMUM_LEAD_ROUNDS = MINIMUM_LEAD_ROUNDS + 1n;
 
 describe('verifyRegistryDeployment', () => {
   const getChainId =
@@ -94,10 +91,6 @@ describe('verifyRegistryDeployment', () => {
           return VERIFIER_RUNTIME_CODEHASH;
         }
 
-        if (functionName === 'minimumLeadRounds') {
-          return MINIMUM_LEAD_ROUNDS;
-        }
-
         throw new Error(`Unexpected function: ${functionName}`);
       },
     );
@@ -132,13 +125,6 @@ describe('verifyRegistryDeployment', () => {
       expect.objectContaining({
         address: REGISTRY_ADDRESS,
         functionName: 'verifierCodehash',
-      }),
-    );
-
-    expect(readContract).toHaveBeenCalledWith(
-      expect.objectContaining({
-        address: REGISTRY_ADDRESS,
-        functionName: 'minimumLeadRounds',
       }),
     );
   });
@@ -243,28 +229,6 @@ describe('verifyRegistryDeployment', () => {
       ),
     ).rejects.toThrow(
       `Registry verifier codehash mismatch: expected ${VERIFIER_RUNTIME_CODEHASH}, received ${WRONG_RUNTIME_CODEHASH}`
-    );
-  });
-
-  it('rejects a registry minimum lead rounds mismatch', async () => {
-    readContract
-      .mockResolvedValueOnce(
-        VERIFIER_ADDRESS,
-      )
-      .mockResolvedValueOnce(
-        VERIFIER_RUNTIME_CODEHASH,
-      )
-      .mockResolvedValueOnce(
-        OTHER_MINIMUM_LEAD_ROUNDS,
-      );
-
-    await expect(
-      verifyRegistryDeployment(
-        client,
-        DEPLOYMENT,
-      ),
-    ).rejects.toThrow(
-      `Registry minimumLeadRounds mismatch: expected ${MINIMUM_LEAD_ROUNDS}, received ${OTHER_MINIMUM_LEAD_ROUNDS}`
     );
   });
 

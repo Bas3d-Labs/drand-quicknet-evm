@@ -81,8 +81,6 @@ const VERIFIER_ADDRESS: Address =
 const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
-const MINIMUM_LEAD_ROUNDS = 5n;
-
 const RANDOMNESS: Hex =
   '0x3333333333333333333333333333333333333333333333333333333333333333';
 
@@ -99,7 +97,6 @@ const DEPLOYMENT: RegistryDeployment = {
   runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
   verifierAddress: VERIFIER_ADDRESS,
   verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
-  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 const BEACON: QuicknetBeacon = {

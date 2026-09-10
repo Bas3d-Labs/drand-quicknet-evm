@@ -88,8 +88,6 @@ const VERIFIER_ADDRESS: Address =
 const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
 
-const MINIMUM_LEAD_ROUNDS = 5n;
-
 const PUBLIC_CLIENT = {} as PublicClient;
 const WALLET_CLIENT = {} as WalletClient;
 const ACCOUNT = {} as Account;
@@ -104,7 +102,6 @@ const DEPLOYMENT: RegistryDeployment = {
   runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
   verifierAddress: VERIFIER_ADDRESS,
   verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
-  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 const REQUEST: QuicknetRandomnessRequest = {

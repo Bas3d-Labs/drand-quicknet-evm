@@ -29,8 +29,6 @@ RPC_URL="$ROBINHOOD_TESTNET_RPC_URL"
 
 REGISTRY=$(jq -r '.registry.address' "$MANIFEST")
 EXPECTED_REGISTRY_CODEHASH=$(jq -r '.registry.runtimeCodehash' "$MANIFEST")
-EXPECTED_REGISTRY_MIN_LEAD_ROUNDS=$(jq -r '.registry.minimumLeadRounds' "$MANIFEST")
-
 VERIFIER=$(jq -r '.verifier.address' "$MANIFEST")
 EXPECTED_VERIFIER_CODEHASH=$(jq -r '.verifier.runtimeCodehash' "$MANIFEST")
 
@@ -86,12 +84,8 @@ ACTUAL_REGISTRY_MIN_LEAD_ROUNDS=$(
     --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
 )
 
-if [ "${EXPECTED_REGISTRY_MIN_LEAD_ROUNDS,,}" != "${ACTUAL_REGISTRY_MIN_LEAD_ROUNDS,,}" ]; then
-  echo "Registry minimum lead rounds mismatch"
-  echo "Expected: $EXPECTED_REGISTRY_MIN_LEAD_ROUNDS"
-  echo "Actual:   $ACTUAL_REGISTRY_MIN_LEAD_ROUNDS"
-  exit 1
-fi
+# This smoke test reports the live floor but does not duplicate chain-policy
+# comparison. `pnpm security:check` compares it with the normative profile.
 
 REGISTRY_VERIFIER=$(
   cast call \

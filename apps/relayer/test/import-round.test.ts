@@ -74,8 +74,6 @@ const VERIFIER_ADDRESS = '0x5555555555555555555555555555555555555555';
 const VERIFIER_RUNTIME_CODEHASH =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
-const MINIMUM_LEAD_ROUNDS = 5n;
-
 const RECEIPT_BLOCK_NUMBER = 123_456n;
 
 const DEPLOYMENT: RegistryDeployment = {
@@ -84,7 +82,6 @@ const DEPLOYMENT: RegistryDeployment = {
   runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
   verifierAddress: VERIFIER_ADDRESS,
   verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
-  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 describe('importQuicknetRound', () => {

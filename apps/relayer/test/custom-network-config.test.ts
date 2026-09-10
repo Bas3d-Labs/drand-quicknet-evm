@@ -35,9 +35,6 @@ const VERIFIER_ADDRESS = '0x2222222222222222222222222222222222222222';
 const VERIFIER_RUNTIME_CODEHASH =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
-const MINIMUM_LEAD_ROUNDS = 5;
-const NORMALIZED_MINIMUM_LEAD_ROUNDS = 5n;
-
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -80,7 +77,6 @@ describe('CustomNetworkDescriptor.parseJson', () => {
         runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
         verifierAddress: VERIFIER_ADDRESS,
         verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
-        minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
       },
       finality: {
         type: 'safe',
@@ -821,50 +817,6 @@ describe('CustomNetworkDescriptor.parseJson', () => {
     );
   });
 
-  it('rejects a missing registry minimumLeadRounds', () => {
-    const config =
-      createValidConfig();
-
-    const registry =
-      config.registry as Record<
-        string,
-        unknown
-      >;
-
-    delete registry.minimumLeadRounds;
-
-    expect(
-      () =>
-        CustomNetworkDescriptor.parseJson(
-          config,
-        ),
-    ).toThrow(
-      'Missing custom network config field: minimumLeadRounds.'
-    );
-  });
-
-  it('propagates invalid registry minimumLeadRounds failures', () => {
-    const config =
-      createValidConfig();
-
-    const registry =
-      config.registry as Record<
-        string,
-        unknown
-      >;
-
-    registry.minimumLeadRounds = 0;
-
-    expect(
-      () =>
-        CustomNetworkDescriptor.parseJson(
-          config,
-        ),
-    ).toThrow(
-      'Registry deployment minimumLeadRounds must be a positive uint64.'
-    );
-  });
-
   it('rejects a non-object registry config', () => {
     const config = createValidConfig();
 
@@ -919,6 +871,27 @@ describe('CustomNetworkDescriptor.parseJson', () => {
         ),
     ).toThrow(
       'Unexpected custom network config field: chainId.'
+    );
+  });
+
+  it('rejects minimumLeadRounds policy in the registry descriptor', () => {
+    const config = createValidConfig();
+
+    const registry =
+      config.registry as Record<
+        string,
+        unknown
+      >;
+
+    registry.minimumLeadRounds = 5;
+
+    expect(
+      () =>
+        CustomNetworkDescriptor.parseJson(
+          config,
+        ),
+    ).toThrow(
+      'Unexpected custom network config field: minimumLeadRounds.'
     );
   });
 
@@ -1018,7 +991,6 @@ describe('loadCustomNetworkDescriptor', () => {
         runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
         verifierAddress: VERIFIER_ADDRESS,
         verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
-        minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
       },
       finality: {
         type: 'safe',
@@ -1105,7 +1077,6 @@ function createValidConfig(): Record<
     registry: {
       address: REGISTRY_ADDRESS,
       runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
-      minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
     },
     finality: {
       type: 'safe',

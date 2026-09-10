@@ -72,18 +72,6 @@ export async function verifyRegistryDeployment(
     );
   }
 
-  const minimumLeadRounds = await client.readContract({
-    address: deployment.address,
-    abi: drandQuicknetBeaconRegistryAbi,
-    functionName: 'minimumLeadRounds',
-  });
-
-  if (minimumLeadRounds !== deployment.minimumLeadRounds) {
-    throw new Error(
-      `Registry minimumLeadRounds mismatch: expected ${deployment.minimumLeadRounds}, received ${minimumLeadRounds}`
-    );
-  }
-
   const verifierCode = await client.getCode({
     address: deployment.verifierAddress,
   });
