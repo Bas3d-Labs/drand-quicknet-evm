@@ -11,6 +11,7 @@
     "test:contracts": "forge test --root contracts -vvv --no-match-path 'test/integration/**'",
     "test:contracts:integration": "forge test --root contracts -vvv --match-path 'test/integration/**'",
     "test:quicknet": "pnpm --filter @based-labs/drand-quicknet test",
+    "test:quicknet-kat": "pnpm --filter quicknet-kat-audit test",
     "test:registry-sdk": "pnpm --filter @based-labs/drand-quicknet-registry test",
     "test:relayer": "pnpm --filter @based-labs/drand-quicknet-relayer test",
     "test:security": "vitest run scripts/security",

@@ -9,6 +9,10 @@ import {
     DrandQuicknetBeaconVerifier
 } from "../../src/verifiers/DrandQuicknetBeaconVerifier.sol";
 
+/// @notice Exposes canonicality and BLS2 decompression for verifier tests.
+/// @dev Inherits verifyBeacon and DST without overrides. Deployment executes
+///      the verifier constructor's two-sided self-test before each test setup
+///      completes. The wrappers add no cryptographic validation logic.
 contract DrandQuicknetBeaconVerifierHarness
     is DrandQuicknetBeaconVerifier
 {

@@ -1,0 +1,368 @@
+{
+  "schemaVersion": 1,
+  "quicknet": {
+    "chainHash": "0x52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971",
+    "publicKey": "0x83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb5ed66304de9cf809bd274ca73bab4af5a6e9c76a4bc09e76eae8991ef5ece45a",
+    "scheme": "bls-unchained-g1-rfc9380",
+    "dst": "BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_",
+    "genesisTime": 1692803367,
+    "periodSeconds": 3
+  },
+  "provenance": {
+    "retrievedAt": "2026-09-10T15:47:03.429Z",
+    "endpoints": [
+      "https://api.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/public/{round}",
+      "https://api2.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/public/{round}"
+    ],
+    "expectedRandomness": "Copied verbatim from matching published responses; not computed by the Solidity verifier.",
+    "independence": "The HTTP endpoints mirror the same drand network; they are not independent cryptographic implementations. Cross-implementation audit uses @noble/curves 2.4.0 versus the Solidity BLS2 verifier.",
+    "uncompressed": "Independent G1 decompression using @noble/curves 2.4.0; raw 48-byte x followed by raw 48-byte y. Not an accepted verifier input.",
+    "responseHash": "SHA-256 of exact curl response bytes; informational acquisition record."
+  },
+  "positive": {
+    "v0": {
+      "id": "quicknet-round-1",
+      "round": "1",
+      "signature": "0xb55e7cb2d5c613ee0b2e28d6750aabbb78c39dcc96bd9d38c2c2e12198df95571de8e8e402a0cc48871c7089a2b3af4b",
+      "randomness": "0x1466a6cd24e327188770752f6134001c64d6efcc590ccc26b721611ad96f165a",
+      "uncompressed": "0x155e7cb2d5c613ee0b2e28d6750aabbb78c39dcc96bd9d38c2c2e12198df95571de8e8e402a0cc48871c7089a2b3af4b0fbb74ee8788264320f2501b0fa0dd56363bcec5ce4b113b2bf1de6e331116c79191af99234824f03aeb10ab1c4c7771",
+      "sourceResponseSha256": [
+        "5569874d5d1506c96e4c1437ce2afa68fd20d313acbd1994c42265cd4dac72f4",
+        "5569874d5d1506c96e4c1437ce2afa68fd20d313acbd1994c42265cd4dac72f4"
+      ]
+    },
+    "v1": {
+      "id": "quicknet-round-2",
+      "round": "2",
+      "signature": "0xb6b6a585449b66eb12e875b64fcbab3799861a00e4dbf092d99e969a5eac57dd3f798acf61e705fe4f093db926626807",
+      "randomness": "0x5782d6987841c654515a0e72b2d1ebb4e741234042c37cb19608ae50d93fb60c",
+      "uncompressed": "0x16b6a585449b66eb12e875b64fcbab3799861a00e4dbf092d99e969a5eac57dd3f798acf61e705fe4f093db92662680715ff2dfd0adad43e0219d11f00f14d4e14cb0d8292bd2c0a8ec634c1b402c2a067fc5d9c53aa2aa0aab8214ca1fce58c",
+      "sourceResponseSha256": [
+        "969528453982fd385dcb193d085660443e297eace0d39baee2afba281b3e5caa",
+        "969528453982fd385dcb193d085660443e297eace0d39baee2afba281b3e5caa"
+      ]
+    },
+    "v2": {
+      "id": "quicknet-round-255",
+      "round": "255",
+      "signature": "0xac47b96c2937201d0fb2f108f1f0e3a05279d310906a3b01c8b09388e4aa2e9c5de30db4d78e358c2ee480d233047111",
+      "randomness": "0x7643c673e167bff7030228a1f75a763aacd4e66cd138066fa91a30ad75d69051",
+      "uncompressed": "0x0c47b96c2937201d0fb2f108f1f0e3a05279d310906a3b01c8b09388e4aa2e9c5de30db4d78e358c2ee480d2330471110fd9000256d8fe6ff1bfbabdb9fd77a744433a918b3fe9082b60f642e9bea53d438908346915774503e6d25bc3bf2185",
+      "sourceResponseSha256": [
+        "02de4d8e05f3660fbed96dab0d5d9f8658576de34e76a05cb567449aa9eeb422",
+        "02de4d8e05f3660fbed96dab0d5d9f8658576de34e76a05cb567449aa9eeb422"
+      ]
+    },
+    "v3": {
+      "id": "quicknet-round-256",
+      "round": "256",
+      "signature": "0x8a0cd30f3694c151cfdbc1aa529b0e7673a8a32c07243046905bb40bf31d83769a95c838e9e16160f7af858dea860bc0",
+      "randomness": "0xfc40470927e5d00267e70c8ccfe5735d9dc57f887922b2bd2e1dd2ce9e396936",
+      "uncompressed": "0x0a0cd30f3694c151cfdbc1aa529b0e7673a8a32c07243046905bb40bf31d83769a95c838e9e16160f7af858dea860bc00c1d87ae155eeb8867c2cd2c05ede39e4226a55f2cd2f1689883c19bf46078689744570ba7901da767e5a1b4c9f0929f",
+      "sourceResponseSha256": [
+        "52e1ae77b16cd9caecef94e15bb43b8cdd89769f6b8852f0e5be6336bc27af66",
+        "52e1ae77b16cd9caecef94e15bb43b8cdd89769f6b8852f0e5be6336bc27af66"
+      ]
+    },
+    "v4": {
+      "id": "quicknet-round-1000",
+      "round": "1000",
+      "signature": "0xb44679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e39",
+      "randomness": "0xfe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd",
+      "uncompressed": "0x144679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e3911f92e4521ef54f047b64b85fa98db2d46f0f44add1f60b93f8a0dbddd63b34f238657c2d93aed18b90bddd60a01b6d2",
+      "sourceResponseSha256": [
+        "7fc6e6956940f0f02920a5ff8bdad77db0406d75555caddc6d0c96ae7aef1a18",
+        "7fc6e6956940f0f02920a5ff8bdad77db0406d75555caddc6d0c96ae7aef1a18"
+      ]
+    },
+    "v5": {
+      "id": "quicknet-round-13335",
+      "round": "13335",
+      "signature": "0xa38ab268d58c04ce2d22b8317e4b66ecda5fa8841c7215bf7733af8dbaed6c5e7d8d60b77817294a64b891f719bc1b40",
+      "randomness": "0xf4eb2e59448d155b1bc34337f2a4160ac5005429644ba61134779a8b8c6087b6",
+      "uncompressed": "0x038ab268d58c04ce2d22b8317e4b66ecda5fa8841c7215bf7733af8dbaed6c5e7d8d60b77817294a64b891f719bc1b401872e87d98f3e720c553b84fdcd5f9043f765bd9659f697762e1dd1ee716f929be3525bb49615b4bfc49157fe52a8771",
+      "sourceResponseSha256": [
+        "b0c800322c97e62092273f5c3bca2a19af6d29b607bbdfcc48b993a5dd4cc861",
+        "b0c800322c97e62092273f5c3bca2a19af6d29b607bbdfcc48b993a5dd4cc861"
+      ]
+    },
+    "v6": {
+      "id": "quicknet-round-65535",
+      "round": "65535",
+      "signature": "0x95aa0afea5aa88f59fe34facebcb08770ac01d38840a8c16e841c6027a293a3c90dbcaf010a8fb19b306b9ff6c46eaf9",
+      "randomness": "0x4a9741b8eb1bfa9109198bcdfe5b30b6bfff7c38b396e64873eb4df9b5b32604",
+      "uncompressed": "0x15aa0afea5aa88f59fe34facebcb08770ac01d38840a8c16e841c6027a293a3c90dbcaf010a8fb19b306b9ff6c46eaf90cacac4e06f63939ffc14b3676d0773f707a186abfa183177f29968f0dbf90839607d5d34d15689d5e3c981fb9c2a01c",
+      "sourceResponseSha256": [
+        "cde5c81db06ebc4e2eb19ad352e5bfe3bc9c2b4c8c3068d31037e648e04cb1dc",
+        "cde5c81db06ebc4e2eb19ad352e5bfe3bc9c2b4c8c3068d31037e648e04cb1dc"
+      ]
+    },
+    "v7": {
+      "id": "quicknet-round-65536",
+      "round": "65536",
+      "signature": "0xa6404de93f56ba89d4ae0360b7eee02120c7c4898c8d7980914139746890eb9b6eaa022fe688614499fa1b42fc508b6f",
+      "randomness": "0x7025100299eaeeacb68f95d9b5cbccf047fcc6d8e01c9793ebfe0b4a9b0d1766",
+      "uncompressed": "0x06404de93f56ba89d4ae0360b7eee02120c7c4898c8d7980914139746890eb9b6eaa022fe688614499fa1b42fc508b6f0f9259e2915c815796886a1a6021a29737a08a2540ab74f20705e29a4efce454e2c4f014d1dc2c714754e0e4e13d47a5",
+      "sourceResponseSha256": [
+        "6eb98cedbe4d43994013132b55038dc35815b01edff59208b0ff1ea100a56d23",
+        "6eb98cedbe4d43994013132b55038dc35815b01edff59208b0ff1ea100a56d23"
+      ]
+    },
+    "v8": {
+      "id": "quicknet-round-16777215",
+      "round": "16777215",
+      "signature": "0x84efb467b2b9f3578c169393d8bd5ccfd17da400a975325282b2955eb10adac747904c3aafd152e48e19d23f8d416f0f",
+      "randomness": "0xd2eb9f652fb4f3bdaa2a746a6a07c8a55bda4c153141623c54dc4edf8e934abc",
+      "uncompressed": "0x04efb467b2b9f3578c169393d8bd5ccfd17da400a975325282b2955eb10adac747904c3aafd152e48e19d23f8d416f0f0370f5243c8015b02a9f4b134fc477540af79f3e865fa3271c788029cde034460d9f47200324c6a7c7f89390df9bfdd7",
+      "sourceResponseSha256": [
+        "653182644ccdddb6f3cd28f46251c6caf9ec7b63fe8abef5c7be006af34188c9",
+        "653182644ccdddb6f3cd28f46251c6caf9ec7b63fe8abef5c7be006af34188c9"
+      ]
+    },
+    "v9": {
+      "id": "quicknet-round-16777216",
+      "round": "16777216",
+      "signature": "0xa38ae8fa3645078723fe002a4769499a9a267557f67ac7263113339718b6b0b78a5dd59a03321240b5b6554dffeac194",
+      "randomness": "0xa3ae17ab68c2edca5b7b3dd42a7e33c6c734011ccf1df1a317b3227ccb307df4",
+      "uncompressed": "0x038ae8fa3645078723fe002a4769499a9a267557f67ac7263113339718b6b0b78a5dd59a03321240b5b6554dffeac19414085e348f0d15ef9d31e3bf356358741bdc3c4552eb825e88780795d816e38ad4bc68c61b4fffad61cce8a1c3a37c9d",
+      "sourceResponseSha256": [
+        "6750b01ccbc1265ca158c50dbb53ed9d6c2e95dbf1a2f790e43492b31b2c176a",
+        "6750b01ccbc1265ca158c50dbb53ed9d6c2e95dbf1a2f790e43492b31b2c176a"
+      ]
+    },
+    "v10": {
+      "id": "quicknet-round-20791007",
+      "round": "20791007",
+      "signature": "0x8d2c8bbc37170dbacc5e280a21d4e195cff5f32a19fd6a58633fa4e4670478b5fb39bc13dd8f8c4372c5a76191198ac5",
+      "randomness": "0xf4ad45db792e14676c62891989b804504e09bf0029cd472143d958649ab3c88a",
+      "uncompressed": "0x0d2c8bbc37170dbacc5e280a21d4e195cff5f32a19fd6a58633fa4e4670478b5fb39bc13dd8f8c4372c5a76191198ac50823ff37364b4060af65c7ec4dde05a428e4a444713680d95c34a4b109f112af1792643c742b75d85940c4bdcfdfbfa1",
+      "sourceResponseSha256": [
+        "64596a6b8bf9c407ac5832b2913f44b6c82d30ce53eed6a9666406384eb9d49d",
+        "64596a6b8bf9c407ac5832b2913f44b6c82d30ce53eed6a9666406384eb9d49d"
+      ]
+    },
+    "v11": {
+      "id": "quicknet-round-31089008",
+      "round": "31089008",
+      "signature": "0x87b3b9c9f99cc1e7fc326e249538f33b84a1c4ef8bd85920a267af642b570bcd62bf70900a3862f742e574164b5f17f3",
+      "randomness": "0xce7b0bc26c2f2f969bb4fa4ceb074fd13baed8557659ac0ea1af0b589c68d8bf",
+      "uncompressed": "0x07b3b9c9f99cc1e7fc326e249538f33b84a1c4ef8bd85920a267af642b570bcd62bf70900a3862f742e574164b5f17f309248d09727d1326fff968299f3af212bd4f6a7064be66700bd005b2134bf4b2cb6d7d6b0b140205883f48d32ad1af72",
+      "sourceResponseSha256": [
+        "decf2006e3659bde2d710acfa3ef84e64eb9bf9085851eb4a67b17978300da8e",
+        "decf2006e3659bde2d710acfa3ef84e64eb9bf9085851eb4a67b17978300da8e"
+      ]
+    }
+  },
+  "negative": {
+    "v0": {
+      "id": "round-zero",
+      "round": "0",
+      "signature": "0xb44679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e39",
+      "canonical": true,
+      "derivation": "Round 1000 signature submitted for round zero."
+    },
+    "v1": {
+      "id": "wrong-round",
+      "round": "1001",
+      "signature": "0xb44679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e39",
+      "canonical": true,
+      "derivation": "Round 1000 signature submitted for round 1001."
+    },
+    "v2": {
+      "id": "uint64-max-round",
+      "round": "18446744073709551615",
+      "signature": "0xb44679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e39",
+      "canonical": true,
+      "derivation": "Round 1000 signature submitted for maximum uint64."
+    },
+    "v3": {
+      "id": "empty",
+      "round": "1000",
+      "signature": "0x",
+      "canonical": false,
+      "derivation": "Empty signature."
+    },
+    "v4": {
+      "id": "one-byte",
+      "round": "1000",
+      "signature": "0xb4",
+      "canonical": false,
+      "derivation": "First byte of round 1000 signature."
+    },
+    "v5": {
+      "id": "length-32",
+      "round": "1000",
+      "signature": "0xb44679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125",
+      "canonical": false,
+      "derivation": "First 32 bytes of round 1000 signature."
+    },
+    "v6": {
+      "id": "truncated-47",
+      "round": "1000",
+      "signature": "0xb44679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e",
+      "canonical": false,
+      "derivation": "Remove final byte of round 1000 signature."
+    },
+    "v7": {
+      "id": "appended-49",
+      "round": "1000",
+      "signature": "0xb44679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e3900",
+      "canonical": false,
+      "derivation": "Append one zero byte to round 1000 signature."
+    },
+    "v8": {
+      "id": "valid-point-uncompressed-96",
+      "round": "1000",
+      "signature": "0x144679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e3911f92e4521ef54f047b64b85fa98db2d46f0f44add1f60b93f8a0dbddd63b34f238657c2d93aed18b90bddd60a01b6d2",
+      "canonical": false,
+      "derivation": "Actual uncompressed round 1000 point from Noble; rejected by compressed-only API."
+    },
+    "v9": {
+      "id": "concatenated-96",
+      "round": "1000",
+      "signature": "0xb44679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e39b44679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e39",
+      "canonical": false,
+      "derivation": "Concatenate round 1000 signature with itself."
+    },
+    "v10": {
+      "id": "compression-clear",
+      "round": "1000",
+      "signature": "0x344679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e39",
+      "canonical": false,
+      "derivation": "Clear C in round 1000 signature."
+    },
+    "v11": {
+      "id": "infinity-set",
+      "round": "1000",
+      "signature": "0xf44679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e39",
+      "canonical": false,
+      "derivation": "Set I in round 1000 signature."
+    },
+    "v12": {
+      "id": "infinity-zero",
+      "round": "1000",
+      "signature": "0xc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "canonical": false,
+      "derivation": "Compressed infinity encoding, C=1 I=1 S=0."
+    },
+    "v13": {
+      "id": "infinity-sign-set",
+      "round": "1000",
+      "signature": "0xe00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "canonical": false,
+      "derivation": "Infinity with sign bit set."
+    },
+    "v14": {
+      "id": "all-zero",
+      "round": "1000",
+      "signature": "0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "canonical": false,
+      "derivation": "48 zero bytes."
+    },
+    "v15": {
+      "id": "all-ff",
+      "round": "1000",
+      "signature": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "canonical": false,
+      "derivation": "48 bytes equal to 0xff."
+    },
+    "v16": {
+      "id": "x-p-minus-one",
+      "round": "1000",
+      "signature": "0x9a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaaa",
+      "canonical": true,
+      "derivation": "Canonical field boundary x=p-1."
+    },
+    "v17": {
+      "id": "x-p",
+      "round": "1000",
+      "signature": "0x9a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab",
+      "canonical": false,
+      "derivation": "Noncanonical field boundary x=p."
+    },
+    "v18": {
+      "id": "x-p-plus-one",
+      "round": "1000",
+      "signature": "0x9a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaac",
+      "canonical": false,
+      "derivation": "Noncanonical field boundary x=p+1."
+    },
+    "v19": {
+      "id": "x-max",
+      "round": "1000",
+      "signature": "0x9fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "canonical": false,
+      "derivation": "Largest 381-bit x with C set."
+    },
+    "v20": {
+      "id": "x-p-sign-set",
+      "round": "1000",
+      "signature": "0xba0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab",
+      "canonical": false,
+      "derivation": "x=p with C and S set."
+    },
+    "v21": {
+      "id": "order-three-sign-clear",
+      "round": "1000",
+      "signature": "0x800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "canonical": true,
+      "derivation": "Point (0,2) has order three, outside prime-order G1 subgroup."
+    },
+    "v22": {
+      "id": "order-three-sign-set",
+      "round": "1000",
+      "signature": "0xa00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "canonical": true,
+      "derivation": "Point (0,p-2) has order three, outside prime-order G1 subgroup."
+    },
+    "v23": {
+      "id": "off-curve-sign-clear",
+      "round": "1000",
+      "signature": "0x800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+      "canonical": true,
+      "derivation": "x=1; x^3+4 is a quadratic nonresidue mod p, independently checked by Euler criterion."
+    },
+    "v24": {
+      "id": "off-curve-sign-set",
+      "round": "1000",
+      "signature": "0xa00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+      "canonical": true,
+      "derivation": "x=1; same nonresidue with S set."
+    },
+    "v25": {
+      "id": "sign-flip",
+      "round": "1000",
+      "signature": "0x944679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e39",
+      "canonical": true,
+      "derivation": "Toggle S in round 1000 signature: opposite subgroup point."
+    },
+    "v26": {
+      "id": "last-x-bit-flip",
+      "round": "1000",
+      "signature": "0xb44679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e38",
+      "canonical": true,
+      "derivation": "Toggle least significant x bit in round 1000 signature."
+    },
+    "v27": {
+      "id": "first-x-bit-flip",
+      "round": "1000",
+      "signature": "0xa44679b9a59af2ec876b1a6b1ad52ea9b1615fc3982b19576350f93447cb1125e342b73a8dd2bacbe47e4b6b63ed5e39",
+      "canonical": true,
+      "derivation": "Toggle bit 380 of x in round 1000 signature."
+    },
+    "v28": {
+      "id": "x-plus-p-alias",
+      "round": "13335",
+      "signature": "0xbd8bc4530f0beb68783e5fe7c19713c43ed6f4090ff7287ede64822eb19e62829c3960b6296b294a1eb791f719bbc5eb",
+      "canonical": false,
+      "derivation": "Add p to x of round 13335, preserving original C/I/S flags without overflow."
+    },
+    "v29": {
+      "id": "unrelated-subgroup-generator",
+      "round": "1000",
+      "signature": "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
+      "canonical": true,
+      "derivation": "Canonical G1 generator: valid nonidentity prime-order subgroup point, incorrect signature."
+    }
+  }
+}
