@@ -162,7 +162,7 @@ function logHeartbeat(
   logger.info({
     event: 'heartbeat',
     consumers,
-  }, 'Relayer daemon healthy');
+  }, 'Relayer daemon heartbeat');
 }
 
 function normalizeError(

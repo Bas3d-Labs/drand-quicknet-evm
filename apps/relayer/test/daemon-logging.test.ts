@@ -582,7 +582,7 @@ describe('createDaemonLogger', () => {
           },
         ],
       },
-      'Relayer daemon healthy',
+      'Relayer daemon heartbeat',
     );
   });
 
@@ -690,7 +690,7 @@ describe('createDaemonLogger', () => {
           },
         ],
       },
-      'Relayer daemon healthy',
+      'Relayer daemon heartbeat',
     );
   });
 
@@ -931,7 +931,7 @@ describe('createDaemonLogger', () => {
           },
         ],
       },
-      'Relayer daemon healthy',
+      'Relayer daemon heartbeat',
     );
   });
 });
