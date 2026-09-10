@@ -11,7 +11,7 @@ import {
 
 import {
     DrandQuicknetBeaconVerifierHarness
-} from "./mocks/DrandQuicknetBeaconVerifierHarness.sol";
+} from "./harnesses/DrandQuicknetBeaconVerifierHarness.sol";
 
 contract DrandQuicknetBeaconVerifierTest is Test {
     uint64 internal constant KAT_ROUND = 1000;

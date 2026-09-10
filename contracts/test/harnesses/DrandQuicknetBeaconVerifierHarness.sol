@@ -13,8 +13,8 @@ import {
 /// @dev Inherits verifyBeacon and DST without overrides. Deployment executes
 ///      the verifier constructor's two-sided self-test before each test setup
 ///      completes. The wrappers add no cryptographic validation logic.
-contract DrandQuicknetBeaconVerifierHarness
-    is DrandQuicknetBeaconVerifier
+contract DrandQuicknetBeaconVerifierHarness is 
+    DrandQuicknetBeaconVerifier
 {
     function isCanonical(
         bytes memory signature
@@ -38,8 +38,7 @@ contract DrandQuicknetBeaconVerifierHarness
             uint256 yLo
         )
     {
-        BLS2.PointG1 memory point =
-            BLS2.g1UnmarshalCompressed(signature);
+        BLS2.PointG1 memory point = BLS2.g1UnmarshalCompressed(signature);
 
         return (
             point.x_hi,
