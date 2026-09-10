@@ -343,10 +343,15 @@ This means a verifier cannot deploy successfully unless the target execution
 environment demonstrates both acceptance of a known-good Quicknet beacon and
 rejection of a corrupted one through the exact deployed verification path.
 
-The repository also contains fixture and compatibility tests. A production
-hardening milestone is to expand the KAT corpus with additional independently
-sourced and cross-implementation vectors; that is an expansion of existing
-coverage, not the project's first known-answer test.
+The repository also contains an expanded deterministic offline KAT corpus:
+12 canonical Quicknet rounds with published expected randomness, 30 fixed
+negative vectors, and 108 derived wrong-round/sign rejection checks. The
+Solidity suite and an independent Noble BLS audit consume the same corpus,
+including fixed decompression coordinates for cross-implementation comparison.
+This hardening extends the existing constructor self-test and unit/fuzz tests.
+
+See [the KAT provenance and run instructions](scripts/quicknet-kat/README.md)
+for source records, independence boundaries, and reproduction commands.
 
 The verifier is deployed separately from the registry. The registry pins both
 the verifier address and its runtime codehash so an existing registry cannot
@@ -850,20 +855,6 @@ tests because they require RPC access.
 ## Production use
 
 This project may ultimately determine outcomes with financial value.
-
-Before production deployment, high-priority work includes:
-
-1. expand the existing cryptographic KAT coverage with a broader independent
-   offline corpus and cross-implementation vectors
-2. obtain independent security review of verifier, registry, and consumer
-   integration
-3. explicitly accept or strengthen the production chain's timestamp and
-   sequencing security model
-4. verify exact production deployment bytecode and policy
-5. operate redundant permissionless relayers
-6. test restart, downtime, RPC failure, and ambiguous transaction recovery
-7. operate monitoring and alerting appropriate to the chain profile
-8. rehearse deployment and verification end-to-end
 
 A larger future-round lead is not a substitute for understanding the security
 model of the chain on which the commitment is made.
