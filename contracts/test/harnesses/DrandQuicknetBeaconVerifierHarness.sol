@@ -16,6 +16,22 @@ import {
 contract DrandQuicknetBeaconVerifierHarness is 
     DrandQuicknetBeaconVerifier
 {
+    function selfTestVector()
+        external
+        pure
+        returns (
+            uint64 round,
+            bytes memory signature,
+            bytes32 randomness
+        )
+    {
+        return (
+            SELF_TEST_ROUND,
+            SELF_TEST_SIGNATURE,
+            SELF_TEST_RANDOMNESS
+        );
+    }
+
     function isCanonical(
         bytes memory signature
     )

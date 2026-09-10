@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 
 import {
     DrandQuicknetBeaconVerifierHarness
-} from "./mocks/DrandQuicknetBeaconVerifierHarness.sol";
+} from "./harnesses/DrandQuicknetBeaconVerifierHarness.sol";
 
 /// @notice Offline, externally sourced Quicknet regression corpus.
 /// @dev Provenance and independent verification instructions are in
@@ -171,6 +171,56 @@ contract DrandQuicknetBeaconVerifierKatTest is Test {
         }
     }
 
+    function test_kat_constructorVectorMatchesPublishedCorpus()
+        public
+        view
+    {
+        (
+            uint64 round,
+            bytes memory signature,
+            bytes32 randomness
+        ) = verifier.selfTestVector();
+
+        uint256 count =
+            vm.parseJsonKeys(corpus, ".positive").length;
+
+        uint256 matches = 0;
+
+        for (uint256 i = 0; i < count; ++i) {
+            string memory key = _key("positive", i);
+
+            if (_round(key) != round) {
+                continue;
+            }
+
+            ++matches;
+
+            assertEq(
+                signature,
+                vm.parseJsonBytes(
+                    corpus,
+                    string.concat(key, ".signature")
+                ),
+                "constructor signature differs from corpus"
+            );
+
+            assertEq(
+                randomness,
+                vm.parseJsonBytes32(
+                    corpus,
+                    string.concat(key, ".randomness")
+                ),
+                "constructor randomness differs from corpus"
+            );
+        }
+
+        assertEq(
+            matches,
+            1,
+            "constructor round must occur exactly once in corpus"
+        );
+    }
+
     function _key(
         string memory group,
         uint256 index
@@ -208,7 +258,7 @@ contract DrandQuicknetBeaconVerifierKatTest is Test {
             bool verified,
             bytes32 randomness
         ) = verifier.verifyBeacon(round, signature);
-        
+
         assertFalse(verified, context);
         assertEq(randomness, bytes32(0), context);
     }
