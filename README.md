@@ -344,7 +344,7 @@ environment demonstrates both acceptance of a known-good Quicknet beacon and
 rejection of a corrupted one through the exact deployed verification path.
 
 The repository also contains an expanded deterministic offline KAT corpus:
-12 canonical Quicknet rounds with published expected randomness, 30 fixed
+12 canonical Quicknet rounds with published expected randomness, 31 fixed
 negative vectors, and 108 derived wrong-round/sign rejection checks. The
 Solidity suite and an independent Noble BLS audit consume the same corpus,
 including fixed decompression coordinates for cross-implementation comparison.

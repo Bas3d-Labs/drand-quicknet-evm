@@ -80,7 +80,7 @@ assert.equal(corpus.quicknet.publicKey, hex(publicKey));
 assert.equal(corpus.quicknet.chainHash, '0x52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971');
 assert.equal(corpus.quicknet.scheme, 'bls-unchained-g1-rfc9380');
 assert.equal(Object.keys(corpus.positive).length, 12);
-assert.equal(Object.keys(corpus.negative).length, 30);
+assert.equal(Object.keys(corpus.negative).length, 31);
 
 const seen = new Set();
 for (const [index, vector] of Object.values(corpus.positive).entries()) {
@@ -122,4 +122,58 @@ for (const [index, vector] of Object.values(corpus.negative).entries()) {
   assert.equal(verify(BigInt(vector.round), signature), false, vector.id);
 }
 
-console.log(`Quicknet KAT audit passed: ${seen.size} published rounds, ${Object.keys(corpus.negative).length} fixed negatives, ${seen.size * 9} derived round/sign negatives.`);
+// This is mandatory for v30: deleting its source metadata must fail the audit.
+// Rejection under Quicknet alone would not establish a real wrong-key beacon.
+const wrongKeyVector = corpus.negative.v30;
+assert.equal(wrongKeyVector.id, 'quicknet-t-round-1000-wrong-key');
+assert.equal(wrongKeyVector.round, '1000');
+assert.equal(wrongKeyVector.canonical, true);
+
+const source = wrongKeyVector.source;
+assert.equal(source.beaconId, 'quicknet-t');
+assert.equal(
+  source.chainHash,
+  '0xcc9c398442737cbd141526600919edd69f1d6f9b4adb67e4d912fbc64341a9a5',
+);
+assert.equal(
+  source.publicKey,
+  '0xb15b65b46fb29104f6a4b5d1e11a8da6344463973d423661bb0804846a0ecd1ef93c25057f1c0baab2ac53e56c662b66' +
+  '072f6d84ee791a3382bfb055afab1e6a375538d8ffc451104ac971d2dc9b168e2d3246b0be2015969cbaac298f6502da',
+);
+assert.equal(source.scheme, corpus.quicknet.scheme);
+assert.notEqual(source.chainHash, corpus.quicknet.chainHash);
+assert.notEqual(source.publicKey, corpus.quicknet.publicKey);
+assert.ok(
+  seen.has(BigInt(wrongKeyVector.round)),
+  'wrong-key round must also have a Quicknet positive',
+);
+
+const wrongKeySignature = bytes(wrongKeyVector.signature);
+const sourceKey = bytes(source.publicKey);
+
+assert.equal(sourceKey.length, 96);
+assert.equal(
+  hex(hash(wrongKeySignature)),
+  source.randomness,
+  'source published randomness',
+);
+
+// No catch: malformed points, invalid keys, and cryptographic errors fail.
+const wrongKeyPoint = bls12_381.G1.Point.fromBytes(wrongKeySignature);
+wrongKeyPoint.assertValidity();
+
+assert.equal(
+  bls.verify(
+    wrongKeyPoint,
+    message(BigInt(wrongKeyVector.round)),
+    sourceKey,
+  ),
+  true,
+  'quicknet-t beacon must verify under its source key',
+);
+
+console.log(
+  `Quicknet KAT audit passed: ${seen.size} published rounds, ` +
+  `${Object.keys(corpus.negative).length} fixed negatives, ` +
+  `${seen.size * 9} derived round/sign negatives, 1 source-key acceptance.`,
+);

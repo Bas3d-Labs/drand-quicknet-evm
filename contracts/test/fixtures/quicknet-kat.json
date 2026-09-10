@@ -363,6 +363,26 @@
       "signature": "0x97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb",
       "canonical": true,
       "derivation": "Canonical G1 generator: valid nonidentity prime-order subgroup point, incorrect signature."
+    },
+    "v30": {
+      "id": "quicknet-t-round-1000-wrong-key",
+      "round": "1000",
+      "signature": "0x95eefb5d443bb029594b17c83bc20aa5976997cb62cd07bd9f77e66089d49e02292d5f329fd0219daf11ff61ffafe6fe",
+      "canonical": true,
+      "derivation": "Published quicknet-t round 1000 beacon: valid under the recorded source key and the same G1 RFC9380 scheme, invalid under the Quicknet key.",
+      "source": {
+        "beaconId": "quicknet-t",
+        "chainHash": "0xcc9c398442737cbd141526600919edd69f1d6f9b4adb67e4d912fbc64341a9a5",
+        "publicKey": "0xb15b65b46fb29104f6a4b5d1e11a8da6344463973d423661bb0804846a0ecd1ef93c25057f1c0baab2ac53e56c662b66072f6d84ee791a3382bfb055afab1e6a375538d8ffc451104ac971d2dc9b168e2d3246b0be2015969cbaac298f6502da",
+        "scheme": "bls-unchained-g1-rfc9380",
+        "randomness": "0x739ba6e75a6b8a9ae1e1fe408163f820d0584935b28d50bcd26339bfc48aca15",
+        "infoUrl": "https://pl-us.testnet.drand.sh/cc9c398442737cbd141526600919edd69f1d6f9b4adb67e4d912fbc64341a9a5/info",
+        "beaconUrl": "https://pl-us.testnet.drand.sh/cc9c398442737cbd141526600919edd69f1d6f9b4adb67e4d912fbc64341a9a5/public/1000",
+        "keySourceUrl": "https://github.com/drand/drand-client/blob/b9572b2ef11d28d5c011144867ca8d27bece23e2/lib/defaults.ts",
+        "retrievedAt": "2026-09-10T19:08:58.343Z",
+        "infoResponseSha256": "7807f39183e3c20ae095ae3e4a0fb2aeb801a9bcc95058e65109931a51e80934",
+        "beaconResponseSha256": "3133e7dcce6bbb1183aa9a35ebdcc3d56f3ac8e0afe92e67aaf0c0f84d5cee8f"
+      }
     }
   }
 }

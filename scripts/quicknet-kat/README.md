@@ -69,7 +69,7 @@ public API still rejects 96-byte inputs.
 
 ## Rejection coverage
 
-Thirty fixed negatives record their exact bytes, round, expected encoding
+Thirty-one fixed negatives record their exact bytes, round, expected encoding
 canonicality, and derivation:
 
 - Zero, wrong, and maximum uint64 rounds with a real signature.
@@ -81,6 +81,7 @@ canonicality, and derivation:
 - Both signs of the order-three points `(0, ±2)`, outside the prime-order G1
   subgroup.
 - Sign and coordinate bit corruption, plus an unrelated valid subgroup point.
+- A published quicknet-t round-1000 signature under a different network key.
 
 Every rejected call must complete with `(false, bytes32(0))`. A revert fails the
 Foundry test. Encoding canonicality is checked separately so a subgroup or
@@ -95,6 +96,26 @@ The fixed counts and contiguous vector keys protect against accidental corpus
 shrinkage. Expected outputs must be reviewed against upstream responses and the
 independent audit when updating fixtures. Never regenerate expected answers by
 calling the Solidity verifier.
+
+## Cross-network wrong-key vector
+
+Negative `v30` is a published `quicknet-t` beacon for round 1000. Its chain
+information and beacon were retrieved from the chain-hash-pinned
+`https://pl-us.testnet.drand.sh/cc9c398442737cbd141526600919edd69f1d6f9b4adb67e4d912fbc64341a9a5`
+endpoint. The chain hash, public key, and scheme were also checked against
+[the official drand client defaults at a pinned commit](https://github.com/drand/drand-client/blob/b9572b2ef11d28d5c011144867ca8d27bece23e2/lib/defaults.ts).
+
+The vector records its source key, scheme, published randomness, URLs,
+acquisition time, and response hashes in `source`. This source record is
+separate from the dual-endpoint provenance of the 12 Quicknet positives.
+
+The Noble audit requires acceptance under the pinned source key using the same
+round serialization and Quicknet DST, and checks the published randomness hash.
+Both Noble and Solidity require rejection under the Quicknet key; Solidity
+also requires encoding canonicality and `(false, bytes32(0))` without a revert.
+Source-key acceptance runs explicitly for `v30` and cannot be skipped by
+removing its source metadata. This adds one fixed negative and one source-key
+acceptance check; the 12 Quicknet positives and 108 derived negatives are unchanged.
 
 This corpus does not establish every EVM client's precompile compatibility or
 replace deployment canaries. A third implementation such as drand's Go stack

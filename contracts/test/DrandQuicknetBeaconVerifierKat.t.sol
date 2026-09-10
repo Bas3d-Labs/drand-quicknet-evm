@@ -71,7 +71,7 @@ contract DrandQuicknetBeaconVerifierKatTest is Test {
         view 
     {
         uint256 count = vm.parseJsonKeys(corpus, ".negative").length;
-        assertEq(count, 30, "negative corpus must not silently shrink");
+        assertEq(count, 31, "negative corpus must not silently shrink");
 
         for (uint256 i; i < count; ++i) {
             string memory key = _key("negative", i);
