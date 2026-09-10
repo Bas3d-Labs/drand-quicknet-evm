@@ -12,12 +12,12 @@
     "testnet": true
   },
   "verifier": {
-    "address": "0x90427e40e7D6f60425D29474a85595C4d8EE6B95",
-    "runtimeCodehash": "0x55ed5b7bad08ed41842bc0bd1c1e431609f0ece0c441aaa25d29c6f660febe63"
+    "address": "0xAe9a1AbF0D30633ec1Eb73038F375b2c7Ee0E01e",
+    "runtimeCodehash": "0x916ebb69c0ceb4c049d50ad8bf5b3e566661a2b1ef33e01727ed443673b68aab"
   },
   "registry": {
-    "address": "0x6e69C56D8D678aDeF8401adF1186c026A0915e2a",
-    "runtimeCodehash": "0x617b58699fa376a677b4c297169e4a66f74d605ee1bdf8de643431d5a752ecce"
+    "address": "0xB1e8bc94AdBb82F036aafC2Af004986F810dd0fe",
+    "runtimeCodehash": "0x6d84157b97cfea3d51931f84f17638028dff7560d9be1f07c9d668fa37480e73"
   },
   "finality": {
     "type": "safe"
