@@ -56,15 +56,12 @@ const VERIFIER_ADDRESS: Address =
 const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
-const MINIMUM_LEAD_ROUNDS = 5n;
-
 const DEPLOYMENT: RegistryDeployment = {
   chainId: CHAIN_ID,
   address: REGISTRY_ADDRESS,
   runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
   verifierAddress: VERIFIER_ADDRESS,
   verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
-  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 const LOWERCASE_CONSUMER = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';

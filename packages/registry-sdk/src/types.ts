@@ -10,15 +10,12 @@ import type {
   CompressedSignature,
 } from '@based-labs/drand-quicknet';
 
-const MAX_UINT64 = (1n << 64n) - 1n;
-
 export interface RegistryDeployment {
   chainId: number;
   address: Address;
   runtimeCodehash: Hex;
   verifierAddress: Address;
   verifierRuntimeCodehash: Hex;
-  minimumLeadRounds: bigint;
 }
 
 export interface CreateRegistryDeploymentOptions {
@@ -27,7 +24,6 @@ export interface CreateRegistryDeploymentOptions {
   runtimeCodehash: unknown;
   verifierAddress: unknown;
   verifierRuntimeCodehash: unknown;
-  minimumLeadRounds: unknown;
 }
 
 export const RegistryDeployment = {
@@ -40,7 +36,6 @@ export const RegistryDeployment = {
       runtimeCodehash,
       verifierAddress,
       verifierRuntimeCodehash,
-      minimumLeadRounds,
     } = options;
 
     if (
@@ -73,16 +68,12 @@ export const RegistryDeployment = {
       'Registry deployment verifierRuntimeCodehash'
     );
 
-    const normalizedMinimumLeadRounds =
-      normalizeMinimumLeadRounds(minimumLeadRounds);
-
     return {
       chainId,
       address: normalizedAddress,
       runtimeCodehash,
       verifierAddress: normalizedVerifierAddress,
       verifierRuntimeCodehash,
-      minimumLeadRounds: normalizedMinimumLeadRounds,
     };
   },
 };
@@ -115,36 +106,6 @@ function validateCodehash(
   ) {
     throw new Error(`${field} must be a 32-byte hex value.`);
   }
-}
-
-function normalizeMinimumLeadRounds(
-  value: unknown,
-): bigint {
-  let normalized: bigint;
-
-  if (typeof value === 'bigint') {
-    normalized = value;
-  } else if (
-    typeof value === 'number' &&
-    Number.isSafeInteger(value)
-  ) {
-    normalized = BigInt(value);
-  } else {
-    throw new Error(
-      'Registry deployment minimumLeadRounds must be a positive uint64.'
-    );
-  }
-
-  if (
-    normalized <= 0n ||
-    normalized > MAX_UINT64
-  ) {
-    throw new Error(
-      'Registry deployment minimumLeadRounds must be a positive uint64.'
-    );
-  }
-
-  return normalized;
 }
 
 export type RegistrySignature = CompressedSignature;

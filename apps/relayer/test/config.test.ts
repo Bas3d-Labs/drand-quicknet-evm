@@ -77,15 +77,12 @@ const VERIFIER_ADDRESS: Address =
 const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
-const MINIMUM_LEAD_ROUNDS = 5n;
-
 const REGISTRY_DEPLOYMENT: RegistryDeployment = {
   chainId: robinhoodTestnet.id,
   address: REGISTRY_ADDRESS,
   runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
   verifierAddress: VERIFIER_ADDRESS,
   verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
-  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 const CUSTOM_REGISTRY_DEPLOYMENT: RegistryDeployment = {
@@ -94,7 +91,6 @@ const CUSTOM_REGISTRY_DEPLOYMENT: RegistryDeployment = {
   runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
   verifierAddress: VERIFIER_ADDRESS,
   verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
-  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 const CUSTOM_NETWORK_DESCRIPTOR: CustomNetworkDescriptor = {

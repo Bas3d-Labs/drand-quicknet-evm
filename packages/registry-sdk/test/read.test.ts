@@ -103,7 +103,7 @@ describe('createRegistryReader', () => {
     );
   });
 
-  it('verifies the configured deployment', async () => {
+  it('verifies the configured deployment identity', async () => {
     const registry = createRegistryReader({
       client,
       deployment: DEPLOYMENT,
@@ -141,11 +141,15 @@ describe('createRegistryReader', () => {
 
     expect(
       readContract,
-    ).toHaveBeenCalledWith({
+    ).not.toHaveBeenCalledWith({
       address: REGISTRY_ADDRESS,
       abi: drandQuicknetBeaconRegistryAbi,
       functionName: 'minimumLeadRounds',
     });
+
+    expect(
+      readContract,
+    ).toHaveBeenCalledTimes(2);
 
     expect(
       getCode,

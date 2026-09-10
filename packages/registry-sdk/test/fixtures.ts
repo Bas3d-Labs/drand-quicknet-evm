@@ -40,7 +40,6 @@ export const DEPLOYMENT: RegistryDeployment = {
   runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
   verifierAddress: VERIFIER_ADDRESS,
   verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
-  minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
 };
 
 export const SIGNATURE =

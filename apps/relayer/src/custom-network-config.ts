@@ -68,7 +68,6 @@ export const CustomNetworkDescriptor = {
       runtimeCodehash: registry.runtimeCodehash,
       verifierAddress: verifier.address,
       verifierRuntimeCodehash: verifier.runtimeCodehash,
-      minimumLeadRounds: registry.minimumLeadRounds,
     });
 
     const finality = FinalityPolicy.parseJson(value.finality);
@@ -118,7 +117,6 @@ interface VerifierDescriptor {
 interface RegistryDescriptor {
   address: unknown;
   runtimeCodehash: unknown;
-  minimumLeadRounds: unknown;
 }
 
 function parseNetworkName(
@@ -254,14 +252,12 @@ function parseRegistry(
     [
       'address',
       'runtimeCodehash',
-      'minimumLeadRounds',
     ],
   );
 
   return {
     address: value.address,
     runtimeCodehash: value.runtimeCodehash,
-    minimumLeadRounds: value.minimumLeadRounds,
   };
 }
 

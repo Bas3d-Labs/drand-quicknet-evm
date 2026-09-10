@@ -19,18 +19,18 @@ import {
 ///         The constructor authenticates the configured registry before
 ///         reading its immutable `minimumLeadRounds`.
 ///
-///         The consumer supplies a local minimum acceptable lead as a
-///         deployment-time safety floor. Construction reverts if the
-///         authenticated registry's configured minimum is below that
-///         floor.
+///         The consumer supplies its chosen deployment-time lead.
+///         Construction reverts if that lead is below the authenticated
+///         registry's `minimumLeadRounds` floor.
 ///
-///         `quicknetLeadRounds` is set to the authenticated registry value
-///         and is used for all subsequent round commitments.
+///         `quicknetLeadRounds` is set to the consumer-supplied lead and is
+///         used for all subsequent round commitments. A consumer may choose
+///         a lead larger than the registry minimum.
 ///
-///         The base contract cannot determine the correct safety floor for
-///         an arbitrary target chain or application. Integrators MUST
-///         choose a local floor that covers the relevant timestamp slack,
-///         inclusion latency, reorg/finality margin, and safety buffer.
+///         The base contract cannot determine the correct lead for an
+///         arbitrary target chain or application. Integrators MUST choose
+///         a value that satisfies the registry floor and any stronger
+///         application-specific timing or finality requirements.
 ///
 ///      2. EXACT-ROUND PERSISTENCE
 ///         The exact round returned by `_requestQuicknetRandomness()` MUST
@@ -94,7 +94,7 @@ abstract contract DrandQuicknetRandomnessConsumer is
     /// @notice Runtime bytecode hash attested for `quicknetBeaconRegistry`.
     bytes32 public immutable quicknetBeaconRegistryCodehash;
 
-    /// @notice Authenticated registry lead used when committing Quicknet rounds.
+    /// @notice Consumer-configured lead used when committing Quicknet rounds.
     uint64 public immutable quicknetLeadRounds;
 
     constructor(
@@ -137,7 +137,7 @@ abstract contract DrandQuicknetRandomnessConsumer is
     ///
     /// @return round Exact Quicknet round committed by the consumer.
     ///
-    /// @dev Uses the authenticated registry lead fixed during construction.
+    /// @dev Uses the consumer-configured lead fixed during construction.
     ///      Registry availability does not influence round selection.
     function _requestQuicknetRandomness()
         internal

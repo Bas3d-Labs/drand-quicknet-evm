@@ -45,9 +45,6 @@ const VERIFIER_ADDRESS: Address = '0x2222222222222222222222222222222222222222';
 const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
-const MINIMUM_LEAD_ROUNDS = 5;
-const NORMALIZED_MINIMUM_LEAD_ROUNDS = 5n;
-
 const VALID_MANIFEST = {
   chainId: CHAIN_ID,
   verifier: {
@@ -57,7 +54,6 @@ const VALID_MANIFEST = {
   registry: {
     address: REGISTRY_ADDRESS,
     runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
-    minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
   },
 };
 
@@ -84,7 +80,6 @@ describe('parseRegistryDeployment', () => {
     ).toEqual({
       chainId: CHAIN_ID,
       address: REGISTRY_ADDRESS,
-      minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
       runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
       verifierAddress: VERIFIER_ADDRESS,
       verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
@@ -103,7 +98,6 @@ describe('parseRegistryDeployment', () => {
     ).toEqual({
       chainId: CHAIN_ID,
       address: REGISTRY_ADDRESS,
-      minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
       runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
       verifierAddress: VERIFIER_ADDRESS,
       verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
@@ -256,7 +250,6 @@ describe('parseRegistryDeployment', () => {
         ...VALID_MANIFEST,
         registry: {
           runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
-          minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
         },
       }),
     ).toThrow(
@@ -318,7 +311,6 @@ describe('parseRegistryDeployment', () => {
         ...VALID_MANIFEST,
         registry: {
           address: REGISTRY_ADDRESS,
-          minimumLeadRounds: MINIMUM_LEAD_ROUNDS,
         },
       }),
     ).toThrow(
@@ -448,34 +440,6 @@ describe('parseRegistryDeployment', () => {
     );
   });
 
-  it('rejects a missing minimumLeadRounds', () => {
-    expect(() =>
-      parseRegistryDeployment({
-        ...VALID_MANIFEST,
-        registry: {
-          address: REGISTRY_ADDRESS,
-          runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
-        },
-      })
-    ).toThrow(
-      'Registry deployment minimumLeadRounds must be a positive uint64.'
-    );
-  });
-
-  it('rejects zero minimumLeadRounds', () => {
-    expect(() =>
-      parseRegistryDeployment({
-        ...VALID_MANIFEST,
-        registry: {
-          ...VALID_MANIFEST.registry,
-          minimumLeadRounds: 0,
-        },
-      })
-    ).toThrow(
-      'Registry deployment minimumLeadRounds must be a positive uint64.'
-    );
-  });
-
   it('ignores unrelated manifest fields', () => {
     expect(
       parseRegistryDeployment({
@@ -494,7 +458,6 @@ describe('parseRegistryDeployment', () => {
     ).toEqual({
       chainId: CHAIN_ID,
       address: REGISTRY_ADDRESS,
-      minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
       runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
       verifierAddress: VERIFIER_ADDRESS,
       verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
@@ -522,7 +485,6 @@ describe('loadRegistryDeployment', () => {
     ).resolves.toEqual({
       chainId: CHAIN_ID,
       address: REGISTRY_ADDRESS,
-      minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
       runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
       verifierAddress: VERIFIER_ADDRESS,
       verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
@@ -543,7 +505,6 @@ describe('loadRegistryDeployment', () => {
       }),
     ).resolves.toEqual({
       chainId: CHAIN_ID,
-      minimumLeadRounds: NORMALIZED_MINIMUM_LEAD_ROUNDS,
       address: REGISTRY_ADDRESS,
       runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
       verifierAddress: VERIFIER_ADDRESS,
