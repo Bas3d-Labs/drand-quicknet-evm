@@ -26,11 +26,6 @@ the shared registry.
 Relayers are permissionless couriers. They do not choose randomness, select
 fallback rounds, or control application settlement.
 
-> **Status:** testnet / pre-production. The verifier performs a two-sided
-> deployment self-test and the repository includes automated and live
-> verification tooling, but production use should still undergo independent
-> security review.
-
 License: [MIT](LICENSE).
 
 ## Contents
@@ -81,13 +76,16 @@ pnpm test:contracts
 
 A consumer extends `DrandQuicknetRandomnessConsumer`, commits to an exact future
 round, persists that round in application state, and later settles from that
-exact beacon. This minimal example uses the resulting seed for a fair coin flip.
+exact beacon.
 
-The example below uses the actual base-contract API. Import the base contract
-from the location appropriate to your Solidity dependency layout.
+The example below uses the actual base-contract API to implement a simple coin
+flip.
 
 ```solidity
 contract CoinFlip is DrandQuicknetRandomnessConsumer {
+    bytes32 internal constant QUICKNET_REGISTRY_CODEHASH =
+        0x...; // from deployments/<network>.json
+
     bytes32 internal constant DOMAIN = keccak256("COIN_FLIP_V1");
 
     uint256 public nextFlipId;
@@ -103,12 +101,11 @@ contract CoinFlip is DrandQuicknetRandomnessConsumer {
 
     constructor(
         address registry,
-        bytes32 registryCodehash,
         uint64 leadRounds
     )
         DrandQuicknetRandomnessConsumer(
             registry,
-            registryCodehash,
+            QUICKNET_REGISTRY_CODEHASH,
             leadRounds
         )
     {}
@@ -119,16 +116,23 @@ contract CoinFlip is DrandQuicknetRandomnessConsumer {
     {
         flipId = nextFlipId++;
 
-        // Commit to the exact future Quicknet round now,
-        // before its randomness becomes knowable.
+        // Commit to the exact future Quicknet round before
+        // its randomness becomes knowable.
         committedRound[flipId] = _requestQuicknetRandomness();
+
+        // Bind every outcome-sensitive input here, before
+        // the requested round becomes knowable.
     }
 
-    function settle(uint256 flipId) external {
+    function settle(
+        uint256 flipId
+    ) external {
         require(!settled[flipId], "flip already settled");
 
         uint64 round = committedRound[flipId];
 
+        // Quicknet rounds are 1-based, so 0 is a safe
+        // sentinel for a flip that was never requested.
         require(round != 0, "flip not requested");
 
         bytes32 randomness = _getQuicknetBeacon(round);
@@ -158,7 +162,17 @@ The base constructor:
 - authenticates the registry runtime codehash
 - reads the authenticated registry's `minimumLeadRounds()`
 - requires `leadRounds >= minimumLeadRounds`
-- preserves the integrator-selected `leadRounds` for future commitments
+- preserves the application-selected `leadRounds` for future commitments
+
+The expected registry codehash should come through a channel with review-time
+integrity, such as a source constant, a network-specific build artifact, or an
+immutable on-chain configuration the application already trusts. It should not
+come from the same mutable runtime configuration that supplies the registry
+address.
+
+For a network-specific deployment, embedding the codehash from the trusted
+deployment manifest directly in reviewed application source is the simplest
+pattern.
 
 `_requestQuicknetRandomness()` commits to an exact future round and emits:
 
@@ -168,6 +182,14 @@ QuicknetRandomnessRequested(round)
 
 The application is responsible for persisting the returned round and refusing
 to replace it later.
+
+`flipId` is unique within the application domain and therefore serves as the
+unique request ID for seed derivation.
+
+All outcome logic should depend only on the derived seed and state committed
+before the requested round became knowable. Extracting one bit, as above, gives
+an exact 50/50 choice. For non-power-of-two ranges, simple `% n` reduction has
+a small modulo bias; use rejection sampling when exact uniformity is required.
 
 If the normal relayer path has not imported the beacon, a consumer may expose a
 permissionless wrapper around `_submitQuicknetBeacon(round, signature)` for the
