@@ -46,6 +46,18 @@ contract DrandQuicknetBeaconVerifier is IDrandQuicknetBeaconVerifier {
     string public constant DST =
         "BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
 
+    /// @dev Known-answer vector used by the constructor's 
+    /// two-sided self-test.
+    uint64 internal constant SELF_TEST_ROUND = 1000;
+
+    bytes internal constant SELF_TEST_SIGNATURE =
+        hex"b44679b9a59af2ec876b1a6b1ad52ea9"
+        hex"b1615fc3982b19576350f93447cb1125"
+        hex"e342b73a8dd2bacbe47e4b6b63ed5e39";
+
+    bytes32 internal constant SELF_TEST_RANDOMNESS =
+        0xfe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd;
+
     uint256 internal constant COMPRESSED_SIGNATURE_LENGTH = 48;
 
     uint128 internal constant P_HI =
@@ -90,47 +102,28 @@ contract DrandQuicknetBeaconVerifier is IDrandQuicknetBeaconVerifier {
     /// @dev The constructor self-test exercises both acceptance and rejection
     ///      through the complete verification path.
     constructor() {
-        bytes memory signature =
-            hex"b44679b9a59af2ec876b1a6b1ad52ea9"
-            hex"b1615fc3982b19576350f93447cb1125"
-            hex"e342b73a8dd2bacbe47e4b6b63ed5e39";
+        bytes memory signature = SELF_TEST_SIGNATURE;
+        bytes memory negativeSignature = abi.encodePacked(signature);
 
-        bytes memory negativeSignature =
-            abi.encodePacked(signature);
-
-        negativeSignature[0] =
-            bytes1(
-                uint8(negativeSignature[0]) ^ 0x20
-            );
+        negativeSignature[0] = bytes1(
+            uint8(negativeSignature[0]) ^ 0x20
+        );
 
         (
             bool verified,
             bytes32 randomness
-        ) = _verifyBeacon(
-            1000,
-            signature
-        );
+        ) = _verifyBeacon(SELF_TEST_ROUND, signature);
 
-        if (
-            !verified ||
-            randomness !=
-                0xfe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd
-        ) {
+        if (!verified || randomness != SELF_TEST_RANDOMNESS) {
             revert PositiveSelfTestFailed();
         }
 
         (
             verified,
             randomness
-        ) = _verifyBeacon(
-            1000,
-            negativeSignature
-        );
+        ) = _verifyBeacon(SELF_TEST_ROUND, negativeSignature);
 
-        if (
-            verified ||
-            randomness != bytes32(0)
-        ) {
+        if (verified || randomness != bytes32(0)) {
             revert NegativeSelfTestFailed();
         }
     }
@@ -164,10 +157,7 @@ contract DrandQuicknetBeaconVerifier is IDrandQuicknetBeaconVerifier {
             bytes32 randomness
         )
     {
-        if (
-            round == 0 ||
-            !_isCanonicalG1Compressed(signature)
-        ) {
+        if (round == 0 || !_isCanonicalG1Compressed(signature)) {
             return (
                 false,
                 bytes32(0)
@@ -179,18 +169,12 @@ contract DrandQuicknetBeaconVerifier is IDrandQuicknetBeaconVerifier {
 
         bytes32 roundHash = sha256(abi.encodePacked(round));
 
-        BLS2.PointG1 memory messagePoint =
-            BLS2.hashToPoint(
-                bytes(DST),
-                abi.encodePacked(roundHash)
-            );
+        BLS2.PointG1 memory messagePoint = BLS2.hashToPoint(
+            bytes(DST),
+            abi.encodePacked(roundHash)
+        );
 
-        if (
-            !_verifyPairing(
-                signaturePoint,
-                messagePoint
-            )
-        ) {
+        if (!_verifyPairing(signaturePoint, messagePoint)) {
             return (
                 false,
                 bytes32(0)
@@ -210,10 +194,7 @@ contract DrandQuicknetBeaconVerifier is IDrandQuicknetBeaconVerifier {
         pure
         returns (bool)
     {
-        if (
-            signature.length !=
-            COMPRESSED_SIGNATURE_LENGTH
-        ) {
+        if (signature.length != COMPRESSED_SIGNATURE_LENGTH) {
             return false;
         }
 
@@ -236,12 +217,7 @@ contract DrandQuicknetBeaconVerifier is IDrandQuicknetBeaconVerifier {
 
         uint128 xHi = uint128(wordA >> 128) & MAX_X_HI;
 
-        return
-            xHi < P_HI ||
-            (
-                xHi == P_HI &&
-                wordB < P_LO
-            );
+        return xHi < P_HI || (xHi == P_HI && wordB < P_LO);
     }
 
     function _verifyPairing(
@@ -310,10 +286,7 @@ contract DrandQuicknetBeaconVerifier is IDrandQuicknetBeaconVerifier {
             return false;
         }
 
-        if (
-            returnSize != 32 ||
-            out[0] > 1
-        ) {
+        if (returnSize != 32 || out[0] > 1) {
             revert InvalidPairingResponse();
         }
 
@@ -326,9 +299,7 @@ contract DrandQuicknetBeaconVerifier is IDrandQuicknetBeaconVerifier {
     {
         uint256 eip150Minimum = (PAIRING_GAS * 64 + 62) / 63;
 
-        if (
-            gasleft() < eip150Minimum + PAIRING_GAS_RESERVE
-        ) {
+        if (gasleft() < eip150Minimum + PAIRING_GAS_RESERVE) {
             revert InsufficientVerifierGas();
         }
     }

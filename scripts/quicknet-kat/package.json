@@ -1,0 +1,11 @@
+{
+  "name": "quicknet-kat-audit",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node verify.mjs"
+  },
+  "dependencies": {
+    "@noble/curves": "2.4.0"
+  }
+}

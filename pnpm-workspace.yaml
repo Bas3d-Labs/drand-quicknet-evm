@@ -1,6 +1,7 @@
 packages:
   - "packages/*"
   - "apps/*"
+  - "scripts/quicknet-kat"
 
 allowBuilds:
   esbuild: true
