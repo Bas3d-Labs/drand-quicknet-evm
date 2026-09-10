@@ -31,19 +31,22 @@ expected value for the separate live consensus-root check.
 
 ### A2: Sequencer timestamp freshness
 
-For Quicknet period 3 seconds and `minimumLeadRounds = 5`, the reference
-consumer's mechanical chain-clock lead at commitment inclusion is 13–15
-seconds.
+For Quicknet period 3 seconds and `minimumLeadRounds = 3`, the reference
+consumer's mechanical chain-clock lead at commitment inclusion is 7–9 seconds.
 
 With `timestampFreshnessReserveSeconds = 3`, the timestamp-skew violation
-boundary is 10 seconds.
+boundary is 4 seconds.
 
-A1 does not establish A2: the protocol-valid backward allowance exceeds this
-boundary by a factor of 34,560.
+A1 does not establish A2: the protocol-valid 345,600-second backward allowance
+exceeds this boundary by a factor of 86,400.
 
-The warning (5 seconds) and critical (8 seconds) thresholds drive the skew
-monitor. Observed compliance is a canary for A2, not proof that the assumption
-always holds.
+The warning (2 seconds) and critical (3 seconds) thresholds drive the skew
+canary. They are intentionally close to the 4-second violation boundary.
+Normal integer `block.timestamp` truncation contributes up to almost one second
+of measured wall-clock skew before observation/network propagation is added, so
+warning-tier observations may be materially noisier than under a larger lead.
+Observed compliance is a canary for A2, not proof that the assumption always
+holds.
 
 ### B: Sequencing and history integrity
 

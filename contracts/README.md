@@ -3,8 +3,9 @@
 This directory contains the Foundry project for
 `DrandQuicknetBeaconRegistry`.
 
-The deployment script reads the oracle address and expected chain ID directly
-from the corresponding JSON manifest under `../deployments/`.
+The deployment script reads verifier identity and expected chain ID from the
+corresponding JSON manifest under `../deployments/`. The registry minimum lead
+is supplied separately from the target chain-security profile.
 
 Public deployment configuration belongs in `deployments/*.json`.
 Secrets and RPC credentials belong in the repository-root `.env`.
@@ -72,31 +73,38 @@ Example:
 
 ```json
 {
+  "manifestVersion": 1,
+  "network": "example-network",
   "chainId": 12345,
-  "network": "robinhood-testnet",
-  "oracle": {
-    "address": "0x692100c4863adAED9f560F6Ce982cF878F083e93",
-    "runtimeCodehash": "0x78faa56ca608db8a19cfb3bb052f11fedbaa14fb1ce74db58044db99246b4cfc"
-    ...
-  },
   "registry": {
-    "address": null,
-    "deploymentTx": null
-    ...
+    "address": "0x...",
+    "runtimeCodehash": "0x...",
+    "deployment": {
+      "transactionHash": "0x...",
+      "blockNumber": 0
+    }
+  },
+  "verifier": {
+    "address": "0x...",
+    "runtimeCodehash": "0x...",
+    "deployment": {
+      "transactionHash": "0x...",
+      "blockNumber": 0
+    }
   }
 }
 ```
 
-Replace the example `chainId` with the actual chain ID.
-
-The manifest is the canonical source for public deployment information,
-including:
+The manifest is the canonical source for durable artifact identity and
+provenance, including:
 
 - chain ID
-- oracle address
-- oracle runtime codehash
-- registry address
-- registry deployment transaction
+- verifier address and runtime codehash
+- registry address and runtime codehash
+- deployment transaction and block provenance
+
+Chain policy such as `minimumLeadRounds` belongs in the chain-security profile,
+not in the deployment manifest.
 
 ## Foundry filesystem permissions
 
@@ -142,7 +150,7 @@ Check formatting:
 pnpm run fmt:contracts:check
 ```
 
-## Verify the oracle before deployment
+## Verify the verifier before deployment
 
 The deployment script performs these checks automatically, but they can also
 be inspected manually.
@@ -150,20 +158,20 @@ be inspected manually.
 For testnet:
 
 ```bash
-ORACLE=$(jq -r \
-  '.oracle.address' \
+VERIFIER=$(jq -r \
+  '.verifier.address' \
   deployments/robinhood-testnet.json)
 
 EXPECTED_CODEHASH=$(jq -r \
-  '.oracle.runtimeCodehash' \
+  '.verifier.runtimeCodehash' \
   deployments/robinhood-testnet.json)
 ```
 
-Check that the oracle has deployed code:
+Check that the verifier has deployed code:
 
 ```bash
 cast code \
-  "$ORACLE" \
+  "$VERIFIER" \
   --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
 ```
 
@@ -177,7 +185,7 @@ Check its runtime codehash:
 
 ```bash
 cast codehash \
-  "$ORACLE" \
+  "$VERIFIER" \
   --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
 ```
 
@@ -187,12 +195,23 @@ It must equal:
 echo "$EXPECTED_CODEHASH"
 ```
 
-and must also equal `EXPECTED_ORACLE_CODEHASH` in
-`DrandQuicknetBeaconRegistry.sol`.
+The deployment script additionally exercises the verifier's positive and
+negative Quicknet KAT before creating the registry.
 
 ## Dry-run deployment
 
 Always simulate before broadcasting.
+
+The registry floor is a deployment input whose normative value comes from the
+target chain-security profile, not from the deployment manifest. Before running
+the script, set:
+
+```bash
+export MINIMUM_LEAD_ROUNDS=<timing.minimumLeadRounds from the target chain profile>
+```
+
+`DeployRegistry.s.sol` requires this value explicitly and validates that it is a
+positive `uint64`.
 
 ### Robinhood Testnet
 
@@ -250,17 +269,21 @@ forge script \
   -vvv
 ```
 
-Only the manifest filename changes between deployments. The Solidity script
-does not contain chain-specific oracle addresses.
+The deployment manifest supplies artifact identity. `MINIMUM_LEAD_ROUNDS` is a
+separate policy input sourced from the target chain profile. The Solidity script
+does not hard-code chain-specific verifier addresses or lead policy.
 
 ## What the deployment script validates
 
 Before broadcasting the registry deployment, the script checks:
 
-1. The manifest can be read.
+1. The deployment manifest can be read.
 2. `block.chainid` matches `.chainId` from the manifest.
-3. `.oracle.address` has the runtime codehash recorded in the manifest.
-4. The registry constructor accepts the oracle's codehash.
+3. `.verifier.address` has the runtime codehash recorded in the manifest.
+4. `MINIMUM_LEAD_ROUNDS` is a positive `uint64`.
+5. The verifier accepts the known-good Quicknet KAT vector.
+6. The verifier rejects the corrupted negative KAT vector.
+7. The registry constructor accepts the verifier identity and explicit floor.
 
 This protects against mistakes such as:
 
@@ -272,7 +295,7 @@ RPC:       Robinhood Testnet
 or:
 
 ```text
-Manifest oracle:        0xABC...
+Manifest verifier:      0xABC...
 Actual codehash:        0x111...
 Manifest codehash:      0x222...
 ```
@@ -392,44 +415,25 @@ cast call \
 
 ## Record the deployment
 
-After deployment, update the corresponding manifest.
-
-Before:
-
-```json
-{
-  "registry": {
-    "address": null,
-    "deploymentTx": null
-  }
-}
-```
-
-After:
+After deployment, update the corresponding deployment manifest with the
+registry's durable identity and provenance:
 
 ```json
 {
   "registry": {
     "address": "0x...",
-    "deploymentTx": "0x..."
+    "runtimeCodehash": "0x...",
+    "deployment": {
+      "transactionHash": "0x...",
+      "blockNumber": 0
+    }
   }
 }
 ```
 
-The completed deployment manifest should be committed to Git.
-
-The manifest may also record reproducibility metadata:
-
-```json
-{
-  "build": {
-    "solc": "0.8.36",
-    "optimizer": true,
-    "optimizerRuns": 200,
-    "viaIR": false
-  }
-}
-```
+The completed deployment manifest should be committed to Git. Keep policy such
+as `minimumLeadRounds` in the chain-security profile rather than copying it into
+the manifest.
 
 ## Mainnet checklist
 
@@ -442,11 +446,12 @@ Before a mainnet deployment:
 - The registry source is committed/tagged.
 - The correct deployment manifest is selected.
 - Manifest chain ID matches the target RPC.
-- Oracle address has been independently verified.
-- Oracle runtime codehash matches the manifest.
-- Oracle runtime codehash matches `EXPECTED_ORACLE_CODEHASH`.
-- Oracle is non-upgradeable.
-- Oracle has no mutable security-critical verification configuration.
+- Verifier address has been independently verified.
+- Verifier runtime codehash matches the manifest.
+- The chain-profile `minimumLeadRounds` value is supplied explicitly to the deployment script.
+- Verifier deployment self-tests pass.
+- Verifier is non-upgradeable.
+- Verifier has no mutable security-critical verification configuration.
 - Deployment account has sufficient gas funds.
 - Dry-run deployment succeeds.
 - Production deployment is broadcast.

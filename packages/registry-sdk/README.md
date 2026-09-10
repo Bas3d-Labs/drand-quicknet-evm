@@ -44,15 +44,17 @@ Applications should commit to an exact future round before it becomes knowable
 and later settle using that same round. A missing round is a liveness
 condition, not permission to substitute another round.
 
-The registry address alone is not the complete trust root. A trusted deployment
-pins:
+The registry address alone is not the complete deployment identity. A trusted
+deployment pins:
 
 - chain ID
 - registry address
 - registry runtime codehash
 - verifier address
 - verifier runtime codehash
-- registry minimum lead rounds
+
+Chain-specific policy such as the expected `minimumLeadRounds` belongs in the
+chain-security profile rather than in deployment identity.
 
 ## Registry deployment
 
@@ -65,7 +67,6 @@ interface RegistryDeployment {
   runtimeCodehash: Hex;
   verifierAddress: Address;
   verifierRuntimeCodehash: Hex;
-  minimumLeadRounds: bigint;
 }
 ```
 
@@ -83,14 +84,11 @@ const deployment =
     runtimeCodehash: '<registry runtime codehash>',
     verifierAddress: '<verifier address>',
     verifierRuntimeCodehash: '<verifier runtime codehash>',
-    minimumLeadRounds: 5n,
   });
 ```
 
-`minimumLeadRounds` may be provided as either a safe JavaScript integer or a
-`bigint`. It is normalized to `bigint` and must be a positive `uint64`.
-
-Deployment metadata is a trust root and should come from a trusted manifest or other authenticated source.
+Deployment metadata is a trust root and should come from a trusted manifest or
+other authenticated source.
 
 ## Verify a deployment
 
@@ -114,9 +112,8 @@ Verification checks:
 3. registry runtime codehash matches
 4. registry `verifier()` matches the trusted verifier address
 5. registry `verifierCodehash()` matches the trusted verifier codehash
-6. registry `minimumLeadRounds()` matches the trusted deployment value
-7. verifier code exists
-8. verifier runtime codehash matches
+6. verifier code exists
+7. verifier runtime codehash matches
 
 Registry runtime authentication occurs before registry configuration getters
 are trusted.
@@ -160,10 +157,10 @@ const minimumLeadRounds =
   await registry.minimumLeadRounds();
 ```
 
-`registry.deployment.minimumLeadRounds` is the expected value from the trusted
-deployment metadata. `registry.minimumLeadRounds()` reads the actual immutable
-value from the deployed registry. `verifyDeployment()` verifies that they
-match.
+`registry.minimumLeadRounds()` reads the immutable consumer floor from the live
+registry. The expected network policy is intentionally not stored in
+`RegistryDeployment`; chain-profile security tooling owns the comparison
+between normative policy and live registry state.
 
 Check whether a round is stored:
 
@@ -254,8 +251,9 @@ is permissionless and idempotent.
 
 The registry does not enforce application commitment timing.
 
-`minimumLeadRounds` is deployment-declared consumer safety metadata, not a
-restriction on beacon submission.
+`minimumLeadRounds` is an immutable registry consumer-safety floor, not a
+restriction on beacon submission. Its expected network value belongs to the
+chain-security profile rather than deployment identity metadata.
 
 Consumers should:
 
@@ -285,29 +283,29 @@ bytes32 seed = keccak256(
 
 ## Deployment manifest
 
-A trusted deployment manifest should represent the verifier and registry as
-separate deployed contracts:
+A trusted deployment manifest represents durable registry and verifier identity
+and provenance. For example:
 
 ```json
 {
-  "chainId": <chain id>,
+  "manifestVersion": 1,
   "network": "<network name>",
-  "quicknet": {
-    "genesisTimestamp": 1692803367,
-    "periodSeconds": 3
+  "chainId": 12345,
+  "registry": {
+    "address": "<registry address>",
+    "runtimeCodehash": "<registry runtime codehash>",
+    "deployment": {
+      "transactionHash": "<deployment transaction>",
+      "blockNumber": 0
+    }
   },
   "verifier": {
     "address": "<verifier address>",
     "runtimeCodehash": "<verifier runtime codehash>",
-    "sourceCommit": "<source commit>"
-  },
-  "registry": {
-    "address": "<registry address>",
-    "runtimeCodehash": "<registry runtime codehash>",
-    "minimumLeadRounds": 5,
-    "deploymentTx": "<deployment transaction>",
-    "deploymentBlock": 0,
-    "sourceCommit": "<source commit>"
+    "deployment": {
+      "transactionHash": "<deployment transaction>",
+      "blockNumber": 0
+    }
   }
 }
 ```
@@ -315,12 +313,16 @@ separate deployed contracts:
 The verifier is intentionally separate because it is independently deployed
 and independently attested.
 
+Policy values such as the expected registry `minimumLeadRounds` are not part of
+the deployment manifest. The chain profile is the normative policy source; the
+live registry is the runtime source; the security checker compares the two.
+
 The verifier Solidity implementation is not bundled into this package.
 
 ## Robinhood Testnet
 
-Use the repository deployment manifest as the complete trust-root record for
-the current Robinhood testnet verifier and registry deployments.
+Use the repository deployment manifest as the trusted deployment-identity record
+for the current Robinhood Testnet verifier and registry deployments.
 
 Quicknet schedule:
 
@@ -330,7 +332,8 @@ genesis timestamp: 1692803367
 period: 3 seconds
 ```
 
-Use the repository deployment manifest as the complete trust-root record.
+Use the corresponding chain-security profile for normative network policy and
+the deployment manifest for artifact identity.
 
 ## API
 

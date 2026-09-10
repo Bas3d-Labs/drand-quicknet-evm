@@ -10,15 +10,18 @@ the Quicknet infrastructure on a particular EVM network.
 
 The profile YAML file is normative for machine consumers.
 
-The referenced Markdown document explains and justifies the normative configuration.
+The YAML file MUST reference its explanatory Markdown document through the
+checked relative `documentation` field. The Markdown document explains and
+justifies the normative configuration.
 
-Changes to normative profile state MUST update both the front matter and the
+Changes to normative profile state MUST update the YAML configuration and the
 corresponding security explanation in the same revision.
 
 Changes to deployed artifact identity or provenance MUST update the deployment
 manifest and any corresponding documentation in the same revision.
 
-Derived quantities MUST NOT be duplicated in front matter when they can be computed from normative inputs.
+Derived quantities MUST NOT be duplicated in the profile YAML when they can be
+computed from normative inputs.
 
 Each normative value SHOULD have one authoritative home.
 
@@ -26,7 +29,7 @@ Expected values mirrored from deployed infrastructure or external chain state
 SHOULD be verified against their live source rather than duplicated across
 multiple configuration files.
 
-## Required front matter
+## Required profile YAML
 
 A profile MUST define the following top-level structure. The `chainAdapter`
 block shown here is schematic; its `config` MUST satisfy the schema for the
@@ -143,6 +146,21 @@ Larger values monotonically strengthen the chain-clock lead.
 Bespoke consumers that bypass these safeguards are outside the profile's guarantee and cannot weaken the registry or other consumers.
 
 Profiles MUST NOT enumerate permissionless downstream consumers.
+
+## Documentation reference
+
+`documentation` MUST be a relative path resolved from the profile YAML file's
+own directory. Absolute paths are invalid.
+
+The referenced path MUST exist and be a regular file.
+
+`securityModel.assumptionsSection` MUST resolve uniquely against an explicit
+anchor in the referenced Markdown document. Documentation resolution is a
+local validation step and MUST complete before any RPC access.
+
+The YAML and its explanatory Markdown are separate files but one security
+profile. Normative policy changes that alter the explanation or assumptions
+MUST update both in the same revision.
 
 ## Explicit anchors
 
@@ -374,27 +392,19 @@ Every live check reports one of:
 MATCH
 DRIFT
 ERROR
+SKIPPED
 ```
 
 ### MATCH
 
 The observation succeeded and agrees with committed expected state.
 
-Exit code:
-
-```text
-0
-```
-
 ### DRIFT
 
-The observation succeeded against the intended subject, but live state differs from committed expected state.
+The observation succeeded against the intended subject, but live state differs
+from committed expected state.
 
-Exit code:
-
-```text
-2
-```
+DRIFT describes the monitored subject.
 
 ### ERROR
 
@@ -408,38 +418,61 @@ Examples include:
 * decode failure
 * unavailable pinned state
 * observation against the wrong chain
+* an internally inconsistent check result
 
-Exit code:
+ERROR describes inability to make a valid observation of the intended subject.
+
+A successful read that invalidates the observation channel itself, including a
+chain-ID mismatch, is ERROR rather than DRIFT.
+
+### SKIPPED
+
+A dependent check could not safely run because a prerequisite was not
+established.
+
+Examples include:
+
+* registry identity drift prevents trusting a registry configuration getter
+* SequencerInbox identity drift prevents reading the expected time-variation
+  envelope through that dependency
+
+SKIPPED is reserved for dependency skips. It MUST NOT be used to represent
+checks omitted by user selection or filtering. If filtering support is added,
+unselected checks MUST be omitted from the run instead.
+
+A SKIPPED result SHOULD appear alongside the causal DRIFT or ERROR that made
+the dependent observation unsafe.
+
+Live checks SHOULD continue collecting independent observations after
+discovering DRIFT or ERROR whenever doing so remains semantically valid.
+
+A later dependent operation MUST NOT erase or reclassify an earlier valid
+finding.
+
+### CLI exit codes
+
+Process exit codes are based on the aggregate status:
 
 ```text
-1
+MATCH -> 0
+ERROR -> 1
+DRIFT -> 2
 ```
 
-DRIFT describes the monitored subject.
-
-ERROR describes inability to make a valid observation of that subject.
-
-A successful read that invalidates the observation channel itself, including a chain-ID mismatch, is ERROR rather than DRIFT.
-
-Live checks SHOULD continue collecting independent observations after discovering DRIFT whenever doing so remains semantically valid.
-
-A later dependent operation MUST NOT erase or reclassify an earlier valid finding.
+SKIPPED has no independent process exit code.
 
 ## Aggregate check behavior
 
 Local validation runs before RPC access.
 
-If local validation fails, the run ends as ERROR without performing live checks.
+If local validation fails, the run ends as ERROR without performing live
+checks.
 
-After successful local validation, every selected live check whose required observation instruments have been validated SHOULD run without fail-fast behavior.
+After successful local validation, independent live checks SHOULD continue
+without fail-fast behavior whenever their required observation instruments and
+prerequisites remain valid.
 
-Overall status precedence is:
-
-```text
-ERROR > DRIFT > MATCH
-```
-
-Therefore:
+The aggregate fold is fail-closed:
 
 ```text
 any ERROR
@@ -448,11 +481,39 @@ any ERROR
 otherwise any DRIFT
     -> overall DRIFT
 
+otherwise any SKIPPED
+    -> overall ERROR
+
 otherwise
     -> overall MATCH
+
+empty check set
+    -> overall ERROR
 ```
 
-Per-check results MUST still be emitted so co-occurring DRIFT findings are preserved even when the aggregate status is ERROR.
+This gives the concrete cases:
+
+```text
+DRIFT + SKIPPED
+    -> DRIFT
+
+ERROR + SKIPPED
+    -> ERROR
+
+MATCH + SKIPPED
+    -> ERROR
+
+only SKIPPED
+    -> ERROR
+```
+
+Under dependency-only SKIPPED semantics, `MATCH + SKIPPED` and an all-SKIPPED
+run should be unreachable in a correctly constructed checker: every legitimate
+skip has a causal DRIFT or ERROR in the same run. Classifying those states as
+ERROR therefore fails closed on checker self-inconsistency.
+
+Per-check results MUST still be emitted so co-occurring findings are preserved
+even when the aggregate status is ERROR.
 
 ## Observation instruments
 
