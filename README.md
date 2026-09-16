@@ -31,6 +31,7 @@ License: [MIT](LICENSE).
 ## Contents
 
 - [Quickstart](#quickstart)
+- [Deployments](#deployments)
 - [Core security rule](#core-security-rule)
 - [Architecture](#architecture)
 - [Cryptographic verification](#cryptographic-verification)
@@ -219,6 +220,34 @@ pnpm --filter @based-labs/drand-quicknet-relayer start \
 
 See [`apps/relayer/README.md`](apps/relayer/README.md) for full operator
 documentation.
+
+## Deployments
+
+### Mainnet
+
+| Network | Chain ID | Contract | Contract Address |
+| --- | --- | --- | --- |
+| Robinhood Mainnet | 4663 | Registry | [0x692100c4863adAED9f560F6Ce982cF878F083e93](https://robinhoodchain.blockscout.com/address/0x692100c4863adAED9f560F6Ce982cF878F083e93?tab=contract) |
+| Robinhood Mainnet | 4663 | Verifier | [0xB2e182C4B4fB57560A738506047a1340eC7Eb57b](https://robinhoodchain.blockscout.com/address/0xB2e182C4B4fB57560A738506047a1340eC7Eb57b?tab=contract) |
+
+[Deployment manifest](deployments/robinhood-mainnet.json) ·
+[Security profile](docs/security/chain-profiles/robinhood-mainnet.md)
+
+### Testnet
+
+| Network | Chain ID | Contract | Contract Address |
+| --- | --- | --- | --- |
+| Robinhood Testnet | 46630 | Registry | [0x6e69C56D8D678aDeF8401adF1186c026A0915e2a](https://explorer.testnet.chain.robinhood.com/address/0x6e69C56D8D678aDeF8401adF1186c026A0915e2a?tab=contract) |
+| Robinhood Testnet | 46630 | Verifier | [0x90427e40e7D6f60425D29474a85595C4d8EE6B95](https://explorer.testnet.chain.robinhood.com/address/0x90427e40e7D6f60425D29474a85595C4d8EE6B95?tab=contract) |
+
+[Deployment manifest](deployments/robinhood-testnet.json) ·
+[Security profile](docs/security/chain-profiles/robinhood-testnet.md)
+
+Applications can use these shared registries without deploying their own
+registry or verifier. Anyone may submit valid Quicknet beacons.
+
+Use the selected deployment manifest for expected runtime codehashes, and
+review the network's security profile before integrating.
 
 ## Core security rule
 

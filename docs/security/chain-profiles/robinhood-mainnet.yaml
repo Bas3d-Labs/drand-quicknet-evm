@@ -1,0 +1,48 @@
+profileVersion: 1
+
+network: robinhood-mainnet
+chainId: 4663
+onboardingTier: 2
+documentation: './robinhood-mainnet.md'
+
+randomness:
+  beacon: drand-quicknet
+  periodSeconds: 3
+
+timing:
+  minimumLeadRounds: 3
+  timestampFreshnessReserveSeconds: 3
+
+securityModel:
+  timestampAuthority: sequencer
+  historyIntegrityAssumption: trusted-sequencer
+  assumptionsSection: security-assumptions
+
+monitoring:
+  timestampSkewSeconds:
+    warning: 2
+    critical: 3
+
+chainAdapter:
+  type: arbitrum-nitro
+  config:
+    parentChain:
+      name: ethereum-mainnet
+      chainId: 1
+      slotSeconds: 12
+      requireTimeVariationSlotParity: true
+
+    rollup: '0x23A19d23e89166adedbDcB432518AB01e4272D94'
+    expectedSequencerInbox: '0xBd0D173EEb87D57A09521c24388a12789F33ba96'
+
+    expectedMaxTimeVariation:
+      delayBlocks: 28800
+      futureBlocks: 300
+      delaySeconds: 345600
+      futureSeconds: 3600
+
+    approvedWasmModuleRoots:
+      - consensusRelease: consensus-v61
+        root: '0xc10cd7ec6acaf1c441a3f6bd0900ad20f15855ba775a96f1939118cbc629dc97'
+
+deploymentManifest: '../../../deployments/robinhood-mainnet.json'

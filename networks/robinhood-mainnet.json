@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "name": "robinhood-mainnet",
+  "chain": {
+    "id": 4663,
+    "name": "Robinhood Chain",
+    "nativeCurrency": {
+      "name": "Ether",
+      "symbol": "ETH",
+      "decimals": 18
+    },
+    "testnet": false
+  },
+  "verifier": {
+    "address": "0xB2e182C4B4fB57560A738506047a1340eC7Eb57b",
+    "runtimeCodehash": "0x916ebb69c0ceb4c049d50ad8bf5b3e566661a2b1ef33e01727ed443673b68aab"
+  },
+  "registry": {
+    "address": "0x692100c4863adAED9f560F6Ce982cF878F083e93",
+    "runtimeCodehash": "0x1057c66d2f40dd764c9f51bf0e11b882c843be3f9d67eb563c79d40ffacba721"
+  },
+  "finality": {
+    "type": "safe"
+  }
+}
