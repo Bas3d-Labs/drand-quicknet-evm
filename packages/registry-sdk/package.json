@@ -1,6 +1,6 @@
 {
   "name": "@based-labs/drand-quicknet-registry",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0",
   "type": "module",
   "description": "TypeScript SDK for interacting with the drand Quicknet EVM beacon registry.",
   "license": "MIT",
