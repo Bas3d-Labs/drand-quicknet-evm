@@ -10,7 +10,10 @@ interface DrandBeaconResponse {
 export async function fetchBeacon(
   round: bigint,
   endpoints: readonly string[] = QUICKNET_ENDPOINTS,
+  options: { signal?: AbortSignal } = {},
 ): Promise<QuicknetBeacon> {
+  options.signal?.throwIfAborted();
+
   if (endpoints.length === 0) {
     throw new Error('At least one Quicknet endpoint is required.');
   }
@@ -22,8 +25,10 @@ export async function fetchBeacon(
       return await fetchBeaconFromEndpoint(
         endpoint,
         round,
+        options,
       );
     } catch (error) {
+      options.signal?.throwIfAborted();
       errors.push(toError(error));
     }
   }
@@ -37,19 +42,34 @@ export async function fetchBeacon(
 export async function fetchBeaconFromEndpoint(
   endpoint: string,
   round: bigint,
+  options: { signal?: AbortSignal } = {},
 ): Promise<QuicknetBeacon> {
+  options.signal?.throwIfAborted();
+
   if (round <= 0n) {
     throw new RangeError('Quicknet round must be greater than zero.');
   }
 
   const baseUrl = removeTrailingSlashes(endpoint);
   const url = `${baseUrl}/beacons/quicknet/rounds/${round}`;
-  const response = await fetch(url);
+
+  let response: Response;
+
+  if (options.signal === undefined) {
+    response = await fetch(url);
+  } else {
+    response = await fetch(url, {
+      signal: options.signal,
+    });
+  }
+
   if (!response.ok) {
     throw new Error(`Failed to fetch Quicknet round ${round}: HTTP ${response.status}`);
   }
 
   const data = (await response.json()) as DrandBeaconResponse;
+  options.signal?.throwIfAborted();
+
   if (
     typeof data.round !== 'number' || 
     !Number.isSafeInteger(data.round)

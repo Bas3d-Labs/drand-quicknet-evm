@@ -7,7 +7,48 @@ import {
 } from 'vitest';
 import { fetchBeacon, fetchBeaconFromEndpoint } from '../src/fetch.js';
 
-const VALID_SIGNATURE = 'ab'.repeat(48);
+const WELL_FORMED_SIGNATURE = 'ab'.repeat(48);
+
+const CANCELLATION_ENDPOINTS = [
+  'https://first.test/v2',
+  'https://second.test/v2',
+] as const;
+
+const cancellationCallers = [
+  {
+    name: 'fetchBeacon',
+    run: (signal: AbortSignal) => fetchBeacon(
+      100n,
+      CANCELLATION_ENDPOINTS,
+      { signal },
+    ),
+  },
+  {
+    name: 'fetchBeaconFromEndpoint',
+    run: (signal: AbortSignal) => fetchBeaconFromEndpoint(
+      CANCELLATION_ENDPOINTS[0],
+      100n,
+      { signal },
+    ),
+  },
+];
+
+function rejectWhenAborted(
+  signal: AbortSignal,
+): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+
+    signal.addEventListener(
+      'abort',
+      () => reject(signal.reason),
+      { once: true },
+    );
+  });
+}
 
 function mockResponse(
   body: unknown,
@@ -40,7 +81,6 @@ function mockFetchResponse({
   return fetchMock;
 }
 
-
 describe('fetchBeacon', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -50,7 +90,7 @@ describe('fetchBeacon', () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockResponse({
         round: 100,
-        signature: VALID_SIGNATURE,
+        signature: WELL_FORMED_SIGNATURE,
       }),
     );
 
@@ -66,7 +106,7 @@ describe('fetchBeacon', () => {
 
     expect(beacon).toEqual({
       round: 100n,
-      signature: `0x${VALID_SIGNATURE}`,
+      signature: `0x${WELL_FORMED_SIGNATURE}`,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -84,7 +124,7 @@ describe('fetchBeacon', () => {
       .mockResolvedValueOnce(
         mockResponse({
           round: 100,
-          signature: VALID_SIGNATURE,
+          signature: WELL_FORMED_SIGNATURE,
         }),
       );
 
@@ -100,7 +140,7 @@ describe('fetchBeacon', () => {
 
     expect(beacon).toEqual({
       round: 100n,
-      signature: `0x${VALID_SIGNATURE}`,
+      signature: `0x${WELL_FORMED_SIGNATURE}`,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -122,13 +162,13 @@ describe('fetchBeacon', () => {
       .mockResolvedValueOnce(
         mockResponse({
           round: 101,
-          signature: VALID_SIGNATURE,
+          signature: WELL_FORMED_SIGNATURE,
         }),
       )
       .mockResolvedValueOnce(
         mockResponse({
           round: 100,
-          signature: VALID_SIGNATURE,
+          signature: WELL_FORMED_SIGNATURE,
         }),
       );
 
@@ -144,13 +184,13 @@ describe('fetchBeacon', () => {
 
     expect(beacon).toEqual({
       round: 100n,
-      signature: `0x${VALID_SIGNATURE}`,
+      signature: `0x${WELL_FORMED_SIGNATURE}`,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('falls back when the first endpoint returns an invalid signature', async () => {
+  it('falls back when the first endpoint returns malformed signature encoding', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -162,7 +202,7 @@ describe('fetchBeacon', () => {
       .mockResolvedValueOnce(
         mockResponse({
           round: 100,
-          signature: VALID_SIGNATURE,
+          signature: WELL_FORMED_SIGNATURE,
         }),
       );
 
@@ -178,7 +218,7 @@ describe('fetchBeacon', () => {
 
     expect(beacon).toEqual({
       round: 100n,
-      signature: `0x${VALID_SIGNATURE}`,
+      signature: `0x${WELL_FORMED_SIGNATURE}`,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -193,7 +233,7 @@ describe('fetchBeacon', () => {
       .mockResolvedValueOnce(
         mockResponse({
           round: 100,
-          signature: VALID_SIGNATURE,
+          signature: WELL_FORMED_SIGNATURE,
         }),
       );
 
@@ -209,7 +249,7 @@ describe('fetchBeacon', () => {
 
     expect(beacon).toEqual({
       round: 100n,
-      signature: `0x${VALID_SIGNATURE}`,
+      signature: `0x${WELL_FORMED_SIGNATURE}`,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -224,13 +264,13 @@ describe('fetchBeacon', () => {
       .mockResolvedValueOnce(
         mockResponse({
           round: 100,
-          signature: VALID_SIGNATURE,
+          signature: WELL_FORMED_SIGNATURE,
         }),
       )
       .mockResolvedValueOnce(
         mockResponse({
           round: 100,
-          signature: VALID_SIGNATURE,
+          signature: WELL_FORMED_SIGNATURE,
         }),
       );
 
@@ -275,7 +315,7 @@ describe('fetchBeacon', () => {
       .mockResolvedValueOnce(
         mockResponse({
           round: 101,
-          signature: VALID_SIGNATURE,
+          signature: WELL_FORMED_SIGNATURE,
         }),
       )
       .mockResolvedValueOnce(
@@ -330,7 +370,7 @@ describe('fetchBeacon', () => {
       .mockResolvedValueOnce(
         mockResponse({
           round: 101,
-          signature: VALID_SIGNATURE,
+          signature: WELL_FORMED_SIGNATURE,
         }),
       );
 
@@ -418,6 +458,69 @@ describe('fetchBeacon', () => {
       );
     }
   });
+
+  it('fails over after an AbortError when the caller signal is still active', async () => {
+    const controller = new AbortController();
+
+    const error = new Error('Endpoint failed');
+    error.name = 'AbortError';
+
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce(mockResponse({
+        round: 100,
+        signature: WELL_FORMED_SIGNATURE,
+      }));
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const beacon = await fetchBeacon(
+      100n,
+      CANCELLATION_ENDPOINTS,
+      { signal: controller.signal },
+    );
+
+    expect(beacon).toEqual({
+      round: 100n,
+      signature: `0x${WELL_FORMED_SIGNATURE}`,
+    });
+
+    expect(controller.signal.aborted).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init.signal).toBe(controller.signal);
+    }
+  });
+
+  it('fails over when reading or parsing a response body fails', async () => {
+    const response = mockResponse(undefined);
+
+    response.json.mockRejectedValue(
+      new SyntaxError('Invalid JSON'),
+    );
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response)
+      .mockResolvedValueOnce(mockResponse({
+        round: 100,
+        signature: WELL_FORMED_SIGNATURE,
+      }));
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const beacon = await fetchBeacon(
+      100n,
+      CANCELLATION_ENDPOINTS,
+    );
+
+    expect(beacon).toEqual({
+      round: 100n,
+      signature: `0x${WELL_FORMED_SIGNATURE}`,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('fetchBeaconFromEndpoint', () => {
@@ -429,7 +532,7 @@ describe('fetchBeaconFromEndpoint', () => {
     mockFetchResponse({
       body: {
         round: 100,
-        signature: VALID_SIGNATURE,
+        signature: WELL_FORMED_SIGNATURE,
       },
     });
 
@@ -440,7 +543,7 @@ describe('fetchBeaconFromEndpoint', () => {
 
     expect(beacon).toEqual({
       round: 100n,
-      signature: `0x${VALID_SIGNATURE}`,
+      signature: `0x${WELL_FORMED_SIGNATURE}`,
     });
   });
 
@@ -448,7 +551,7 @@ describe('fetchBeaconFromEndpoint', () => {
     const fetchMock = mockFetchResponse({
       body: {
         round: 100,
-        signature: VALID_SIGNATURE,
+        signature: WELL_FORMED_SIGNATURE,
       },
     });
 
@@ -467,7 +570,7 @@ describe('fetchBeaconFromEndpoint', () => {
     const fetchMock = mockFetchResponse({
       body: {
         round: 100,
-        signature: VALID_SIGNATURE,
+        signature: WELL_FORMED_SIGNATURE,
       },
     });
 
@@ -530,7 +633,7 @@ describe('fetchBeaconFromEndpoint', () => {
   it('rejects a missing response round', async () => {
     mockFetchResponse({
       body: {
-        signature: VALID_SIGNATURE,
+        signature: WELL_FORMED_SIGNATURE,
       },
     });
 
@@ -548,7 +651,7 @@ describe('fetchBeaconFromEndpoint', () => {
     mockFetchResponse({
       body: {
         round: '100',
-        signature: VALID_SIGNATURE,
+        signature: WELL_FORMED_SIGNATURE,
       },
     });
 
@@ -566,7 +669,7 @@ describe('fetchBeaconFromEndpoint', () => {
     mockFetchResponse({
       body: {
         round: 100.5,
-        signature: VALID_SIGNATURE,
+        signature: WELL_FORMED_SIGNATURE,
       },
     });
 
@@ -584,7 +687,7 @@ describe('fetchBeaconFromEndpoint', () => {
     mockFetchResponse({
       body: {
         round: Number.MAX_SAFE_INTEGER + 1,
-        signature: VALID_SIGNATURE,
+        signature: WELL_FORMED_SIGNATURE,
       },
     });
 
@@ -602,7 +705,7 @@ describe('fetchBeaconFromEndpoint', () => {
     mockFetchResponse({
       body: {
         round: 101,
-        signature: VALID_SIGNATURE,
+        signature: WELL_FORMED_SIGNATURE,
       },
     });
 
@@ -705,5 +808,146 @@ describe('fetchBeaconFromEndpoint', () => {
     expect(beacon.signature).toBe(
       `0x${uppercaseSignature.toLowerCase()}`,
     );
-  })
+  });
+});
+
+describe.each(cancellationCallers)(
+  '$name cancellation',
+  ({ run }) => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+  it.each([
+    {
+      label: 'the default reason',
+      reason: undefined,
+    },
+    {
+      label: 'a non-Error reason',
+      reason: { code: 'TEST_CANCELLED' },
+    },
+  ])(
+    'rejects before fetching with $label', async ({ reason }) => {
+      const controller = new AbortController();
+      controller.abort(reason);
+
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(
+        run(controller.signal),
+      ).rejects.toBe(controller.signal.reason);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('passes the signal to fetch and succeeds while it stays active', async () => {
+    const controller = new AbortController();
+
+    const fetchMock = mockFetchResponse({
+      body: {
+        round: 100,
+        signature: WELL_FORMED_SIGNATURE,
+      },
+    });
+
+    expect(await run(controller.signal)).toEqual({
+      round: 100n,
+      signature: `0x${WELL_FORMED_SIGNATURE}`,
+    });
+
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      'https://first.test/v2/beacons/quicknet/rounds/100',
+      { signal: controller.signal },
+    );
+  });
+
+  it('cancels an in-flight request without wrapping the reason or failing over', async () => {
+    const controller = new AbortController();
+    const reason = { code: 'TEST_CANCELLED' };
+    const entered = Promise.withResolvers<void>();
+
+    const fetchMock = vi.fn(
+      (_url: string, init?: RequestInit) => {
+        entered.resolve();
+
+        if (!init?.signal) {
+          throw new Error('Test requires a forwarded signal.');
+        }
+
+        return rejectWhenAborted(init.signal);
+      },
+    );
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = expect(
+      run(controller.signal),
+    ).rejects.toBe(reason);
+
+    await entered.promise;
+    controller.abort(reason);
+    await result;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels while the response body is being read', async () => {
+    const controller = new AbortController();
+    const reason = { code: 'TEST_CANCELLED' };
+    const entered = Promise.withResolvers<void>();
+
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+
+      json() {
+        entered.resolve();
+
+        if (!init?.signal) {
+          throw new Error('Test requires a forwarded signal.');
+        }
+
+        return rejectWhenAborted(init.signal);
+      },
+    }));
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = expect(
+      run(controller.signal),
+    ).rejects.toBe(reason);
+
+    await entered.promise;
+    controller.abort(reason);
+    await result;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards a valid body if cancellation happens before processing it', async () => {
+    const controller = new AbortController();
+    const reason = { code: 'TEST_CANCELLED' };
+
+    const response = mockResponse(undefined);
+
+    response.json.mockImplementation(async () => {
+      controller.abort(reason);
+
+      return {
+        round: 100,
+        signature: WELL_FORMED_SIGNATURE,
+      };
+    });
+
+    const fetchMock = vi.fn().mockResolvedValue(response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      run(controller.signal),
+    ).rejects.toBe(reason);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
