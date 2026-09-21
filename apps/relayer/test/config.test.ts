@@ -18,9 +18,13 @@ import {
   robinhoodTestnet,
 } from 'viem/chains';
 
-import type {
-  Address,
-  Hex,
+import {
+  createWalletClient,
+  custom,
+  keccak256,
+  parseTransaction,
+  type Address,
+  type Hex,
 } from 'viem';
 
 import type {
@@ -934,6 +938,68 @@ describe('loadRelayerConfig', () => {
         customNetworkMocks
           .loadCustomNetworkDescriptor,
       ).not.toHaveBeenCalled();
+    });
+
+    it('does not reuse a nonce when the RPC count stays stale', async () => {
+      const config = await loadRelayerConfig({
+        source: { type: 'preset', network: 'robinhood-testnet' },
+        env: createEnvironment(),
+      });
+
+      const manager = config.account.nonceManager;
+      expect(manager).toBeDefined();
+
+      const identity = {
+        address: config.account.address,
+        chainId: config.chain.id,
+      };
+      manager?.reset(identity);
+
+      const nonces: number[] = [];
+      const transport = custom({
+        async request({ method, params }) {
+          if (method === 'eth_getTransactionCount') return '0x313';
+
+          if (method === 'eth_sendRawTransaction') {
+            const serialized = params[0] as Hex;
+            const transaction = parseTransaction(serialized);
+            nonces.push(transaction.nonce!);
+            return keccak256(serialized);
+          }
+
+          throw new Error(`Unexpected test RPC method: ${method}`);
+        },
+      }, { retryCount: 0 });
+
+      // Both clients use the same account, as imports and settlements do.
+      const first = createWalletClient({
+        account: config.account,
+        chain: config.chain,
+        transport,
+      });
+
+      const second = createWalletClient({
+        account: config.account,
+        chain: config.chain,
+        transport,
+      });
+
+      const request = {
+        to: REGISTRY_ADDRESS,
+        gas: 21_000n,
+        maxFeePerGas: 2n,
+        maxPriorityFeePerGas: 1n,
+        type: 'eip1559' as const,
+      };
+
+      try {
+        await first.sendTransaction(request);
+        await second.sendTransaction(request);
+
+        expect(nonces).toEqual([787, 788]);
+      } finally {
+        manager?.reset(identity);
+      }
     });
   });
 });

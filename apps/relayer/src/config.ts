@@ -13,6 +13,7 @@ import {
 } from '@based-labs/drand-quicknet-registry';
 
 import {
+  nonceManager,
   privateKeyToAccount,
 } from 'viem/accounts';
 
@@ -106,7 +107,9 @@ export async function loadRelayerConfig(
 
   return {
     ...network,
-    account: privateKeyToAccount(privateKey),
+    account: privateKeyToAccount(privateKey, {
+      nonceManager
+    }),
   };
 }
 
