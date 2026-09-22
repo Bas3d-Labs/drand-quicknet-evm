@@ -427,7 +427,7 @@ describe('createDaemonLogger', () => {
     );
   });
 
-  it('logs consumer failures with the original Error', () => {
+  it('logs consumer failures with a safe error summary', () => {
     const error =
       new Error(
         'RPC request failed.',
@@ -455,7 +455,10 @@ describe('createDaemonLogger', () => {
       {
         event: 'consumer_failed',
         consumer: CONSUMER_A,
-        err: error,
+        err: {
+          name: 'Error',
+          message: 'Operation failed; details redacted.',
+        },
       },
       'Consumer processing failed',
     );
@@ -491,7 +494,7 @@ describe('createDaemonLogger', () => {
       call[0] as {
         event: string;
         consumer: Address;
-        err: Error;
+        err: { name: string; message: string };
       };
 
     expect(
@@ -506,16 +509,17 @@ describe('createDaemonLogger', () => {
       CONSUMER_A,
     );
 
-    expect(
-      context.err,
-    ).toBeInstanceOf(
-      Error,
-    );
+     expect(
+       context.err,
+    ).toEqual({
+      name: 'UnknownError',
+      message: 'Operation failed; details redacted.',
+    });
 
     expect(
       context.err.message,
     ).toBe(
-      'Non-Error value thrown: RPC request failed',
+      'Operation failed; details redacted.',
     );
 
     expect(
@@ -779,7 +783,10 @@ describe('createDaemonLogger', () => {
     ).toHaveBeenCalledWith(
       {
         event: 'logging_failed',
-        err: loggingFailure,
+        err: {
+          name: 'Error',
+          message: 'Operation failed; details redacted.',
+        },
       },
       'Daemon logging failed',
     );
