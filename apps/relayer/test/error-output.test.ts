@@ -165,22 +165,30 @@ function captureCliError(
     throw new Error('Expected CLI error output.');
   }
 
-  // No second argument may expose the original error to console.
   expect(call).toHaveLength(1);
 
   const output = call[0];
 
   if (typeof output !== 'string') {
-    throw new Error('Expected a rendered CLI error string.');
+    throw new Error('Expected a rendered CLI diagnostic.');
   }
 
   assertSafeOutput(output);
-  expect(output.startsWith('Error: ')).toBe(true);
   expect(process.exitCode).toBe(1);
 
-  return JSON.parse(
-    output.slice('Error: '.length),
-  ) as ErrorSummary;
+  const diagnostic = JSON.parse(output) as {
+    event: string;
+    kind: string;
+    err: ErrorSummary;
+  };
+
+  expect(diagnostic).toEqual({
+    event: 'cli_failed',
+    kind: 'operation',
+    err: expect.any(Object),
+  });
+
+  return diagnostic.err;
 }
 
 describe('error output boundaries', () => {

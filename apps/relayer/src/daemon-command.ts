@@ -24,7 +24,7 @@ import {
 
 import {
   collectDaemonStartupSummary,
-  formatDaemonStartupSummary,
+  type DaemonStartupSummary,
 } from './daemon-startup.js';
 
 import {
@@ -49,6 +49,7 @@ export interface RunDaemonCommandOptions {
   source: NetworkSource;
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
+  onStartup?: (summary: DaemonStartupSummary) => void;
 }
 
 export async function runDaemonCommand(
@@ -107,7 +108,7 @@ export async function runDaemonCommand(
       config,
       durableNextBlocks,
     });
-    console.log(formatDaemonStartupSummary(startupSummary));
+    options.onStartup?.(startupSummary);
 
     await runDaemon({
       publicClient: clients.publicClient,
