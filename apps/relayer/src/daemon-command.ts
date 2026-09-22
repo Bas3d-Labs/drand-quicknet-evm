@@ -19,10 +19,6 @@ import {
 } from './daemon-logging.js';
 
 import {
-  logger,
-} from './logger.js';
-
-import {
   loadDaemonConfig,
 } from './daemon-config.js';
 
@@ -42,7 +38,12 @@ import {
 import {
   validateQuicknetConsumers,
 } from './validate-consumers.js';
+
 import { FileCheckpointLock } from './file-checkpoint-lock.js';
+
+import {
+  createRelayerLog,
+} from './relayer-log.js';
 
 export interface RunDaemonCommandOptions {
   source: NetworkSource;
@@ -60,12 +61,13 @@ export async function runDaemonCommand(
       : {}),
   });
 
+  const logger = createRelayerLog({
+    chainId: config.chain.id,
+    level: (options.env ?? process.env).QUICKNET_LOG_LEVEL ?? 'info',
+  });
+
   const daemonLogger = createDaemonLogger({
-    logger: logger.child({
-      component: 'daemon',
-      network: config.network,
-      chainId: config.chain.id,
-    }),
+    logger,
   });
 
   const clients = createRelayerClients(config);
