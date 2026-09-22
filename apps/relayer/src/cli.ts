@@ -1,20 +1,11 @@
-import {
-  resolve,
-} from 'node:path';
 
 import process from 'node:process';
-
-import {
-  pathToFileURL,
-} from 'node:url';
 
 import {
   createRelayerClients,
 } from './clients.js';
 
 import {
-  renderCliOutput,
-  renderOutputFailure,
   type CliOutput,
 } from './cli-output.js';
 
@@ -33,10 +24,6 @@ import {
 } from './decimal.js';
 
 import {
-  renderDiagnostic,
-} from './diagnostics.js';
-
-import {
   importQuicknetRound,
 } from './import-round.js';
 
@@ -51,8 +38,6 @@ import {
 const MAX_UINT64 = (1n << 64n) - 1n;
 
 type CliOutputHandler = (output: CliOutput) => void;
-
-const outputFailures = new WeakMap<object, string>();
 
 interface ImportCommandArguments {
   command: 'import';
@@ -87,8 +72,8 @@ type CommandArguments =
   | HelpCommandArguments;
 
 export async function main(
-  args: readonly string[] = process.argv.slice(2),
-  output: CliOutputHandler = writeCliOutput,
+  args: readonly string[],
+  output: CliOutputHandler,
 ): Promise<void> {
   const normalizedArgs = normalizeArguments(args);
   const command = parseCommandArguments(normalizedArgs);
@@ -228,7 +213,7 @@ export function parseCommandArguments(
 function parseImportArguments(
   args: readonly string[],
 ): ImportCommandArguments {
-  const parsed = parseRoundCommandOptions(args, 'import');
+  const parsed = parseRoundCommandOptions(args);
 
   return {
     command: 'import',
@@ -240,7 +225,7 @@ function parseImportArguments(
 function parseImportWhenAvailableArguments(
   args: readonly string[],
 ): ImportWhenAvailableCommandArguments {
-  const parsed = parseRoundCommandOptions(args, 'import-when-available');
+  const parsed = parseRoundCommandOptions(args);
 
   return {
     command: 'import-when-available',
@@ -294,7 +279,6 @@ interface RoundCommandOptions {
 
 function parseRoundCommandOptions(
   args: readonly string[],
-  command: string,
 ): RoundCommandOptions {
   let source: NetworkSource | undefined;
   let round: bigint | undefined;
@@ -347,7 +331,7 @@ function parseRoundCommandOptions(
 }
 
 interface ParsedNetworkSourceArgument {
-  source: NetworkSource,
+  source: NetworkSource;
   nextIndex: number;
 }
 
@@ -431,48 +415,4 @@ function normalizeArguments(
   }
 
   return args;
-}
-
-function writeCliOutput(
-  output: CliOutput,
-): void {
-  try {
-    const rendered = renderCliOutput(output);
-    console.log(rendered);
-  } catch (cause) {
-    const failure = new Error('CLI output failed.', { cause });
-
-    outputFailures.set(
-      failure,
-      renderOutputFailure(output, cause),
-    );
-
-    throw failure;
-  }
-}
-
-export function reportCliError(
-  error: unknown,
-): void {
-  if (typeof error === 'object' && error !== null) {
-    const outputFailure = outputFailures.get(error);
-
-    if (outputFailure !== undefined) {
-      console.error(outputFailure);
-      process.exitCode = 2;
-      return;
-    }
-  }
-
-  console.error(renderDiagnostic(error));
-  process.exitCode = 1;
-}
-
-const entryPath = process.argv[1];
-
-if (
-  entryPath !== undefined &&
-  import.meta.url === pathToFileURL(resolve(entryPath)).href
-) {
-  main().catch(reportCliError);
 }
