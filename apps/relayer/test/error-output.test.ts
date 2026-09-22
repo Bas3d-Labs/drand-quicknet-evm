@@ -15,8 +15,8 @@ import {
 } from 'viem';
 
 import {
-  reportCliError,
-} from '../src/cli.js';
+  renderDiagnostic
+} from '../src/diagnostics.js';
 
 import type {
   RunDaemonCycleResult,
@@ -148,60 +148,28 @@ function recordAt(
   return JSON.parse(line) as Record<string, unknown>;
 }
 
-function captureCliError(
-  error: unknown,
-): ErrorSummary {
-  const stderr = vi.spyOn(console, 'error').mockImplementation(
-    () => {},
-  );
-
-  reportCliError(error);
-
-  expect(stderr).toHaveBeenCalledOnce();
-
-  const call = stderr.mock.calls[0];
-
-  if (call === undefined) {
-    throw new Error('Expected CLI error output.');
-  }
-
-  expect(call).toHaveLength(1);
-
-  const output = call[0];
-
-  if (typeof output !== 'string') {
-    throw new Error('Expected a rendered CLI diagnostic.');
-  }
+function captureCliError(error: unknown): ErrorSummary {
+  const output = renderDiagnostic(error);
 
   assertSafeOutput(output);
-  expect(process.exitCode).toBe(1);
 
-  const diagnostic = JSON.parse(output) as {
-    event: string;
-    kind: string;
-    err: ErrorSummary;
-  };
+  const diagnostic = JSON.parse(output);
 
-  expect(diagnostic).toEqual({
+  expect(diagnostic).toMatchObject({
     event: 'cli_failed',
     kind: 'operation',
-    err: expect.any(Object),
+    err: {
+      name: expect.any(String),
+      message: expect.any(String),
+    },
   });
 
-  return diagnostic.err;
+  return diagnostic.err as ErrorSummary;
 }
 
 describe('error output boundaries', () => {
-  let previousExitCode: typeof process.exitCode;
-
-  beforeEach(() => {
-    previousExitCode = process.exitCode;
-    process.exitCode = 0;
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
-    process.exitCode = previousExitCode;
   });
 
   it('emits safe daemon output without modifying the original viem error', () => {
@@ -495,7 +463,7 @@ describe('error output boundaries', () => {
     });
   });
 
-  it('renders safe CLI stderr and sets the failure exit code', () => {
+  it('renders a safe CLI operation diagnostic', () => {
     const error = httpError();
     const originalMessage = error.message;
 

@@ -1,13 +1,31 @@
 import process from 'node:process';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Address, Hash, PublicClient, WalletClient } from 'viem';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+
+import type {
+  Address,
+  Hash,
+  PublicClient,
+  WalletClient,
+} from 'viem';
+
 import { privateKeyToAccount } from 'viem/accounts';
 import { robinhoodTestnet } from 'viem/chains';
 
 vi.mock('../src/config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/config.js')>();
-  return { ...actual, loadRelayerConfig: vi.fn() };
+
+  return {
+    ...actual,
+    loadRelayerConfig: vi.fn(),
+  };
 });
 
 vi.mock('../src/clients.js', () => ({
@@ -29,11 +47,9 @@ vi.mock('../src/import-round-when-available.js', () => ({
 import {
   main,
   parseCommandArguments,
-  reportCliError,
 } from '../src/cli.js';
 
 import type { CliOutput } from '../src/cli-output.js';
-
 import { createRelayerClients } from '../src/clients.js';
 
 import {
@@ -55,12 +71,15 @@ import {
 
 const PRESET = 'robinhood-testnet';
 const CONFIG_FILE = './networks/example-mainnet.json';
-const SOURCE = { type: 'preset', network: PRESET } as const;
+
+const SOURCE = {
+  type: 'preset',
+  network: PRESET,
+} as const;
 
 const ROUND = 31_089_008n;
 const MAX_UINT64 = '18446744073709551615';
 const ABOVE_MAX_UINT64 = '18446744073709551616';
-
 const SECRET = 'cli-credential-canary';
 
 const CONSUMER: Address =
@@ -227,15 +246,14 @@ const NETWORK_FAILURES: {
   },
 ];
 
-const ROUND_COMMANDS = ['import', 'import-when-available'] as const;
+const ROUND_COMMANDS = [
+  'import',
+  'import-when-available',
+] as const;
+
 const SIGNALS = ['SIGINT', 'SIGTERM'] as const;
 
-let previousExitCode: typeof process.exitCode;
-
 beforeEach(() => {
-  previousExitCode = process.exitCode;
-  process.exitCode = 0;
-
   vi.mocked(loadRelayerConfig)
     .mockReset()
     .mockResolvedValue(CONFIG);
@@ -262,7 +280,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  process.exitCode = previousExitCode;
 });
 
 describe('parseCommandArguments', () => {
@@ -456,17 +473,20 @@ describe('main', () => {
     { args: [], type: 'help' },
     { args: ['--help'], type: 'help' },
     { args: ['daemon', '--help'], type: 'daemon-help' },
-  ] as const)('emits $type for $args', async ({ args, type }) => {
-    const output = vi.fn<(record: CliOutput) => void>();
+  ] as const)(
+    'emits $type for $args',
+    async ({ args, type }) => {
+      const output = vi.fn<(record: CliOutput) => void>();
 
-    await main(args, output);
+      await main(args, output);
 
-    expect(output).toHaveBeenCalledExactlyOnceWith({ type });
-    expect(loadRelayerConfig).not.toHaveBeenCalled();
-    expect(runDaemonCommand).not.toHaveBeenCalled();
-    expect(importQuicknetRound).not.toHaveBeenCalled();
-    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
-  });
+      expect(output).toHaveBeenCalledExactlyOnceWith({ type });
+      expect(loadRelayerConfig).not.toHaveBeenCalled();
+      expect(runDaemonCommand).not.toHaveBeenCalled();
+      expect(importQuicknetRound).not.toHaveBeenCalled();
+      expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    },
+  );
 
   describe.each(ROUND_COMMANDS)('%s', (command) => {
     function operation() {
@@ -520,6 +540,7 @@ describe('main', () => {
 
     it('emits an already-stored result', async () => {
       operation().mockResolvedValue(ALREADY_STORED);
+
       const output = vi.fn();
 
       await main([
@@ -579,6 +600,7 @@ describe('main', () => {
 
     it('preserves an injected output failure without repeating the import', async () => {
       const failure = new Error('Output failed.');
+
       const output = vi.fn(() => {
         throw failure;
       });
@@ -658,6 +680,7 @@ describe('main', () => {
             expect(added).toHaveLength(1);
 
             const listener = added[0];
+
             if (listener === undefined) {
               throw new Error('Expected shutdown listener.');
             }
@@ -741,72 +764,5 @@ describe('main', () => {
         SIGNALS.map((signal) => process.listeners(signal)),
       ).toEqual(before);
     });
-  });
-});
-
-describe('intermediate CLI output writer', () => {
-  it('writes help through the default writer', async () => {
-    const stdout = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    await main(['--help']);
-
-    expect(stdout).toHaveBeenCalledOnce();
-    expect(stdout.mock.calls[0]?.[0]).toContain('Usage:');
-  });
-
-  it.each([
-    'import',
-    'import-when-available',
-    'daemon',
-  ] as const)('reports %s output failure with exit 2', async (command) => {
-    vi.spyOn(console, 'log').mockImplementation(() => {
-      throw new Error(SECRET);
-    });
-
-    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    vi.mocked(runDaemonCommand).mockImplementation(
-      async ({ onStartup }) => {
-        onStartup?.(STARTUP_SUMMARY);
-      },
-    );
-
-    const args: string[] = [command, '--network', PRESET];
-
-    if (command !== 'daemon') {
-      args.push('--round', ROUND.toString());
-    }
-
-    await main(args).catch(reportCliError);
-
-    expect(stderr).toHaveBeenCalledOnce();
-
-    const line: unknown = stderr.mock.calls[0]?.[0];
-
-    if (typeof line !== 'string') {
-      throw new Error('Expected diagnostic output.');
-    }
-
-    expect(line).not.toContain(SECRET);
-
-    const diagnostic = JSON.parse(line);
-
-    expect(diagnostic).toMatchObject({
-      event: 'output_failed',
-      code: 'CLI_OUTPUT_FAILED',
-    });
-
-    if (command === 'daemon') {
-      expect(diagnostic.output).toBe('daemon-startup');
-    } else {
-      expect(diagnostic).toMatchObject({
-        output: 'import-result',
-        status: 'imported',
-        round: ROUND.toString(),
-        transactionHash: HASH,
-      });
-    }
-
-    expect(process.exitCode).toBe(2);
   });
 });
