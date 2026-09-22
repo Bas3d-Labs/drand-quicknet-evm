@@ -10,6 +10,10 @@ import type {
   ProcessedDaemonScan,
 } from './daemon-iteration.js';
 
+import {
+  summarizeError,
+} from './error-summary.js';
+
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
 
 type DaemonScanType =
@@ -62,9 +66,9 @@ function logCycle(
   for (const consumer of result.consumers) {
     if (consumer.status === 'failed') {
       logger.error({
-       event: 'consumer_failed',
-       consumer: consumer.consumer.address,
-       err: normalizeError(consumer.error), 
+        event: 'consumer_failed',
+        consumer: consumer.consumer.address,
+        err: summarizeError(consumer.error),
       }, 'Consumer processing failed');
       
       continue;
@@ -165,16 +169,6 @@ function logHeartbeat(
   }, 'Relayer daemon heartbeat');
 }
 
-function normalizeError(
-  error: unknown,
-): Error {
-  if (error instanceof Error) {
-    return error;
-  }
-
-  return new Error(`Non-Error value thrown: ${String(error)}`);
-}
-
 function logLoggingFailure(
   logger: Logger,
   error: unknown,
@@ -182,7 +176,7 @@ function logLoggingFailure(
   try {
     logger.error({
       event: 'logging_failed',
-      err: normalizeError(error),
+      err: summarizeError(error),
     }, 'Daemon logging failed');
   } catch {
     // logging must never stop the daemon.

@@ -22,6 +22,10 @@ import {
 } from './import-round-when-available.js';
 import { isDecimalInteger } from './decimal.js';
 
+import {
+  summarizeError,
+} from './error-summary.js';
+
 const MAX_UINT64 = (1n << 64n) - 1n;
 
 interface ImportCommandArguments {
@@ -409,14 +413,11 @@ function normalizeArguments(
   return args;
 }
 
-function formatError(
+export function reportCliError(
   error: unknown,
-): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return String(error);
+): void {
+  console.error(`Error: ${JSON.stringify(summarizeError(error))}`);
+  process.exitCode = 1;
 }
 
 function printHelp(): void {
@@ -470,8 +471,5 @@ function printDaemonHelp(): void {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error: unknown) => {
-    console.error(`Error: ${formatError(error)}`);
-    process.exitCode = 1;
-  });
+  main().catch(reportCliError);
 }
