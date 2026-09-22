@@ -30,13 +30,18 @@ const ERROR_MESSAGES = new Map<string, string>([
 ]);
 
 const SYSTEM_CODES = new Set([
-  'ECONNRESET',
-  'ETIMEDOUT',
-  'ENOTFOUND',
-  'EAI_AGAIN',
-  'ECONNREFUSED',
+  'ABORT_ERR',
   'EACCES',
+  'EAI_AGAIN',
+  'ECONNABORTED',
+  'ECONNREFUSED',
+  'ECONNRESET',
   'ENOENT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EPIPE',
+  'ETIMEDOUT',
 ]);
 
 export interface ErrorSummary {

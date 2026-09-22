@@ -1,6 +1,6 @@
 import type {
-  Logger,
-} from 'pino';
+  Address
+} from 'viem';
 
 import type {
   RunDaemonCycleResult,
@@ -10,9 +10,10 @@ import type {
   ProcessedDaemonScan,
 } from './daemon-iteration.js';
 
-import {
-  summarizeError,
-} from './error-summary.js';
+import type {
+  ConsumerHealth,
+  RelayerLog,
+} from './relayer-log.js';
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
 
@@ -21,7 +22,7 @@ type DaemonScanType =
   | 'soft';
 
 export interface CreateDaemonLoggerOptions {
-  logger: Logger;
+  logger: RelayerLog;
   heartbeatIntervalMs?: number;
   now?: () => number;
 }
@@ -60,28 +61,26 @@ export function createDaemonLogger(
 }
 
 function logCycle(
-  logger: Logger,
+  logger: RelayerLog,
   result: RunDaemonCycleResult,
 ): void {
   for (const consumer of result.consumers) {
     if (consumer.status === 'failed') {
-      logger.error({
-        event: 'consumer_failed',
+      logger.consumerFailed({
         consumer: consumer.consumer.address,
-        err: summarizeError(consumer.error),
-      }, 'Consumer processing failed');
+        error: consumer.error,
+      });
       
       continue;
     }
 
     const iteration = consumer.iteration;
     if (iteration.durableHeadRegressed) {
-      logger.warn({
-        event: 'durable_head_regressed',
+      logger.durableHeadRegressed({
         consumer: consumer.consumer.address,
-        durableBlock: iteration.durableBlock.toString(),
-        durableNextBlock: iteration.durableNextBlock.toString(),
-      }, 'Durable head is behind persisted checkpoint');
+        durableBlock: iteration.durableBlock,
+        durableNextBlock: iteration.durableNextBlock,
+      });
     }
 
     if (iteration.durableScan !== undefined) {
@@ -92,13 +91,12 @@ function logCycle(
         iteration.durableScan,
       );
 
-      logger.debug({
-        event: 'checkpoint_advanced',
+      logger.checkpointAdvanced({
         consumer: consumer.consumer.address,
-        fromBlock: iteration.durableScan.fromBlock.toString(),
-        toBlock: iteration.durableScan.toBlock.toString(),
-        nextBlock: iteration.durableScan.nextBlock.toString(),
-      }, 'Durable checkpoint advanced');
+        fromBlock: iteration.durableScan.fromBlock,
+        toBlock: iteration.durableScan.toBlock,
+        nextBlock: iteration.durableScan.nextBlock,
+      });
     }
 
     if (iteration.softScan !== undefined) {
@@ -113,39 +111,37 @@ function logCycle(
 }
 
 function logScanRounds(
-  logger: Logger,
-  consumer: string,
+  logger: RelayerLog,
+  consumer: Address,
   scanType: DaemonScanType,
   scan: ProcessedDaemonScan,
 ): void {
   for (const processedRound of scan.processing.rounds) {
     const result = processedRound.result;
     if (result.status === 'imported') {
-      logger.info({
-        event: 'round_imported',
+      logger.roundImported({
         consumer,
         scanType,
-        round: processedRound.round.toString(),
+        round: processedRound.round,
         transactionHash: result.transactionHash,
-      }, 'Quicknet round imported');
+      });
 
       continue;
     }
 
-    logger.debug({
-      event: 'round_already_stored',
+    logger.roundAlreadyStored({
       consumer,
       scanType,
-      round: processedRound.round.toString(),
-    }, 'Quicknet round already stored');
+      round: processedRound.round,
+    });
   }
 }
 
 function logHeartbeat(
-  logger: Logger,
+  logger: RelayerLog,
   result: RunDaemonCycleResult,
 ): void {
-  const consumers = result.consumers.map((consumer) => {
+  const consumers = result.consumers.map((consumer): ConsumerHealth => {
     if (consumer.status === 'failed') {
       return {
         consumer: consumer.consumer.address,
@@ -156,28 +152,26 @@ function logHeartbeat(
     return {
       consumer: consumer.consumer.address,
       status: 'healthy',
-      latestBlock: consumer.iteration.latestBlock.toString(),
-      durableBlock: consumer.iteration.durableBlock.toString(),
-      durableNextBlock: consumer.iteration.durableNextBlock.toString(),
-      softNextBlock: consumer.iteration.softCursor.nextBlock.toString(),
+      latestBlock: consumer.iteration.latestBlock,
+      durableBlock: consumer.iteration.durableBlock,
+      durableNextBlock: consumer.iteration.durableNextBlock,
+      softNextBlock: consumer.iteration.softCursor.nextBlock,
     };
   });
 
-  logger.info({
-    event: 'heartbeat',
+  logger.heartbeat({
     consumers,
-  }, 'Relayer daemon heartbeat');
+  });
 }
 
 function logLoggingFailure(
-  logger: Logger,
+  logger: RelayerLog,
   error: unknown,
 ): void {
   try {
-    logger.error({
-      event: 'logging_failed',
-      err: summarizeError(error),
-    }, 'Daemon logging failed');
+    logger.loggingFailed({
+      error,
+    });
   } catch {
     // logging must never stop the daemon.
   }

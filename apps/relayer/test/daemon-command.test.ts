@@ -1,19 +1,23 @@
 import {
+  afterEach,
   beforeEach,
   describe,
   expect,
   it,
   vi,
 } from 'vitest';
+
 import type {
   Address,
   Hex,
   PublicClient,
   WalletClient,
 } from 'viem';
+
 import {
   privateKeyToAccount,
 } from 'viem/accounts';
+
 import {
   robinhoodTestnet,
 } from 'viem/chains';
@@ -40,19 +44,14 @@ const daemonLoggerMocks = vi.hoisted(() => ({
   onCycle: vi.fn(),
 }));
 
-const childLoggerMocks = vi.hoisted(() => ({
-  debug: vi.fn(),
-  info: vi.fn(),
-  error: vi.fn(),
-}));
-
-const loggerMocks = vi.hoisted(() => ({
-  child: vi.fn(),
-}));
-
-const daemonStartupMocks = vi.hoisted(() => ({
-  collectDaemonStartupSummary: vi.fn(),
-  formatDaemonStartupSummary: vi.fn(),
+const relayerLogMocks = vi.hoisted(() => ({
+  consumerFailed: vi.fn(),
+  durableHeadRegressed: vi.fn(),
+  checkpointAdvanced: vi.fn(),
+  roundImported: vi.fn(),
+  roundAlreadyStored: vi.fn(),
+  heartbeat: vi.fn(),
+  loggingFailed: vi.fn(),
 }));
 
 vi.mock(
@@ -62,76 +61,50 @@ vi.mock(
   }),
 );
 
-vi.mock(
-  '../src/clients.js',
-  () => ({
-    createRelayerClients: vi.fn(),
-  }),
-);
+vi.mock('../src/clients.js', () => ({
+  createRelayerClients: vi.fn(),
+}));
 
-vi.mock(
-  '../src/daemon-config.js',
-  () => ({
-    loadDaemonConfig: vi.fn(),
-  }),
-);
+vi.mock('../src/daemon-config.js', () => ({
+  loadDaemonConfig: vi.fn(),
+}));
 
-vi.mock(
-  '../src/daemon-logging.js',
-  () => ({
-    createDaemonLogger: vi.fn(
-      () => daemonLoggerMocks,
-    ),
-  }),
-);
+vi.mock('../src/daemon-logging.js', () => ({
+  createDaemonLogger: vi.fn(),
+}));
 
-vi.mock(
-  '../src/daemon-startup.js',
-  () => daemonStartupMocks,
-);
+vi.mock('../src/daemon-startup.js', () => ({
+  collectDaemonStartupSummary: vi.fn(),
+  formatDaemonStartupSummary: vi.fn(),
+}));
 
-vi.mock(
-  '../src/daemon.js',
-  () => ({
-    runDaemon: vi.fn(),
-  }),
-);
+vi.mock('../src/daemon.js', () => ({
+  runDaemon: vi.fn(),
+}));
 
-vi.mock(
-  '../src/file-checkpoint-lock.js',
-  () => ({
-    FileCheckpointLock: vi.fn(
-      function FileCheckpointLock() {
-        return checkpointLockMocks;
-      },
-    ),
-  }),
-);
+vi.mock('../src/file-checkpoint-lock.js', () => ({
+  FileCheckpointLock: vi.fn(
+    function FileCheckpointLock() {
+      return checkpointLockMocks;
+    },
+  ),
+}));
 
-vi.mock(
-  '../src/file-checkpoint-store.js',
-  () => ({
-    FileCheckpointStore: vi.fn(
-      function FileCheckpointStore() {
-        return checkpointStoreMocks;
-      },
-    ),
-  }),
-);
+vi.mock('../src/file-checkpoint-store.js', () => ({
+  FileCheckpointStore: vi.fn(
+    function FileCheckpointStore() {
+      return checkpointStoreMocks;
+    },
+  ),
+}));
 
-vi.mock(
-  '../src/logger.js',
-  () => ({
-    logger: loggerMocks,
-  }),
-);
+vi.mock('../src/relayer-log.js', () => ({
+  createRelayerLog: vi.fn(),
+}));
 
-vi.mock(
-  '../src/validate-consumers.js',
-  () => ({
-    validateQuicknetConsumers: vi.fn(),
-  }),
-);
+vi.mock('../src/validate-consumers.js', () => ({
+  validateQuicknetConsumers: vi.fn(),
+}));
 
 import {
   createRelayerClients,
@@ -157,6 +130,7 @@ import {
 import {
   collectDaemonStartupSummary,
   formatDaemonStartupSummary,
+  type DaemonStartupSummary,
 } from '../src/daemon-startup.js';
 
 import {
@@ -172,20 +146,30 @@ import {
 } from '../src/file-checkpoint-store.js';
 
 import {
+  createRelayerLog,
+} from '../src/relayer-log.js';
+
+import {
   validateQuicknetConsumers,
 } from '../src/validate-consumers.js';
 
+const SOURCE = {
+  type: 'preset',
+  network: 'robinhood-testnet',
+} as const;
+
 const CONSUMER_A: Address =
-'0x1111111111111111111111111111111111111111';
+  '0x1111111111111111111111111111111111111111';
 
 const CONSUMER_B: Address =
   '0x2222222222222222222222222222222222222222';
 
-const CHAIN_ID = 12345;
+const CHAIN_ID = robinhoodTestnet.id;
 
+// Fixed test fixture; never use this account outside tests.
 const PRIVATE_KEY =
   '0x1111111111111111111111111111111111111111111111111111111111111111';
-  
+
 const REGISTRY_ADDRESS: Address =
   '0x3333333333333333333333333333333333333333';
 
@@ -245,11 +229,27 @@ const VALIDATED_CONSUMERS = [
   VALIDATED_CONSUMER_B,
 ];
 
-const STARTUP_SUMMARY = {
-  network: 'robinhood-testnet',
-} as never;
+const STARTUP_SUMMARY: DaemonStartupSummary = {
+  network: DAEMON_CONFIG.network,
+  chainId: CHAIN_ID,
+  rpcOrigin: 'https://rpc.example.test',
+  signer: ACCOUNT.address,
+  signerBalance: 1_000_000_000_000_000_000n,
+  registry: REGISTRY_ADDRESS,
+  registryRuntimeCodehash: REGISTRY_RUNTIME_CODEHASH,
+  finality: DAEMON_CONFIG.finality,
+  latestHead: 123_600n,
+  durableHead: 123_500n,
+  consumers: DAEMON_CONFIG.consumers,
+  checkpointFile: DAEMON_CONFIG.checkpointFile,
+  startBlock: DAEMON_CONFIG.startBlock,
+  maxBlockRange: DAEMON_CONFIG.maxBlockRange,
+  pollIntervalMs: DAEMON_CONFIG.pollIntervalMs,
+  durableNextBlocks: new Map<Address, bigint>(),
+};
 
-const FORMATTED_STARTUP_SUMMARY = 'Relayer daemon starting\n...';
+const FORMATTED_STARTUP_SUMMARY =
+  'Relayer daemon starting\n...';
 
 function firstInvocationOrder(
   mock: {
@@ -269,92 +269,62 @@ function firstInvocationOrder(
 
 describe('runDaemonCommand', () => {
   beforeEach(() => {
-    vi.mocked(
-      loadDaemonConfig,
-    ).mockReset();
+    // Keep tests independent of the shell's logging configuration.
+    vi.stubEnv('QUICKNET_LOG_LEVEL', undefined);
 
-    vi.mocked(
-      createRelayerClients,
-    ).mockReset();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
 
-    vi.mocked(
-      verifyRegistryDeployment,
-    ).mockReset();
+    vi.mocked(loadDaemonConfig).mockReset();
+    vi.mocked(createRelayerLog).mockReset();
+    vi.mocked(createDaemonLogger).mockReset();
+    vi.mocked(createRelayerClients).mockReset();
+    vi.mocked(verifyRegistryDeployment).mockReset();
+    vi.mocked(validateQuicknetConsumers).mockReset();
+    vi.mocked(collectDaemonStartupSummary).mockReset();
+    vi.mocked(formatDaemonStartupSummary).mockReset();
+    vi.mocked(runDaemon).mockReset();
 
-    vi.mocked(
-      validateQuicknetConsumers,
-    ).mockReset();
-
-    vi.mocked(
-      FileCheckpointStore,
-    ).mockClear();
-
-    vi.mocked(
-      FileCheckpointLock,
-    ).mockClear();
-
-    vi.mocked(
-      createDaemonLogger,
-    ).mockClear();
+    // Preserve the constructor implementations declared in vi.mock.
+    vi.mocked(FileCheckpointStore).mockClear();
+    vi.mocked(FileCheckpointLock).mockClear();
 
     checkpointStoreMocks.load.mockReset();
     checkpointStoreMocks.save.mockReset();
-
     checkpointLockMocks.acquire.mockReset();
     checkpointLockHandleMocks.release.mockReset();
-
     daemonLoggerMocks.onCycle.mockReset();
 
-    loggerMocks.child.mockReset();
+    for (const mock of Object.values(relayerLogMocks)) {
+      mock.mockReset();
+    }
 
-    childLoggerMocks.debug.mockReset();
-    childLoggerMocks.info.mockReset();
-    childLoggerMocks.error.mockReset();
-
-    vi.mocked(
-      collectDaemonStartupSummary,
-    ).mockReset();
-
-    vi.mocked(
-      formatDaemonStartupSummary,
-    ).mockReset();
-
-    vi.mocked(
-      runDaemon,
-    ).mockReset();
-
-    vi.mocked(
-      loadDaemonConfig,
-    ).mockResolvedValue(
+    vi.mocked(loadDaemonConfig).mockResolvedValue(
       DAEMON_CONFIG,
     );
 
-    vi.mocked(
-      createRelayerClients,
-    ).mockReturnValue({
+    vi.mocked(createRelayerLog).mockReturnValue(
+      relayerLogMocks,
+    );
+
+    vi.mocked(createDaemonLogger).mockReturnValue(
+      daemonLoggerMocks,
+    );
+
+    vi.mocked(createRelayerClients).mockReturnValue({
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
     });
 
-    vi.mocked(
-      verifyRegistryDeployment,
-    ).mockResolvedValue(
+    vi.mocked(verifyRegistryDeployment).mockResolvedValue(
       undefined,
     );
 
-    vi.mocked(
-      validateQuicknetConsumers,
-    ).mockResolvedValue(
+    vi.mocked(validateQuicknetConsumers).mockResolvedValue(
       VALIDATED_CONSUMERS,
     );
 
-    checkpointStoreMocks.load.mockResolvedValue(
-      undefined,
-    );
-
-    checkpointStoreMocks.save.mockResolvedValue(
-      undefined,
-    );
+    checkpointStoreMocks.load.mockResolvedValue(undefined);
+    checkpointStoreMocks.save.mockResolvedValue(undefined);
 
     checkpointLockMocks.acquire.mockResolvedValue(
       checkpointLockHandleMocks,
@@ -364,27 +334,20 @@ describe('runDaemonCommand', () => {
       undefined,
     );
 
-    loggerMocks.child.mockReturnValue(
-      childLoggerMocks,
-    );
-
-    vi.mocked(
-      collectDaemonStartupSummary,
-    ).mockResolvedValue(
+    vi.mocked(collectDaemonStartupSummary).mockResolvedValue(
       STARTUP_SUMMARY,
     );
 
-    vi.mocked(
-      formatDaemonStartupSummary,
-    ).mockReturnValue(
+    vi.mocked(formatDaemonStartupSummary).mockReturnValue(
       FORMATTED_STARTUP_SUMMARY,
     );
 
-    vi.mocked(
-      runDaemon,
-    ).mockResolvedValue(
-      undefined,
-    );
+    vi.mocked(runDaemon).mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('loads daemon configuration for the requested network', async () => {
@@ -395,120 +358,133 @@ describe('runDaemonCommand', () => {
     };
 
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
       env,
     });
 
-    expect(
-      loadDaemonConfig,
-    ).toHaveBeenCalledOnce();
+    expect(loadDaemonConfig).toHaveBeenCalledOnce();
 
-    expect(
-      loadDaemonConfig,
-    ).toHaveBeenCalledWith({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+    expect(loadDaemonConfig).toHaveBeenCalledWith({
+      source: SOURCE,
       env,
     });
   });
 
   it('omits env when no environment is provided', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
+      source: SOURCE,
+    });
+
+    expect(loadDaemonConfig).toHaveBeenCalledWith({
+      source: SOURCE,
+    });
+  });
+
+  it('creates the relayer logger with chain ID and default level', async () => {
+    await runDaemonCommand({
+      source: SOURCE,
+    });
+
+    expect(createRelayerLog).toHaveBeenCalledOnce();
+
+    // Exact arguments prevent raw configuration from becoming bindings.
+    expect(createRelayerLog).toHaveBeenCalledWith({
+      chainId: CHAIN_ID,
+      level: 'info',
+    });
+  });
+
+  it('uses the log level from the supplied environment', async () => {
+    vi.stubEnv('QUICKNET_LOG_LEVEL', 'error');
+
+    await runDaemonCommand({
+      source: SOURCE,
+      env: {
+        QUICKNET_LOG_LEVEL: 'debug',
       },
     });
 
-    expect(
-      loadDaemonConfig,
-    ).toHaveBeenCalledWith({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
+    expect(createRelayerLog).toHaveBeenCalledWith({
+      chainId: CHAIN_ID,
+      level: 'debug',
+    });
+  });
+
+  it('uses the process log level when no environment is supplied', async () => {
+    vi.stubEnv('QUICKNET_LOG_LEVEL', 'warn');
+
+    await runDaemonCommand({
+      source: SOURCE,
+    });
+
+    expect(createRelayerLog).toHaveBeenCalledWith({
+      chainId: CHAIN_ID,
+      level: 'warn',
+    });
+  });
+
+  it('defaults to info for an explicit environment without a log level', async () => {
+    vi.stubEnv('QUICKNET_LOG_LEVEL', 'debug');
+
+    await runDaemonCommand({
+      source: SOURCE,
+      env: {},
+    });
+
+    expect(createRelayerLog).toHaveBeenCalledWith({
+      chainId: CHAIN_ID,
+      level: 'info',
+    });
+  });
+
+  it('delegates log-level validation to createRelayerLog', async () => {
+    const invalidLevel = 'invalid-level-canary';
+
+    await runDaemonCommand({
+      source: SOURCE,
+      env: {
+        QUICKNET_LOG_LEVEL: invalidLevel,
       },
+    });
+
+    expect(createRelayerLog).toHaveBeenCalledWith({
+      chainId: CHAIN_ID,
+      level: invalidLevel,
+    });
+  });
+
+  it('creates the daemon logger from the relayer logger', async () => {
+    await runDaemonCommand({
+      source: SOURCE,
+    });
+
+    expect(createDaemonLogger).toHaveBeenCalledOnce();
+
+    expect(createDaemonLogger).toHaveBeenCalledWith({
+      logger: relayerLogMocks,
     });
   });
 
   it('creates relayer clients from the daemon configuration', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
-    expect(
-      createRelayerClients,
-    ).toHaveBeenCalledOnce();
+    expect(createRelayerClients).toHaveBeenCalledOnce();
 
-    expect(
-      createRelayerClients,
-    ).toHaveBeenCalledWith(
+    expect(createRelayerClients).toHaveBeenCalledWith(
       DAEMON_CONFIG,
     );
   });
 
-  it('creates a daemon child logger with network context', async () => {
-    await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
-    });
-
-    expect(
-      loggerMocks.child,
-    ).toHaveBeenCalledOnce();
-
-    expect(
-      loggerMocks.child,
-    ).toHaveBeenCalledWith({
-      component: 'daemon',
-      network: 'robinhood-testnet',
-      chainId: robinhoodTestnet.id,
-    });
-  });
-
-  it('creates the daemon logger from the child logger', async () => {
-    await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
-    });
-
-    expect(
-      createDaemonLogger,
-    ).toHaveBeenCalledOnce();
-
-    expect(
-      createDaemonLogger,
-    ).toHaveBeenCalledWith({
-      logger: childLoggerMocks,
-    });
-  });
-
   it('verifies the configured registry deployment', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
-    expect(
-      verifyRegistryDeployment,
-    ).toHaveBeenCalledOnce();
+    expect(verifyRegistryDeployment).toHaveBeenCalledOnce();
 
-    expect(
-      verifyRegistryDeployment,
-    ).toHaveBeenCalledWith(
+    expect(verifyRegistryDeployment).toHaveBeenCalledWith(
       PUBLIC_CLIENT,
       DEPLOYMENT,
     );
@@ -516,19 +492,12 @@ describe('runDaemonCommand', () => {
 
   it('validates the configured consumers', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
-    expect(
-      validateQuicknetConsumers,
-    ).toHaveBeenCalledOnce();
+    expect(validateQuicknetConsumers).toHaveBeenCalledOnce();
 
-    expect(
-      validateQuicknetConsumers,
-    ).toHaveBeenCalledWith({
+    expect(validateQuicknetConsumers).toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
       deployment: DEPLOYMENT,
       consumers: [
@@ -540,19 +509,12 @@ describe('runDaemonCommand', () => {
 
   it('creates a checkpoint store for the configured deployment', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
-    expect(
-      FileCheckpointStore,
-    ).toHaveBeenCalledOnce();
+    expect(FileCheckpointStore).toHaveBeenCalledOnce();
 
-    expect(
-      FileCheckpointStore,
-    ).toHaveBeenCalledWith({
+    expect(FileCheckpointStore).toHaveBeenCalledWith({
       filePath: './state/checkpoint.json',
       deployment: DEPLOYMENT,
     });
@@ -560,58 +522,37 @@ describe('runDaemonCommand', () => {
 
   it('creates a checkpoint lock for the configured checkpoint file', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
-    expect(
-      FileCheckpointLock,
-    ).toHaveBeenCalledOnce();
+    expect(FileCheckpointLock).toHaveBeenCalledOnce();
 
-    expect(
-      FileCheckpointLock,
-    ).toHaveBeenCalledWith({
+    expect(FileCheckpointLock).toHaveBeenCalledWith({
       checkpointFile: './state/checkpoint.json',
     });
   });
 
   it('acquires the checkpoint lock', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
-    expect(
-      checkpointLockMocks.acquire,
-    ).toHaveBeenCalledOnce();
+    expect(checkpointLockMocks.acquire).toHaveBeenCalledOnce();
   });
 
   it('loads persisted checkpoints for the validated consumers', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
-    expect(
-      checkpointStoreMocks.load,
-    ).toHaveBeenCalledTimes(2);
+    expect(checkpointStoreMocks.load).toHaveBeenCalledTimes(2);
 
-    expect(
-      checkpointStoreMocks.load,
-    ).toHaveBeenNthCalledWith(
+    expect(checkpointStoreMocks.load).toHaveBeenNthCalledWith(
       1,
       CONSUMER_A,
     );
 
-    expect(
-      checkpointStoreMocks.load,
-    ).toHaveBeenNthCalledWith(
+    expect(checkpointStoreMocks.load).toHaveBeenNthCalledWith(
       2,
       CONSUMER_B,
     );
@@ -619,19 +560,12 @@ describe('runDaemonCommand', () => {
 
   it('starts the daemon with the validated consumers and configured settings', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
-    expect(
-      runDaemon,
-    ).toHaveBeenCalledOnce();
+    expect(runDaemon).toHaveBeenCalledOnce();
 
-    expect(
-      runDaemon,
-    ).toHaveBeenCalledWith({
+    expect(runDaemon).toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
@@ -641,7 +575,7 @@ describe('runDaemonCommand', () => {
       startBlock: 123_456n,
       maxBlockRange: 2_000n,
       finality: {
-        type: 'safe',
+               type: 'safe',
       },
       pollIntervalMs: 1_000,
       onCycle: daemonLoggerMocks.onCycle,
@@ -658,9 +592,7 @@ describe('runDaemonCommand', () => {
       source,
     });
 
-    expect(
-      loadDaemonConfig,
-    ).toHaveBeenCalledWith({
+    expect(loadDaemonConfig).toHaveBeenCalledWith({
       source,
     });
   });
@@ -669,487 +601,352 @@ describe('runDaemonCommand', () => {
     const controller = new AbortController();
 
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
       signal: controller.signal,
     });
 
-    expect(
-      runDaemon,
-    ).toHaveBeenCalledWith({
-      publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
-      account: ACCOUNT,
-      deployment: DEPLOYMENT,
-      checkpointStore: checkpointStoreMocks,
-      consumers: VALIDATED_CONSUMERS,
-      startBlock: 123_456n,
-      maxBlockRange: 2_000n,
-      pollIntervalMs: 1_000,
-      finality: {
-        type: 'safe',
-      },
-      onCycle: daemonLoggerMocks.onCycle,
-      signal: controller.signal,
-    });
+    expect(runDaemon).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signal: controller.signal,
+      }),
+    );
+
+    const daemonOptions = vi.mocked(runDaemon).mock.calls[0]?.[0];
+
+    expect(daemonOptions?.signal).toBe(controller.signal);
   });
 
   it('does not start later components when configuration loading fails', async () => {
     const failure = new Error('Daemon configuration failed.');
 
-    vi.mocked(
-      loadDaemonConfig,
-    ).mockRejectedValue(
-      failure,
-    );
+    vi.mocked(loadDaemonConfig).mockRejectedValueOnce(failure);
 
     await expect(
       runDaemonCommand({
-        source: {
-          type: 'preset',
-          network: 'robinhood-testnet',
-        },
+        source: SOURCE,
       }),
-    ).rejects.toBe(
-      failure
-    );
+    ).rejects.toBe(failure);
 
-    expect(
-      createRelayerClients,
-    ).not.toHaveBeenCalled();
+    expect(createRelayerLog).not.toHaveBeenCalled();
+    expect(createDaemonLogger).not.toHaveBeenCalled();
+    expect(createRelayerClients).not.toHaveBeenCalled();
+    expect(verifyRegistryDeployment).not.toHaveBeenCalled();
+    expect(validateQuicknetConsumers).not.toHaveBeenCalled();
+    expect(FileCheckpointStore).not.toHaveBeenCalled();
+    expect(FileCheckpointLock).not.toHaveBeenCalled();
+    expect(runDaemon).not.toHaveBeenCalled();
+  });
 
-    expect(
-      loggerMocks.child,
-    ).not.toHaveBeenCalled();
+  it('does not start later components when logger initialization fails', async () => {
+    const failure = new Error('Logging initialization failed.');
 
-    expect(
-      createDaemonLogger,
-    ).not.toHaveBeenCalled();
+    vi.mocked(createRelayerLog).mockImplementationOnce(() => {
+      throw failure;
+    });
 
-    expect(
-      verifyRegistryDeployment,
-    ).not.toHaveBeenCalled();
+    await expect(
+      runDaemonCommand({
+        source: SOURCE,
+      }),
+    ).rejects.toBe(failure);
 
-    expect(
-      validateQuicknetConsumers,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      FileCheckpointStore,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      FileCheckpointLock,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      runDaemon,
-    ).not.toHaveBeenCalled();
+    expect(createDaemonLogger).not.toHaveBeenCalled();
+    expect(createRelayerClients).not.toHaveBeenCalled();
+    expect(verifyRegistryDeployment).not.toHaveBeenCalled();
+    expect(validateQuicknetConsumers).not.toHaveBeenCalled();
+    expect(FileCheckpointStore).not.toHaveBeenCalled();
+    expect(FileCheckpointLock).not.toHaveBeenCalled();
+    expect(checkpointLockMocks.acquire).not.toHaveBeenCalled();
+    expect(checkpointLockHandleMocks.release).not.toHaveBeenCalled();
+    expect(runDaemon).not.toHaveBeenCalled();
   });
 
   it('does not validate consumers or start the daemon when deployment verification fails', async () => {
     const failure = new Error('Registry verification failed.');
 
-    vi.mocked(
-      verifyRegistryDeployment,
-    ).mockRejectedValue(
+    vi.mocked(verifyRegistryDeployment).mockRejectedValueOnce(
       failure,
     );
 
     await expect(
       runDaemonCommand({
-        source: {
-          type: 'preset',
-          network: 'robinhood-testnet',
-        },
+        source: SOURCE,
       }),
-    ).rejects.toBe(
-      failure
-    );
+    ).rejects.toBe(failure);
 
-    expect(
-      validateQuicknetConsumers,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      FileCheckpointStore,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      FileCheckpointLock,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      runDaemon,
-    ).not.toHaveBeenCalled();
+    expect(validateQuicknetConsumers).not.toHaveBeenCalled();
+    expect(FileCheckpointStore).not.toHaveBeenCalled();
+    expect(FileCheckpointLock).not.toHaveBeenCalled();
+    expect(runDaemon).not.toHaveBeenCalled();
   });
 
-  it('does not create checkpoint components or start the daemon when consumer validation fails', async () => {
+  it('does not create checkpoint components when consumer validation fails', async () => {
     const failure = new Error('Consumer validation failed.');
 
-    vi.mocked(
-      validateQuicknetConsumers,
-    ).mockRejectedValue(
+    vi.mocked(validateQuicknetConsumers).mockRejectedValueOnce(
       failure,
     );
 
     await expect(
       runDaemonCommand({
-        source: {
-          type: 'preset',
-          network: 'robinhood-testnet',
-        },
+        source: SOURCE,
       }),
-    ).rejects.toBe(
-      failure
-    );
+    ).rejects.toBe(failure);
 
-    expect(
-      FileCheckpointStore,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      FileCheckpointLock,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      runDaemon,
-    ).not.toHaveBeenCalled();
+    expect(FileCheckpointStore).not.toHaveBeenCalled();
+    expect(FileCheckpointLock).not.toHaveBeenCalled();
+    expect(runDaemon).not.toHaveBeenCalled();
   });
 
-  it('does not load checkpoints or start the daemon when lock acquisition fails', async () => {
+  it('does not load checkpoints or release a lock when acquisition fails', async () => {
     const failure =
       new Error('Checkpoint lock acquisition failed.');
 
-    checkpointLockMocks.acquire.mockRejectedValue(
-      failure,
-    );
+    checkpointLockMocks.acquire.mockRejectedValueOnce(failure);
 
     await expect(
       runDaemonCommand({
-        source: {
-          type: 'preset',
-          network: 'robinhood-testnet',
-        },
+        source: SOURCE,
       }),
-    ).rejects.toBe(
-      failure
-    );
+    ).rejects.toBe(failure);
 
-    expect(
-      checkpointStoreMocks.load,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      collectDaemonStartupSummary,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      runDaemon,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      checkpointLockHandleMocks.release,
-    ).not.toHaveBeenCalled();
+    expect(checkpointStoreMocks.load).not.toHaveBeenCalled();
+    expect(collectDaemonStartupSummary).not.toHaveBeenCalled();
+    expect(runDaemon).not.toHaveBeenCalled();
+    expect(checkpointLockHandleMocks.release).not.toHaveBeenCalled();
   });
 
-  it('does not start the daemon when checkpoint loading fails', async () => {
-    const failure =
-      new Error('Checkpoint loading failed.');
+  it('releases the lock when checkpoint loading fails', async () => {
+    const failure = new Error('Checkpoint loading failed.');
 
-    checkpointStoreMocks.load.mockRejectedValue(
-      failure,
-    );
+    checkpointStoreMocks.load.mockRejectedValueOnce(failure);
 
     await expect(
       runDaemonCommand({
-        source: {
-          type: 'preset',
-          network: 'robinhood-testnet',
-        },
+        source: SOURCE,
       }),
-    ).rejects.toBe(
-      failure
-    );
+    ).rejects.toBe(failure);
 
-    expect(
-      collectDaemonStartupSummary,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      runDaemon,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      checkpointLockHandleMocks.release,
-    ).toHaveBeenCalledOnce();
+    expect(collectDaemonStartupSummary).not.toHaveBeenCalled();
+    expect(runDaemon).not.toHaveBeenCalled();
+    expect(checkpointLockHandleMocks.release).toHaveBeenCalledOnce();
   });
 
-  it('propagates daemon failures', async () => {
+  it('propagates daemon failures and releases the lock', async () => {
     const failure = new Error('Daemon failed.');
 
-    vi.mocked(
-      runDaemon,
-    ).mockRejectedValue(
-      failure,
-    );
+    vi.mocked(runDaemon).mockRejectedValueOnce(failure);
 
     await expect(
       runDaemonCommand({
-        source: {
-          type: 'preset',
-          network: 'robinhood-testnet',
-        },
+        source: SOURCE,
       }),
-    ).rejects.toBe(
-      failure
+    ).rejects.toBe(failure);
+
+    expect(checkpointLockHandleMocks.release).toHaveBeenCalledOnce();
+  });
+
+  it('initializes logging before creating clients or acquiring the lock', async () => {
+    await runDaemonCommand({
+      source: SOURCE,
+    });
+
+    const loggerOrder = firstInvocationOrder(
+      vi.mocked(createRelayerLog),
     );
 
-    expect(
-      checkpointLockHandleMocks.release,
-    ).toHaveBeenCalledOnce();
+    expect(loggerOrder).toBeLessThan(
+      firstInvocationOrder(vi.mocked(createRelayerClients)),
+    );
+
+    expect(loggerOrder).toBeLessThan(
+      firstInvocationOrder(checkpointLockMocks.acquire),
+    );
   });
 
   it('verifies the deployment before validating consumers', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
     expect(
-      firstInvocationOrder(
-        vi.mocked(verifyRegistryDeployment),
-      )
+      firstInvocationOrder(vi.mocked(verifyRegistryDeployment)),
     ).toBeLessThan(
-      firstInvocationOrder(
-        vi.mocked(validateQuicknetConsumers),
-      )
+      firstInvocationOrder(vi.mocked(validateQuicknetConsumers)),
     );
   });
 
   it('validates consumers before creating the checkpoint store', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
     expect(
-      firstInvocationOrder(
-        vi.mocked(validateQuicknetConsumers),
-      )
+      firstInvocationOrder(vi.mocked(validateQuicknetConsumers)),
     ).toBeLessThan(
-      firstInvocationOrder(
-        vi.mocked(FileCheckpointStore),
-      )
+      firstInvocationOrder(vi.mocked(FileCheckpointStore)),
     );
   });
 
   it('creates the checkpoint store before creating the checkpoint lock', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
     expect(
-      firstInvocationOrder(
-        vi.mocked(FileCheckpointStore),
-      )
+      firstInvocationOrder(vi.mocked(FileCheckpointStore)),
     ).toBeLessThan(
-      firstInvocationOrder(
-        vi.mocked(FileCheckpointLock),
-      )
+      firstInvocationOrder(vi.mocked(FileCheckpointLock)),
     );
   });
 
   it('acquires the checkpoint lock before loading checkpoints', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
     expect(
-      firstInvocationOrder(
-        checkpointLockMocks.acquire,
-      )
+      firstInvocationOrder(checkpointLockMocks.acquire),
     ).toBeLessThan(
-      firstInvocationOrder(
-        checkpointStoreMocks.load,
-      )
+      firstInvocationOrder(checkpointStoreMocks.load),
     );
   });
 
   it('creates the checkpoint store before starting the daemon', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
     expect(
-      firstInvocationOrder(
-        vi.mocked(FileCheckpointStore),
-      )
+      firstInvocationOrder(vi.mocked(FileCheckpointStore)),
     ).toBeLessThan(
-      firstInvocationOrder(
-        vi.mocked(runDaemon),
-      )
+      firstInvocationOrder(vi.mocked(runDaemon)),
     );
   });
 
   it('passes daemon cycle results to the daemon logger', async () => {
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
-    expect(
-      runDaemon,
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onCycle:
-          daemonLoggerMocks.onCycle,
-      }),
-    );
+    const daemonOptions = vi.mocked(runDaemon).mock.calls[0]?.[0];
+
+    expect(daemonOptions?.onCycle).toBe(daemonLoggerMocks.onCycle);
   });
 
   it('collects and prints the daemon startup summary', async () => {
-    const consoleLog =
-      vi.spyOn(
-        console,
-        'log',
-      ).mockImplementation(
-        () => {},
-      );
-
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
-    expect(
-      collectDaemonStartupSummary,
-    ).toHaveBeenCalledWith({
+    expect(collectDaemonStartupSummary).toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
       config: DAEMON_CONFIG,
-      durableNextBlocks:
-        new Map(),
+      durableNextBlocks: new Map(),
     });
 
-    expect(
-      formatDaemonStartupSummary,
-    ).toHaveBeenCalledWith(
+    expect(formatDaemonStartupSummary).toHaveBeenCalledWith(
       STARTUP_SUMMARY,
     );
 
-    expect(
-      consoleLog,
-    ).toHaveBeenCalledWith(
+    expect(console.log).toHaveBeenCalledOnce();
+
+    expect(console.log).toHaveBeenCalledWith(
       FORMATTED_STARTUP_SUMMARY,
     );
-
-    consoleLog.mockRestore();
   });
 
   it('includes persisted consumer checkpoints in the startup summary', async () => {
     checkpointStoreMocks.load
-      .mockResolvedValueOnce(
-        123_500n,
-      )
-      .mockResolvedValueOnce(
-        123_600n,
-      );
+      .mockResolvedValueOnce(123_500n)
+      .mockResolvedValueOnce(123_600n);
 
     await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
-      },
+      source: SOURCE,
     });
 
-    expect(
-      collectDaemonStartupSummary,
-    ).toHaveBeenCalledWith({
+    expect(collectDaemonStartupSummary).toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
       config: DAEMON_CONFIG,
-      durableNextBlocks:
-        new Map([
-          [
-            CONSUMER_A,
-            123_500n,
-          ],
-          [
-            CONSUMER_B,
-            123_600n,
-          ],
-        ]),
+      durableNextBlocks: new Map([
+        [CONSUMER_A, 123_500n],
+        [CONSUMER_B, 123_600n],
+      ]),
     });
   });
 
-  it('does not start the daemon when startup summary collection fails', async () => {
-    const failure =
-      new Error('Startup summary failed.');
+  it('releases the lock when startup summary collection fails', async () => {
+    const failure = new Error('Startup summary failed.');
 
-    vi.mocked(
-      collectDaemonStartupSummary,
-    ).mockRejectedValue(
+    vi.mocked(collectDaemonStartupSummary).mockRejectedValueOnce(
       failure,
     );
 
     await expect(
       runDaemonCommand({
-        source: {
-          type: 'preset',
-          network: 'robinhood-testnet',
-        },
+        source: SOURCE,
       }),
-    ).rejects.toBe(
-      failure
-    );
+    ).rejects.toBe(failure);
 
-    expect(
-      runDaemon,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      checkpointLockHandleMocks.release,
-    ).toHaveBeenCalledOnce();
+    expect(formatDaemonStartupSummary).not.toHaveBeenCalled();
+    expect(console.log).not.toHaveBeenCalled();
+    expect(runDaemon).not.toHaveBeenCalled();
+    expect(checkpointLockHandleMocks.release).toHaveBeenCalledOnce();
   });
 
-  it('releases the checkpoint lock after the daemon exits', async () => {
-    await runDaemonCommand({
-      source: {
-        type: 'preset',
-        network: 'robinhood-testnet',
+  it('releases the lock when startup summary formatting fails', async () => {
+    const failure = new Error('Startup formatting failed.');
+
+    vi.mocked(formatDaemonStartupSummary).mockImplementationOnce(
+      () => {
+        throw failure;
       },
+    );
+
+    await expect(
+      runDaemonCommand({
+        source: SOURCE,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(console.log).not.toHaveBeenCalled();
+    expect(runDaemon).not.toHaveBeenCalled();
+    expect(checkpointLockHandleMocks.release).toHaveBeenCalledOnce();
+  });
+
+  it('releases the lock after the daemon finishes', async () => {
+    let finishDaemon!: () => void;
+
+    const daemonFinished = new Promise<void>((resolve) => {
+      finishDaemon = resolve;
     });
 
-    expect(
-      checkpointLockHandleMocks.release,
-    ).toHaveBeenCalledOnce();
+    let markDaemonStarted!: () => void;
 
-    expect(
-      firstInvocationOrder(
-        vi.mocked(runDaemon),
-      )
-    ).toBeLessThan(
-      firstInvocationOrder(
+    const daemonStarted = new Promise<void>((resolve) => {
+      markDaemonStarted = resolve;
+    });
+
+    vi.mocked(runDaemon).mockImplementationOnce(async () => {
+      markDaemonStarted();
+      await daemonFinished;
+    });
+
+    const command = runDaemonCommand({
+      source: SOURCE,
+    });
+
+    try {
+      await daemonStarted;
+
+      expect(
         checkpointLockHandleMocks.release,
-      )
-    );
+      ).not.toHaveBeenCalled();
+    } finally {
+      finishDaemon();
+      await command;
+    }
+
+    expect(checkpointLockHandleMocks.release).toHaveBeenCalledOnce();
   });
 });
