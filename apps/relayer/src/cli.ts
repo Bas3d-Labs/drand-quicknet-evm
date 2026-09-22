@@ -1,4 +1,22 @@
+import {
+  resolve,
+} from 'node:path';
+
 import process from 'node:process';
+
+import {
+  pathToFileURL,
+} from 'node:url';
+
+import {
+  createRelayerClients,
+} from './clients.js';
+
+import {
+  renderCliOutput,
+  renderOutputFailure,
+  type CliOutput,
+} from './cli-output.js';
 
 import {
   loadRelayerConfig,
@@ -6,27 +24,35 @@ import {
   type NetworkSource,
 } from './config.js';
 
-import { createRelayerClients } from './clients.js';
-
 import {
   runDaemonCommand,
 } from './daemon-command.js';
 
-import { 
+import {
+  isDecimalInteger,
+} from './decimal.js';
+
+import {
+  renderDiagnostic,
+} from './diagnostics.js';
+
+import {
   importQuicknetRound,
-  type ImportQuicknetRoundResult,
 } from './import-round.js';
 
 import {
   importQuicknetRoundWhenAvailable,
 } from './import-round-when-available.js';
-import { isDecimalInteger } from './decimal.js';
 
 import {
-  summarizeError,
-} from './error-summary.js';
+  UsageError,
+} from './usage-error.js';
 
 const MAX_UINT64 = (1n << 64n) - 1n;
+
+type CliOutputHandler = (output: CliOutput) => void;
+
+const outputFailures = new WeakMap<object, string>();
 
 interface ImportCommandArguments {
   command: 'import';
@@ -62,35 +88,37 @@ type CommandArguments =
 
 export async function main(
   args: readonly string[] = process.argv.slice(2),
+  output: CliOutputHandler = writeCliOutput,
 ): Promise<void> {
   const normalizedArgs = normalizeArguments(args);
   const command = parseCommandArguments(normalizedArgs);
 
   switch (command.command) {
     case 'import':
-      await runImportCommand(command);
+      await runImportCommand(command, output);
       return;
 
     case 'import-when-available':
-      await runImportWhenAvailableCommand(command);
+      await runImportWhenAvailableCommand(command, output);
       return;
     
     case 'daemon':
-      await runDaemonCli(command.source);
+      await runDaemonCli(command.source, output);
       return;    
       
     case 'daemon-help':
-      printDaemonHelp();
+      output({ type: 'daemon-help' });
       return;
 
     case 'help':
-      printHelp();
+      output({ type: 'help' });
       return;
   }
 }
 
 async function runImportCommand(
   command: ImportCommandArguments,
+  output: CliOutputHandler,
 ): Promise<void> {
   const config = await loadRelayerConfig({
     source: command.source,
@@ -106,11 +134,16 @@ async function runImportCommand(
     round: command.round,
   });
 
-  printImportResult(command.round, result);
+  output({
+    type: 'import-result',
+    round: command.round,
+    result,
+  });
 }
 
 async function runImportWhenAvailableCommand(
   command: ImportWhenAvailableCommandArguments,
+  output: CliOutputHandler,
 ): Promise<void> {
   const config = await loadRelayerConfig({
     source: command.source,
@@ -126,42 +159,40 @@ async function runImportWhenAvailableCommand(
     round: command.round,
   });
 
-  printImportResult(command.round, result);
+  output({
+    type: 'import-result',
+    round: command.round,
+    result,
+  });
 }
 
 async function runDaemonCli(
   source: NetworkSource,
+  output: CliOutputHandler,
 ): Promise<void> {
   const controller = new AbortController();
+
   const handleShutdown = (): void => {
     controller.abort();
   };
 
-  process.on(
-    'SIGINT',
-    handleShutdown
-  );
-
-  process.on(
-    'SIGTERM',
-    handleShutdown
-  );
+  process.on('SIGINT', handleShutdown);
+  process.on('SIGTERM', handleShutdown);
 
   try {
     await runDaemonCommand({
       source,
       signal: controller.signal,
+      onStartup(summary) {
+        output({
+          type: 'daemon-startup',
+          summary,
+        });
+      },
     });
   } finally {
-    process.removeListener(
-      'SIGINT',
-      handleShutdown
-    );
-
-    process.removeListener(
-      'SIGTERM',
-      handleShutdown
-    );
+    process.removeListener('SIGINT', handleShutdown);
+    process.removeListener('SIGTERM', handleShutdown);
   }
 }
 
@@ -190,7 +221,7 @@ export function parseCommandArguments(
       return parseDaemonArguments(commandArgs);
 
     default:
-      throw new Error(`Unknown command: ${command}.`);
+      throw new UsageError('UNKNOWN_COMMAND');
   }
 }
 
@@ -228,7 +259,7 @@ function parseDaemonArguments(
   for (let i = 0; i < args.length; i++) {
     const argument = args[i];
     if (argument === undefined) {
-      throw new Error('Expected daemon argument.');
+      throw new UsageError('EXPECTED_ARGUMENT');
     }
 
     if (argument === '--help' || argument === '-h') {
@@ -243,11 +274,11 @@ function parseDaemonArguments(
       continue;
     }
 
-    throw new Error(`Unknown daemon argument: ${argument}.`);
+    throw new UsageError('UNKNOWN_ARGUMENT');
   }
 
   if (source === undefined) {
-    throw new Error('Missing required argument: --network or --network-config.');
+    throw new UsageError('MISSING_NETWORK');
   }
 
   return {
@@ -271,7 +302,7 @@ function parseRoundCommandOptions(
   for (let i = 0; i < args.length; i++) {
     const argument = args[i];
     if (argument === undefined) {
-      throw new Error(`Expected ${command} argument.`);
+      throw new UsageError('EXPECTED_ARGUMENT');
     }
 
     const networkArgument = parseNetworkSourceArgument(args, i, source);
@@ -284,12 +315,12 @@ function parseRoundCommandOptions(
 
     if (argument === '--round') {
       if (round !== undefined) {
-        throw new Error('Duplicate argument: --round.');
+        throw new UsageError('DUPLICATE_ROUND');
       }
 
       const value = args[i + 1];
       if (value === undefined) {
-        throw new Error('Missing value for --round.');
+        throw new UsageError('MISSING_ROUND_VALUE');
       }
 
       round = parseRound(value);
@@ -298,15 +329,15 @@ function parseRoundCommandOptions(
       continue;
     }
 
-    throw new Error(`Unknown ${command} argument: ${argument}.`);
+    throw new UsageError('UNKNOWN_ARGUMENT');
   }
 
   if (source === undefined) {
-    throw new Error('Missing required argument: --network or --network-config.');
+    throw new UsageError('MISSING_NETWORK');
   }
 
   if (round === undefined) {
-    throw new Error('Missing required argument: --round.');
+    throw new UsageError('MISSING_ROUND');
   }
 
   return {
@@ -332,19 +363,23 @@ function parseNetworkSourceArgument(
 
   if (currentSource !== undefined) {
     if (argument === '--network' && currentSource.type === 'preset') {
-      throw new Error('Duplicate argument: --network.');
+      throw new UsageError('DUPLICATE_NETWORK');
     }
 
     if (argument === '--network-config' && currentSource.type === 'custom') {
-      throw new Error('Duplicate argument: --network-config.');
+      throw new UsageError('DUPLICATE_NETWORK_CONFIG');
     }
 
-    throw new Error('Arguments --network and --network-config are mutually exclusive.');
+    throw new UsageError('CONFLICTING_NETWORK');
   }
 
   const value = args[index + 1];
   if (value === undefined) {
-    throw new Error(`Missing value for ${argument}.`);
+    if (argument === '--network') {
+      throw new UsageError('MISSING_NETWORK_VALUE');
+    }
+
+    throw new UsageError('MISSING_NETWORK_CONFIG_VALUE');
   }
 
   if (argument === '--network') {
@@ -366,21 +401,6 @@ function parseNetworkSourceArgument(
   };
 }
 
-function printImportResult(
-  round: bigint,
-  result: ImportQuicknetRoundResult,
-): void {
-  if (result.status === 'already-stored') {
-    console.log(`Quicknet round ${round} is already stored.`);
-    console.log(`Randomness: ${result.randomness}`);
-    return;
-  }
-
-  console.log(`Imported Quicknet round ${round}.`);
-  console.log(`Randomness: ${result.randomness}`);
-  console.log(`Transaction: ${result.transactionHash}`);
-}
-
 function parseRound(
   value: string,
 ): bigint {
@@ -388,16 +408,16 @@ function parseRound(
     value.length === 0 ||
     !isDecimalInteger(value)
   ) {
-    throw new Error('Round must be a positive decimal integer.');
+    throw new UsageError('INVALID_ROUND');
   }
 
   const round = BigInt(value);
   if (round <= 0n) {
-    throw new Error('Round must be greater than zero.');
+    throw new UsageError('ZERO_ROUND');
   }
 
   if (round > MAX_UINT64) {
-    throw new Error('Round must fit in uint64.');
+    throw new UsageError('ROUND_OVERFLOW');
   }
 
   return round;
@@ -413,63 +433,46 @@ function normalizeArguments(
   return args;
 }
 
+function writeCliOutput(
+  output: CliOutput,
+): void {
+  try {
+    const rendered = renderCliOutput(output);
+    console.log(rendered);
+  } catch (cause) {
+    const failure = new Error('CLI output failed.', { cause });
+
+    outputFailures.set(
+      failure,
+      renderOutputFailure(output, cause),
+    );
+
+    throw failure;
+  }
+}
+
 export function reportCliError(
   error: unknown,
 ): void {
-  console.error(`Error: ${JSON.stringify(summarizeError(error))}`);
+  if (typeof error === 'object' && error !== null) {
+    const outputFailure = outputFailures.get(error);
+
+    if (outputFailure !== undefined) {
+      console.error(outputFailure);
+      process.exitCode = 2;
+      return;
+    }
+  }
+
+  console.error(renderDiagnostic(error));
   process.exitCode = 1;
 }
 
-function printHelp(): void {
-  console.log(
-    [
-      'Usage:',
-      '  relayer <command> [options]',
-      '',
-      'Commands:',
-      '  import                 Import an exact Quicknet round immediately.',
-      '  import-when-available  Wait for and import an exact Quicknet round.',
-      '  daemon                 Watch configured consumers and relay requested rounds.',
-      '',
-      'Network selection:',
-      '  --network <preset>       Use an official network preset.',
-      '  --network-config <file>  Use a custom network configuration.',
-      '',
-      'Exactly one network selection option is required for import, import-when-available, and daemon.',
-      '',
-      'Run relayer daemon --help for daemon-specific usage.',
-    ].join('\n')
-  );
-}
+const entryPath = process.argv[1];
 
-function printDaemonHelp(): void {
-  console.log(
-    [
-      'Usage:',
-      '  relayer daemon --network <preset>',
-      '  relayer daemon --network-config <file>',
-      '',
-      'Network options:',
-      '  --network <preset>       Use an official network preset.',
-      '  --network-config <file>  Use a custom network configuration.',
-      '',
-      'Exactly one network option is required.',
-      '',
-      'Required daemon environment variables:',
-      '  QUICKNET_CONSUMERS',
-      '  QUICKNET_START_BLOCK',
-      '  QUICKNET_CHECKPOINT_FILE',
-      '',
-      'Custom network environment:',
-      '  QUICKNET_RPC_URL',
-      '',
-      'Optional environment variables:',
-      '  QUICKNET_MAX_BLOCK_RANGE',
-      '  QUICKNET_POLL_INTERVAL_MS',
-    ].join('\n')
-  );
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+  entryPath !== undefined &&
+  import.meta.url === pathToFileURL(resolve(entryPath)).href
+) {
   main().catch(reportCliError);
 }

@@ -1,6 +1,6 @@
-import type {
-  Hash,
-  PublicClient,
+import {
+  type Hash,
+  type PublicClient,
 } from 'viem';
 
 export interface BlockAnchor {

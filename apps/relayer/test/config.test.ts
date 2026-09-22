@@ -1,22 +1,6 @@
-import {
-  resolve,
-} from 'node:path';
+import { resolve } from 'node:path';
 
-import {
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from 'vitest';
-
-import {
-  privateKeyToAccount,
-} from 'viem/accounts';
-
-import {
-  robinhoodTestnet,
-} from 'viem/chains';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createWalletClient,
@@ -27,56 +11,69 @@ import {
   type Hex,
 } from 'viem';
 
+import { privateKeyToAccount } from 'viem/accounts';
+import { robinhoodTestnet } from 'viem/chains';
+
 import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
-import type {
-  CustomNetworkDescriptor,
-} from '../src/custom-network-config.js';
-
-import {
-  resolveNetworkConfigPath,
-} from '../src/config.js';
-
-const deploymentMocks = vi.hoisted(() => ({
+vi.mock('../src/deployment.js', () => ({
   loadRegistryDeployment: vi.fn(),
 }));
 
-const customNetworkMocks = vi.hoisted(() => ({
+vi.mock('../src/custom-network-config.js', () => ({
   loadCustomNetworkDescriptor: vi.fn(),
 }));
-
-vi.mock(
-  '../src/deployment.js',
-  () => deploymentMocks,
-);
-
-vi.mock(
-  '../src/custom-network-config.js',
-  () => customNetworkMocks,
-);
 
 import {
   loadRelayerConfig,
   parseRelayerNetworkPreset,
   RELAYER_NETWORK_PRESETS,
+  resolveNetworkConfigPath,
 } from '../src/config.js';
+
+import {
+  configDiagnostic,
+  RelayerConfigError,
+  type ConfigCode,
+  type ConfigSetting,
+} from '../src/config-errors.js';
+
+import {
+  loadCustomNetworkDescriptor,
+  type CustomNetworkDescriptor,
+} from '../src/custom-network-config.js';
+
+import { loadRegistryDeployment } from '../src/deployment.js';
+import { UsageError, usageCode } from '../src/usage-error.js';
+
+const PRESET_SOURCE = {
+  type: 'preset',
+  network: 'robinhood-testnet',
+} as const;
+
+const CUSTOM_CONFIG_FILE = './networks/example-mainnet.json';
+
+const CUSTOM_SOURCE = {
+  type: 'custom',
+  configFile: CUSTOM_CONFIG_FILE,
+} as const;
 
 const RPC_URL = 'https://rpc.example.com';
 const CUSTOM_RPC_URL = 'https://custom-rpc.example.com';
-const PRIVATE_KEY = `0x${'11'.repeat(32)}` as Hex;
+const PRIVATE_KEY: Hex = `0x${'11'.repeat(32)}`;
 
 const CUSTOM_CHAIN_ID = 12_345;
 
 const REGISTRY_ADDRESS: Address =
   '0x1111111111111111111111111111111111111111';
 
-const REGISTRY_RUNTIME_CODEHASH: Hex =
-  '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-
 const VERIFIER_ADDRESS: Address =
   '0x2222222222222222222222222222222222222222';
+
+const REGISTRY_RUNTIME_CODEHASH: Hex =
+  '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -90,11 +87,8 @@ const REGISTRY_DEPLOYMENT: RegistryDeployment = {
 };
 
 const CUSTOM_REGISTRY_DEPLOYMENT: RegistryDeployment = {
+  ...REGISTRY_DEPLOYMENT,
   chainId: CUSTOM_CHAIN_ID,
-  address: REGISTRY_ADDRESS,
-  runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
-  verifierAddress: VERIFIER_ADDRESS,
-  verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
 };
 
 const CUSTOM_NETWORK_DESCRIPTOR: CustomNetworkDescriptor = {
@@ -117,28 +111,16 @@ const CUSTOM_NETWORK_DESCRIPTOR: CustomNetworkDescriptor = {
   },
 };
 
-const CUSTOM_CONFIG_FILE =
-  './networks/example-mainnet.json';
+const EXPECTED_MANIFEST_URL = new URL(
+  '../../../deployments/robinhood-testnet.json',
+  import.meta.url,
+);
 
-const EXPECTED_MANIFEST_URL =
-  new URL(
-    '../../../deployments/robinhood-testnet.json',
-    import.meta.url,
-  );
+type Environment = Readonly<Record<string, string | undefined>>;
 
 function createEnvironment(
-  overrides: Readonly<
-    Record<
-      string,
-      string | undefined
-    >
-  > = {},
-): Readonly<
-  Record<
-    string,
-    string | undefined
-  >
-> {
+  overrides: Environment = {},
+): Environment {
   return {
     ROBINHOOD_TESTNET_RPC_URL: RPC_URL,
     QUICKNET_RPC_URL: CUSTOM_RPC_URL,
@@ -147,858 +129,546 @@ function createEnvironment(
   };
 }
 
+async function expectConfigRejection(
+  promise: Promise<unknown>,
+  code: ConfigCode,
+  setting: ConfigSetting,
+): Promise<void> {
+  const error = await promise.then(
+    () => {
+      throw new Error('Expected the promise to reject.');
+    },
+    (failure: unknown) => failure,
+  );
+
+  expect(error).toBeInstanceOf(RelayerConfigError);
+  expect(configDiagnostic(error)).toEqual({ code, setting });
+}
+
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.mocked(loadRegistryDeployment)
+    .mockReset()
+    .mockResolvedValue(REGISTRY_DEPLOYMENT);
 
-  deploymentMocks
-    .loadRegistryDeployment
-    .mockResolvedValue(
-      REGISTRY_DEPLOYMENT,
-    );
-
-  customNetworkMocks
-    .loadCustomNetworkDescriptor
-    .mockResolvedValue(
-      CUSTOM_NETWORK_DESCRIPTOR,
-    );
+  vi.mocked(loadCustomNetworkDescriptor)
+    .mockReset()
+    .mockResolvedValue(CUSTOM_NETWORK_DESCRIPTOR);
 });
 
 describe('RELAYER_NETWORK_PRESETS', () => {
   it('contains Robinhood Testnet', () => {
-    expect(
-      RELAYER_NETWORK_PRESETS,
-    ).toContain(
-      'robinhood-testnet',
-    );
+    expect(RELAYER_NETWORK_PRESETS).toContain('robinhood-testnet');
   });
 });
 
 describe('parseRelayerNetworkPreset', () => {
   it('parses a supported network preset', () => {
     expect(
-      parseRelayerNetworkPreset(
-        'robinhood-testnet',
-      ),
-    ).toBe(
-      'robinhood-testnet',
-    );
+      parseRelayerNetworkPreset('robinhood-testnet'),
+    ).toBe('robinhood-testnet');
   });
 
-  it('rejects an unsupported network preset', () => {
-    expect(() =>
-      parseRelayerNetworkPreset(
-        'unknown-network',
-      ),
-    ).toThrow(
-      'Unsupported network preset: unknown-network. Supported presets: robinhood-testnet'
-    );
-  });
+  it.each([
+    {
+      name: 'unsupported preset',
+      value: 'unknown-network',
+    },
+    {
+      name: 'uppercase preset',
+      value: 'ROBINHOOD-TESTNET',
+    },
+  ])('rejects an $name with a registered diagnostic', ({ value }) => {
+    let thrown: unknown;
 
-  it('does not normalize network preset names', () => {
-    expect(() =>
-      parseRelayerNetworkPreset(
-        'ROBINHOOD-TESTNET',
-      ),
-    ).toThrow(
-      'Unsupported network preset: ROBINHOOD-TESTNET. Supported presets: robinhood-testnet'
-    );
+    try {
+      parseRelayerNetworkPreset(value);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(UsageError);
+    expect(usageCode(thrown)).toBe('UNSUPPORTED_NETWORK');
   });
 });
 
 describe('loadRelayerConfig', () => {
   describe('preset network', () => {
     it('loads a valid relayer configuration', async () => {
-      const config =
-        await loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment(),
-        });
-
-      expect(
-        config.network,
-      ).toBe(
-        'robinhood-testnet',
-      );
-
-      expect(
-        config.chain,
-      ).toBe(
-        robinhoodTestnet,
-      );
-
-      expect(
-        config.rpcUrl,
-      ).toBe(
-        RPC_URL,
-      );
-
-      expect(
-        config.deployment,
-      ).toBe(
-        REGISTRY_DEPLOYMENT,
-      );
-
-      expect(
-        config.finality,
-      ).toEqual({
-        type: 'safe',
+      const config = await loadRelayerConfig({
+        source: PRESET_SOURCE,
+        env: createEnvironment(),
       });
+
+      expect(config.network).toBe('robinhood-testnet');
+      expect(config.chain).toBe(robinhoodTestnet);
+      expect(config.rpcUrl).toBe(RPC_URL);
+      expect(config.deployment).toBe(REGISTRY_DEPLOYMENT);
+      expect(config.finality).toEqual({ type: 'safe' });
     });
 
     it('configures Robinhood Testnet with safe finality', async () => {
-      const config =
-        await loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment(),
-        });
-
-      expect(
-        config.chain,
-      ).toBe(
-        robinhoodTestnet,
-      );
-
-      expect(
-        config.finality,
-      ).toEqual({
-        type: 'safe',
+      const config = await loadRelayerConfig({
+        source: PRESET_SOURCE,
+        env: createEnvironment(),
       });
+
+      expect(config.chain).toBe(robinhoodTestnet);
+      expect(config.finality).toEqual({ type: 'safe' });
     });
 
     it('does not allow operator configuration to override preset finality', async () => {
-      const config =
-        await loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            QUICKNET_FINALITY: 'finalized',
-          }),
-        });
-
-      expect(
-        config.finality,
-      ).toEqual({
-        type: 'safe',
+      const config = await loadRelayerConfig({
+        source: PRESET_SOURCE,
+        env: createEnvironment({
+          QUICKNET_FINALITY: 'finalized',
+        }),
       });
+
+      expect(config.finality).toEqual({ type: 'safe' });
     });
 
     it('loads the deployment manifest for the selected preset', async () => {
       await loadRelayerConfig({
-        source: {
-          type: 'preset',
-          network: 'robinhood-testnet',
-        },
+        source: PRESET_SOURCE,
         env: createEnvironment(),
       });
 
-      expect(
-        deploymentMocks
-          .loadRegistryDeployment,
-      ).toHaveBeenCalledOnce();
-
-      expect(
-        deploymentMocks
-          .loadRegistryDeployment,
-      ).toHaveBeenCalledWith({
-        manifestUrl:
-          EXPECTED_MANIFEST_URL,
-        expectedChainId:
-          robinhoodTestnet.id,
+      expect(loadRegistryDeployment).toHaveBeenCalledExactlyOnceWith({
+        manifestUrl: EXPECTED_MANIFEST_URL,
+        expectedChainId: robinhoodTestnet.id,
       });
 
-      expect(
-        customNetworkMocks
-          .loadCustomNetworkDescriptor,
-      ).not.toHaveBeenCalled();
+      expect(loadCustomNetworkDescriptor).not.toHaveBeenCalled();
     });
 
-    it('propagates deployment loader failures', async () => {
-      const error =
-        new Error(
-          'Deployment manifest is invalid.',
-        );
-
-      deploymentMocks
-        .loadRegistryDeployment
-        .mockRejectedValue(
-          error,
-        );
+    it('propagates deployment loader failures unchanged', async () => {
+      const failure = new Error('Deployment manifest is invalid.');
+      vi.mocked(loadRegistryDeployment).mockRejectedValue(failure);
 
       await expect(
         loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
+          source: PRESET_SOURCE,
           env: createEnvironment(),
         }),
-      ).rejects.toBe(
-        error,
-      );
+      ).rejects.toBe(failure);
     });
 
-    it('requires the preset RPC URL', async () => {
-      await expect(
+    it.each([
+      { name: 'missing', value: undefined },
+      { name: 'empty', value: '' },
+      { name: 'whitespace-only', value: '   ' },
+    ])('rejects a $name preset RPC URL', async ({ value }) => {
+      await expectConfigRejection(
         loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
+          source: PRESET_SOURCE,
           env: createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL: undefined,
+            ROBINHOOD_TESTNET_RPC_URL: value,
           }),
         }),
-      ).rejects.toThrow(
-        'Missing required environment variable: ROBINHOOD_TESTNET_RPC_URL.'
+        'MISSING_REQUIRED_SETTING',
+        'ROBINHOOD_TESTNET_RPC_URL',
       );
 
-      expect(
-        deploymentMocks
-          .loadRegistryDeployment,
-      ).not.toHaveBeenCalled();
-    });
-
-    it('rejects an empty preset RPC URL', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL: '',
-          }),
-        }),
-      ).rejects.toThrow(
-        'Missing required environment variable: ROBINHOOD_TESTNET_RPC_URL.'
-      );
-    });
-
-    it('rejects a whitespace-only preset RPC URL', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL: '   ',
-          }),
-        }),
-      ).rejects.toThrow(
-        'Missing required environment variable: ROBINHOOD_TESTNET_RPC_URL.'
-      );
+      expect(loadRegistryDeployment).not.toHaveBeenCalled();
     });
 
     it('trims the preset RPC URL', async () => {
-      const config =
-        await loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL: `  ${RPC_URL}  `,
-          }),
-        });
-
-      expect(
-        config.rpcUrl,
-      ).toBe(
-        RPC_URL,
-      );
-    });
-
-    it('accepts an HTTPS preset RPC URL', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL: 'https://rpc.example.com',
-          }),
+      const config = await loadRelayerConfig({
+        source: PRESET_SOURCE,
+        env: createEnvironment({
+          ROBINHOOD_TESTNET_RPC_URL: `  ${RPC_URL}  `,
         }),
-      ).resolves.toBeDefined();
+      });
+
+      expect(config.rpcUrl).toBe(RPC_URL);
     });
 
-    it('accepts an HTTP preset RPC URL', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL: 'http://localhost:8545',
-          }),
+    it.each([
+      'https://rpc.example.com',
+      'http://localhost:8545',
+    ])('accepts preset RPC URL %s', async (rpcUrl) => {
+      const config = await loadRelayerConfig({
+        source: PRESET_SOURCE,
+        env: createEnvironment({
+          ROBINHOOD_TESTNET_RPC_URL: rpcUrl,
         }),
-      ).resolves.toBeDefined();
+      });
+
+      expect(config.rpcUrl).toBe(rpcUrl);
     });
 
-    it('rejects an invalid preset RPC URL', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL:
-              'not-a-url',
+    it.each([
+      {
+        value: 'not-a-url',
+        code: 'INVALID_RPC_URL',
+      },
+      {
+        value: 'ws://rpc.example.com',
+        code: 'UNSUPPORTED_RPC_PROTOCOL',
+      },
+    ] as const)(
+      'rejects preset RPC URL with $code',
+      async ({ value, code }) => {
+        await expectConfigRejection(
+          loadRelayerConfig({
+            source: PRESET_SOURCE,
+            env: createEnvironment({
+              ROBINHOOD_TESTNET_RPC_URL: value,
+            }),
           }),
-        }),
-      ).rejects.toThrow(
-        'Invalid RPC URL.',
-      );
+          code,
+          'ROBINHOOD_TESTNET_RPC_URL',
+        );
 
-      expect(
-        deploymentMocks
-          .loadRegistryDeployment,
-      ).not.toHaveBeenCalled();
-    });
-
-    it('rejects an unsupported preset RPC protocol', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            ROBINHOOD_TESTNET_RPC_URL: 'ws://rpc.example.com',
-          }),
-        }),
-      ).rejects.toThrow(
-        'Unsupported RPC URL protocol: ws:.',
-      );
-
-      expect(
-        deploymentMocks
-          .loadRegistryDeployment,
-      ).not.toHaveBeenCalled();
-    });
+        expect(loadRegistryDeployment).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('custom network', () => {
     it('loads a valid custom network configuration', async () => {
-      const config =
-        await loadRelayerConfig({
-          source: {
-            type: 'custom',
-            configFile: CUSTOM_CONFIG_FILE,
-          },
-          env: createEnvironment(),
-        });
+      const config = await loadRelayerConfig({
+        source: CUSTOM_SOURCE,
+        env: createEnvironment(),
+      });
 
-      expect(
-        config.network,
-      ).toBe(
-        'example-mainnet',
-      );
+      expect(config.network).toBe('example-mainnet');
+      expect(config.chain.id).toBe(CUSTOM_CHAIN_ID);
+      expect(config.chain.name).toBe('Example Chain');
 
-      expect(
-        config.chain.id,
-      ).toBe(
-        CUSTOM_CHAIN_ID,
-      );
-
-      expect(
-        config.chain.name,
-      ).toBe(
-        'Example Chain',
-      );
-
-      expect(
-        config.chain.nativeCurrency,
-      ).toEqual({
+      expect(config.chain.nativeCurrency).toEqual({
         name: 'Example',
         symbol: 'EX',
         decimals: 18,
       });
 
-      expect(
-        config.chain.testnet,
-      ).toBe(
-        false,
-      );
+      expect(config.chain.testnet).toBe(false);
+      expect(config.rpcUrl).toBe(CUSTOM_RPC_URL);
+      expect(config.deployment).toBe(CUSTOM_REGISTRY_DEPLOYMENT);
 
-      expect(
-        config.rpcUrl,
-      ).toBe(
-        CUSTOM_RPC_URL,
-      );
-
-      expect(
-        config.deployment,
-      ).toBe(
-        CUSTOM_REGISTRY_DEPLOYMENT,
-      );
-
-      expect(
-        config.finality,
-      ).toEqual({
+      expect(config.finality).toEqual({
         type: 'confirmations',
         confirmations: 20n,
       });
     });
 
     it('constructs the custom chain with the configured RPC URL', async () => {
-      const config =
-        await loadRelayerConfig({
-          source: {
-            type: 'custom',
-            configFile: CUSTOM_CONFIG_FILE,
-          },
-          env: createEnvironment(),
-        });
+      const config = await loadRelayerConfig({
+        source: CUSTOM_SOURCE,
+        env: createEnvironment(),
+      });
 
-      expect(
-        config.chain.rpcUrls
-          .default.http,
-      ).toEqual([
+      expect(config.chain.rpcUrls.default.http).toEqual([
         CUSTOM_RPC_URL,
       ]);
     });
 
     it('loads the selected custom network config file', async () => {
       await loadRelayerConfig({
-        source: {
-          type: 'custom',
-          configFile: CUSTOM_CONFIG_FILE,
-        },
+        source: CUSTOM_SOURCE,
         env: createEnvironment(),
       });
 
       expect(
-        customNetworkMocks
-          .loadCustomNetworkDescriptor,
-      ).toHaveBeenCalledOnce();
+        loadCustomNetworkDescriptor,
+      ).toHaveBeenCalledExactlyOnceWith(CUSTOM_CONFIG_FILE);
 
-      expect(
-        customNetworkMocks
-          .loadCustomNetworkDescriptor,
-      ).toHaveBeenCalledWith(
-        CUSTOM_CONFIG_FILE,
-      );
-
-      expect(
-        deploymentMocks
-          .loadRegistryDeployment,
-      ).not.toHaveBeenCalled();
+      expect(loadRegistryDeployment).not.toHaveBeenCalled();
     });
 
-    it('propagates custom network loader failures', async () => {
-      const error =
-        new Error(
-          'Custom network config is invalid.',
-        );
+    it('propagates custom network loader failures unchanged', async () => {
+      const failure = new Error('Custom network config is invalid.');
 
-      customNetworkMocks
-        .loadCustomNetworkDescriptor
-        .mockRejectedValue(
-          error,
-        );
+      vi.mocked(loadCustomNetworkDescriptor).mockRejectedValue(failure);
 
       await expect(
         loadRelayerConfig({
-          source: {
-            type: 'custom',
-            configFile: CUSTOM_CONFIG_FILE,
-          },
+          source: CUSTOM_SOURCE,
           env: createEnvironment(),
         }),
-      ).rejects.toBe(
-        error,
-      );
+      ).rejects.toBe(failure);
     });
 
-    it('requires QUICKNET_RPC_URL', async () => {
-      await expect(
+    it.each([
+      { name: 'missing', value: undefined },
+      { name: 'empty', value: '' },
+      { name: 'whitespace-only', value: '   ' },
+    ])('rejects a $name QUICKNET_RPC_URL', async ({ value }) => {
+      await expectConfigRejection(
         loadRelayerConfig({
-          source: {
-            type: 'custom',
-            configFile: CUSTOM_CONFIG_FILE,
-          },
+          source: CUSTOM_SOURCE,
           env: createEnvironment({
-            QUICKNET_RPC_URL: undefined,
+            QUICKNET_RPC_URL: value,
           }),
         }),
-      ).rejects.toThrow(
-        'Missing required environment variable: QUICKNET_RPC_URL.'
-      );
-    });
-
-    it('rejects an empty QUICKNET_RPC_URL', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'custom',
-            configFile: CUSTOM_CONFIG_FILE,
-          },
-          env: createEnvironment({
-            QUICKNET_RPC_URL: '',
-          }),
-        }),
-      ).rejects.toThrow(
-        'Missing required environment variable: QUICKNET_RPC_URL.'
-      );
-    });
-
-    it('rejects a whitespace-only QUICKNET_RPC_URL', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'custom',
-            configFile: CUSTOM_CONFIG_FILE,
-          },
-          env: createEnvironment({
-            QUICKNET_RPC_URL: '   ',
-          }),
-        }),
-      ).rejects.toThrow(
-        'Missing required environment variable: QUICKNET_RPC_URL.'
+        'MISSING_REQUIRED_SETTING',
+        'QUICKNET_RPC_URL',
       );
     });
 
     it('trims QUICKNET_RPC_URL', async () => {
-      const config =
-        await loadRelayerConfig({
-          source: {
-            type: 'custom',
-            configFile: CUSTOM_CONFIG_FILE,
-          },
-          env: createEnvironment({
-            QUICKNET_RPC_URL: `  ${CUSTOM_RPC_URL}  `,
-          }),
-        });
+      const config = await loadRelayerConfig({
+        source: CUSTOM_SOURCE,
+        env: createEnvironment({
+          QUICKNET_RPC_URL: `  ${CUSTOM_RPC_URL}  `,
+        }),
+      });
 
-      expect(
-        config.rpcUrl,
-      ).toBe(
-        CUSTOM_RPC_URL,
-      );
+      expect(config.rpcUrl).toBe(CUSTOM_RPC_URL);
 
-      expect(
-        config.chain.rpcUrls
-          .default.http,
-      ).toEqual([
+      expect(config.chain.rpcUrls.default.http).toEqual([
         CUSTOM_RPC_URL,
       ]);
     });
 
-    it('rejects an invalid QUICKNET_RPC_URL', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'custom',
-            configFile: CUSTOM_CONFIG_FILE,
-          },
-          env: createEnvironment({
-            QUICKNET_RPC_URL: 'not-a-url',
+    it.each([
+      {
+        value: 'not-a-url',
+        code: 'INVALID_RPC_URL',
+      },
+      {
+        value: 'ws://rpc.example.com',
+        code: 'UNSUPPORTED_RPC_PROTOCOL',
+      },
+    ] as const)(
+      'rejects custom RPC URL with $code',
+      async ({ value, code }) => {
+        await expectConfigRejection(
+          loadRelayerConfig({
+            source: CUSTOM_SOURCE,
+            env: createEnvironment({
+              QUICKNET_RPC_URL: value,
+            }),
           }),
-        }),
-      ).rejects.toThrow(
-        'Invalid RPC URL.',
-      );
-    });
-
-    it('rejects an unsupported custom RPC protocol', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'custom',
-            configFile: CUSTOM_CONFIG_FILE,
-          },
-          env: createEnvironment({
-            QUICKNET_RPC_URL: 'ws://rpc.example.com',
-          }),
-        }),
-      ).rejects.toThrow(
-        'Unsupported RPC URL protocol: ws:.',
-      );
-    });
+          code,
+          'QUICKNET_RPC_URL',
+        );
+      },
+    );
 
     it('uses finality from the custom network descriptor', async () => {
-      const descriptor = {
+      vi.mocked(loadCustomNetworkDescriptor).mockResolvedValue({
         ...CUSTOM_NETWORK_DESCRIPTOR,
-        finality: {
-          type: 'finalized',
-        } as const,
-      };
-
-      customNetworkMocks
-        .loadCustomNetworkDescriptor
-        .mockResolvedValue(
-          descriptor,
-        );
-
-      const config =
-        await loadRelayerConfig({
-          source: {
-            type: 'custom',
-            configFile: CUSTOM_CONFIG_FILE,
-          },
-          env: createEnvironment({
-            QUICKNET_FINALITY: 'safe',
-          }),
-        });
-
-      expect(
-        config.finality,
-      ).toEqual({
-        type: 'finalized',
+        finality: { type: 'finalized' },
       });
+
+      const config = await loadRelayerConfig({
+        source: CUSTOM_SOURCE,
+        env: createEnvironment({
+          QUICKNET_FINALITY: 'safe',
+        }),
+      });
+
+      expect(config.finality).toEqual({ type: 'finalized' });
     });
   });
 
   describe('account configuration', () => {
     it('creates the account from PRIVATE_KEY', async () => {
-      const config =
-        await loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment(),
-        });
+      const config = await loadRelayerConfig({
+        source: PRESET_SOURCE,
+        env: createEnvironment(),
+      });
 
-      const expectedAccount = privateKeyToAccount(PRIVATE_KEY);
-      expect(
-        config.account.address,
-      ).toBe(
-        expectedAccount.address,
-      );
+      const expected = privateKeyToAccount(PRIVATE_KEY);
 
-      expect(
-        config.account.type,
-      ).toBe(
-        expectedAccount.type,
-      );
+      expect(config.account.address).toBe(expected.address);
+      expect(config.account.type).toBe(expected.type);
     });
 
-    it('requires PRIVATE_KEY', async () => {
-      await expect(
+    it.each([
+      { name: 'missing', value: undefined },
+      { name: 'empty', value: '' },
+      { name: 'whitespace-only', value: '   ' },
+    ])('rejects a $name PRIVATE_KEY', async ({ value }) => {
+      await expectConfigRejection(
         loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
+          source: PRESET_SOURCE,
           env: createEnvironment({
-            PRIVATE_KEY: undefined,
+            PRIVATE_KEY: value,
           }),
         }),
-      ).rejects.toThrow(
-        'Missing required environment variable: PRIVATE_KEY.'
+        'MISSING_REQUIRED_SETTING',
+        'PRIVATE_KEY',
       );
 
-      expect(
-        deploymentMocks
-          .loadRegistryDeployment,
-      ).not.toHaveBeenCalled();
-
-      expect(
-        customNetworkMocks
-          .loadCustomNetworkDescriptor,
-      ).not.toHaveBeenCalled();
+      expect(loadRegistryDeployment).not.toHaveBeenCalled();
+      expect(loadCustomNetworkDescriptor).not.toHaveBeenCalled();
     });
 
-    it('rejects an empty PRIVATE_KEY', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            PRIVATE_KEY: '',
+    it.each([
+      {
+        name: 'missing 0x prefix',
+        value: '11'.repeat(32),
+      },
+      {
+        name: 'shorter than 32 bytes',
+        value: '0x' + '11'.repeat(31),
+      },
+      {
+        name: 'longer than 32 bytes',
+        value: '0x' + '11'.repeat(33),
+      },
+      {
+        name: 'non-hex characters',
+        value: '0x' + 'gg'.repeat(32),
+      },
+      {
+        name: '63 hex digits',
+        value: '0x' + '1'.repeat(63),
+      },
+    ])(
+      'rejects PRIVATE_KEY with $name before loading the network',
+      async ({ value }) => {
+        await expectConfigRejection(
+          loadRelayerConfig({
+            source: PRESET_SOURCE,
+            env: createEnvironment({
+              PRIVATE_KEY: value,
+            }),
           }),
-        }),
-      ).rejects.toThrow(
-        'Missing required environment variable: PRIVATE_KEY.'
-      );
-    });
+          'INVALID_PRIVATE_KEY',
+          'PRIVATE_KEY',
+        );
 
-    it('rejects a private key without a 0x prefix', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            PRIVATE_KEY: '11'.repeat(32),
+        expect(loadRegistryDeployment).not.toHaveBeenCalled();
+        expect(loadCustomNetworkDescriptor).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      {
+        name: 'zero',
+        value: '0x' + '00'.repeat(32),
+      },
+      {
+        name: 'out-of-range scalar',
+        value: '0x' + 'ff'.repeat(32),
+      },
+    ])(
+      'wraps a $name private key in a registered diagnostic',
+      async ({ value }) => {
+        await expectConfigRejection(
+          loadRelayerConfig({
+            source: PRESET_SOURCE,
+            env: createEnvironment({
+              PRIVATE_KEY: value,
+            }),
           }),
-        }),
-      ).rejects.toThrow(
-        'PRIVATE_KEY must be a 32-byte hex value.'
-      );
-
-      expect(
-        deploymentMocks
-          .loadRegistryDeployment,
-      ).not.toHaveBeenCalled();
-    });
-
-    it('rejects a private key shorter than 32 bytes', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            PRIVATE_KEY: `0x${'11'.repeat(31)}`,
-          }),
-        }),
-      ).rejects.toThrow(
-        'PRIVATE_KEY must be a 32-byte hex value.'
-      );
-    });
-
-    it('rejects a private key longer than 32 bytes', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            PRIVATE_KEY: `0x${'11'.repeat(33)}`,
-          }),
-        }),
-      ).rejects.toThrow(
-        'PRIVATE_KEY must be a 32-byte hex value.'
-      );
-    });
-
-    it('rejects non-hex characters in PRIVATE_KEY', async () => {
-      await expect(
-        loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            PRIVATE_KEY: `0x${'gg'.repeat(32)}`,
-          }),
-        }),
-      ).rejects.toThrow(
-        'PRIVATE_KEY must be a 32-byte hex value.'
-      );
-    });
+          'INVALID_PRIVATE_KEY',
+          'PRIVATE_KEY',
+        );
+      },
+    );
 
     it('trims PRIVATE_KEY before parsing it', async () => {
-      const config =
-        await loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
-          env: createEnvironment({
-            PRIVATE_KEY: `  ${PRIVATE_KEY}  `,
-          }),
-        });
+      const config = await loadRelayerConfig({
+        source: PRESET_SOURCE,
+        env: createEnvironment({
+          PRIVATE_KEY: `  ${PRIVATE_KEY}  `,
+        }),
+      });
 
-      expect(
-        config.account.address,
-      ).toBe(
-        privateKeyToAccount(
-          PRIVATE_KEY,
-        ).address,
+      expect(config.account.address).toBe(
+        privateKeyToAccount(PRIVATE_KEY).address,
       );
     });
 
-    it('validates operator configuration before loading network configuration', async () => {
-      await expect(
+    it('validates required operator configuration before loading the network', async () => {
+      await expectConfigRejection(
         loadRelayerConfig({
-          source: {
-            type: 'preset',
-            network: 'robinhood-testnet',
-          },
+          source: PRESET_SOURCE,
           env: {},
         }),
-      ).rejects.toThrow();
+        'MISSING_REQUIRED_SETTING',
+        'PRIVATE_KEY',
+      );
 
-      expect(
-        deploymentMocks
-          .loadRegistryDeployment,
-      ).not.toHaveBeenCalled();
-
-      expect(
-        customNetworkMocks
-          .loadCustomNetworkDescriptor,
-      ).not.toHaveBeenCalled();
+      expect(loadRegistryDeployment).not.toHaveBeenCalled();
+      expect(loadCustomNetworkDescriptor).not.toHaveBeenCalled();
     });
 
     it('does not reuse a nonce when the RPC count stays stale', async () => {
       const config = await loadRelayerConfig({
-        source: { type: 'preset', network: 'robinhood-testnet' },
+        source: PRESET_SOURCE,
         env: createEnvironment(),
       });
 
       const manager = config.account.nonceManager;
-      expect(manager).toBeDefined();
+
+      if (manager === undefined) {
+        throw new Error(
+          'Expected the relayer account to have a nonce manager.',
+        );
+      }
 
       const identity = {
         address: config.account.address,
         chainId: config.chain.id,
       };
-      manager?.reset(identity);
 
-      const nonces: number[] = [];
-      const transport = custom({
-        async request({ method, params }) {
-          if (method === 'eth_getTransactionCount') return '0x313';
-
-          if (method === 'eth_sendRawTransaction') {
-            const serialized = params[0] as Hex;
-            const transaction = parseTransaction(serialized);
-            nonces.push(transaction.nonce!);
-            return keccak256(serialized);
-          }
-
-          throw new Error(`Unexpected test RPC method: ${method}`);
-        },
-      }, { retryCount: 0 });
-
-      // Both clients use the same account, as imports and settlements do.
-      const first = createWalletClient({
-        account: config.account,
-        chain: config.chain,
-        transport,
-      });
-
-      const second = createWalletClient({
-        account: config.account,
-        chain: config.chain,
-        transport,
-      });
-
-      const request = {
-        to: REGISTRY_ADDRESS,
-        gas: 21_000n,
-        maxFeePerGas: 2n,
-        maxPriorityFeePerGas: 1n,
-        type: 'eip1559' as const,
-      };
+      // Discard module-level nonce state from any earlier use of this account.
+      manager.reset(identity);
 
       try {
+        const nonces: number[] = [];
+
+        const transport = custom({
+          async request({ method, params }) {
+            if (method === 'eth_getTransactionCount') {
+              return '0x313';
+            }
+
+            if (method === 'eth_sendRawTransaction') {
+              const serialized = params[0] as Hex;
+              const transaction = parseTransaction(serialized);
+
+              if (transaction.nonce === undefined) {
+                throw new Error(
+                  'Expected a nonce in the signed transaction.',
+                );
+              }
+
+              nonces.push(transaction.nonce);
+
+              return keccak256(serialized);
+            }
+
+            throw new Error(
+              `Unexpected test RPC method: ${method}`,
+            );
+          },
+        }, {
+          retryCount: 0,
+        });
+
+        // Both clients share the account, as imports and settlements do.
+        const first = createWalletClient({
+          account: config.account,
+          chain: config.chain,
+          transport,
+        });
+
+        const second = createWalletClient({
+          account: config.account,
+          chain: config.chain,
+          transport,
+        });
+
+        const request = {
+          to: REGISTRY_ADDRESS,
+          gas: 21_000n,
+          maxFeePerGas: 2n,
+          maxPriorityFeePerGas: 1n,
+          type: 'eip1559' as const,
+        };
+
         await first.sendTransaction(request);
         await second.sendTransaction(request);
 
         expect(nonces).toEqual([787, 788]);
       } finally {
-        manager?.reset(identity);
+        manager.reset(identity);
       }
     });
   });
@@ -1007,80 +677,49 @@ describe('loadRelayerConfig', () => {
 describe('resolveNetworkConfigPath', () => {
   const repositoryRoot = resolve('/workspace/drand-quicknet-evm');
   const packageCwd = resolve(repositoryRoot, 'apps/relayer');
+  const relativePath = 'networks/examples/robinhood-testnet-custom.json';
 
   it('resolves a relative path against INIT_CWD when available', () => {
     expect(
-      resolveNetworkConfigPath(
-        'networks/examples/robinhood-testnet-custom.json',
-        {
-          env: {
-            INIT_CWD: repositoryRoot,
-          },
-          cwd: packageCwd,
-        }
-      )
+      resolveNetworkConfigPath(relativePath, {
+        env: { INIT_CWD: repositoryRoot },
+        cwd: packageCwd,
+      }),
     ).toBe(
-      resolve(
-        repositoryRoot,
-        'networks/examples/robinhood-testnet-custom.json'
-      )
+      resolve(repositoryRoot, relativePath),
     );
   });
 
-  it('falls back to the process working directory when INIT_CWD is unavailable', () => {
+  it('falls back to the supplied working directory when INIT_CWD is unavailable', () => {
     expect(
-      resolveNetworkConfigPath(
-        '../../networks/examples/robinhood-testnet-custom.json',
-        {
-          env: {},
-          cwd: packageCwd,
-        }
-      )
+      resolveNetworkConfigPath('../../' + relativePath, {
+        env: {},
+        cwd: packageCwd,
+      }),
     ).toBe(
-      resolve(
-        repositoryRoot,
-        'networks/examples/robinhood-testnet-custom.json'
-      )
+      resolve(repositoryRoot, relativePath),
     );
   });
 
-  it('falls back to the process working directory when INIT_CWD is empty', () => {
+  it('falls back to the supplied working directory when INIT_CWD is blank', () => {
     expect(
-      resolveNetworkConfigPath(
-        '../../networks/examples/robinhood-testnet-custom.json',
-        {
-          env: {
-            INIT_CWD: '   ',
-          },
-          cwd: packageCwd,
-        }
-      )
+      resolveNetworkConfigPath('../../' + relativePath, {
+        env: { INIT_CWD: '   ' },
+        cwd: packageCwd,
+      }),
     ).toBe(
-      resolve(
-        repositoryRoot,
-        'networks/examples/robinhood-testnet-custom.json'
-      )
+      resolve(repositoryRoot, relativePath),
     );
   });
 
   it('preserves an absolute path', () => {
-    const configPath = resolve(
-      repositoryRoot,
-      'networks/examples/robinhood-testnet-custom.json'
-    );
+    const configPath = resolve(repositoryRoot, relativePath);
 
     expect(
-      resolveNetworkConfigPath(
-        configPath,
-        {
-          env: {
-            INIT_CWD: repositoryRoot,
-          },
-          cwd: packageCwd,
-        }
-      )
-    ).toBe(
-      configPath
-    );
+      resolveNetworkConfigPath(configPath, {
+        env: { INIT_CWD: repositoryRoot },
+        cwd: packageCwd,
+      }),
+    ).toBe(configPath);
   });
 });

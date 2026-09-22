@@ -1,7 +1,13 @@
+import process from 'node:process';
+
 import {
   getAddress,
   type Address,
 } from 'viem';
+
+import {
+  RelayerConfigError,
+} from './config-errors.js';
 
 import {
   loadRelayerConfig,
@@ -9,10 +15,12 @@ import {
   type RelayerConfig,
 } from './config.js';
 
-import { isDecimalInteger } from './decimal.js';
+import {
+  isDecimalInteger,
+} from './decimal.js';
 
-export const DEFAULT_MAX_BLOCK_RANGE = 2000n;
-export const DEFAULT_POLL_INTERVAL_MS = 1000;
+export const DEFAULT_MAX_BLOCK_RANGE = 2_000n;
+export const DEFAULT_POLL_INTERVAL_MS = 1_000;
 
 export interface DaemonConfig extends RelayerConfig {
   consumers: readonly Address[];
@@ -35,6 +43,7 @@ export async function loadDaemonConfig(
     source: options.source,
     env,
   });
+
   const consumers = parseConsumerAddresses(env.QUICKNET_CONSUMERS);
   const startBlock = parseStartBlock(env.QUICKNET_START_BLOCK);
   const checkpointFile = parseCheckpointFile(env.QUICKNET_CHECKPOINT_FILE);
@@ -55,26 +64,35 @@ export function parseConsumerAddresses(
   value: string | undefined,
 ): readonly Address[] {
   if (value === undefined) {
-    throw new Error('Missing required environment variable: QUICKNET_CONSUMERS.');
+    throw new RelayerConfigError(
+      'MISSING_REQUIRED_SETTING',
+      'QUICKNET_CONSUMERS'
+    );
   }
 
-  const entries = value.split(',')
+  const entries = value
+    .split(',')
     .map((entry) => entry.trim());
 
   const consumers: Address[] = [];
   const seen = new Set<Address>();
+
   for (const entry of entries) {
     if (entry.length === 0) {
-      throw new Error('QUICKNET_CONSUMERS contains an empty consumer address.');
+      throw new RelayerConfigError(
+        'EMPTY_CONSUMER',
+        'QUICKNET_CONSUMERS',
+      );
     }
 
     let address: Address;
     try {
       address = getAddress(entry);
     } catch (cause) {
-      throw new Error(
-        `Invalid Quicknet consumer address: ${entry}.`,
-        { cause }
+      throw new RelayerConfigError(
+        'INVALID_CONSUMER',
+        'QUICKNET_CONSUMERS',
+        { cause },
       );
     }
 
@@ -93,11 +111,17 @@ export function parseStartBlock(
   value: string | undefined,
 ): bigint {
   if (value === undefined) {
-    throw new Error('Missing required environment variable: QUICKNET_START_BLOCK.');
+    throw new RelayerConfigError(
+      'MISSING_REQUIRED_SETTING',
+      'QUICKNET_START_BLOCK',
+    );
   }
 
   if (!isDecimalInteger(value)) {
-    throw new Error('QUICKNET_START_BLOCK must be a non-negative decimal integer.');
+    throw new RelayerConfigError(
+      'INVALID_START_BLOCK',
+      'QUICKNET_START_BLOCK',
+    );
   }
 
   return BigInt(value);
@@ -107,11 +131,17 @@ export function parseCheckpointFile(
   value: string | undefined,
 ): string {
   if (value === undefined) {
-    throw new Error('Missing required environment variable: QUICKNET_CHECKPOINT_FILE.');
+    throw new RelayerConfigError(
+      'MISSING_REQUIRED_SETTING',
+      'QUICKNET_CHECKPOINT_FILE',
+    );
   }
 
   if (value.trim().length === 0) {
-    throw new Error('QUICKNET_CHECKPOINT_FILE must not be empty.');
+    throw new RelayerConfigError(
+      'EMPTY_CHECKPOINT_FILE',
+      'QUICKNET_CHECKPOINT_FILE',
+    );
   }
 
   return value;
@@ -125,12 +155,18 @@ export function parseMaxBlockRange(
   }
 
   if (!isDecimalInteger(value)) {
-    throw new Error('QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.');
+    throw new RelayerConfigError(
+      'INVALID_BLOCK_RANGE',
+      'QUICKNET_MAX_BLOCK_RANGE',
+    );
   }
 
   const parsed = BigInt(value);
   if (parsed === 0n) {
-    throw new Error('QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.');
+    throw new RelayerConfigError(
+      'INVALID_BLOCK_RANGE',
+      'QUICKNET_MAX_BLOCK_RANGE',
+    );
   }
 
   return parsed;
@@ -144,12 +180,18 @@ export function parsePollIntervalMs(
   }
 
   if (!isDecimalInteger(value)) {
-    throw new Error('QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.');
+    throw new RelayerConfigError(
+      'INVALID_POLL_INTERVAL',
+      'QUICKNET_POLL_INTERVAL_MS',
+    );
   }
 
   const parsed = BigInt(value);
   if (parsed === 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error('QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.');
+    throw new RelayerConfigError(
+      'INVALID_POLL_INTERVAL',
+      'QUICKNET_POLL_INTERVAL_MS',
+    );
   }
 
   return Number(parsed);
