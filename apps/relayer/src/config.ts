@@ -1,16 +1,14 @@
+import {
+  resolve,
+} from 'node:path';
+
 import process from 'node:process';
 
 import {
   defineChain,
-  isHex,
-  size,
   type Chain,
   type Hex,
 } from 'viem';
-
-import {
-  type RegistryDeployment,
-} from '@based-labs/drand-quicknet-registry';
 
 import {
   nonceManager,
@@ -20,6 +18,15 @@ import {
 import {
   robinhoodTestnet,
 } from 'viem/chains';
+
+import type {
+  RegistryDeployment,
+} from '@based-labs/drand-quicknet-registry';
+
+import {
+  RelayerConfigError,
+  type ConfigSetting,
+} from './config-errors.js';
 
 import {
   loadCustomNetworkDescriptor,
@@ -32,12 +39,24 @@ import {
 import type {
   FinalityPolicy,
 } from './finality-policy.js';
-import { resolve } from 'node:path';
 
-export const RELAYER_NETWORK_PRESETS = [
-  'robinhood-testnet',
-] as const;
-export type RelayerNetworkPreset = (typeof RELAYER_NETWORK_PRESETS)[number];
+import {
+  isFixedHex,
+} from './hex.js';
+
+import {
+  RELAYER_NETWORK_PRESETS,
+  type RelayerNetworkPreset,
+} from './network-presets.js';
+
+import {
+  UsageError,
+} from './usage-error.js';
+
+export {
+  RELAYER_NETWORK_PRESETS,
+  type RelayerNetworkPreset,
+};
 
 export type NetworkSource =
   | {
@@ -51,16 +70,15 @@ export type NetworkSource =
 
 interface NetworkPresetConfig {
   chain: Chain;
-  rpcUrlEnv: string;
+  rpcUrlEnv: ConfigSetting;
   deploymentManifestUrl: URL;
   finality: FinalityPolicy;
 }
 
-const NETWORK_RESETS: Record<RelayerNetworkPreset, NetworkPresetConfig> = {
+const NETWORK_PRESETS: Record<RelayerNetworkPreset, NetworkPresetConfig> = {
   'robinhood-testnet': {
     chain: robinhoodTestnet,
-    rpcUrlEnv:
-      'ROBINHOOD_TESTNET_RPC_URL',
+    rpcUrlEnv: 'ROBINHOOD_TESTNET_RPC_URL',
     deploymentManifestUrl:
       new URL(
         '../../../deployments/robinhood-testnet.json',
@@ -103,26 +121,39 @@ export async function loadRelayerConfig(
       'PRIVATE_KEY',
     ),
   );
+
   const network = await resolveNetworkConfig(source, env);
+  let account: RelayerConfig['account'];
+
+  try {
+    // keep existing account creation and nonce-manager options.
+    account = privateKeyToAccount(privateKey, {
+      nonceManager
+    });
+  } catch (cause) {
+    throw new RelayerConfigError(
+      'INVALID_PRIVATE_KEY',
+      'PRIVATE_KEY',
+      { cause },
+    );
+  }
 
   return {
     ...network,
-    account: privateKeyToAccount(privateKey, {
-      nonceManager
-    }),
+    account,
   };
 }
 
-export function parseRelayerNetworkPreset(value: string): RelayerNetworkPreset {
+export function parseRelayerNetworkPreset(
+  value: string
+): RelayerNetworkPreset {
   for (const network of RELAYER_NETWORK_PRESETS) {
     if (value === network) {
       return network;
     }
   }
 
-  throw new Error(
-    `Unsupported network preset: ${value}. Supported presets: ${RELAYER_NETWORK_PRESETS.join(', ')}`
-  );
+  throw new UsageError('UNSUPPORTED_NETWORK');
 }
 
 async function resolveNetworkConfig(
@@ -142,10 +173,10 @@ async function resolveNetworkPreset(
   network: RelayerNetworkPreset,
   env: Readonly<Record<string, string | undefined>>,
 ): Promise<ResolvedNetworkConfig> {
-  const preset = NETWORK_RESETS[network];
+  const preset = NETWORK_PRESETS[network];
   
   const rpcUrl = requireEnvironmentVariable(env, preset.rpcUrlEnv);
-  validateRpcUrl(rpcUrl);
+  validateRpcUrl(rpcUrl, preset.rpcUrlEnv);
 
   const deployment = await loadRegistryDeployment({
     manifestUrl: preset.deploymentManifestUrl,
@@ -168,13 +199,12 @@ async function resolveCustomNetwork(
   const descriptor = await loadCustomNetworkDescriptor(configFile);
 
   const rpcUrl = requireEnvironmentVariable(env, 'QUICKNET_RPC_URL');
-  validateRpcUrl(rpcUrl);
+  validateRpcUrl(rpcUrl, 'QUICKNET_RPC_URL');
 
-  const chain =  defineChain({
+  const chainDefinition: Chain = {
     id: descriptor.chain.id,
     name: descriptor.chain.name,
-    nativeCurrency:
-      descriptor.chain.nativeCurrency,
+    nativeCurrency: descriptor.chain.nativeCurrency,
     rpcUrls: {
       default: {
         http: [
@@ -182,12 +212,13 @@ async function resolveCustomNetwork(
         ],
       },
     },
-    ...(descriptor.chain.testnet === undefined
-    ? {}
-    : {
-        testnet: descriptor.chain.testnet,
-      }),
-  });
+  };
+
+  if (descriptor.chain.testnet !== undefined) {
+    chainDefinition.testnet = descriptor.chain.testnet;
+  }
+
+  const chain = defineChain(chainDefinition);
 
   return {
     network: descriptor.name,
@@ -211,41 +242,50 @@ export function resolveNetworkConfigPath(
   const cwd = options.cwd ?? process.cwd();
 
   const initCwd = env.INIT_CWD?.trim();
-  const baseDir = initCwd !== undefined && initCwd.length > 0
-    ? initCwd
-    : cwd;
 
-    return resolve(baseDir, value);
+  let baseDir = cwd;
+
+  if (initCwd !== undefined && initCwd.length > 0) {
+    baseDir = initCwd;
+  }
+
+  return resolve(baseDir, value);
 }
 
 function requireEnvironmentVariable(
   env: Readonly<Record<string, string | undefined>>,
-  name: string,
+  name: ConfigSetting,
 ): string {
   const value = env[name];
   if (value === undefined || value.trim().length === 0) {
-    throw new Error(`Missing required environment variable: ${name}.`);
+    throw new RelayerConfigError('MISSING_REQUIRED_SETTING', name);
   }
 
   return value.trim();
 }
 
-function validateRpcUrl(value: string): void {
+function validateRpcUrl(
+  value: string,
+  setting: ConfigSetting,
+): void {
   let url: URL;
+
   try {
     url = new URL(value);
   } catch {
-    throw new Error('Invalid RPC URL.');
+    throw new RelayerConfigError('INVALID_RPC_URL', setting);
   }
 
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error(`Unsupported RPC URL protocol: ${url.protocol}.`);
+    throw new RelayerConfigError('UNSUPPORTED_RPC_PROTOCOL', setting);
   }
 }
 
-function parsePrivateKey(value: string): Hex {
-  if (!isHex(value, {strict: true}) || size(value) !== 32) {
-    throw new Error('PRIVATE_KEY must be a 32-byte hex value.');
+function parsePrivateKey(
+  value: string,
+): Hex {
+  if (!isFixedHex(value, 32)) {
+    throw new RelayerConfigError('INVALID_PRIVATE_KEY', 'PRIVATE_KEY');
   }
 
   return value as Hex;
