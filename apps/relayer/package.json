@@ -3,9 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "relayer": "./dist/bootstrap.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node --env-file=../../.env dist/cli.js",
+    "start": "node --env-file=../../.env dist/bootstrap.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json"

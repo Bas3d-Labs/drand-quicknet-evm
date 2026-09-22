@@ -57,4 +57,4 @@ COPY --chown=node:node \
     --from=build /home/node/app/deployments \
     /home/deployments
 
-ENTRYPOINT ["node", "dist/cli.js"]
+ENTRYPOINT ["node", "dist/bootstrap.js"]
