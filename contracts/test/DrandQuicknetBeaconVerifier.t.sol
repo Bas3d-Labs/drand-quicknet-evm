@@ -37,6 +37,26 @@ contract DrandQuicknetBeaconVerifierTest is Test {
     uint256 internal constant STARVED_VERIFY_GAS = 1_000;
     uint256 internal constant REFERENCE_KAT_GAS_CEILING = 800_000;
 
+    address internal constant PAIRING_PRECOMPILE = address(0x0f);
+
+    uint128 internal constant KAT_Y_HI =
+        0x11f92e4521ef54f047b64b85fa98db2d;
+
+    uint256 internal constant KAT_Y_LO =
+        0x46f0f44add1f60b93f8a0dbddd63b34f238657c2d93aed18b90bddd60a01b6d2;
+
+    uint128 internal constant NEGATIVE_KAT_Y_HI =
+        0x0807e3a5179091aa03655c3048b2d1aa;
+
+    uint256 internal constant NEGATIVE_KAT_Y_LO =
+        0x1d86573a1665b20627a6c4e3194d42d4fb25a83bd81912e700f32229f5fdf3d9;
+
+    uint128 internal constant X4_Y_HI =
+        0x0a989badd40d6212b33cffc3f3763e9b;
+
+    uint256 internal constant X4_Y_LO =
+        0xc760f988c9926b26da9dd85e928483446346b8ed00e1de5d5ea93e354abe706c;
+
     DrandQuicknetBeaconVerifierHarness internal verifier;
 
     function setUp() public {
@@ -375,6 +395,372 @@ contract DrandQuicknetBeaconVerifierTest is Test {
             ALIAS_KAT_ROUND,
             aliasSignature
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // Witness
+    // ---------------------------------------------------------------------
+
+    function test_witness_matchesOfficialQuicknetVector()
+        public
+        view
+    {
+        (
+            bool verified,
+            bytes32 randomness
+        ) = verifier.verifyBeaconWithWitness(
+            KAT_ROUND,
+            _katSignature(),
+            KAT_Y_HI,
+            KAT_Y_LO
+        );
+
+        assertTrue(verified);
+        assertEq(randomness, KAT_RANDOMNESS);
+    }
+
+    function test_witness_roundZeroRejectsBeforePairing()
+        public
+    {
+        _expectNoPairing();
+
+        _assertWitnessRejected(
+            0,
+            _katSignature(),
+            KAT_Y_HI,
+            KAT_Y_LO
+        );
+    }
+
+    function test_witness_invalidLengthsRejectBeforePairing()
+        public
+    {
+        _expectNoPairing();
+
+        uint256[4] memory lengths = [
+            uint256(0),
+            47,
+            49,
+            96
+        ];
+
+        for (uint256 i = 0; i < lengths.length; ++i) {
+            _assertWitnessRejected(
+                KAT_ROUND,
+                _validLookingSignatureWithLength(lengths[i]),
+                KAT_Y_HI,
+                KAT_Y_LO
+            );
+        }
+    }
+
+    function test_witness_invalidFlagsRejectBeforePairing()
+        public
+    {
+        _expectNoPairing();
+
+        uint8[6] memory flags = [
+            uint8(0x00),
+            0x20,
+            0x40,
+            0x60,
+            0xc0,
+            0xe0
+        ];
+
+        for (uint256 i = 0; i < flags.length; ++i) {
+            bytes memory signature = _katSignature();
+
+            signature[0] = bytes1(
+                (uint8(signature[0]) & 0x1f) | flags[i]
+            );
+
+            _assertWitnessRejected(
+                KAT_ROUND,
+                signature,
+                KAT_Y_HI,
+                KAT_Y_LO
+            );
+        }
+    }
+
+    function test_witness_xAtOrAbovePRejectsBeforePairing()
+        public
+    {
+        _expectNoPairing();
+
+        _assertWitnessRejected(
+            KAT_ROUND,
+            _compressedPoint(P_HI, P_LO, true),
+            KAT_Y_HI,
+            KAT_Y_LO
+        );
+
+        _assertWitnessRejected(
+            KAT_ROUND,
+            _compressedPoint(P_HI, P_LO + 1, true),
+            KAT_Y_HI,
+            KAT_Y_LO
+        );
+
+        _assertWitnessRejected(
+            KAT_ROUND,
+            _compressedPoint(MAX_X_HI, type(uint256).max, true),
+            KAT_Y_HI,
+            KAT_Y_LO
+        );
+    }
+
+    function test_witness_yAtOrAbovePRejectsBeforePairing()
+        public
+    {
+        _expectNoPairing();
+
+        bytes memory signature = _katSignature();
+
+        _assertWitnessRejected(KAT_ROUND, signature, P_HI, P_LO);
+        _assertWitnessRejected(KAT_ROUND, signature, P_HI, P_LO + 1);
+        _assertWitnessRejected(KAT_ROUND, signature, P_HI + 1, 0);
+
+        _assertWitnessRejected(
+            KAT_ROUND,
+            signature,
+            type(uint128).max,
+            type(uint256).max
+        );
+    }
+
+    function test_witness_infinityRejectsBeforePairing()
+        public
+    {
+        _expectNoPairing();
+
+        _assertWitnessRejected(
+            KAT_ROUND,
+            _compressedPoint(0, 0, false),
+            0,
+            0
+        );
+
+        _assertWitnessRejected(
+            KAT_ROUND,
+            _compressedPoint(0, 0, true),
+            0,
+            0
+        );
+    }
+
+    function test_witness_signMismatchesRejectBeforePairing()
+        public
+    {
+        _expectNoPairing();
+
+        _assertWitnessRejected(
+            KAT_ROUND,
+            _katSignature(),
+            NEGATIVE_KAT_Y_HI,
+            NEGATIVE_KAT_Y_LO
+        );
+
+        bytes memory flipped = _katSignature();
+        flipped[0] = bytes1(uint8(flipped[0]) ^ 0x20);
+
+        _assertWitnessRejected(
+            KAT_ROUND,
+            flipped,
+            KAT_Y_HI,
+            KAT_Y_LO
+        );
+    }
+
+    function test_witness_wrongRoundReachesPairing()
+        public
+    {
+        bytes memory signature = _katSignature();
+
+        bytes memory input = verifier.pairingInputForWitness(
+            KAT_ROUND + 1,
+            signature,
+            KAT_Y_HI,
+            KAT_Y_LO
+        );
+
+        vm.expectCall(PAIRING_PRECOMPILE, input, uint64(1));
+
+        _assertWitnessRejected(
+            KAT_ROUND + 1,
+            signature,
+            KAT_Y_HI,
+            KAT_Y_LO
+        );
+    }
+
+    /// @dev Local execution conformance. Target-chain RPC calls and traces
+    ///      must independently repeat these cases before deployment use.
+    function test_witness_matchesRawPairingConformanceCases()
+        public
+    {
+        // Passing control under the same raw-call gas allowance.
+        _assertPairingCase(
+            _katSignature(),
+            KAT_Y_HI,
+            KAT_Y_LO,
+            true,
+            true
+        );
+
+        // Valid subgroup point, correctly encoded, wrong signature.
+        bytes memory flipped = _katSignature();
+        flipped[0] = bytes1(uint8(flipped[0]) ^ 0x20);
+
+        _assertPairingCase(
+            flipped,
+            NEGATIVE_KAT_Y_HI,
+            NEGATIVE_KAT_Y_LO,
+            true,
+            false
+        );
+
+        // Off-curve point with the original signature's sign.
+        _assertPairingCase(
+            _katSignature(),
+            KAT_Y_HI,
+            KAT_Y_LO + 1,
+            false,
+            false
+        );
+
+        // On-curve, non-subgroup: smaller root at x = 0.
+        _assertPairingCase(
+            _compressedPoint(0, 0, false),
+            0,
+            2,
+            false,
+            false
+        );
+
+        // On-curve, non-subgroup: larger root at x = 0.
+        _assertPairingCase(
+            _compressedPoint(0, 0, true),
+            P_HI,
+            P_LO - 2,
+            false,
+            false
+        );
+
+        // On-curve, non-subgroup: generic nonzero x.
+        _assertPairingCase(
+            _compressedPoint(0, 4, false),
+            X4_Y_HI,
+            X4_Y_LO,
+            false,
+            false
+        );
+    }
+
+    function test_compressed_rejectsAdditionalSubgroupVectors()
+        public
+    {
+        vm.expectCall(
+            PAIRING_PRECOMPILE,
+            bytes(""),
+            uint64(2)
+        );
+
+        _assertDecompressedAndRejected(
+            _compressedPoint(0, 0, true),
+            0,
+            P_HI,
+            P_LO - 2
+        );
+
+        _assertDecompressedAndRejected(
+            _compressedPoint(0, 4, false),
+            4,
+            X4_Y_HI,
+            X4_Y_LO
+        );
+    }
+
+    function testFuzz_witness_rejectsOtherCanonicalY(
+        uint128 rawYHi,
+        uint256 rawYLo
+    )
+        public
+        view
+    {
+        (
+            uint128 yHi,
+            uint256 yLo
+        ) = _boundedY(rawYHi, rawYLo);
+
+        vm.assume(yHi != KAT_Y_HI || yLo != KAT_Y_LO);
+
+        _assertWitnessRejected(
+            KAT_ROUND,
+            _katSignature(),
+            yHi,
+            yLo
+        );
+    }
+
+    function testFuzz_witness_smallYRejectsBeforePairing(
+        uint256 yLo
+    )
+        public
+    {
+        // Every 256-bit y is below p/2. The KAT requires S = 1.
+        _expectNoPairing();
+
+        _assertWitnessRejected(
+            KAT_ROUND,
+            _katSignature(),
+            0,
+            yLo
+        );
+    }
+
+    function test_negateY_boundariesAddBackToP()
+        public
+        view
+    {
+        _assertNegation(0, 0);
+        _assertNegation(0, 1);
+        _assertNegation(0, P_LO);
+        _assertNegation(0, P_LO + 1);
+        _assertNegation(0, type(uint256).max);
+        _assertNegation(P_HI, P_LO - 1);
+        _assertNegation(P_HI - 1, P_LO + 1);
+        _assertNegation(P_HI - 1, type(uint256).max);
+    }
+
+    function testFuzz_negateY_addsBackToP(
+        uint128 rawYHi,
+        uint256 rawYLo
+    )
+        public
+        view
+    {
+        (
+            uint128 yHi,
+            uint256 yLo
+        ) = _boundedY(rawYHi, rawYLo);
+
+        _assertNegation(yHi, yLo);
+    }
+
+    function test_witness_guardPrecedesKatSuccessBand()
+        public
+        view
+    {
+        _assertWitnessGasBoundary(true);
+    }
+
+    function test_witness_guardPrecedesInvalidCompletionBand()
+        public
+        view
+    {
+        _assertWitnessGasBoundary(false);
     }
 
     // ---------------------------------------------------------------------
@@ -899,6 +1285,16 @@ contract DrandQuicknetBeaconVerifierTest is Test {
             hex"00000000000000000000000000000000";
     }
 
+    function _expectNoPairing()
+        internal
+    {
+        vm.expectCall(
+            PAIRING_PRECOMPILE,
+            bytes(""),
+            uint64(0)
+        );
+    }
+
     function _assertRejected(
         bytes memory signature
     )
@@ -1140,5 +1536,320 @@ contract DrandQuicknetBeaconVerifierTest is Test {
         return
             !verified &&
             randomness == bytes32(0);
+    }
+    
+    function _assertWitnessRejected(
+        uint64 round,
+        bytes memory signature,
+        uint128 yHi,
+        uint256 yLo
+    )
+        internal
+        view
+    {
+        (
+            bool verified,
+            bytes32 randomness
+        ) = verifier.verifyBeaconWithWitness{
+            gas: AMPLE_VERIFY_GAS
+        }(
+            round,
+            signature,
+            yHi,
+            yLo
+        );
+
+        assertFalse(verified);
+        assertEq(randomness, bytes32(0));
+    }
+
+    function _compressedPoint(
+        uint128 xHi,
+        uint256 xLo,
+        bool largerRoot
+    )
+        internal
+        pure
+        returns (bytes memory)
+    {
+        uint128 flags = uint128(0x80) << 120;
+
+        if (largerRoot) {
+            flags |= uint128(0x20) << 120;
+        }
+
+        return abi.encodePacked(
+            bytes16(xHi | flags),
+            bytes32(xLo)
+        );
+    }
+
+    function _assertPairingCase(
+        bytes memory signature,
+        uint128 yHi,
+        uint256 yLo,
+        bool expectedCallSuccess,
+        bool expectedVerified
+    )
+        internal
+    {
+        bytes memory input = verifier.pairingInputForWitness(
+            KAT_ROUND,
+            signature,
+            yHi,
+            yLo
+        );
+
+        assertEq(input.length, 768);
+
+        // One raw call and one production call must use identical input.
+        vm.expectCall(PAIRING_PRECOMPILE, input, uint64(2));
+
+        (
+            bool callSuccess,
+            bytes memory returndata
+        ) = verifier.rawPairing(input);
+
+        assertEq(callSuccess, expectedCallSuccess);
+
+        if (callSuccess) {
+            assertEq(returndata.length, 32);
+
+            uint256 result = abi.decode(returndata, (uint256));
+
+            assertLe(result, 1);
+            assertEq(result == 1, expectedVerified);
+        }
+
+        // Failed raw calls are deliberately not decoded.
+        (
+            bool verified,
+            bytes32 randomness
+        ) = verifier.verifyBeaconWithWitness(
+            KAT_ROUND,
+            signature,
+            yHi,
+            yLo
+        );
+
+        assertEq(verified, expectedVerified);
+
+        if (expectedVerified) {
+            assertEq(randomness, KAT_RANDOMNESS);
+        } else {
+            assertEq(randomness, bytes32(0));
+        }
+    }
+
+    function _assertDecompressedAndRejected(
+        bytes memory signature,
+        uint256 expectedXLo,
+        uint128 expectedYHi,
+        uint256 expectedYLo
+    )
+        internal
+        view
+    {
+        (
+            uint128 xHi,
+            uint256 xLo,
+            uint128 yHi,
+            uint256 yLo
+        ) = verifier.decompressG1(signature);
+
+        assertEq(xHi, 0);
+        assertEq(xLo, expectedXLo);
+        assertEq(yHi, expectedYHi);
+        assertEq(yLo, expectedYLo);
+
+        _assertRejected(signature);
+    }
+
+    function _boundedY(
+        uint128 rawYHi,
+        uint256 rawYLo
+    )
+        internal
+        pure
+        returns (
+            uint128 yHi,
+            uint256 yLo
+        )
+    {
+        yHi = uint128(bound(uint256(rawYHi), 0, uint256(P_HI)));
+        yLo = rawYLo;
+
+        if (yHi == P_HI) {
+            yLo = bound(rawYLo, 0, P_LO - 1);
+        }
+    }
+
+    function _assertNegation(
+        uint128 yHi,
+        uint256 yLo
+    )
+        internal
+        view
+    {
+        (
+            uint128 oppositeYHi,
+            uint256 oppositeYLo
+        ) = verifier.negateY(yHi, yLo);
+
+        // Verify subtraction through independent addition with carry.
+        uint256 sumLo;
+
+        unchecked {
+            sumLo = yLo + oppositeYLo;
+        }
+
+        uint256 sumHi = uint256(yHi) + uint256(oppositeYHi);
+
+        if (sumLo < yLo) {
+            ++sumHi;
+        }
+
+        assertEq(sumHi, uint256(P_HI));
+        assertEq(sumLo, P_LO);
+    }
+
+    function _callWitnessWithGas(
+        uint256 gasLimit,
+        bytes memory signature,
+        uint128 yHi,
+        uint256 yLo
+    )
+        internal
+        view
+        returns (
+            bool success,
+            bytes memory returndata
+        )
+    {
+        bytes memory callData = abi.encodeCall(
+            DrandQuicknetBeaconVerifier.verifyBeaconWithWitness,
+            (KAT_ROUND, signature, yHi, yLo)
+        );
+
+        return address(verifier).staticcall{
+            gas: gasLimit
+        }(callData);
+    }
+
+    function _witnessCompletesWithGas(
+        uint256 gasLimit,
+        bytes memory signature,
+        uint128 yHi,
+        uint256 yLo,
+        bool expectedVerified
+    )
+        internal
+        view
+        returns (bool)
+    {
+        (
+            bool success,
+            bytes memory returndata
+        ) = _callWitnessWithGas(
+            gasLimit,
+            signature,
+            yHi,
+            yLo
+        );
+
+        if (!success || returndata.length != 64) {
+            return false;
+        }
+
+        (
+            bool verified,
+            bytes32 randomness
+        ) = abi.decode(returndata, (bool, bytes32));
+
+        if (verified != expectedVerified) {
+            return false;
+        }
+
+        if (verified) {
+            return randomness == KAT_RANDOMNESS;
+        }
+
+        return randomness == bytes32(0);
+    }
+
+    function _assertWitnessGasBoundary(
+        bool validCandidate
+    )
+        internal
+        view
+    {
+        bytes memory signature = _katSignature();
+        uint128 yHi = KAT_Y_HI;
+        uint256 yLo = KAT_Y_LO;
+
+        if (!validCandidate) {
+            signature = _offSubgroupPointEncoding();
+            yHi = 0;
+            yLo = 2;
+        }
+
+        uint256 low = 0;
+        uint256 high = AMPLE_VERIFY_GAS;
+
+        assertTrue(
+            _witnessCompletesWithGas(
+                high,
+                signature,
+                yHi,
+                yLo,
+                validCandidate
+            )
+        );
+
+        while (low + 1 < high) {
+            uint256 middle = low + (high - low) / 2;
+
+            if (
+                _witnessCompletesWithGas(
+                    middle,
+                    signature,
+                    yHi,
+                    yLo,
+                    validCandidate
+                )
+            ) {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+
+        (
+            bool success,
+            bytes memory returndata
+        ) = _callWitnessWithGas(
+            high - 1,
+            signature,
+            yHi,
+            yLo
+        );
+
+        assertFalse(success);
+        assertEq(returndata.length, 4);
+
+        assertEq(
+            _revertSelector(returndata),
+            DrandQuicknetBeaconVerifier.InsufficientVerifierGas.selector
+        );
+
+        assertTrue(
+            _witnessCompletesWithGas(
+                high,
+                signature,
+                yHi,
+                yLo,
+                validCandidate
+            )
+        );
     }
 }

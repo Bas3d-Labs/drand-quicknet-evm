@@ -212,6 +212,28 @@ contract DrandQuicknetBeaconVerifierKatTest is Test {
                 ),
                 "constructor randomness differs from corpus"
             );
+
+            (
+                uint128 constructorYHi,
+                uint256 constructorYLo
+            ) = verifier.selfTestWitness();
+
+            (
+                uint128 expectedYHi,
+                uint256 expectedYLo
+            ) = _corpusWitness(key);
+
+            assertEq(
+                constructorYHi,
+                expectedYHi,
+                "constructor witness high limb differs from corpus"
+            );
+
+            assertEq(
+                constructorYLo,
+                expectedYLo,
+                "constructor witness low limb differs from corpus"
+            );
         }
 
         assertEq(
@@ -219,6 +241,259 @@ contract DrandQuicknetBeaconVerifierKatTest is Test {
             1,
             "constructor round must occur exactly once in corpus"
         );
+    }
+
+    function test_kat_witnessMatchesCompressedAndPublishedAnswers()
+        public
+        view
+    {
+        uint256 count = vm.parseJsonKeys(corpus, ".positive").length;
+        assertEq(count, 12, "positive corpus must not silently shrink");
+
+        for (uint256 i = 0; i < count; ++i) {
+            string memory key = _key("positive", i);
+            uint64 round = _round(key);
+
+            bytes memory signature = vm.parseJsonBytes(
+                corpus,
+                string.concat(key, ".signature")
+            );
+
+            bytes32 expected = vm.parseJsonBytes32(
+                corpus,
+                string.concat(key, ".randomness")
+            );
+
+            (
+                uint128 yHi,
+                uint256 yLo
+            ) = _corpusWitness(key);
+
+            (
+                bool compressedVerified,
+                bytes32 compressedRandomness
+            ) = verifier.verifyBeacon(round, signature);
+
+            (
+                bool witnessVerified,
+                bytes32 witnessRandomness
+            ) = verifier.verifyBeaconWithWitness(
+                round,
+                signature,
+                yHi,
+                yLo
+            );
+
+            assertTrue(compressedVerified, key);
+            assertTrue(witnessVerified, key);
+            assertEq(compressedRandomness, expected, key);
+            assertEq(witnessRandomness, expected, key);
+            assertEq(witnessRandomness, compressedRandomness, key);
+        }
+    }
+
+    function test_kat_witnessBindsEverySignatureToAllRoundBytes()
+        public
+        view
+    {
+        uint256 count = vm.parseJsonKeys(corpus, ".positive").length;
+
+        for (uint256 i = 0; i < count; ++i) {
+            string memory key = _key("positive", i);
+            uint64 round = _round(key);
+
+            bytes memory signature = vm.parseJsonBytes(
+                corpus,
+                string.concat(key, ".signature")
+            );
+
+            (
+                uint128 yHi,
+                uint256 yLo
+            ) = _corpusWitness(key);
+
+            for (uint256 byteIndex = 0; byteIndex < 8; ++byteIndex) {
+                uint64 mask = uint64(uint256(1) << (8 * byteIndex));
+
+                _assertWitnessRejected(
+                    round ^ mask,
+                    signature,
+                    yHi,
+                    yLo,
+                    key
+                );
+            }
+        }
+    }
+
+    function test_kat_witnessSignMismatchesRejectBeforePairing()
+        public
+    {
+        vm.expectCall(address(0x0f), bytes(""), uint64(0));
+
+        uint256 count = vm.parseJsonKeys(corpus, ".positive").length;
+
+        for (uint256 i = 0; i < count; ++i) {
+            string memory key = _key("positive", i);
+            uint64 round = _round(key);
+
+            bytes memory signature = vm.parseJsonBytes(
+                corpus,
+                string.concat(key, ".signature")
+            );
+
+            (
+                uint128 yHi,
+                uint256 yLo
+            ) = _corpusWitness(key);
+
+            (
+                uint128 oppositeYHi,
+                uint256 oppositeYLo
+            ) = verifier.negateY(yHi, yLo);
+
+            // Original signature, opposite root.
+            _assertWitnessRejected(
+                round,
+                signature,
+                oppositeYHi,
+                oppositeYLo,
+                key
+            );
+
+            // Flipped signature, original root.
+            signature[0] = bytes1(uint8(signature[0]) ^ 0x20);
+
+            _assertWitnessRejected(
+                round,
+                signature,
+                yHi,
+                yLo,
+                key
+            );
+        }
+    }
+
+    function test_kat_witnessConsistentSignFlipsReachPairing()
+        public
+    {
+        uint256 count = vm.parseJsonKeys(corpus, ".positive").length;
+        assertEq(count, 12, "positive corpus must not silently shrink");
+
+        vm.expectCall(address(0x0f), bytes(""), uint64(12));
+
+        for (uint256 i = 0; i < count; ++i) {
+            string memory key = _key("positive", i);
+
+            bytes memory signature = vm.parseJsonBytes(
+                corpus,
+                string.concat(key, ".signature")
+            );
+
+            (
+                uint128 yHi,
+                uint256 yLo
+            ) = _corpusWitness(key);
+
+            (
+                uint128 oppositeYHi,
+                uint256 oppositeYLo
+            ) = verifier.negateY(yHi, yLo);
+
+            signature[0] = bytes1(uint8(signature[0]) ^ 0x20);
+
+            _assertWitnessRejected(
+                _round(key),
+                signature,
+                oppositeYHi,
+                oppositeYLo,
+                key
+            );
+        }
+    }
+
+    function test_kat_witnessRejectsFixedAdversarialVectors()
+        public
+        view
+    {
+        uint256 count = vm.parseJsonKeys(corpus, ".negative").length;
+        assertEq(count, 31, "negative corpus must not silently shrink");
+
+        for (uint256 i = 0; i < count; ++i) {
+            string memory key = _key("negative", i);
+
+            bytes memory signature = vm.parseJsonBytes(
+                corpus,
+                string.concat(key, ".signature")
+            );
+
+            bool canonical = vm.parseJsonBool(
+                corpus,
+                string.concat(key, ".canonical")
+            );
+
+            assertEq(verifier.isCanonical(signature), canonical, key);
+
+            uint128 yHi = 0;
+            uint256 yLo = 0;
+
+            if (canonical) {
+                // These negative fixtures need not encode valid points.
+                // Use the legacy decompressor to supply a candidate y.
+                // Independent coordinates are used for all positive KATs.
+                (
+                    ,
+                    ,
+                    yHi,
+                    yLo
+                ) = verifier.decompressG1(signature);
+            }
+
+            _assertWitnessRejected(
+                _round(key),
+                signature,
+                yHi,
+                yLo,
+                key
+            );
+        }
+    }
+
+    function test_kat_witnessNoncanonicalCorpusRejectsBeforePairing()
+        public
+    {
+        vm.expectCall(address(0x0f), bytes(""), uint64(0));
+
+        uint256 count = vm.parseJsonKeys(corpus, ".negative").length;
+        uint256 checked = 0;
+
+        for (uint256 i = 0; i < count; ++i) {
+            string memory key = _key("negative", i);
+
+            if (
+                vm.parseJsonBool(
+                    corpus,
+                    string.concat(key, ".canonical")
+                )
+            ) {
+                continue;
+            }
+
+            ++checked;
+
+            _assertWitnessRejected(
+                _round(key),
+                vm.parseJsonBytes(
+                    corpus,
+                    string.concat(key, ".signature")
+                ),
+                0,
+                0,
+                key
+            );
+        }
+
+        assertGt(checked, 0, "noncanonical corpus coverage missing");
     }
 
     function _key(
@@ -246,6 +521,31 @@ contract DrandQuicknetBeaconVerifierKatTest is Test {
         return uint64(round);
     }
 
+    /// @dev Reads y from the independently generated 96-byte x || y
+    ///      fixture. Does not invoke the Solidity decompressor.
+    function _corpusWitness(
+        string memory key
+    )
+        internal
+        view
+        returns (
+            uint128 yHi,
+            uint256 yLo
+        )
+    {
+        bytes memory uncompressed = vm.parseJsonBytes(
+            corpus,
+            string.concat(key, ".uncompressed")
+        );
+
+        assertEq(uncompressed.length, 96, key);
+
+        assembly {
+            yHi := shr(128, mload(add(uncompressed, 0x50)))
+            yLo := mload(add(uncompressed, 0x60))
+        }
+    }
+
     function _assertRejected(
         uint64 round,
         bytes memory signature,
@@ -258,6 +558,30 @@ contract DrandQuicknetBeaconVerifierKatTest is Test {
             bool verified,
             bytes32 randomness
         ) = verifier.verifyBeacon(round, signature);
+
+        assertFalse(verified, context);
+        assertEq(randomness, bytes32(0), context);
+    }
+
+    function _assertWitnessRejected(
+        uint64 round,
+        bytes memory signature,
+        uint128 yHi,
+        uint256 yLo,
+        string memory context
+    )
+        internal
+        view
+    {
+        (
+            bool verified,
+            bytes32 randomness
+        ) = verifier.verifyBeaconWithWitness(
+            round,
+            signature,
+            yHi,
+            yLo
+        );
 
         assertFalse(verified, context);
         assertEq(randomness, bytes32(0), context);
