@@ -6,10 +6,10 @@ import process from 'node:process';
 
 // Type queries are erased and do not evaluate application modules.
 type SummarizeError =
-  typeof import('./error-summary.js').summarizeError;
+  typeof import('./diagnostics/error-summary.js').summarizeError;
 
 type RenderDiagnostic =
-  typeof import('./diagnostics.js').renderDiagnostic;
+  typeof import('./diagnostics/diagnostics.js').renderDiagnostic;
 
 const WRITE_BUDGET_MS = 250;
 const MAX_WRITE_ATTEMPTS = 128;
@@ -162,18 +162,18 @@ process.on('unhandledRejection', (error) => {
 
 try {
   // Upgrade the fixed fallback before loading more application code.
-  const errors = await import('./error-summary.js');
+  const errors = await import('./diagnostics/error-summary.js');
   summarizeError = errors.summarizeError;
 
-  const diagnostics = await import('./diagnostics.js');
+  const diagnostics = await import('./diagnostics/diagnostics.js');
   renderDiagnostic = diagnostics.renderDiagnostic;
 
   const {
     renderCliOutput,
     renderOutputFailure,
-  } = await import('./cli-output.js');
+  } = await import('./cli/cli-output.js');
 
-  const { main } = await import('./cli.js');
+  const { main } = await import('./cli/cli.js');
 
   await main(process.argv.slice(2), (record) => {
     try {
