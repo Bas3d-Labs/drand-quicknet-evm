@@ -26,8 +26,8 @@ records your selection; it does not determine compatibility automatically.
 
 The packages are versioned independently:
 
-- A Quicknet release also schedules a patch release of the registry SDK
-  because the SDK depends on Quicknet through `workspace:*`.
+- A Quicknet release also schedules at least a patch release of the
+  registry SDK because the SDK depends on Quicknet through `workspace:*`.
 - An SDK-only release does not require a Quicknet release.
 - Private workspace packages are not versioned or tagged by Changesets.
 
@@ -36,7 +36,8 @@ version. Keep the workspace dependency declaration unchanged in source.
 
 ## Changes that do not require a release
 
-For changes that intentionally require no public package release, run:
+For changes that intentionally require no public package release, you may
+record that decision with an empty changeset:
 
 ```bash
 pnpm changeset --empty
@@ -64,3 +65,20 @@ Review the complete plan, including automatic dependency bumps.
 
 Creating a changeset or inspecting its status does not change package
 versions or publish packages.
+
+## Release workflow
+
+After changesets merge into `main`, GitHub Actions creates or updates a
+release PR containing version, changelog, and lockfile changes.
+
+New release PRs start as drafts. Updating an existing release PR does not
+return it to draft status.
+
+Maintainers review release intent and version-bump choices. CI does not
+require every package change to include a changeset.
+
+Package publishing and release tagging remain manual after the release
+PR is merged.
+
+See [the release guide](../docs/releasing.md) for review and CI approval
+instructions.
