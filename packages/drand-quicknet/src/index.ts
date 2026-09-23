@@ -23,3 +23,11 @@ export type {
   Hex,
   QuicknetBeacon,
 } from './types.js';
+
+export {
+  createSignatureWitness,
+} from './witness.js';
+
+export type {
+  SignatureWitness,
+} from './witness.js';
