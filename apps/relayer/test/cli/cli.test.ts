@@ -20,7 +20,9 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { robinhoodTestnet } from 'viem/chains';
 
 vi.mock('../../src/config/config.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/config/config.js')>();
+  const actual = await importOriginal<
+    typeof import('../../src/config/config.js')
+  >();
 
   return {
     ...actual,
@@ -49,8 +51,13 @@ import {
   parseCommandArguments,
 } from '../../src/cli/cli.js';
 
-import type { CliOutput } from '../../src/cli/cli-output.js';
-import { createRelayerClients } from '../../src/chain/clients.js';
+import type {
+  CliOutput,
+} from '../../src/cli/cli-output.js';
+
+import {
+  createRelayerClients,
+} from '../../src/chain/clients.js';
 
 import {
   loadRelayerConfig,
@@ -58,10 +65,21 @@ import {
   type RelayerConfig,
 } from '../../src/config/config.js';
 
-import { runDaemonCommand } from '../../src/cli/daemon-command.js';
-import type { DaemonStartupSummary } from '../../src/daemon/daemon-startup.js';
-import { importQuicknetRound } from '../../src/rounds/import-round.js';
-import { importQuicknetRoundWhenAvailable } from '../../src/rounds/import-round-when-available.js';
+import {
+  runDaemonCommand,
+} from '../../src/cli/daemon-command.js';
+
+import type {
+  DaemonStartupSummary,
+} from '../../src/daemon/daemon-startup.js';
+
+import {
+  importQuicknetRound,
+} from '../../src/rounds/import-round.js';
+
+import {
+  importQuicknetRoundWhenAvailable,
+} from '../../src/rounds/import-round-when-available.js';
 
 import {
   UsageError,
@@ -118,6 +136,7 @@ const WALLET_CLIENT = {} as WalletClient;
 
 const IMPORTED = {
   status: 'imported',
+  submission: 'witness',
   round: ROUND,
   randomness: RANDOMNESS,
   transactionHash: HASH,
@@ -531,8 +550,9 @@ describe('main', () => {
           result: IMPORTED,
         });
 
-        const calls = vi.mocked(importQuicknetRound).mock.calls.length
-          + vi.mocked(importQuicknetRoundWhenAvailable).mock.calls.length;
+        const calls =
+          vi.mocked(importQuicknetRound).mock.calls.length +
+          vi.mocked(importQuicknetRoundWhenAvailable).mock.calls.length;
 
         expect(calls).toBe(1);
       },
@@ -560,6 +580,7 @@ describe('main', () => {
 
     it('does not import or emit output when configuration fails', async () => {
       const failure = new Error('Configuration failed.');
+
       vi.mocked(loadRelayerConfig).mockRejectedValue(failure);
 
       const output = vi.fn();
@@ -581,6 +602,7 @@ describe('main', () => {
 
     it('propagates operation failure without emitting a result', async () => {
       const failure = new Error('Import failed.');
+
       operation().mockRejectedValue(failure);
 
       const output = vi.fn();
@@ -726,6 +748,7 @@ describe('main', () => {
       );
 
       const failure = new Error('Daemon failed.');
+
       vi.mocked(runDaemonCommand).mockRejectedValue(failure);
 
       await expect(

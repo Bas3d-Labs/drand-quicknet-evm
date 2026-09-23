@@ -8,15 +8,15 @@ reference relayer tooling, and chain-security verification tooling for making
 applications.
 
 ```text
-drand Quicknet
-      ↓
-DrandQuicknetBeaconVerifier
-      ↓
-DrandQuicknetBeaconRegistry
-      ↓
+        drand Quicknet
+              ↓
+  DrandQuicknetBeaconVerifier
+              ↓
+  DrandQuicknetBeaconRegistry
+              ↓
 DrandQuicknetRandomnessConsumer
-      ↓
-applications
+              ↓
+         applications
 ```
 
 Applications commit to an **exact future Quicknet round before that round
@@ -190,7 +190,7 @@ unique request ID for seed derivation.
 All outcome logic should depend only on the derived seed and state committed
 before the requested round became knowable. Extracting one bit, as above, gives
 an exact 50/50 choice. For non-power-of-two ranges, simple `% n` reduction has
-a small modulo bias; use rejection sampling when exact uniformity is required.
+a small modulo bias. Use rejection sampling when exact uniformity is required.
 
 If the normal relayer path has not imported the beacon, a consumer may expose a
 permissionless wrapper around `_submitQuicknetBeacon(round, signature)` for the
@@ -199,27 +199,41 @@ round-selection path.
 
 ### Run the reference relayer
 
-Using the repository's current Robinhood Testnet custom descriptor, configure:
+Create `network.json` in the repository root using the custom network
+descriptor format documented in
+[`apps/relayer/README.md`](apps/relayer/README.md#network-sources).
+
+Populate it with trusted registry and verifier deployment identity,
+chain configuration, and the intended finality policy.
+
+Configure the repository root `.env`:
 
 ```dotenv
 QUICKNET_RPC_URL=https://...
 PRIVATE_KEY=0x...
 QUICKNET_CONSUMERS=0x...
-QUICKNET_START_BLOCK=0
+QUICKNET_START_BLOCK=123456
 QUICKNET_CHECKPOINT_FILE=.state/quicknet-relayer.json
 ```
 
-Then run the demand-driven daemon:
+Set `QUICKNET_START_BLOCK` to the first block whose consumer request
+history must be reconciled.
+
+Build the TypeScript packages and start the demand-driven daemon:
 
 ```bash
+pnpm build:quicknet
+pnpm build:registry-sdk
 pnpm build:relayer
+
 pnpm --filter @based-labs/drand-quicknet-relayer start \
   daemon \
-  --network-config networks/examples/robinhood-testnet-custom.json
+  --network-config "$PWD/network.json"
 ```
 
-See [`apps/relayer/README.md`](apps/relayer/README.md) for full operator
-documentation.
+See [`apps/relayer/README.md`](apps/relayer/README.md) for deployment
+verification, signer configuration, recovery limitations, and full
+operator documentation.
 
 ## Deployments
 
@@ -272,14 +286,14 @@ The safe flow is:
 
 ```text
 consumer commits to exact round R
-              ↓
-R becomes publicly knowable
-              ↓
-any relayer submits R
-              ↓
-registry verifies and stores R
-              ↓
-consumer settles using exactly R
+             ↓
+  R becomes publicly knowable
+             ↓
+    any relayer submits R
+             ↓
+  registry verifies and stores R
+             ↓
+ consumer settles using exactly R
 ```
 
 If round `R` is temporarily unavailable, that is a **liveness problem**, not
@@ -291,23 +305,23 @@ If a relayer or drand endpoint is unavailable:
 
 ```text
 correct:
-retry exact R
-    ↓
+     retry exact R
+          ↓
 wait for another relayer
-    ↓
-recover exact R
+          ↓
+    recover exact R
 ```
 
 not:
 
 ```text
 unsafe:
-use another round
-    ↓
-use latest randomness
-    ↓
-reroll
-    ↓
+        use another round
+               ↓
+      use latest randomness
+               ↓
+             reroll
+               ↓
 choose whichever beacon is available
 ```
 
@@ -339,45 +353,63 @@ trust roles.
 
 ## Cryptographic verification
 
-`DrandQuicknetBeaconVerifier` verifies canonical drand Quicknet BLS12-381
-beacons.
+`DrandQuicknetBeaconVerifier` authenticates canonical drand Quicknet
+BLS12-381 beacons through two entry points:
 
-For a nonzero Quicknet round, it accepts only the canonical 48-byte compressed
-G1 signature published by drand. On successful verification, the returned
-randomness is:
+- `verifyBeacon(round, signature)` decompresses the signature on-chain.
+- `verifyBeaconWithWitness(round, signature, yHi, yLo)` accepts the
+  signature's y-coordinate as a witness, avoiding on-chain decompression.
+
+Both paths require the same canonical 48-byte compressed G1 signature
+and authenticate it against the supplied nonzero Quicknet round.
+
+The witness path checks canonical encoding, coordinate bounds, and sign
+consistency before invoking pairing verification. Curve and subgroup
+validity are enforced by the required pairing precompile.
+
+A witness assists verification. It does not replace on-chain
+authentication or introduce a trusted witness provider.
+
+Both paths return the same randomness on successful verification:
 
 ```text
-sha256(canonical compressed signature)
+SHA-256(canonical compressed signature bytes)
 ```
+
+The hash is over the 48 signature bytes, not their hexadecimal text.
 
 ### Deployment self-test
 
-Every verifier deployment performs a two-sided known-answer self-test through
-the complete verification path:
+Every verifier deployment exercises both compressed and witness-assisted
+verification with a known Quicknet round-1000 beacon.
 
-```text
-known valid Quicknet round-1000 vector
-              ↓
-must verify and produce the known randomness
+For each path:
 
-same vector with a deliberate sign-bit mutation
-              ↓
-must be rejected and return zero randomness
-```
+- the valid beacon must verify and return the known randomness
+- a sign-flipped signature must fail verification and return zero randomness
 
-Construction reverts with `PositiveSelfTestFailed` or `NegativeSelfTestFailed`
-if either side produces the wrong result.
+For the witness negative case, the y-coordinate is also negated so that
+it remains consistent with the flipped sign bit. This exercises rejection
+by the pairing equation rather than merely rejection of a mismatched
+witness.
 
-This means a verifier cannot deploy successfully unless the target execution
-environment demonstrates both acceptance of a known-good Quicknet beacon and
-rejection of a corrupted one through the exact deployed verification path.
+Construction reverts with `PositiveSelfTestFailed` or
+`NegativeSelfTestFailed` if an expected result is not obtained.
 
-The repository also contains an expanded deterministic offline KAT corpus:
-12 canonical Quicknet rounds with published expected randomness, 31 fixed
-negative vectors, and 108 derived wrong-round/sign rejection checks. The
-Solidity suite and an independent Noble BLS audit consume the same corpus,
-including fixed decompression coordinates for cross-implementation comparison.
-This hardening extends the existing constructor self-test and unit/fuzz tests.
+These checks provide deployment-time evidence that both paths accept
+the known valid beacon and reject the selected invalid beacon. They
+complement the broader test suite. They do not establish correctness
+for every possible input.
+
+Witness-specific tests compare both paths against published randomness
+and independently derived coordinates. They also exercise malformed
+witnesses, noncanonical encodings, sign mismatches, and wrong-round
+rejection.
+
+The repository includes a deterministic Quicknet known-answer corpus
+consumed by Solidity tests and an independent Noble BLS audit.
+Published randomness and fixed decompression coordinates support
+cross-implementation comparison.
 
 See [the KAT provenance and run instructions](scripts/quicknet-kat/README.md)
 for source records, independence boundaries, and reproduction commands.
@@ -404,6 +436,34 @@ Important properties:
 - no relayer allowlist is required
 - no "latest randomness" settlement API exists
 - consumers read by exact round
+
+### Submission methods
+
+The registry exposes:
+
+```solidity
+submitBeacon(uint64 round, bytes signature)
+
+submitBeaconWithWitness(
+    uint64 round,
+    bytes signature,
+    uint128 yHi,
+    uint256 yLo
+)
+```
+
+Both methods populate the same exact-round cache.
+
+For an unstored round, successful verification stores the randomness and
+emits `BeaconStored`. Failed verification leaves the round unstored.
+A later valid submission may still succeed.
+
+For an already-stored round, either method returns cached randomness
+without examining the signature or witness, invoking the verifier, or
+emitting another `BeaconStored` event.
+
+A successful call for a cached round therefore does not authenticate
+the supplied signature or witness.
 
 Strict reads use:
 
@@ -491,7 +551,8 @@ an application domain.
 
 Relayers are not trusted randomness providers.
 
-The registry verifies every submitted beacon on-chain.
+The registry verifies every newly stored beacon on-chain. Repeated
+submissions for an already-stored round return the cached value.
 
 ```text
 Relayer A ──┐
@@ -621,7 +682,7 @@ Tier 3
 recurring watches and alerting operational
 ```
 
-Tier 2 and Tier 3 are operational claims; they cannot be established solely by
+Tier 2 and Tier 3 are operational claims. They cannot be established solely by
 loading a profile.
 
 A committed verification report is historical evidence for a specific
@@ -751,7 +812,7 @@ deployments/
 For example:
 
 ```text
-deployments/robinhood-testnet.json
+deployments/<network>.json
 ```
 
 A deployment manifest contains durable artifact identity and provenance:
@@ -812,9 +873,9 @@ materially different consensus, timestamp, or sequencing semantics should add a
 corresponding security adapter rather than being forced into an unrelated
 model.
 
-The repository currently includes an upstream profile for
-[Robinhood Chain Testnet](docs/security/chain-profiles/robinhood-testnet.yaml).
-Read the committed profile for its authoritative current policy values.
+Committed upstream profiles are listed alongside their deployments in
+[Deployments](#deployments). Read each committed profile for its
+authoritative network assumptions and policy values.
 
 A chain definition existing in an EVM library does **not** by itself establish
 compatibility with the verifier. The target EVM must provide the BLS12-381
@@ -823,18 +884,37 @@ the target chain.
 
 ## Reference relayer
 
-The reference relayer under [`apps/relayer/`](apps/relayer/) supports exact-round
-imports, future-round waiting, demand-driven consumer discovery, endpoint
-failover, simulation before broadcast, and durable restart/replay behavior.
+The reference relayer under [`apps/relayer/`](apps/relayer/) supports
+exact-round imports, future-round waiting, demand-driven consumer
+discovery, endpoint failover, and durable request-scan checkpoints.
 
-The daemon watches `QuicknetRandomnessRequested(round)` and services only that
-exact round. Only public beacon retrieval is automatically retried; ambiguous
-transaction broadcasts are reconciled against chain state before another
-transaction is attempted.
+The daemon watches `QuicknetRandomnessRequested(round)` and services
+only that exact round.
 
-See [`apps/relayer/README.md`](apps/relayer/README.md) for commands, custom
-network descriptors, finality policy, checkpointing, logging, recovery, and
-operator monitoring.
+For an unstored round, the relayer normally generates a witness locally
+and simulates `submitBeaconWithWitness`. It simulates compressed
+`submitBeacon` once if local witness generation fails or witness
+simulation returns a matching decoded `InvalidBeacon`.
+
+Fallback preserves the original round and signature and occurs entirely
+before broadcast. Other simulation failures do not trigger fallback.
+
+After successful simulation, the relayer submits the simulated request,
+requires a successful receipt, and checks stored randomness at the
+receipt's block against the simulation result.
+
+Successful imports report the submission method and, when applicable,
+the fallback reason.
+
+An import attempt does not resubmit after an uncertain wallet response
+or receipt timeout. Durable pending-transaction reconciliation across
+attempts, daemon cycles, and restarts is not implemented by this flow.
+Operators must reconcile uncertain transactions before retrying.
+Registry idempotence does not prevent nonce conflicts or wasted gas.
+
+See [`apps/relayer/README.md`](apps/relayer/README.md) for commands,
+network configuration, fallback rules, checkpointing, logging, and
+recovery guidance.
 
 ## Repository structure
 
@@ -842,44 +922,67 @@ operator monitoring.
 drand-quicknet-evm/
 ├── contracts/                 Solidity verifier, registry, consumers, tests
 ├── packages/
-│   ├── drand-quicknet/        Quicknet schedule/fetch/signature utilities
+│   ├── drand-quicknet/        Quicknet fetch, schedule, signature, and witness utilities
 │   └── registry-sdk/          Typed registry SDK and deployment verification
 ├── apps/relayer/              Reference permissionless relayer
 ├── deployments/               Canonical deployment identity/provenance
 ├── docs/security/
 │   ├── chain-profiles/        Chain policy and security assumptions
 │   └── verification/          Historical machine-generated evidence
-├── networks/examples/         Example operator network descriptors
-└── scripts/security/          Profile and live-verification tooling
+├── scripts/
+│   ├── quicknet-kat/          Independent KAT audit tooling
+│   └── security/              Profile and live-verification tooling
+└── networks/examples/         Example operator network descriptors
 ```
 
 The public TypeScript packages are:
 
-- `@based-labs/drand-quicknet` — round/time calculations, beacon fetching,
-  endpoint failover, and 48-byte compressed-signature parsing
-- `@based-labs/drand-quicknet-registry` — registry ABI, exact-round reads,
-  submission, simulation, and trusted runtime verification
+- [`@based-labs/drand-quicknet`](packages/drand-quicknet/README.md) —
+  round/time calculations, beacon fetching with endpoint failover and
+  cancellation, compressed-signature parsing, and signature witness
+  generation.
+- [`@based-labs/drand-quicknet-registry`](packages/registry-sdk/README.md) —
+  registry ABI, exact-round reads, deployment verification, and simulation
+  and submission helpers for both compressed and witness-assisted imports.
 
-The low-level Quicknet package validates response shape; cryptographic beacon
-verification remains on-chain.
+Fetching and parsing validate response shape and signature format.
+Witness generation additionally validates canonical point encoding,
+curve membership, and subgroup membership. Neither authenticates a
+beacon against a Quicknet round or public key. That authentication
+remains on-chain.
+
+SDK submission helpers return a transaction hash and simulated randomness.
+They do not wait for receipts or implement the relayer's fallback policy.
 
 ## Testing
 
-Useful deterministic checks from the repository root include:
+Run the complete local validation pipeline from the repository root:
 
 ```bash
-pnpm security:profile
-pnpm typecheck
-pnpm test
+pnpm check
 ```
 
-The suites cover the verifier's positive/negative behavior, exact-round
-registry semantics, consumer lead and seed rules, Quicknet fetching/signature
-parsing, SDK deployment checks, relayer import/recovery behavior, chain-profile
-validation, Nitro live-check logic, and verification-report aggregation.
+This runs typechecking, contract and TypeScript tests, the independent
+Quicknet KAT audit, builds, and local security-profile validation.
 
-Live security checks are intentionally separate from deterministic repository
-tests because they require RPC access.
+The suites cover:
+
+- compressed and witness-assisted beacon verification
+- canonical encoding, malformed witnesses, and wrong-round rejection
+- exact-round registry storage and shared-cache semantics
+- consumer lead and seed-derivation rules
+- Quicknet fetching, parsing, and witness generation
+- SDK deployment checks and both submission methods
+- relayer fallback selection, confirmation, and submission reporting
+- scanning, checkpoints, and restart/replay behavior
+- chain-profile validation and security-check aggregation
+
+Live security checks and RPC-backed contract integration tests are
+separate from this pipeline.
+
+See the package READMEs and
+[Quicknet KAT documentation](scripts/quicknet-kat/README.md) for targeted
+commands.
 
 ## Production use
 

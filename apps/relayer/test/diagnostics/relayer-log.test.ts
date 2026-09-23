@@ -133,6 +133,8 @@ function assertLoggingTypes(log: RelayerLog): void {
     // @ts-expect-error Rounds must be bigint.
     round: '40',
     transactionHash: HASH,
+    submission: 'witness',
+    fallbackReason: undefined,
   });
 
   // @ts-expect-error Application-specific events are not exposed.
@@ -199,6 +201,8 @@ describe('createRelayerLog', () => {
       scanType: 'soft',
       round: 40n,
       transactionHash: HASH,
+      submission: 'witness',
+      fallbackReason: undefined,
     });
 
     log.roundAlreadyStored({
@@ -248,6 +252,7 @@ describe('createRelayerLog', () => {
         scanType: 'soft',
         round: '40',
         transactionHash: HASH,
+        submission: 'witness',
       },
       {
         level: 20,
@@ -419,6 +424,8 @@ describe('createRelayerLog', () => {
       scanType: 'soft',
       round: 40n,
       transactionHash: hash,
+      submission: 'witness',
+      fallbackReason: undefined,
     });
 
     expect(recordAt(lines)).toMatchObject({
@@ -471,6 +478,8 @@ describe('createRelayerLog', () => {
       scanType: 'soft',
       round: 40n,
       transactionHash: transactionHash as never,
+      submission: 'witness',
+      fallbackReason: undefined,
     });
 
     expect(lines).toHaveLength(0);
@@ -493,6 +502,8 @@ describe('createRelayerLog', () => {
       scanType: 'soft',
       round,
       transactionHash: HASH,
+      submission: 'witness',
+      fallbackReason: undefined,
     });
 
     expect(recordAt(lines).round).toBe(round.toString());
@@ -512,6 +523,8 @@ describe('createRelayerLog', () => {
       scanType: 'soft',
       round: round as never,
       transactionHash: HASH,
+      submission: 'witness',
+      fallbackReason: undefined,
     });
 
     expect(lines).toHaveLength(0);
@@ -986,5 +999,71 @@ describe('createRelayerLog', () => {
 
     expect(lines.join('')).not.toContain(SECRET);
     expect(writeSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'witness-rejected',
+    'witness-decode-failed',
+  ] as const)(
+    'projects completed fallback metadata without provider fields: %s',
+    (fallbackReason) => {
+      const { log, lines } = capture('info');
+
+      const context = {
+        consumer: CONSUMER,
+        scanType: 'durable',
+        round: 1000n,
+        transactionHash: HASH,
+        submission: 'compressed',
+        fallbackReason,
+        error: providerError(),
+        url: SECRET,
+      } as const;
+
+      log.roundImported(context);
+
+      expect(recordAt(lines)).toMatchObject({
+        event: 'round_imported',
+        submission: 'compressed',
+        fallbackReason,
+      });
+
+      expect(lines.join('')).not.toContain(SECRET);
+      expect(recordAt(lines)).not.toHaveProperty('err');
+      expect(recordAt(lines)).not.toHaveProperty('url');
+    },
+  );
+
+  it.each([
+    'submission',
+    'fallbackReason',
+  ] as const)(
+    'rejects unrecognized %s without emitting its value',
+    (field) => {
+      const { log, lines } = capture();
+
+      const context = {
+        consumer: CONSUMER,
+        scanType: 'durable',
+        round: 1000n,
+        transactionHash: HASH,
+        submission: 'compressed',
+        fallbackReason: 'witness-rejected',
+        [field]: SECRET,
+      };
+
+      // Deliberately bypass the type boundary to test runtime validation.
+      log.roundImported(context as never);
+
+      expect(lines).toHaveLength(0);
+
+      expect(
+        JSON.stringify(fallbackRecords()),
+      ).not.toContain(SECRET);
+
+      expect(fallbackRecords()[0]).toMatchObject({
+        code: 'LOG_RECORD_REJECTED',
+        rejected: 'round_imported',
+      });
   });
 });

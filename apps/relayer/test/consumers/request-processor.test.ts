@@ -111,6 +111,7 @@ function importedResult(
 ): ImportQuicknetRoundResult {
   return {
     status: 'imported',
+    submission: 'witness',
     round,
     randomness,
     transactionHash,

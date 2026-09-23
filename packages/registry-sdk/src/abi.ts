@@ -178,6 +178,40 @@ export const drandQuicknetBeaconRegistryAbi = [
   },
   {
     type: 'function',
+    name: 'submitBeaconWithWitness',
+    inputs: [
+      {
+        name: 'round',
+        type: 'uint64',
+        internalType: 'uint64',
+      },
+      {
+        name: 'signature',
+        type: 'bytes',
+        internalType: 'bytes',
+      },
+      {
+        name: 'yHi',
+        type: 'uint128',
+        internalType: 'uint128',
+      },
+      {
+        name: 'yLo',
+        type: 'uint256',
+        internalType: 'uint256',
+      },
+    ],
+    outputs: [
+      {
+        name: 'randomness',
+        type: 'bytes32',
+        internalType: 'bytes32',
+      },
+    ],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
     name: 'verifier',
     inputs: [],
     outputs: [

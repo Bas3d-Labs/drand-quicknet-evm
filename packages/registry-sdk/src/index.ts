@@ -12,7 +12,16 @@ export {
 
 export {
   simulateSubmitBeacon,
+  simulateSubmitBeaconWithWitness,
   submitBeacon,
+  submitBeaconWithWitness,
+} from './write.js';
+
+export type {
+  SimulateSubmitBeaconOptions,
+  SimulateSubmitBeaconWithWitnessOptions,
+  SubmitBeaconOptions,
+  SubmitBeaconWithWitnessOptions,
 } from './write.js';
 
 export {

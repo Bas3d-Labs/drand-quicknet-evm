@@ -562,6 +562,7 @@ describe('bootstrap process boundary', () => {
           round: 100n,
           result: {
             status: 'imported',
+            submission: 'witness',
             round: 100n,
             randomness: '0x' + '11'.repeat(32),
             transactionHash: '0x' + '22'.repeat(32),

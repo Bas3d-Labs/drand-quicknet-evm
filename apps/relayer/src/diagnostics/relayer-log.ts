@@ -37,6 +37,11 @@ interface Values {
   scanType: ScanType;
   error: unknown;
   consumers: readonly ConsumerHealth[];
+  submission: 'witness' | 'compressed';
+  fallbackReason:
+    | 'witness-rejected'
+    | 'witness-decode-failed'
+    | undefined;
 }
 
 type Kind = keyof Values;
@@ -83,6 +88,8 @@ const EVENTS = {
       scanType: 'scanType',
       round: 'uint',
       transactionHash: 'hash',
+      submission: 'submission',
+      fallbackReason: 'fallbackReason',
     },
   ],
   roundAlreadyStored: [
@@ -359,6 +366,24 @@ function scalar(
   if (
     kind === 'scanType' &&
     (value === 'durable' || value === 'soft')
+  ) {
+    return value;
+  }
+
+  if (
+    kind === 'submission' &&
+    (value === 'witness' || value === 'compressed')
+  ) {
+    return value;
+  }
+
+  if (
+    kind === 'fallbackReason' &&
+    (
+      value === undefined ||
+      value === 'witness-rejected' ||
+      value === 'witness-decode-failed'
+    )
   ) {
     return value;
   }
