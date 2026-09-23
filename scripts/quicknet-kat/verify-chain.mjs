@@ -10,7 +10,6 @@ function check(condition, message) {
 }
 
 const rpcUrl = process.env.QUICKNET_RPC_URL;
-const expectedChainId = process.env.QUICKNET_EXPECTED_CHAIN_ID;
 
 const p = BigInt(
   '0x1a0111ea397fe69a4b1ba7b6434bacd7' +

@@ -20,6 +20,18 @@ contract DeployRegistry is Script {
     bytes32 internal constant KAT_RANDOMNESS =
         0xfe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd;
 
+    uint128 internal constant KAT_Y_HI =
+        0x11f92e4521ef54f047b64b85fa98db2d;
+
+    uint256 internal constant KAT_Y_LO =
+        0x46f0f44add1f60b93f8a0dbddd63b34f238657c2d93aed18b90bddd60a01b6d2;
+
+    uint128 internal constant KAT_OPPOSITE_Y_HI =
+        0x0807e3a5179091aa03655c3048b2d1aa;
+
+    uint256 internal constant KAT_OPPOSITE_Y_LO =
+        0x1d86573a1665b20627a6c4e3194d42d4fb25a83bd81912e700f32229f5fdf3d9;
+
     function run()
         external
         returns (DrandQuicknetBeaconRegistry registry)
@@ -81,6 +93,23 @@ contract DeployRegistry is Script {
             "Verifier KAT failed"
         );
 
+        (
+            verified,
+            randomness
+        ) = IDrandQuicknetBeaconVerifier(
+            verifier
+        ).verifyBeaconWithWitness(
+            KAT_ROUND,
+            signature,
+            KAT_Y_HI,
+            KAT_Y_LO
+        );
+
+        require(
+            verified && randomness == KAT_RANDOMNESS,
+            "Verifier witness KAT failed"
+        );
+
         signature[0] =
             bytes1(uint8(signature[0]) ^ 0x20);
 
@@ -95,6 +124,25 @@ contract DeployRegistry is Script {
         require(
             !negativeVerified && negativeRandomness == bytes32(0),
             "Verifier negative KAT failed"
+        );
+
+        // The flipped signature and opposite root agree on encoding.
+        // Rejection must therefore go beyond the witness sign check.
+        (
+            negativeVerified,
+            negativeRandomness
+        ) = IDrandQuicknetBeaconVerifier(
+            verifier
+        ).verifyBeaconWithWitness(
+            KAT_ROUND,
+            signature,
+            KAT_OPPOSITE_Y_HI,
+            KAT_OPPOSITE_Y_LO
+        );
+
+        require(
+            !negativeVerified && negativeRandomness == bytes32(0),
+            "Verifier witness negative KAT failed"
         );
 
         vm.startBroadcast();
