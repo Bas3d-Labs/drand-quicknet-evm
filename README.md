@@ -227,8 +227,8 @@ documentation.
 
 | Network | Chain ID | Contract | Contract Address |
 | --- | --- | --- | --- |
-| Robinhood Mainnet | 4663 | Registry | [0x692100c4863adAED9f560F6Ce982cF878F083e93](https://robinhoodchain.blockscout.com/address/0x692100c4863adAED9f560F6Ce982cF878F083e93?tab=contract) |
-| Robinhood Mainnet | 4663 | Verifier | [0xB2e182C4B4fB57560A738506047a1340eC7Eb57b](https://robinhoodchain.blockscout.com/address/0xB2e182C4B4fB57560A738506047a1340eC7Eb57b?tab=contract) |
+| Robinhood Mainnet | 4663 | Registry | [0x25CA96ff9CAC264b801e5a0E06a9545360494A7E](https://robinhoodchain.blockscout.com/address/0x25CA96ff9CAC264b801e5a0E06a9545360494A7E?tab=contract) |
+| Robinhood Mainnet | 4663 | Verifier | [0xdB5156a3daC7d220bB53642434a3043abd534Acd](https://robinhoodchain.blockscout.com/address/0xdB5156a3daC7d220bB53642434a3043abd534Acd?tab=contract) |
 
 [Deployment manifest](deployments/robinhood-mainnet.json) ·
 [Security profile](docs/security/chain-profiles/robinhood-mainnet.md)
@@ -237,8 +237,8 @@ documentation.
 
 | Network | Chain ID | Contract | Contract Address |
 | --- | --- | --- | --- |
-| Robinhood Testnet | 46630 | Registry | [0x6e69C56D8D678aDeF8401adF1186c026A0915e2a](https://explorer.testnet.chain.robinhood.com/address/0x6e69C56D8D678aDeF8401adF1186c026A0915e2a?tab=contract) |
-| Robinhood Testnet | 46630 | Verifier | [0x90427e40e7D6f60425D29474a85595C4d8EE6B95](https://explorer.testnet.chain.robinhood.com/address/0x90427e40e7D6f60425D29474a85595C4d8EE6B95?tab=contract) |
+| Robinhood Testnet | 46630 | Registry | [0xF5a014eeB019D4aA2B56db9a941393e769F1D3c5](https://explorer.testnet.chain.robinhood.com/address/0xF5a014eeB019D4aA2B56db9a941393e769F1D3c5?tab=contract) |
+| Robinhood Testnet | 46630 | Verifier | [0x9358F0C39010B1E0F9cE9a0aeB708c5f18c42358](https://explorer.testnet.chain.robinhood.com/address/0x9358F0C39010B1E0F9cE9a0aeB708c5f18c42358?tab=contract) |
 
 [Deployment manifest](deployments/robinhood-testnet.json) ·
 [Security profile](docs/security/chain-profiles/robinhood-testnet.md)
