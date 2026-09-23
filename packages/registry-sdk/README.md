@@ -4,11 +4,11 @@ TypeScript SDK for interacting with the Based Labs drand Quicknet EVM beacon reg
 
 The package provides:
 
-- Registry ABI
-- Trusted registry and verifier deployment metadata
+- Registry ABI, including witness-assisted submission
+- Typed registry and verifier deployment configuration
 - Deployment verification
 - Typed registry reads
-- Beacon submission simulation and submission
+- Compressed-signature and witness-assisted submission helpers
 
 Built on [Viem](https://viem.sh/).
 
@@ -28,17 +28,28 @@ The registry is a permissionless cache of verified drand Quicknet randomness key
 round -> official drand randomness
 ```
 
-Anyone may submit a beacon. For an unstored round, the registry verifies the
-canonical 48-byte Quicknet signature through its configured on-chain verifier
-and stores the official drand randomness returned by that verifier.
+Anyone may submit a beacon through either method:
 
-For Quicknet, the stored randomness is:
+- `submitBeacon`: submits the canonical 48-byte compressed signature.
+- `submitBeaconWithWitness`: submits the same compressed signature plus
+  its y-coordinate limbs.
 
-```ts
-    sha256(canonical signature)
-```
+For an unstored round, both methods authenticate the beacon through the
+configured on-chain verifier and store the same official drand randomness.
+The witness assists verification; it does not replace signature
+authentication.
+
+For Quicknet, the stored randomness is SHA-256 of the canonical compressed
+signature bytes, not the hexadecimal text.
 
 Stored rounds are immutable and repeated submissions are idempotent.
+
+Both methods share the same cache. For an already-stored round, they
+return cached randomness without examining the signature or witness,
+and do not emit another `BeaconStored` event.
+
+A successful simulation for a stored round therefore does not validate
+the supplied signature or witness.
 
 Applications should commit to an exact future round before it becomes knowable
 and later settle using that same round. A missing round is a liveness
@@ -87,8 +98,17 @@ const deployment =
   });
 ```
 
-Deployment metadata is a trust root and should come from a trusted manifest or
-other authenticated source.
+`RegistryDeployment.create()` validates configuration field formats and
+normalizes addresses. It does not contact the chain or authenticate the
+deployment.
+
+Read and write helpers do not automatically verify deployment identity.
+Call `verifyRegistryDeployment()` or `registry.verifyDeployment()` before
+using the configured registry. Configure the wallet client for the same
+chain as the verified public client.
+
+Deployment metadata is a trust root and should come from a trusted manifest
+or other authenticated source.
 
 ## Verify a deployment
 
@@ -203,7 +223,50 @@ const round =
 
 ## Submit a beacon
 
-Fetch a beacon with `@based-labs/drand-quicknet`, then simulate or submit it:
+The following examples also use `@based-labs/drand-quicknet`:
+
+```bash
+pnpm add @based-labs/drand-quicknet
+```
+
+The examples assume `publicClient`, `walletClient`, `account`, and a
+verified `deployment` are configured for the intended chain.
+
+### Submit with a witness
+
+```ts
+import {
+  createSignatureWitness,
+  fetchBeacon,
+} from '@based-labs/drand-quicknet';
+
+import {
+  submitBeaconWithWitness,
+} from '@based-labs/drand-quicknet-registry';
+
+const beacon = await fetchBeacon(31_250_000n);
+const witness = createSignatureWitness(beacon.signature);
+
+const result = await submitBeaconWithWitness({
+  publicClient,
+  walletClient,
+  deployment,
+  account,
+  round: beacon.round,
+  signature: beacon.signature,
+  yHi: witness.yHi,
+  yLo: witness.yLo,
+});
+```
+
+`yHi` and `yLo` are `bigint` values corresponding to Solidity `uint128`
+and `uint256`. They reconstruct the signature's y-coordinate as
+`(yHi << 256n) | yLo`.
+
+Witness generation validates the encoded point locally. The on-chain
+verifier authenticates the signature against the submitted round.
+
+### Submit without a witness
 
 ```ts
 import {
@@ -211,41 +274,115 @@ import {
 } from '@based-labs/drand-quicknet';
 
 import {
-  simulateSubmitBeacon,
   submitBeacon,
 } from '@based-labs/drand-quicknet-registry';
 
-const beacon =
-  await fetchBeacon(
-    31_250_000n,
-  );
+const beacon = await fetchBeacon(31_250_000n);
 
-await simulateSubmitBeacon({
+const result = await submitBeacon({
   publicClient,
+  walletClient,
   deployment,
   account,
   round: beacon.round,
   signature: beacon.signature,
 });
-
-const result =
-  await submitBeacon({
-    publicClient,
-    walletClient,
-    deployment,
-    account,
-    round: beacon.round,
-    signature: beacon.signature,
-  });
 ```
 
-The registry SDK accepts canonical compressed Quicknet signatures.
+Both methods accept `RegistrySignature`, an alias of the branded
+`CompressedSignature` type exported by `@based-labs/drand-quicknet`.
+Obtain it through `fetchBeacon()` or `parseCompressedSignature()`.
 
-`submitBeacon()` simulates before broadcasting and returns the transaction hash
-and official drand randomness.
+The TypeScript brand does not prove that a signature authenticates a
+particular round.
 
-Multiple independent relayers may safely submit the same round. The registry
-is permissionless and idempotent.
+### Simulate without broadcasting
+
+```ts
+import {
+  createSignatureWitness,
+  fetchBeacon,
+} from '@based-labs/drand-quicknet';
+
+import {
+  simulateSubmitBeaconWithWitness,
+} from '@based-labs/drand-quicknet-registry';
+
+const beacon = await fetchBeacon(31_250_000n);
+const witness = createSignatureWitness(beacon.signature);
+
+const simulation = await simulateSubmitBeaconWithWitness({
+  publicClient,
+  deployment,
+  account,
+  round: beacon.round,
+  signature: beacon.signature,
+  yHi: witness.yHi,
+  yLo: witness.yLo,
+});
+
+console.log(simulation.result);
+```
+
+`simulateSubmitBeacon()` provides the equivalent simulation without
+witness arguments.
+
+Both simulation helpers return Viem's simulation result, including
+`request` and `result`. Neither broadcasts a transaction.
+
+### Confirm a submission
+
+Both submission helpers simulate before broadcasting and return:
+
+- `hash`: the submitted transaction hash.
+- `randomness`: the value returned by simulation.
+
+They do not wait for a receipt. Returned randomness is a simulated
+result, not confirmation that the transaction succeeded or stored a beacon.
+
+After either submission example:
+
+```ts
+const receipt = await publicClient.waitForTransactionReceipt({
+  hash: result.hash,
+});
+
+if (receipt.status !== 'success') {
+  throw new Error('Beacon submission reverted.');
+}
+
+const registry = createRegistryReader({
+  client: publicClient,
+  deployment,
+});
+
+const storedRandomness = await registry.getBeacon(
+  beacon.round,
+  receipt.blockNumber,
+);
+
+if (
+  storedRandomness.toLowerCase() !==
+  result.randomness.toLowerCase()
+) {
+  throw new Error('Stored randomness does not match simulation.');
+}
+```
+
+Import `createRegistryReader` from
+`@based-labs/drand-quicknet-registry` when using this confirmation example.
+
+### Fallback and retries
+
+The SDK does not generate witnesses automatically, select a submission
+method, fall back between methods, or retry failed submissions.
+
+Applications own fallback and transaction-reconciliation policy.
+An unsuccessful witness attempt does not permanently invalidate a round.
+
+Independent relayers may submit the same round without overwriting stored
+randomness. Duplicate transactions can still consume gas, and processes
+sharing a signer must coordinate nonces.
 
 ## Consumer safety
 
@@ -319,21 +456,18 @@ live registry is the runtime source; the security checker compares the two.
 
 The verifier Solidity implementation is not bundled into this package.
 
-## Robinhood Testnet
+## Network support
 
-Use the repository deployment manifest as the trusted deployment-identity record
-for the current Robinhood Testnet verifier and registry deployments.
+The SDK is chain-agnostic. Configure public and wallet clients for the
+target EVM chain and supply a trusted `RegistryDeployment` for that chain.
 
-Quicknet schedule:
+Using the SDK requires a compatible registry and verifier deployment.
+SDK compatibility alone does not establish that a chain supports the
+verifier's required precompiles or satisfies an application's timing and
+finality requirements.
 
-```text
-chain ID: 46630
-genesis timestamp: 1692803367
-period: 3 seconds
-```
-
-Use the corresponding chain-security profile for normative network policy and
-the deployment manifest for artifact identity.
+Network-specific deployment records, security profiles, and operational
+guidance belong in the deployment repository.
 
 ## API
 
@@ -355,12 +489,26 @@ the deployment manifest for artifact identity.
 
 - `simulateSubmitBeacon(options)`
 - `submitBeacon(options)`
+- `simulateSubmitBeaconWithWitness(options)`
+- `submitBeaconWithWitness(options)`
 
-### Exports
+### Deployment configuration
+
+- `RegistryDeployment.create(options)`
+
+### ABI
 
 - `drandQuicknetBeaconRegistryAbi`
+
+### Types
+
 - `RegistryDeployment`
+- `CreateRegistryDeploymentOptions`
 - `RegistrySignature`
+- `SimulateSubmitBeaconOptions`
+- `SubmitBeaconOptions`
+- `SimulateSubmitBeaconWithWitnessOptions`
+- `SubmitBeaconWithWitnessOptions`
 
 ## Testing
 
