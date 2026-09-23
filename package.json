@@ -29,7 +29,8 @@
     "security:profile": "tsx scripts/security/profile.ts",
     "security:check": "tsx scripts/security/check.ts",
     "changeset": "changeset",
-    "changeset:status": "changeset status"
+    "changeset:status": "changeset status",
+    "version:packages": "changeset version && pnpm install --lockfile-only --no-frozen-lockfile"
   },
   "devEngines": {
     "packageManager": {
