@@ -39,7 +39,10 @@ contract DrandQuicknetBeaconVerifierHarness is
         pure
         returns (bool)
     {
-        return _isCanonicalG1Compressed(signature);
+        (bool canonical, , , ) =
+            _decodeCanonicalG1Compressed(signature);
+
+        return canonical;
     }
 
     function decompressG1(
