@@ -26,7 +26,7 @@ import type {
 import {
   RelayerConfigError,
   type ConfigSetting,
-} from './config-errors.js';
+} from '../diagnostics/config-errors.js';
 
 import {
   loadCustomNetworkDescriptor,
@@ -38,11 +38,11 @@ import {
 
 import type {
   FinalityPolicy,
-} from './finality-policy.js';
+} from '../chain/finality-policy.js';
 
 import {
   isFixedHex,
-} from './hex.js';
+} from '../shared/hex.js';
 
 import {
   RELAYER_NETWORK_PRESETS,
@@ -51,7 +51,7 @@ import {
 
 import {
   UsageError,
-} from './usage-error.js';
+} from '../diagnostics/usage-error.js';
 
 export {
   RELAYER_NETWORK_PRESETS,
@@ -81,7 +81,7 @@ const NETWORK_PRESETS: Record<RelayerNetworkPreset, NetworkPresetConfig> = {
     rpcUrlEnv: 'ROBINHOOD_TESTNET_RPC_URL',
     deploymentManifestUrl:
       new URL(
-        '../../../deployments/robinhood-testnet.json',
+        '../../../../deployments/robinhood-testnet.json',
         import.meta.url,
       ),
     finality: {

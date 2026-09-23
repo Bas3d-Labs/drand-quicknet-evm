@@ -12,7 +12,7 @@ import { HttpRequestError } from 'viem';
 import {
   summarizeError,
   type ErrorSummary,
-} from '../src/error-summary.js';
+} from '../src/diagnostics/error-summary.js';
 
 const SECRET = 'summary-credential-canary';
 

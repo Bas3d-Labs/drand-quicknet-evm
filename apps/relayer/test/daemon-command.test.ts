@@ -1,5 +1,3 @@
-import process from 'node:process';
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Address, Hex, PublicClient, WalletClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -10,7 +8,7 @@ import {
   type RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
-import type { RelayerLog } from '../src/relayer-log.js';
+import type { RelayerLog } from '../src/diagnostics/relayer-log.js';
 
 const checkpointLockHandleMocks = vi.hoisted(() => ({
   release: vi.fn(),
@@ -43,67 +41,67 @@ vi.mock('@based-labs/drand-quicknet-registry', () => ({
   verifyRegistryDeployment: vi.fn(),
 }));
 
-vi.mock('../src/clients.js', () => ({
+vi.mock('../src/chain/clients.js', () => ({
   createRelayerClients: vi.fn(),
 }));
 
-vi.mock('../src/daemon-config.js', () => ({
+vi.mock('../src/config/daemon-config.js', () => ({
   loadDaemonConfig: vi.fn(),
 }));
 
-vi.mock('../src/daemon-logging.js', () => ({
+vi.mock('../src/daemon/daemon-logging.js', () => ({
   createDaemonLogger: vi.fn(),
 }));
 
-vi.mock('../src/daemon-startup.js', () => ({
+vi.mock('../src/daemon/daemon-startup.js', () => ({
   collectDaemonStartupSummary: vi.fn(),
 }));
 
-vi.mock('../src/daemon.js', () => ({
+vi.mock('../src/daemon/daemon.js', () => ({
   runDaemon: vi.fn(),
 }));
 
-vi.mock('../src/relayer-log.js', () => ({
+vi.mock('../src/diagnostics/relayer-log.js', () => ({
   createRelayerLog: vi.fn(),
 }));
 
-vi.mock('../src/validate-consumers.js', () => ({
+vi.mock('../src/consumers/validate-consumers.js', () => ({
   validateQuicknetConsumers: vi.fn(),
 }));
 
-vi.mock('../src/file-checkpoint-lock.js', () => ({
+vi.mock('../src/state/file-checkpoint-lock.js', () => ({
   FileCheckpointLock: vi.fn(function FileCheckpointLock() {
     return checkpointLockMocks;
   }),
 }));
 
-vi.mock('../src/file-checkpoint-store.js', () => ({
+vi.mock('../src/state/file-checkpoint-store.js', () => ({
   FileCheckpointStore: vi.fn(function FileCheckpointStore() {
     return checkpointStoreMocks;
   }),
 }));
 
-import { createRelayerClients } from '../src/clients.js';
-import type { ValidatedQuicknetConsumer } from '../src/consumer.js';
-import { runDaemonCommand } from '../src/daemon-command.js';
+import { createRelayerClients } from '../src/chain/clients.js';
+import type { ValidatedQuicknetConsumer } from '../src/consumers/consumer.js';
+import { runDaemonCommand } from '../src/cli/daemon-command.js';
 
 import {
   loadDaemonConfig,
   type DaemonConfig,
-} from '../src/daemon-config.js';
+} from '../src/config/daemon-config.js';
 
-import { createDaemonLogger } from '../src/daemon-logging.js';
+import { createDaemonLogger } from '../src/daemon/daemon-logging.js';
 
 import {
   collectDaemonStartupSummary,
   type DaemonStartupSummary,
-} from '../src/daemon-startup.js';
+} from '../src/daemon/daemon-startup.js';
 
-import { runDaemon } from '../src/daemon.js';
-import { FileCheckpointLock } from '../src/file-checkpoint-lock.js';
-import { FileCheckpointStore } from '../src/file-checkpoint-store.js';
-import { createRelayerLog } from '../src/relayer-log.js';
-import { validateQuicknetConsumers } from '../src/validate-consumers.js';
+import { runDaemon } from '../src/daemon/daemon.js';
+import { FileCheckpointLock } from '../src/state/file-checkpoint-lock.js';
+import { FileCheckpointStore } from '../src/state/file-checkpoint-store.js';
+import { createRelayerLog } from '../src/diagnostics/relayer-log.js';
+import { validateQuicknetConsumers } from '../src/consumers/validate-consumers.js';
 
 const SOURCE = {
   type: 'preset',

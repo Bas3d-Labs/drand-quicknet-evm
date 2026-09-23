@@ -16,9 +16,16 @@ import {
   writeSync,
 } from 'node:fs';
 
-import { join } from 'node:path';
+import {
+  dirname,
+  join,
+} from 'node:path';
+
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
+
+import {
+  fileURLToPath,
+} from 'node:url';
 
 import {
   afterAll,
@@ -30,13 +37,28 @@ import {
 
 import {
   renderCliOutput,
-} from '../src/cli-output.js';
+} from '../src/cli/cli-output.js';
 
-const APP = fileURLToPath(new URL('..', import.meta.url));
+const APP = fileURLToPath(
+  new URL('..', import.meta.url),
+);
 
 const EXPECTED_OUTPUT = Buffer.from(
   renderCliOutput({ type: 'help' }) + '\n',
 );
+
+const MODULE_PATHS = {
+  bootstrap: 'bootstrap.js',
+  'error-summary': 'diagnostics/error-summary.js',
+  'diagnostic-messages': 'diagnostics/diagnostic-messages.js',
+  'usage-error': 'diagnostics/usage-error.js',
+  'config-errors': 'diagnostics/config-errors.js',
+  diagnostics: 'diagnostics/diagnostics.js',
+  'cli-output': 'cli/cli-output.js',
+  cli: 'cli/cli.js',
+  hex: 'shared/hex.js',
+  'network-presets': 'config/network-presets.js',
+} as const;
 
 interface PipeResult {
   code: number | null;
@@ -78,31 +100,32 @@ describe.skipIf(process.platform !== 'linux')(
         },
       );
 
-      fixture = mkdtempSync(join(APP, '.bootstrap-pipe-'));
+      fixture = mkdtempSync(
+        join(APP, '.bootstrap-pipe-'),
+      );
 
       const dist = join(fixture, 'dist');
 
-      mkdirSync(dist);
-
       writeFileSync(
         join(fixture, 'package.json'),
-        '{"type":"module"}',
+        JSON.stringify({ type: 'module' }),
       );
 
-      for (const name of [
-        'bootstrap',
-        'error-summary',
-        'diagnostic-messages',
-        'usage-error',
-        'config-errors',
-        'diagnostics',
-        'cli-output',
-        'hex',
-        'network-presets',
-      ]) {
+      // Preserve the compiled directory structure and relative imports.
+      for (const [name, relativePath] of Object.entries(MODULE_PATHS)) {
+        if (name === 'cli') {
+          continue;
+        }
+
+        const destination = join(dist, relativePath);
+
+        mkdirSync(dirname(destination), {
+          recursive: true,
+        });
+
         copyFileSync(
-          join(APP, 'dist', name + '.js'),
-          join(dist, name + '.js'),
+          join(APP, 'dist', relativePath),
+          destination,
         );
       }
 
@@ -112,6 +135,7 @@ describe.skipIf(process.platform !== 'linux')(
         join(fixture, 'observe.cjs'),
         `
           const fs = require('node:fs');
+
           const {
             syncBuiltinESMExports,
           } = require('node:module');
@@ -134,10 +158,15 @@ describe.skipIf(process.platform !== 'linux')(
         `,
       );
 
-      // Use deterministic output without configuration or RPC.
+      const cli = join(dist, MODULE_PATHS.cli);
+
+      mkdirSync(dirname(cli), {
+        recursive: true,
+      });
+
       // Reaching the IPC message proves the output callback returned.
       writeFileSync(
-        join(dist, 'cli.js'),
+        cli,
         `
           export async function main(args, output) {
             output({ type: 'help' });
@@ -183,8 +212,7 @@ describe.skipIf(process.platform !== 'linux')(
           constants.O_WRONLY | constants.O_NONBLOCK,
         );
 
-        // Track every filler byte so the final assertion can compare
-        // the complete stream, including exact application output.
+        // Track every filler byte to compare the complete stream.
         let fillerBytes = 0;
         const filler = Buffer.alloc(4096, 'F');
         const finalByte = Buffer.from('F');
@@ -198,7 +226,7 @@ describe.skipIf(process.platform !== 'linux')(
               throw error;
             }
 
-            // A rejected large write alone need not mean zero capacity.
+            // A rejected large write need not mean zero capacity.
             try {
               fillerBytes += writeSync(writer, finalByte);
             } catch (probeError) {
@@ -226,7 +254,7 @@ describe.skipIf(process.platform !== 'linux')(
           [
             '--require',
             join(fixture, 'observe.cjs'),
-            join(fixture, 'dist', 'bootstrap.js'),
+            join(fixture, 'dist', MODULE_PATHS.bootstrap),
           ],
           {
             cwd: APP,
@@ -281,7 +309,10 @@ describe.skipIf(process.platform !== 'linux')(
         });
 
         child.on('message', (message) => {
-          if (typeof message !== 'object' || message === null) {
+          if (
+            typeof message !== 'object' ||
+            message === null
+          ) {
             return;
           }
 
@@ -323,8 +354,8 @@ describe.skipIf(process.platform !== 'linux')(
             });
           });
 
-          // For the failure case, leave the pipe full until the child
-          // exits. Inspect it afterward without enabling recovery.
+          // For the failure case, keep the pipe full until the child
+          // exits, then inspect it without enabling recovery.
           drain();
 
           if (drainFailure !== undefined) {
@@ -363,7 +394,7 @@ describe.skipIf(process.platform !== 'linux')(
     it('completes exact output after the full pipe drains', async () => {
       const result = await runWithFullPipe(true);
 
-      expect(result.eagainCount).toBeGreaterThan(0);
+      expect(result.eagainCount, result.stderr).toBeGreaterThan(0);
       expect(result.timedOut).toBe(false);
       expect(result.signal).toBeNull();
       expect(result.code, result.stderr).toBe(0);
@@ -381,7 +412,7 @@ describe.skipIf(process.platform !== 'linux')(
     it('exits with code 2 when the pipe remains full', async () => {
       const result = await runWithFullPipe(false);
 
-      expect(result.eagainCount).toBeGreaterThan(0);
+      expect(result.eagainCount, result.stderr).toBeGreaterThan(0);
       expect(result.timedOut).toBe(false);
       expect(result.signal).toBeNull();
       expect(result.code, result.stderr).toBe(2);

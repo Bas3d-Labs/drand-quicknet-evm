@@ -17,7 +17,7 @@ import type {
 } from '@based-labs/drand-quicknet-registry';
 
 vi.mock(
-  '../src/consumer.js',
+  '../src/consumers/consumer.js',
   () => ({
     validateQuicknetConsumer:
       vi.fn(),
@@ -26,10 +26,10 @@ vi.mock(
 
 import {
   validateQuicknetConsumer,
-} from '../src/consumer.js';
+} from '../src/consumers/consumer.js';
 import {
   validateQuicknetConsumers,
-} from '../src/validate-consumers.js';
+} from '../src/consumers/validate-consumers.js';
 
 const CONSUMER_A = '0x1111111111111111111111111111111111111111';
 const CONSUMER_B = '0x2222222222222222222222222222222222222222';

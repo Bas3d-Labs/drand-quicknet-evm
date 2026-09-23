@@ -12,24 +12,24 @@ import type {
 import {
   getChainHeads,
   type ChainHeads,
-} from './chain-heads.js';
+} from '../chain/chain-heads.js';
 
 import type {
   CheckpointStore,
-} from './checkpoint.js';
+} from '../state/checkpoint.js';
 
 import type {
   FinalityPolicy,
-} from './finality-policy.js';
+} from '../chain/finality-policy.js';
 
 import {
   processQuicknetRequests,
   type ProcessQuicknetRequestsResult,
-} from './request-processor.js';
+} from '../consumers/request-processor.js';
 
 import {
   scanQuicknetRequests,
-} from './request-scanner.js';
+} from '../consumers/request-scanner.js';
 
 export interface SoftScanCursor {
   nextBlock: bigint;

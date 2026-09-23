@@ -19,21 +19,21 @@ import type {
 } from '@based-labs/drand-quicknet-registry';
 
 vi.mock(
-  '../src/chain-heads.js',
+  '../src/chain/chain-heads.js',
   () => ({
     getChainHeads: vi.fn(),
   }),
 );
 
 vi.mock(
-  '../src/request-processor.js',
+  '../src/consumers/request-processor.js',
   () => ({
     processQuicknetRequests: vi.fn(),
   }),
 );
 
 vi.mock(
-  '../src/request-scanner.js',
+  '../src/consumers/request-scanner.js',
   () => ({
     scanQuicknetRequests: vi.fn(),
   }),
@@ -41,32 +41,32 @@ vi.mock(
 
 import {
   getChainHeads,
-} from '../src/chain-heads.js';
+} from '../src/chain/chain-heads.js';
 
 import type {
   CheckpointStore,
-} from '../src/checkpoint.js';
+} from '../src/state/checkpoint.js';
 
 import {
   runDaemonIteration,
-} from '../src/daemon-iteration.js';
+} from '../src/daemon/daemon-iteration.js';
 
 import type {
   FinalityPolicy,
-} from '../src/finality-policy.js';
+} from '../src/chain/finality-policy.js';
 
 import {
   processQuicknetRequests,
   type ProcessQuicknetRequestsResult,
-} from '../src/request-processor.js';
+} from '../src/consumers/request-processor.js';
 
 import type {
   QuicknetRandomnessRequest,
-} from '../src/request-events.js';
+} from '../src/consumers/request-events.js';
 
 import {
   scanQuicknetRequests,
-} from '../src/request-scanner.js';
+} from '../src/consumers/request-scanner.js';
 
 const CONSUMER: Address =
   '0x1111111111111111111111111111111111111111';

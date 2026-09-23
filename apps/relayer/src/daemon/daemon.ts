@@ -11,11 +11,11 @@ import type {
 
 import type {
   CheckpointStore,
-} from './checkpoint.js';
+} from '../state/checkpoint.js';
 
 import type {
   ValidatedQuicknetConsumer,
-} from './consumer.js';
+} from '../consumers/consumer.js';
 
 import {
   runDaemonCycle,
@@ -28,7 +28,7 @@ import type {
 
 import type {
   FinalityPolicy,
-} from './finality-policy.js';
+} from '../chain/finality-policy.js';
 
 export interface RunDaemonOptions {
   publicClient: PublicClient;

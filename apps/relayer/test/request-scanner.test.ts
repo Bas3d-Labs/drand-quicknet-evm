@@ -11,7 +11,7 @@ import type {
 } from 'viem';
 
 vi.mock(
-  '../src/request-events.js',
+  '../src/consumers/request-events.js',
   () => ({
     getQuicknetRandomnessRequests: vi.fn(),
   }),
@@ -20,10 +20,10 @@ vi.mock(
 import {
   getQuicknetRandomnessRequests,
   type QuicknetRandomnessRequest,
-} from '../src/request-events.js';
+} from '../src/consumers/request-events.js';
 import {
   scanQuicknetRequests,
-} from '../src/request-scanner.js';
+} from '../src/consumers/request-scanner.js';
 
 const CONSUMER_A: Address = '0x1111111111111111111111111111111111111111';
 const CONSUMER_B: Address = '0x2222222222222222222222222222222222222222';

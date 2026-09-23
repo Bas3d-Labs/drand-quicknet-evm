@@ -12,7 +12,7 @@ import type {
 import {
   FinalityPolicy,
   getDurableBlockNumber,
-} from '../src/finality-policy.js';
+} from '../src/chain/finality-policy.js';
 
 const SAFE_BLOCK_NUMBER = 123_456n;
 const FINALIZED_BLOCK_NUMBER = 123_400n;

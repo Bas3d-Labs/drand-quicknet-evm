@@ -46,23 +46,23 @@ vi.mock(
 );
 
 vi.mock(
-  '../src/wait-for-round.js',
+  '../src/rounds/wait-for-round.js',
   () => waitMocks,
 );
 
 vi.mock(
-  '../src/fetch-beacon-with-retry.js',
+  '../src/rounds/fetch-beacon-with-retry.js',
   () => fetchMocks,
 );
 
 vi.mock(
-  '../src/import-round.js',
+  '../src/rounds/import-round.js',
   () => importMocks,
 );
 
 import {
   importQuicknetRoundWhenAvailable,
-} from '../src/import-round-when-available.js';
+} from '../src/rounds/import-round-when-available.js';
 
 const CHAIN_ID = 12345;
 

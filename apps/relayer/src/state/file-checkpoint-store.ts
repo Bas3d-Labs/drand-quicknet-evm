@@ -23,7 +23,7 @@ import type {
 import type {
   CheckpointStore,
 } from './checkpoint.js';
-import { isDecimalInteger } from './decimal.js';
+import { isDecimalInteger } from '../shared/decimal.js';
 
 const CHECKPOINT_FILE_VERSION = 1;
 

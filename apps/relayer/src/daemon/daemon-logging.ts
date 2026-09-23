@@ -13,7 +13,7 @@ import type {
 import type {
   ConsumerHealth,
   RelayerLog,
-} from './relayer-log.js';
+} from '../diagnostics/relayer-log.js';
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
 

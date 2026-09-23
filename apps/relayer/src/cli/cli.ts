@@ -3,7 +3,7 @@ import process from 'node:process';
 
 import {
   createRelayerClients,
-} from './clients.js';
+} from '../chain/clients.js';
 
 import {
   type CliOutput,
@@ -13,7 +13,7 @@ import {
   loadRelayerConfig,
   parseRelayerNetworkPreset,
   type NetworkSource,
-} from './config.js';
+} from '../config/config.js';
 
 import {
   runDaemonCommand,
@@ -21,19 +21,19 @@ import {
 
 import {
   isDecimalInteger,
-} from './decimal.js';
+} from '../shared/decimal.js';
 
 import {
   importQuicknetRound,
-} from './import-round.js';
+} from '../rounds/import-round.js';
 
 import {
   importQuicknetRoundWhenAvailable,
-} from './import-round-when-available.js';
+} from '../rounds/import-round-when-available.js';
 
 import {
   UsageError,
-} from './usage-error.js';
+} from '../diagnostics/usage-error.js';
 
 const MAX_UINT64 = (1n << 64n) - 1n;
 

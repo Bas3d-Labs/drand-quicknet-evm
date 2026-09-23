@@ -8,21 +8,21 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
-vi.mock('../src/config.js', () => ({
+vi.mock('../src/config/config.js', () => ({
   loadRelayerConfig: vi.fn(),
 }));
 
 import {
   loadRelayerConfig,
   type RelayerConfig,
-} from '../src/config.js';
+} from '../src/config/config.js';
 
 import {
   configDiagnostic,
   RelayerConfigError,
   type ConfigCode,
   type ConfigSetting,
-} from '../src/config-errors.js';
+} from '../src/diagnostics/config-errors.js';
 
 import {
   DEFAULT_MAX_BLOCK_RANGE,
@@ -33,7 +33,7 @@ import {
   parseMaxBlockRange,
   parsePollIntervalMs,
   parseStartBlock,
-} from '../src/daemon-config.js';
+} from '../src/config/daemon-config.js';
 
 const SOURCE = {
   type: 'preset',

@@ -19,7 +19,7 @@ import type {
 } from '@based-labs/drand-quicknet-registry';
 
 vi.mock(
-  '../src/daemon-iteration.js',
+  '../src/daemon/daemon-iteration.js',
   () => ({
     runDaemonIteration: vi.fn(),
   }),
@@ -27,25 +27,25 @@ vi.mock(
 
 import type {
   CheckpointStore,
-} from '../src/checkpoint.js';
+} from '../src/state/checkpoint.js';
 
 import type {
   ValidatedQuicknetConsumer,
-} from '../src/consumer.js';
+} from '../src/consumers/consumer.js';
 
 import {
   runDaemonCycle,
-} from '../src/daemon-cycle.js';
+} from '../src/daemon/daemon-cycle.js';
 
 import {
   runDaemonIteration,
   type RunDaemonIterationResult,
   type SoftScanCursor,
-} from '../src/daemon-iteration.js';
+} from '../src/daemon/daemon-iteration.js';
 
 import type {
   FinalityPolicy,
-} from '../src/finality-policy.js';
+} from '../src/chain/finality-policy.js';
 
 const CONSUMER_A: Address = '0x1111111111111111111111111111111111111111';
 const CONSUMER_B: Address = '0x2222222222222222222222222222222222222222';

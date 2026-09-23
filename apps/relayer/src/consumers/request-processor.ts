@@ -10,11 +10,11 @@ import type {
 
 import type {
   ImportQuicknetRoundResult,
-} from './import-round.js';
+} from '../rounds/import-round.js';
 
 import {
   importQuicknetRoundWhenAvailable,
-} from './import-round-when-available.js';
+} from '../rounds/import-round-when-available.js';
 
 import type {
   QuicknetRandomnessRequest,

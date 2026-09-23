@@ -16,24 +16,24 @@ import {
 
 import {
   renderDiagnostic
-} from '../src/diagnostics.js';
+} from '../src/diagnostics/diagnostics.js';
 
 import type {
   RunDaemonCycleResult,
-} from '../src/daemon-cycle.js';
+} from '../src/daemon/daemon-cycle.js';
 
 import {
   createDaemonLogger,
-} from '../src/daemon-logging.js';
+} from '../src/daemon/daemon-logging.js';
 
 import type {
   ErrorSummary,
-} from '../src/error-summary.js';
+} from '../src/diagnostics/error-summary.js';
 
 import {
   createRelayerLog,
   type RelayerLog,
-} from '../src/relayer-log.js';
+} from '../src/diagnostics/relayer-log.js';
 
 const CHAIN_ID = 4663;
 const SECRET = 'credential-canary-DO-NOT-LOG';

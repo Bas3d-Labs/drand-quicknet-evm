@@ -22,7 +22,7 @@ import {
 import {
   CustomNetworkDescriptor,
   loadCustomNetworkDescriptor,
-} from '../src/custom-network-config.js';
+} from '../src/config/custom-network-config.js';
 
 const REGISTRY_ADDRESS =
   '0x1111111111111111111111111111111111111111';

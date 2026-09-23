@@ -17,10 +17,10 @@ import type {
 
 import {
   QUICKNET_RANDOMNESS_CONSUMER_ABI,
-} from '../src/consumer-abi.js';
+} from '../src/consumers/consumer-abi.js';
 import {
   validateQuicknetConsumer,
-} from '../src/consumer.js';
+} from '../src/consumers/consumer.js';
 
 const CONSUMER_ADDRESS: Address =
   '0x1111111111111111111111111111111111111111';

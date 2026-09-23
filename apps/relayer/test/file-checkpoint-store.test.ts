@@ -34,7 +34,7 @@ import type {
 
 import {
   FileCheckpointStore,
-} from '../src/file-checkpoint-store.js';
+} from '../src/state/file-checkpoint-store.js';
 
 const CONSUMER_A: Address = '0x1111111111111111111111111111111111111111';
 const CONSUMER_B: Address = '0x2222222222222222222222222222222222222222';

@@ -18,11 +18,11 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
-vi.mock('../src/deployment.js', () => ({
+vi.mock('../src/config/deployment.js', () => ({
   loadRegistryDeployment: vi.fn(),
 }));
 
-vi.mock('../src/custom-network-config.js', () => ({
+vi.mock('../src/config/custom-network-config.js', () => ({
   loadCustomNetworkDescriptor: vi.fn(),
 }));
 
@@ -31,22 +31,22 @@ import {
   parseRelayerNetworkPreset,
   RELAYER_NETWORK_PRESETS,
   resolveNetworkConfigPath,
-} from '../src/config.js';
+} from '../src/config/config.js';
 
 import {
   configDiagnostic,
   RelayerConfigError,
   type ConfigCode,
   type ConfigSetting,
-} from '../src/config-errors.js';
+} from '../src/diagnostics/config-errors.js';
 
 import {
   loadCustomNetworkDescriptor,
   type CustomNetworkDescriptor,
-} from '../src/custom-network-config.js';
+} from '../src/config/custom-network-config.js';
 
-import { loadRegistryDeployment } from '../src/deployment.js';
-import { UsageError, usageCode } from '../src/usage-error.js';
+import { loadRegistryDeployment } from '../src/config/deployment.js';
+import { UsageError, usageCode } from '../src/diagnostics/usage-error.js';
 
 const PRESET_SOURCE = {
   type: 'preset',

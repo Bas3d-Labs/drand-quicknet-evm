@@ -13,10 +13,10 @@ import {
 
 import {
   QUICKNET_RANDOMNESS_REQUESTED_EVENT,
-} from '../src/consumer-abi.js';
+} from '../src/consumers/consumer-abi.js';
 import {
   getQuicknetRandomnessRequests,
-} from '../src/request-events.js';
+} from '../src/consumers/request-events.js';
 
 const CONSUMER_A: Address = '0x1111111111111111111111111111111111111111';
 const CONSUMER_B: Address = '0x2222222222222222222222222222222222222222';

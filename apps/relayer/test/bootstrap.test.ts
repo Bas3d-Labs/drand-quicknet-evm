@@ -1,4 +1,7 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  execFileSync,
+  spawnSync,
+} from 'node:child_process';
 
 import {
   copyFileSync,
@@ -9,9 +12,16 @@ import {
   writeFileSync,
 } from 'node:fs';
 
-import { join } from 'node:path';
+import {
+  dirname,
+  join,
+} from 'node:path';
+
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
+
+import {
+  fileURLToPath,
+} from 'node:url';
 
 import {
   afterAll,
@@ -22,29 +32,55 @@ import {
   it,
 } from 'vitest';
 
-import { renderCliOutput } from '../src/cli-output.js';
+import {
+  renderCliOutput,
+} from '../src/cli/cli-output.js';
 
-const APP = fileURLToPath(new URL('..', import.meta.url));
+const APP = fileURLToPath(
+  new URL('..', import.meta.url),
+);
 
 const SECRET = 'bootstrap-credential-canary';
+
 const RPC_URL =
   `https://user:${SECRET}@rpc.example/${SECRET}?key=${SECRET}`;
 
-const MODULES = [
-  'bootstrap',
-  'error-summary',
-  'diagnostic-messages',
-  'usage-error',
-  'config-errors',
-  'diagnostics',
-  'cli-output',
-  'hex',
-  'network-presets',
-];
+// Paths relative to the application's compiled dist directory.
+// Keep the fixture layout identical to the production layout.
+const MODULE_PATHS = {
+  bootstrap: 'bootstrap.js',
+  'error-summary': 'diagnostics/error-summary.js',
+  'diagnostic-messages': 'diagnostics/diagnostic-messages.js',
+  'usage-error': 'diagnostics/usage-error.js',
+  'config-errors': 'diagnostics/config-errors.js',
+  diagnostics: 'diagnostics/diagnostics.js',
+  'cli-output': 'cli/cli-output.js',
+  cli: 'cli/cli.js',
+  hex: 'shared/hex.js',
+  'network-presets': 'config/network-presets.js',
+} as const;
+
+type ModuleName = keyof typeof MODULE_PATHS;
+
+interface LaunchOptions {
+  args?: string[];
+  env?: NodeJS.ProcessEnv;
+  realCli?: boolean;
+  preload?: string;
+}
+
+interface WriteStats {
+  calls: number;
+  waits: number;
+  clock: number;
+  getters: number;
+}
 
 let fixture: string | undefined;
 
-function fixturePath(...parts: string[]): string {
+function fixturePath(
+  ...parts: string[]
+): string {
   if (fixture === undefined) {
     throw new Error('Bootstrap fixture is unavailable.');
   }
@@ -52,18 +88,27 @@ function fixturePath(...parts: string[]): string {
   return join(fixture, ...parts);
 }
 
+function modulePath(
+  name: ModuleName,
+): string {
+  return fixturePath('dist', MODULE_PATHS[name]);
+}
+
 function setModule(
-  name: string,
+  name: ModuleName,
   source: string,
 ): void {
-  writeFileSync(
-    fixturePath('dist', name + '.js'),
-    source,
-  );
+  const destination = modulePath(name);
+
+  mkdirSync(dirname(destination), {
+    recursive: true,
+  });
+
+  writeFileSync(destination, source);
 }
 
 beforeAll(() => {
-  // Compile current sources: never test a stale dist/bootstrap.js.
+  // Compile current sources before exercising the process boundary.
   execFileSync(
     'pnpm',
     ['exec', 'tsc', '-p', 'tsconfig.json'],
@@ -74,22 +119,35 @@ beforeAll(() => {
     },
   );
 
-  fixture = mkdtempSync(join(APP, '.bootstrap-test-'));
-
-  mkdirSync(fixturePath('dist'));
+  // Keeping fixtures under APP preserves dependency resolution.
+  fixture = mkdtempSync(
+    join(APP, '.bootstrap-test-'),
+  );
 
   writeFileSync(
     fixturePath('package.json'),
-    JSON.stringify({ type: 'module' }),
+    JSON.stringify({
+      type: 'module',
+    }),
   );
 }, 35_000);
 
 beforeEach(() => {
-  // Restore modules so failure injection cannot affect later tests.
-  for (const name of MODULES) {
+  // Restore all supporting modules before each failure injection.
+  for (const [name, relativePath] of Object.entries(MODULE_PATHS)) {
+    if (name === 'cli') {
+      continue;
+    }
+
+    const destination = fixturePath('dist', relativePath);
+
+    mkdirSync(dirname(destination), {
+      recursive: true,
+    });
+
     copyFileSync(
-      join(APP, 'dist', name + '.js'),
-      fixturePath('dist', name + '.js'),
+      join(APP, 'dist', relativePath),
+      destination,
     );
   }
 
@@ -98,6 +156,10 @@ beforeEach(() => {
       output({ type: 'help' });
     }
   `);
+
+  rmSync(fixturePath('write-stats.json'), {
+    force: true,
+  });
 });
 
 afterAll(() => {
@@ -109,18 +171,13 @@ afterAll(() => {
   }
 });
 
-interface LaunchOptions {
-  args?: string[];
-  env?: NodeJS.ProcessEnv;
-  realCli?: boolean;
-  preload?: string;
-}
-
-function launch(options: LaunchOptions = {}) {
-  let entry = fixturePath('dist', 'bootstrap.js');
+function launch(
+  options: LaunchOptions = {},
+) {
+  let entry = modulePath('bootstrap');
 
   if (options.realCli === true) {
-    entry = join(APP, 'dist', 'bootstrap.js');
+    entry = join(APP, 'dist', MODULE_PATHS.bootstrap);
   }
 
   const args: string[] = [];
@@ -141,16 +198,20 @@ function launch(options: LaunchOptions = {}) {
     ...options.env,
   };
 
-  // Keep inherited Node flags from changing the child's failure policy.
+  // Inherited Node flags must not change the child's failure policy.
   delete env.NODE_OPTIONS;
 
-  const result = spawnSync(process.execPath, args, {
-    cwd: APP,
-    env,
-    encoding: 'utf8',
-    timeout: 5_000,
-    maxBuffer: 1_048_576,
-  });
+  const result = spawnSync(
+    process.execPath,
+    args,
+    {
+      cwd: APP,
+      env,
+      encoding: 'utf8',
+      timeout: 5_000,
+      maxBuffer: 1_048_576,
+    },
+  );
 
   expect(result.error).toBeUndefined();
   expect(result.signal).toBeNull();
@@ -184,10 +245,15 @@ function diagnostic(
   return value as Record<string, unknown>;
 }
 
-// Intercept writes in a child process without exporting bootstrap internals.
-// The controlled clock makes retry-budget assertions deterministic.
-function installWriteHook(body: string): string {
+// Intercept writes in the child without exporting bootstrap internals.
+// A fake monotonic clock makes retry-budget assertions deterministic.
+function installWriteHook(
+  body: string,
+): string {
   const preload = fixturePath('write-hook.cjs');
+  const statsPath = JSON.stringify(
+    fixturePath('write-stats.json'),
+  );
 
   writeFileSync(preload, `
     const fs = require('node:fs');
@@ -195,6 +261,7 @@ function installWriteHook(body: string): string {
     const { syncBuiltinESMExports } = require('node:module');
 
     const original = fs.writeSync;
+
     const stats = {
       calls: 0,
       waits: 0,
@@ -209,6 +276,7 @@ function installWriteHook(body: string): string {
     Atomics.wait = function(_array, _index, _value, timeout) {
       stats.waits += 1;
       stats.clock += timeout;
+
       return 'timed-out';
     };
 
@@ -218,6 +286,7 @@ function installWriteHook(body: string): string {
       }
 
       stats.calls += 1;
+
       ${body}
     };
 
@@ -225,7 +294,7 @@ function installWriteHook(body: string): string {
 
     process.on('exit', () => {
       fs.writeFileSync(
-        ${JSON.stringify(fixturePath('write-stats.json'))},
+        ${statsPath},
         JSON.stringify(stats),
       );
     });
@@ -234,25 +303,25 @@ function installWriteHook(body: string): string {
   return preload;
 }
 
-function writeStats(): {
-  calls: number;
-  waits: number;
-  clock: number;
-  getters: number;
-} {
+function writeStats(): WriteStats {
   return JSON.parse(
-    readFileSync(fixturePath('write-stats.json'), 'utf8'),
+    readFileSync(
+      fixturePath('write-stats.json'),
+      'utf8',
+    ),
   );
 }
 
 describe('bootstrap process boundary', () => {
   it('preserves the executable shebang in the compiled file', () => {
     const firstLine = readFileSync(
-      join(APP, 'dist/bootstrap.js'),
+      join(APP, 'dist', MODULE_PATHS.bootstrap),
       'utf8',
     ).split('\n', 1)[0];
 
-    expect(firstLine?.trimEnd()).toBe('#!/usr/bin/env node');
+    expect(firstLine?.trimEnd()).toBe(
+      '#!/usr/bin/env node',
+    );
   });
 
   it('runs real CLI help without required configuration', () => {
@@ -261,10 +330,12 @@ describe('bootstrap process boundary', () => {
       args: ['--help'],
     });
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
+
     expect(result.stdout).toBe(
       renderCliOutput({ type: 'help' }) + '\n',
     );
+
     expect(result.stderr).toBe('');
   });
 
@@ -332,10 +403,9 @@ describe('bootstrap process boundary', () => {
   });
 
   it('uses the fixed fallback if the summarizer import fails', () => {
-    setModule(
-      'error-summary',
-      `throw new Error(${JSON.stringify(RPC_URL)});`,
-    );
+    setModule('error-summary', `
+      throw new Error(${JSON.stringify(RPC_URL)});
+    `);
 
     const result = launch();
 
@@ -352,10 +422,9 @@ describe('bootstrap process boundary', () => {
   });
 
   it('uses the loaded summarizer if the diagnostics import fails', () => {
-    setModule(
-      'diagnostics',
-      `throw new TypeError(${JSON.stringify(RPC_URL)});`,
-    );
+    setModule('diagnostics', `
+      throw new TypeError(${JSON.stringify(RPC_URL)});
+    `);
 
     const result = launch();
 
@@ -364,18 +433,19 @@ describe('bootstrap process boundary', () => {
     expect(diagnostic(result.stderr)).toMatchObject({
       event: 'cli_failed',
       kind: 'bootstrap',
-      err: { name: 'TypeError' },
+      err: {
+        name: 'TypeError',
+      },
     });
   });
 
   it.each([
     'cli-output',
     'cli',
-  ])('contains an import failure in %s', (name) => {
-    setModule(
-      name,
-      `throw new Error(${JSON.stringify(RPC_URL)});`,
-    );
+  ] as const)('contains an import failure in %s', (name) => {
+    setModule(name, `
+      throw new Error(${JSON.stringify(RPC_URL)});
+    `);
 
     const result = launch();
 
@@ -384,12 +454,14 @@ describe('bootstrap process boundary', () => {
     expect(diagnostic(result.stderr)).toMatchObject({
       event: 'cli_failed',
       kind: 'operation',
-      err: { name: 'Error' },
+      err: {
+        name: 'Error',
+      },
     });
   });
 
   it('contains a missing application module', () => {
-    rmSync(fixturePath('dist/cli.js'));
+    rmSync(modulePath('cli'));
 
     const result = launch();
 
@@ -443,7 +515,9 @@ describe('bootstrap process boundary', () => {
   it.each([
     {
       event: 'uncaught_exception',
-      action: `throw new Error(${JSON.stringify(RPC_URL)});`,
+      action: `
+        throw new Error(${JSON.stringify(RPC_URL)});
+      `,
     },
     {
       event: 'unhandled_rejection',
@@ -470,7 +544,9 @@ describe('bootstrap process boundary', () => {
 
     expect(diagnostic(result.stderr)).toMatchObject({
       event,
-      err: { name: 'Error' },
+      err: {
+        name: 'Error',
+      },
     });
   });
 
@@ -496,7 +572,7 @@ describe('bootstrap process boundary', () => {
 
     const result = launch();
 
-    expect(result.status).toBe(2);
+    expect(result.status, result.stderr).toBe(2);
     expect(result.stdout).toBe('');
 
     expect(diagnostic(result.stderr)).toMatchObject({
@@ -521,7 +597,7 @@ describe('bootstrap process boundary', () => {
 
     const result = launch();
 
-    expect(result.status).toBe(2);
+    expect(result.status, result.stderr).toBe(2);
     expect(result.stdout).toBe('');
 
     expect(diagnostic(result.stderr)).toMatchObject({
@@ -537,6 +613,7 @@ describe('bootstrap process boundary', () => {
 
       export async function main() {
         closeSync(2);
+
         throw new Error(${JSON.stringify(RPC_URL)});
       }
     `);
@@ -554,13 +631,14 @@ describe('bootstrap process boundary', () => {
       export async function main(args, output) {
         closeSync(1);
         closeSync(2);
+
         output({ type: 'help' });
       }
     `);
 
     const result = launch();
 
-    expect(result.status).toBe(2);
+    expect(result.status, result.stderr).toBe(2);
     expect(result.stdout).toBe('');
     expect(result.stderr).toBe('');
   });
@@ -575,7 +653,7 @@ describe('bootstrap write policy', () => {
       if (stats.calls === 1) {
         throw Object.assign(
           new Error('transient'),
-          { code: '${code}' },
+          { code: ${JSON.stringify(code)} },
         );
       }
 
@@ -584,10 +662,12 @@ describe('bootstrap write policy', () => {
 
     const result = launch({ preload });
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
+
     expect(result.stdout).toBe(
       renderCliOutput({ type: 'help' }) + '\n',
     );
+
     expect(result.stderr).toBe('');
 
     expect(writeStats()).toMatchObject({
@@ -608,10 +688,12 @@ describe('bootstrap write policy', () => {
 
     const result = launch({ preload });
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
+
     expect(result.stdout).toBe(
       renderCliOutput({ type: 'help' }) + '\n',
     );
+
     expect(result.stderr).toBe('');
     expect(writeStats().calls).toBeGreaterThan(1);
   });
@@ -626,12 +708,14 @@ describe('bootstrap write policy', () => {
 
     const result = launch({ preload });
 
-    expect(result.status).toBe(2);
+    expect(result.status, result.stderr).toBe(2);
     expect(result.stdout).toBe('');
 
     expect(diagnostic(result.stderr)).toMatchObject({
       event: 'output_failed',
-      err: { code: 'EAGAIN' },
+      err: {
+        code: 'EAGAIN',
+      },
     });
 
     const stats = writeStats();
@@ -655,7 +739,7 @@ describe('bootstrap write policy', () => {
 
       const written = original(fd, bytes, offset, 1);
 
-      if ('${mode}' === 'deadline') {
+      if (${JSON.stringify(mode)} === 'deadline') {
         stats.clock = 251;
       }
 
@@ -664,7 +748,7 @@ describe('bootstrap write policy', () => {
 
     const result = launch({ preload });
 
-    expect(result.status).toBe(2);
+    expect(result.status, result.stderr).toBe(2);
 
     const stats = writeStats();
 
@@ -682,7 +766,9 @@ describe('bootstrap write policy', () => {
       event: 'output_failed',
       err: {
         name: 'Error',
-        cause: { code: 'EAGAIN' },
+        cause: {
+          code: 'EAGAIN',
+        },
       },
     });
 
@@ -699,11 +785,13 @@ describe('bootstrap write policy', () => {
 
     const result = launch({ preload });
 
-    expect(result.status).toBe(2);
+    expect(result.status, result.stderr).toBe(2);
 
     expect(diagnostic(result.stderr)).toMatchObject({
       event: 'output_failed',
-      err: { code: 'EPIPE' },
+      err: {
+        code: 'EPIPE',
+      },
     });
 
     expect(writeStats()).toMatchObject({
@@ -713,11 +801,11 @@ describe('bootstrap write policy', () => {
   });
 
   it('rejects a write that makes no progress', () => {
-    const result = launch({
-      preload: installWriteHook('return 0;'),
-    });
+    const preload = installWriteHook('return 0;');
 
-    expect(result.status).toBe(2);
+    const result = launch({ preload });
+
+    expect(result.status, result.stderr).toBe(2);
 
     expect(diagnostic(result.stderr)).toMatchObject({
       event: 'output_failed',
@@ -736,6 +824,7 @@ describe('bootstrap write policy', () => {
       Object.defineProperty(error, 'code', {
         get() {
           stats.getters += 1;
+
           return 'EAGAIN';
         },
       });
@@ -745,7 +834,7 @@ describe('bootstrap write policy', () => {
 
     const result = launch({ preload });
 
-    expect(result.status).toBe(2);
+    expect(result.status, result.stderr).toBe(2);
 
     expect(diagnostic(result.stderr)).toMatchObject({
       event: 'output_failed',

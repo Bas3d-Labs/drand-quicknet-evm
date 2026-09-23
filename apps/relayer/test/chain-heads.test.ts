@@ -14,7 +14,7 @@ const finalityMocks = vi.hoisted(() => ({
 }));
 
 vi.mock(
-  '../src/finality-policy.js',
+  '../src/chain/finality-policy.js',
   () => ({
     getDurableBlockNumber:
       finalityMocks.getDurableBlockNumber,
@@ -23,10 +23,10 @@ vi.mock(
 
 import {
   getChainHeads,
-} from '../src/chain-heads.js';
+} from '../src/chain/chain-heads.js';
 import type {
   FinalityPolicy,
-} from '../src/finality-policy.js';
+} from '../src/chain/finality-policy.js';
 
 const FINALITY: FinalityPolicy = {
   type: 'safe',

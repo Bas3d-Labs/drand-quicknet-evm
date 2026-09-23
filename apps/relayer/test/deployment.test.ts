@@ -31,7 +31,7 @@ import type {
 import {
   loadRegistryDeployment,
   parseRegistryDeployment,
-} from '../src/deployment.js';
+} from '../src/config/deployment.js';
 
 const CHAIN_ID = 46630;
 

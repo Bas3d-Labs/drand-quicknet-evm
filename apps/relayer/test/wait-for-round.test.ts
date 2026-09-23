@@ -11,7 +11,7 @@ import {
 
 import {
   waitForQuicknetRound,
-} from '../src/wait-for-round.js';
+} from '../src/rounds/wait-for-round.js';
 
 const ROUND = 31_089_008n;
 

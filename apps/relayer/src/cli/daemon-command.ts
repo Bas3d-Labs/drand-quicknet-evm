@@ -8,42 +8,42 @@ import {
 
 import type {
   NetworkSource,
-} from './config.js';
+} from '../config/config.js';
 
 import {
   createRelayerClients,
-} from './clients.js';
+} from '../chain/clients.js';
 
 import {
   createDaemonLogger,
-} from './daemon-logging.js';
+} from '../daemon/daemon-logging.js';
 
 import {
   loadDaemonConfig,
-} from './daemon-config.js';
+} from '../config/daemon-config.js';
 
 import {
   collectDaemonStartupSummary,
   type DaemonStartupSummary,
-} from './daemon-startup.js';
+} from '../daemon/daemon-startup.js';
 
 import {
   runDaemon,
-} from './daemon.js';
+} from '../daemon/daemon.js';
 
 import {
   FileCheckpointStore,
-} from './file-checkpoint-store.js';
+} from '../state/file-checkpoint-store.js';
 
 import {
   validateQuicknetConsumers,
-} from './validate-consumers.js';
+} from '../consumers/validate-consumers.js';
 
-import { FileCheckpointLock } from './file-checkpoint-lock.js';
+import { FileCheckpointLock } from '../state/file-checkpoint-lock.js';
 
 import {
   createRelayerLog,
-} from './relayer-log.js';
+} from '../diagnostics/relayer-log.js';
 
 export interface RunDaemonCommandOptions {
   source: NetworkSource;

@@ -7,13 +7,13 @@ import {
   RelayerConfigError,
   type ConfigCode,
   type ConfigSetting,
-} from '../../src/config-errors.js';
+} from '../../src/diagnostics/config-errors.js';
 
 import {
   usageCode,
   UsageError,
   type UsageCode,
-} from '../../src/usage-error.js';
+} from '../../src/diagnostics/usage-error.js';
 
 function captureThrown(
   action: () => unknown,

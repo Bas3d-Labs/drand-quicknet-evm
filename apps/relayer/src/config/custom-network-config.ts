@@ -12,7 +12,7 @@ import {
 
 import {
   FinalityPolicy,
-} from './finality-policy.js';
+} from '../chain/finality-policy.js';
 
 import {
   resolveNetworkConfigPath,

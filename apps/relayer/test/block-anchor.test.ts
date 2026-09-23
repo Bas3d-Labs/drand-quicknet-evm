@@ -14,7 +14,7 @@ import {
   blockAnchorsMatch,
   getBlockAnchor,
   type BlockAnchor,
-} from '../src/block-anchor.js';
+} from '../src/chain/block-anchor.js';
 
 const BLOCK_HASH_A =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as Hash;

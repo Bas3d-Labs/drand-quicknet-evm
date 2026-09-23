@@ -18,7 +18,7 @@ import type {
 } from '@based-labs/drand-quicknet-registry';
 
 vi.mock(
-  '../src/import-round-when-available.js',
+  '../src/rounds/import-round-when-available.js',
   () => ({
     importQuicknetRoundWhenAvailable: vi.fn(),
   }),
@@ -26,16 +26,16 @@ vi.mock(
 
 import type {
   ImportQuicknetRoundResult,
-} from '../src/import-round.js';
+} from '../src/rounds/import-round.js';
 import {
   importQuicknetRoundWhenAvailable,
-} from '../src/import-round-when-available.js';
+} from '../src/rounds/import-round-when-available.js';
 import type {
   QuicknetRandomnessRequest,
-} from '../src/request-events.js';
+} from '../src/consumers/request-events.js';
 import {
   processQuicknetRequests,
-} from '../src/request-processor.js';
+} from '../src/consumers/request-processor.js';
 
 const CONSUMER_A: Address = '0x1111111111111111111111111111111111111111';
 const CONSUMER_B: Address = '0x2222222222222222222222222222222222222222';

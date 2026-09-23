@@ -1,7 +1,7 @@
 import type {
   PublicClient,
 } from 'viem';
-import { isDecimalInteger } from './decimal.js';
+import { isDecimalInteger } from '../shared/decimal.js';
 
 export type FinalityPolicy = 
   | {

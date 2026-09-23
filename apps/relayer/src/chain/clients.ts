@@ -7,7 +7,7 @@ import type {
   PublicClient,
   WalletClient,
 } from 'viem';
-import type { RelayerConfig } from "./config.js";
+import type { RelayerConfig } from "../config/config.js";
 
 export interface RelayerClients {
   publicClient: PublicClient;

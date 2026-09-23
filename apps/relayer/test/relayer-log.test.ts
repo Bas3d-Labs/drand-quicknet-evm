@@ -17,13 +17,13 @@ import { HttpRequestError } from 'viem';
 
 import {
   createDaemonLogger,
-} from '../src/daemon-logging.js';
+} from '../src/daemon/daemon-logging.js';
 
 import {
   createRelayerLog,
   type ConsumerHealth,
   type RelayerLog,
-} from '../src/relayer-log.js';
+} from '../src/diagnostics/relayer-log.js';
 
 // Keep real Pino; intercept only the emergency stderr writer.
 vi.mock('node:fs', async (importOriginal) => ({

@@ -43,7 +43,7 @@ vi.mock(
 
 import {
   importQuicknetRound,
-} from '../src/import-round.js';
+} from '../src/rounds/import-round.js';
 
 const CHAIN_ID = 46630;
 

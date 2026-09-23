@@ -11,7 +11,7 @@ import {
 
 import { summarizeError } from './error-summary.js';
 
-import { isFixedHex } from './hex.js';
+import { isFixedHex } from '../shared/hex.js';
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
 type ScanType = 'durable' | 'soft';

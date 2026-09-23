@@ -7,12 +7,12 @@ import {
 
 import type {
   DaemonConfig,
-} from './daemon-config.js';
+} from '../config/daemon-config.js';
 
 import {
   getDurableBlockNumber,
   type FinalityPolicy,
-} from './finality-policy.js';
+} from '../chain/finality-policy.js';
 
 export interface DaemonStartupSummary {
   network: string;

@@ -24,7 +24,7 @@ vi.mock(
 
 import {
   fetchQuicknetBeaconWithRetry,
-} from '../src/fetch-beacon-with-retry.js';
+} from '../src/rounds/fetch-beacon-with-retry.js';
 
 const ROUND = 31_089_008n;
 

@@ -13,28 +13,28 @@ import type {
 
 import type {
   ValidatedQuicknetConsumer,
-} from '../src/consumer.js';
+} from '../src/consumers/consumer.js';
 
 import type {
   RunDaemonCycleResult,
-} from '../src/daemon-cycle.js';
+} from '../src/daemon/daemon-cycle.js';
 
 import {
   createDaemonLogger,
-} from '../src/daemon-logging.js';
+} from '../src/daemon/daemon-logging.js';
 
 import type {
   ProcessedDaemonScan,
   RunDaemonIterationResult,
-} from '../src/daemon-iteration.js';
+} from '../src/daemon/daemon-iteration.js';
 
 import type {
   RelayerLog,
-} from '../src/relayer-log.js';
+} from '../src/diagnostics/relayer-log.js';
 
 import type {
   ProcessedQuicknetRound,
-} from '../src/request-processor.js';
+} from '../src/consumers/request-processor.js';
 
 const CONSUMER_A: Address =
   '0x1111111111111111111111111111111111111111';

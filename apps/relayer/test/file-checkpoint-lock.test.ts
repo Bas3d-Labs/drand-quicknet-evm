@@ -16,7 +16,6 @@ import {
   hostname,
 } from 'node:os';
 import {
-  dirname,
   join,
 } from 'node:path';
 import {
@@ -32,7 +31,7 @@ import {
   CheckpointLockStaleError,
   CheckpointLockUnvalidatableError,
   FileCheckpointLock,
-} from '../src/file-checkpoint-lock.js';
+} from '../src/state/file-checkpoint-lock.js';
 
 interface SerializedLockState {
   version: number;

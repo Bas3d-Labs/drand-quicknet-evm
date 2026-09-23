@@ -7,17 +7,17 @@ import {
 
 import {
   RelayerConfigError,
-} from './config-errors.js';
+} from '../diagnostics/config-errors.js';
 
 import {
   loadRelayerConfig,
   type NetworkSource,
   type RelayerConfig,
-} from './config.js';
+} from '../config/config.js';
 
 import {
   isDecimalInteger,
-} from './decimal.js';
+} from '../shared/decimal.js';
 
 export const DEFAULT_MAX_BLOCK_RANGE = 2_000n;
 export const DEFAULT_POLL_INTERVAL_MS = 1_000;

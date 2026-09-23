@@ -19,8 +19,8 @@ import type {
 import { privateKeyToAccount } from 'viem/accounts';
 import { robinhoodTestnet } from 'viem/chains';
 
-vi.mock('../src/config.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/config.js')>();
+vi.mock('../src/config/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/config/config.js')>();
 
   return {
     ...actual,
@@ -28,46 +28,46 @@ vi.mock('../src/config.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../src/clients.js', () => ({
+vi.mock('../src/chain/clients.js', () => ({
   createRelayerClients: vi.fn(),
 }));
 
-vi.mock('../src/daemon-command.js', () => ({
+vi.mock('../src/cli/daemon-command.js', () => ({
   runDaemonCommand: vi.fn(),
 }));
 
-vi.mock('../src/import-round.js', () => ({
+vi.mock('../src/rounds/import-round.js', () => ({
   importQuicknetRound: vi.fn(),
 }));
 
-vi.mock('../src/import-round-when-available.js', () => ({
+vi.mock('../src/rounds/import-round-when-available.js', () => ({
   importQuicknetRoundWhenAvailable: vi.fn(),
 }));
 
 import {
   main,
   parseCommandArguments,
-} from '../src/cli.js';
+} from '../src/cli/cli.js';
 
-import type { CliOutput } from '../src/cli-output.js';
-import { createRelayerClients } from '../src/clients.js';
+import type { CliOutput } from '../src/cli/cli-output.js';
+import { createRelayerClients } from '../src/chain/clients.js';
 
 import {
   loadRelayerConfig,
   type NetworkSource,
   type RelayerConfig,
-} from '../src/config.js';
+} from '../src/config/config.js';
 
-import { runDaemonCommand } from '../src/daemon-command.js';
-import type { DaemonStartupSummary } from '../src/daemon-startup.js';
-import { importQuicknetRound } from '../src/import-round.js';
-import { importQuicknetRoundWhenAvailable } from '../src/import-round-when-available.js';
+import { runDaemonCommand } from '../src/cli/daemon-command.js';
+import type { DaemonStartupSummary } from '../src/daemon/daemon-startup.js';
+import { importQuicknetRound } from '../src/rounds/import-round.js';
+import { importQuicknetRoundWhenAvailable } from '../src/rounds/import-round-when-available.js';
 
 import {
   UsageError,
   usageCode,
   type UsageCode,
-} from '../src/usage-error.js';
+} from '../src/diagnostics/usage-error.js';
 
 const PRESET = 'robinhood-testnet';
 const CONFIG_FILE = './networks/example-mainnet.json';

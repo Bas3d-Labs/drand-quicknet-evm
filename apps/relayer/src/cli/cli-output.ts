@@ -1,18 +1,18 @@
 import {
   summarizeError,
-} from './error-summary.js';
+} from '../diagnostics/error-summary.js';
 
 import {
   isFixedHex,
-} from './hex.js';
+} from '../shared/hex.js';
 
 import type {
   DaemonStartupSummary,
-} from './daemon-startup.js';
+} from '../daemon/daemon-startup.js';
 
 import type {
   ImportQuicknetRoundResult,
-} from './import-round.js';
+} from '../rounds/import-round.js';
 
 export type CliOutput =
   | {

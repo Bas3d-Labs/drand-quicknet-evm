@@ -11,7 +11,10 @@ import {
   writeFileSync,
 } from 'node:fs';
 
-import { join } from 'node:path';
+import {
+  join,
+} from 'node:path';
+
 import process from 'node:process';
 
 import {
@@ -26,9 +29,35 @@ import {
   it,
 } from 'vitest';
 
-const APP = fileURLToPath(new URL('..', import.meta.url));
+const APP = fileURLToPath(
+  new URL('..', import.meta.url),
+);
+
+const MODULE_PATHS = {
+  bootstrap: 'bootstrap.js',
+  'cli-output': 'cli/cli-output.js',
+  config: 'config/config.js',
+  clients: 'chain/clients.js',
+  'import-round': 'rounds/import-round.js',
+  'import-round-when-available':
+    'rounds/import-round-when-available.js',
+  'daemon-config': 'config/daemon-config.js',
+  'validate-consumers': 'consumers/validate-consumers.js',
+  daemon: 'daemon/daemon.js',
+  'daemon-startup': 'daemon/daemon-startup.js',
+} as const;
+
+type ModuleName = keyof typeof MODULE_PATHS;
 
 let fixture: string;
+
+function compiledModuleUrl(
+  name: ModuleName,
+): string {
+  return pathToFileURL(
+    join(APP, 'dist', MODULE_PATHS[name]),
+  ).href;
+}
 
 beforeAll(() => {
   execFileSync(
@@ -68,9 +97,7 @@ it.each([
     const completed = join(fixture, command + '.completed');
     const preload = join(fixture, command + '.mjs');
 
-    const renderer = pathToFileURL(
-      join(APP, 'dist', 'cli-output.js'),
-    ).href;
+    const renderer = compiledModuleUrl('cli-output');
 
     const setup = `
       const config = {
@@ -99,9 +126,9 @@ it.each([
     // Stub configuration and network work. Bootstrap, CLI dispatch,
     // runDaemonCommand, output rendering, and FileCheckpointLock
     // execute their actual compiled implementations.
-    const replacements = new Map([
+    const replacements = new Map<ModuleName, string>([
       [
-        'config.js',
+        'config',
         setup + `
           export function parseRelayerNetworkPreset() {
             return 'robinhood-testnet';
@@ -113,7 +140,7 @@ it.each([
         `,
       ],
       [
-        'clients.js',
+        'clients',
         `
           export function createRelayerClients() {
             return {};
@@ -121,7 +148,7 @@ it.each([
         `,
       ],
       [
-        'import-round.js',
+        'import-round',
         `
           import {
             closeSync,
@@ -154,7 +181,7 @@ it.each([
         `,
       ],
       [
-        'import-round-when-available.js',
+        'import-round-when-available',
         `
           import {
             closeSync,
@@ -186,7 +213,7 @@ it.each([
         `,
       ],
       [
-        'daemon-config.js',
+        'daemon-config',
         setup + `
           export async function loadDaemonConfig() {
             return config;
@@ -194,7 +221,7 @@ it.each([
         `,
       ],
       [
-        'validate-consumers.js',
+        'validate-consumers',
         `
           export async function validateQuicknetConsumers() {
             return [];
@@ -202,7 +229,7 @@ it.each([
         `,
       ],
       [
-        'daemon.js',
+        'daemon',
         `
           import { writeFileSync } from 'node:fs';
 
@@ -215,7 +242,7 @@ it.each([
         `,
       ],
       [
-        'daemon-startup.js',
+        'daemon-startup',
         `
           import {
             closeSync,
@@ -239,8 +266,8 @@ it.each([
               throw new Error('Expected an owned checkpoint lock.');
             }
 
-            // Prove the lock existed and belonged to this process
-            // before startup output failed.
+            // Prove the lock belonged to this process before
+            // startup output failed.
             writeFileSync(
               ${JSON.stringify(observed)},
               'owned',
@@ -277,8 +304,9 @@ it.each([
       ],
     ]);
 
+    // Match complete module URLs, including the new directories.
     const modules = [...replacements].map(([name, source]) => [
-      pathToFileURL(join(APP, 'dist', name)).href,
+      compiledModuleUrl(name),
       source,
     ]);
 
@@ -341,7 +369,7 @@ it.each([
     const args = [
       '--import',
       preload,
-      join(APP, 'dist', 'bootstrap.js'),
+      join(APP, 'dist', MODULE_PATHS.bootstrap),
       command,
       '--network',
       'robinhood-testnet',
@@ -351,21 +379,25 @@ it.each([
       args.push('--round', '100');
     }
 
-    const child = spawnSync(process.execPath, args, {
-      cwd: APP,
-      env,
-      encoding: 'utf8',
-      timeout: 5_000,
-      maxBuffer: 1_048_576,
-    });
+    const child = spawnSync(
+      process.execPath,
+      args,
+      {
+        cwd: APP,
+        env,
+        encoding: 'utf8',
+        timeout: 5_000,
+        maxBuffer: 1_048_576,
+      },
+    );
 
     expect(child.error).toBeUndefined();
     expect(child.signal).toBeNull();
     expect(child.status, child.stderr).toBe(2);
     expect(child.stdout).toBe('');
 
-    // Output failure should produce one diagnostic, without a second
-    // ordinary CLI failure when the sentinel reaches bootstrap.
+    // The sentinel must preserve output failure without producing
+    // a second ordinary CLI failure.
     expect(child.stderr).not.toContain('cli_failed');
     expect(child.stderr.endsWith('\n')).toBe(true);
 
