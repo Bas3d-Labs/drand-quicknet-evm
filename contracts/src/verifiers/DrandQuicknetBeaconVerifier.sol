@@ -38,10 +38,12 @@ import {
 ///      The witness path avoids signature decompression but still uses
 ///      ModExp for two hash-to-field reductions inside BLS2.hashToPoint.
 ///
-///      Required execution compatibility is checked by constructor
-///      acceptance and rejection tests through both entry points'
-///      internal implementations. Deployment tooling and monitoring
-///      should repeat these checks against the live deployed verifier.
+///      Constructor self-tests check known-answer acceptance and
+///      pairing-equation rejection through both verification paths.
+///      These checks do not establish complete precompile conformance.
+///      Deployment tooling must additionally test malformed-point and
+///      subgroup rejection on the target chain. Monitoring should repeat
+///      known-answer acceptance and rejection against the live verifier.
 contract DrandQuicknetBeaconVerifier is IDrandQuicknetBeaconVerifier {
     error PositiveSelfTestFailed();
     error NegativeSelfTestFailed();

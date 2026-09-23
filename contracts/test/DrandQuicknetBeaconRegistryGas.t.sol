@@ -32,6 +32,12 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
     bytes32 internal constant KAT_RANDOMNESS =
         0xfe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd;
 
+    uint128 internal constant KAT_Y_HI =
+        0x11f92e4521ef54f047b64b85fa98db2d;
+
+    uint256 internal constant KAT_Y_LO =
+        0x46f0f44add1f60b93f8a0dbddd63b34f238657c2d93aed18b90bddd60a01b6d2;
+
     DrandQuicknetBeaconVerifier internal verifier;
     DrandQuicknetBeaconRegistry internal registry;
 
@@ -48,17 +54,51 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
     }
 
     function test_SubmitBeaconGasBands() public {
-        uint256 minimumGas = _findMinimumSuccessfulGas();
-
-        emit log_named_uint(
-            "minimum submitBeacon call gas",
-            minimumGas
+        bytes memory callData = abi.encodeCall(
+            DrandQuicknetBeaconRegistry.submitBeacon,
+            (
+                KAT_ROUND,
+                _katSignature()
+            )
         );
+
+        _assertSubmitGasBands(
+            callData,
+            "minimum submitBeacon call gas"
+        );
+    }
+
+    function test_SubmitBeaconWithWitnessGasBands() public {
+        bytes memory callData = abi.encodeCall(
+            DrandQuicknetBeaconRegistry.submitBeaconWithWitness,
+            (
+                KAT_ROUND,
+                _katSignature(),
+                KAT_Y_HI,
+                KAT_Y_LO
+            )
+        );
+
+        _assertSubmitGasBands(
+            callData,
+            "minimum submitBeaconWithWitness call gas"
+        );
+    }
+
+    function _assertSubmitGasBands(
+        bytes memory callData,
+        string memory label
+    )
+        internal
+    {
+        uint256 minimumGas = _findMinimumSuccessfulGas(callData);
+
+        emit log_named_uint(label, minimumGas);
 
         assertLe(
             minimumGas,
             REFERENCE_SUBMIT_GAS_CEILING,
-            "submitBeacon gas requirement exceeded reference ceiling"
+            "submission gas requirement exceeded reference ceiling"
         );
 
         assertGt(minimumGas, STARVATION_GAS);
@@ -68,25 +108,31 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
             bool success,
             uint256 returndataLength,
             bytes32 returndataWord
-        ) = _probe(minimumGas);
+        ) = _probe(minimumGas, callData);
 
         assertTrue(success);
         assertEq(returndataLength, 32);
         assertEq(returndataWord, KAT_RANDOMNESS);
 
-        // The probe wrapper reverts all registry state after every probe.
+        // Successful probes also roll back their storage changes.
         assertFalse(registry.isStored(KAT_ROUND));
 
-        // In the current reference implementation, the verifier gas
-        // guard is the binding late-stage threshold. One gas below the
-        // measured success boundary therefore reaches and bubbles
-        // InsufficientVerifierGas. This assertion intentionally detects
-        // changes to that composed-path behavior.
+        // Reference-EVM regression: the verifier guard is the binding
+        // threshold for the complete registry submission.
+        //
+        // For this KAT, pre-guard work completes before gas becomes
+        // limiting. After the guard passes, the pairing's actual cost
+        // leaves sufficient gas for verifier completion and registry
+        // storage. One gas below the success boundary is therefore
+        // expected to reach and fail the guard.
+        //
+        // Reassess this expectation if guard accounting, pairing pricing,
+        // compiler output, or surrounding work changes.
         (
             success,
             returndataLength,
             returndataWord
-        ) = _probe(minimumGas - 1);
+        ) = _probe(minimumGas - 1, callData);
 
         assertFalse(success);
         assertEq(returndataLength, 4);
@@ -100,22 +146,45 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
 
         assertFalse(registry.isStored(KAT_ROUND));
 
-        // Severe starvation cannot reliably reach the semantic verifier
-        // failure and therefore returns no revert data.
+        // Severe starvation cannot reliably reach the verifier guard.
         (
             success,
             returndataLength,
             returndataWord
-        ) = _probe(STARVATION_GAS);
+        ) = _probe(STARVATION_GAS, callData);
 
         assertFalse(success);
         assertEq(returndataLength, 0);
         assertEq(returndataWord, bytes32(0));
 
         assertFalse(registry.isStored(KAT_ROUND));
+
+        // Submit outside the rollback wrapper with sufficient gas.
+        // The earlier failed attempts must not prevent storage.
+        (
+            bool retrySuccess,
+            bytes memory retryReturndata
+        ) = address(registry).call{
+            gas: SEARCH_CEILING_GAS
+        }(
+            callData
+        );
+
+        assertTrue(retrySuccess);
+        assertEq(retryReturndata.length, 32);
+
+        assertEq(
+            abi.decode(retryReturndata, (bytes32)),
+            KAT_RANDOMNESS
+        );
+
+        assertTrue(registry.isStored(KAT_ROUND));
+        assertEq(registry.getBeacon(KAT_ROUND), KAT_RANDOMNESS);
     }
 
-    function _findMinimumSuccessfulGas()
+    function _findMinimumSuccessfulGas(
+        bytes memory callData
+    )
         internal
         returns (uint256 minimumGas)
     {
@@ -126,11 +195,11 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
             bool ceilingSucceeds,
             uint256 ceilingReturndataLength,
             bytes32 ceilingReturndataWord
-        ) = _probe(high);
+        ) = _probe(high, callData);
 
         assertTrue(
             ceilingSucceeds,
-            "submitBeacon gas search ceiling is too low"
+            "submission gas search ceiling is too low"
         );
 
         assertEq(ceilingReturndataLength, 32);
@@ -143,7 +212,7 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
                 bool success,
                 uint256 returndataLength,
                 bytes32 returndataWord
-            ) = _probe(middle);
+            ) = _probe(middle, callData);
 
             if (success) {
                 assertEq(returndataLength, 32);
@@ -159,7 +228,8 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
     }
 
     function _probe(
-        uint256 gasLimit
+        uint256 gasLimit,
+        bytes memory callData
     )
         internal
         returns (
@@ -174,7 +244,10 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
         ) = address(this).call(
             abi.encodeCall(
                 this.gasProbe,
-                (gasLimit)
+                (
+                    gasLimit,
+                    callData
+                )
             )
         );
 
@@ -207,22 +280,14 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
         );
     }
 
-    // gasProbe always reverts so each probe rolls back beacon state and
-    // EIP-2929 access warming introduced inside the probe. Binary-search
-    // iterations therefore measure the same unstored, cold composed path.
+    // Each probe rolls back storage and access warming introduced within
+    // the wrapper, preserving the starting state across search iterations.
     function gasProbe(
-        uint256 gasLimit
+        uint256 gasLimit,
+        bytes calldata callData
     )
         external
     {
-        bytes memory callData = abi.encodeCall(
-            DrandQuicknetBeaconRegistry.submitBeacon,
-            (
-                KAT_ROUND,
-                _katSignature()
-            )
-        );
-
         (
             bool success,
             bytes memory returndata
@@ -232,7 +297,7 @@ contract DrandQuicknetBeaconRegistryGasTest is Test {
             callData
         );
 
-        bytes32 returndataWord;
+        bytes32 returndataWord = bytes32(0);
 
         if (returndata.length != 0) {
             assembly ("memory-safe") {
