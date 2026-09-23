@@ -2,20 +2,20 @@
   "manifestVersion": 1,
   "network": "robinhood-mainnet",
   "chainId": 4663,
-  "verifier": {
-    "address": "0xB2e182C4B4fB57560A738506047a1340eC7Eb57b",
-    "runtimeCodehash": "0x916ebb69c0ceb4c049d50ad8bf5b3e566661a2b1ef33e01727ed443673b68aab",
+  "registry": {
+    "address": "0x25CA96ff9CAC264b801e5a0E06a9545360494A7E",
+    "runtimeCodehash": "0x0c196ffb62064b46059b981115e8161bed4b3484cd08519ffd0ecda0f216117e",
     "deployment": {
-      "transactionHash": "0x95276b2493e27d53274568bd9b371a929ec44338c9fbb1c1843fb978defd19c8",
-      "blockNumber": 64022932
+      "transactionHash": "0x8ee152fefc514f2385af888acea24331cca38816f56a7c19000d30bb0204bd5e",
+      "blockNumber": 70327419
     }
   },
-  "registry": {
-    "address": "0x692100c4863adAED9f560F6Ce982cF878F083e93",
-    "runtimeCodehash": "0x1057c66d2f40dd764c9f51bf0e11b882c843be3f9d67eb563c79d40ffacba721",
+  "verifier": {
+    "address": "0xdB5156a3daC7d220bB53642434a3043abd534Acd",
+    "runtimeCodehash": "0x9384ffb4be822f3382eb367aa16b9aa1a503856fbf93429c2288d537a2c4304c",
     "deployment": {
-      "transactionHash": "0xb3c7550c52e5a67fbedcd84dd03e2ea6a70471372b9257bbc3b021eb80131639",
-      "blockNumber": 64024452
+      "transactionHash": "0x1480a3e487f3bbad1110de6c4608132f482f02301ea33b402ebfc5f6aedf4340",
+      "blockNumber": 70324420
     }
   }
 }

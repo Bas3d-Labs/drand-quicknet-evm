@@ -24,4 +24,21 @@ contract MockDrandQuicknetBeaconVerifier is
     {
         revert UnmockedVerifierCall(round);
     }
+
+    function verifyBeaconWithWitness(
+        uint64 round,
+        bytes calldata,
+        uint128,
+        uint256
+    )
+        external
+        pure
+        override
+        returns (
+            bool,
+            bytes32
+        )
+    {
+        revert UnmockedVerifierCall(round);
+    }
 }

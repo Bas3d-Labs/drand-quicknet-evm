@@ -14,6 +14,13 @@ import {
 ///         Quicknet beacons.
 /// @dev This contract authenticates and caches beacon values only.
 ///
+///      The verifier address and expected runtime codehash are immutable.
+///      The codehash is checked at construction. New imports depend on the
+///      configured verifier and compatible chain precompiles, including
+///      execution within the verifier's fixed pairing gas cap. If those
+///      assumptions cease to hold, new imports may fail; already stored
+///      beacons remain readable.
+///
 ///      Security requirements for consumers:
 ///
 ///      1. FUTURE-ROUND COMMITMENT
@@ -42,8 +49,9 @@ import {
 ///         off-chain before transaction submission, transaction inclusion
 ///         latency must also be accounted for.
 ///
-///         `minimumLeadRounds` is not enforced by `submitBeacon`. Valid past,
-///         current, and future rounds may all be cached permissionlessly.
+///         Neither submission method enforces `minimumLeadRounds`. Valid
+///         past, current, and future rounds may all be cached
+///         permissionlessly.
 ///
 ///      2. ROUND SELECTION MUST NOT DEPEND ON REGISTRY AVAILABILITY
 ///         Consumers must never select a randomness round based on which
@@ -76,7 +84,7 @@ import {
 ///
 ///         Settlement should therefore remain permissionless for the exact
 ///         committed round, allowing anyone to supply R's valid signature
-///         through `submitBeacon`.
+///         through either submission method.
 ///
 ///      4. DOMAIN SEPARATION
 ///         The stored randomness is application-neutral and identical on
@@ -194,16 +202,54 @@ contract DrandQuicknetBeaconRegistry is
             signature
         );
 
-        if (!verified || randomness == bytes32(0)) {
-            revert InvalidBeacon();
+        _storeVerifiedBeacon(
+            round,
+            verified,
+            randomness
+        );
+
+        return randomness;
+    }
+
+    /// @inheritdoc IDrandQuicknetBeaconRegistry
+    function submitBeaconWithWitness(
+        uint64 round,
+        bytes calldata signature,
+        uint128 yHi,
+        uint256 yLo
+    )
+        external
+        override
+        returns (bytes32 randomness)
+    {
+        if (round == 0) {
+            revert InvalidRound();
         }
 
-        _beacons[round] = randomness;
+        randomness = _beacons[round];
 
-        emit BeaconStored(
+        if (randomness != bytes32(0)) {
+            return randomness;
+        }
+
+        bool verified;
+
+        (
+            verified,
+            randomness
+        ) = IDrandQuicknetBeaconVerifier(
+            verifier
+        ).verifyBeaconWithWitness(
             round,
-            randomness,
-            msg.sender
+            signature,
+            yHi,
+            yLo
+        );
+
+        _storeVerifiedBeacon(
+            round,
+            verified,
+            randomness
         );
 
         return randomness;
@@ -294,5 +340,27 @@ contract DrandQuicknetBeaconRegistry is
         returns (uint64)
     {
         return roundAt(block.timestamp);
+    }
+
+    /// @dev Called only for a non-zero, unstored round after verification.
+    ///      Rejects failed verification and preserves the zero sentinel.
+    function _storeVerifiedBeacon(
+        uint64 round,
+        bool verified,
+        bytes32 randomness
+    )
+        private
+    {
+        if (!verified || randomness == bytes32(0)) {
+            revert InvalidBeacon();
+        }
+
+        _beacons[round] = randomness;
+
+        emit BeaconStored(
+            round,
+            randomness,
+            msg.sender
+        );
     }
 }

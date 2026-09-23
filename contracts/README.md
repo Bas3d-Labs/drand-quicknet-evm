@@ -1,89 +1,73 @@
 # Contract Deployment
 
-This directory contains the Foundry project for
-`DrandQuicknetBeaconRegistry`.
+This directory contains the Foundry project for the Quicknet verifier,
+beacon registry, and randomness consumer contracts.
 
-The deployment script reads verifier identity and expected chain ID from the
-corresponding JSON manifest under `../deployments/`. The registry minimum lead
-is supplied separately from the target chain-security profile.
+The Foundry project contains:
 
-Public deployment configuration belongs in `deployments/*.json`.
+- `DrandQuicknetBeaconVerifier`: verifies Quicknet signatures.
+- `DrandQuicknetBeaconRegistry`: verifies and caches beacons.
+- `DrandQuicknetRandomnessConsumer`: provides consumer integration helpers.
+
+The registry supports `submitBeacon` and `submitBeaconWithWitness`.
+Both methods share the same cache and produce the same randomness.
+
+Public deployment identity belongs in `deployments/`.
 Secrets and RPC credentials belong in the repository-root `.env`.
 
-## Repository layout
+## Setup
 
-```text
-.
-├── .env
-├── .env.example
-├── deployments/
-│   ├── robinhood-testnet.json
-│   └── robinhood-mainnet.json
-│
-└── contracts/
-    ├── src/
-    │   └── DrandQuicknetBeaconRegistry.sol
-    ├── script/
-    │   └── DeployRegistry.s.sol
-    ├── test/
-    └── foundry.toml
-```
+Required tools: Foundry, Node.js 24+, pnpm
 
-## Prerequisites
-
-Install Foundry:
+Install dependencies:
 
 ```bash
-forge --version
-cast --version
+pnpm install --frozen-lockfile
 ```
 
-## Environment
+The target chain must support the precompiles used by the verifier with
+compatible behavior and sufficient gas under its configured call limits.
+Local Foundry tests alone do not establish target-chain compatibility.
 
-Create the repository-root `.env`:
+See `../scripts/quicknet-kat/README.md` for the independent audit and
+read-only target-chain checks.
 
-```bash
-cp .env.example .env
-```
-
-Example:
+Set the following in the repository-root `.env`:
 
 ```dotenv
 PRIVATE_KEY=
-
-ROBINHOOD_TESTNET_RPC_URL=
-ROBINHOOD_MAINNET_RPC_URL=
+QUICKNET_RPC_URL=
 ```
 
-Contract addresses are read from the deployment manifests.
-
-Load the environment into your shell before running Foundry:
+Load the environment and select a deployment manifest:
 
 ```bash
 set -a
 source .env
 set +a
+
+export DEPLOYMENT_FILE="example-network.json"
+MANIFEST="deployments/$DEPLOYMENT_FILE"
+
+: "${PRIVATE_KEY:?Missing PRIVATE_KEY}"
+: "${QUICKNET_RPC_URL:?Missing QUICKNET_RPC_URL}"
+
+cast wallet address --private-key "$PRIVATE_KEY"
 ```
 
-## Deployment manifests
+`DEPLOYMENT_FILE` is relative to `deployments/`.
+`QUICKNET_RPC_URL` must point to the intended chain.
 
-Each supported chain has a JSON file under `deployments/`.
+## Deployment manifest
 
-Example:
+Use `deployments/<network>.json` to record contract identity and deployment
+provenance:
 
 ```json
 {
   "manifestVersion": 1,
   "network": "example-network",
   "chainId": 12345,
-  "registry": {
-    "address": "0x...",
-    "runtimeCodehash": "0x...",
-    "deployment": {
-      "transactionHash": "0x...",
-      "blockNumber": 0
-    }
-  },
   "verifier": {
     "address": "0x...",
     "runtimeCodehash": "0x...",
@@ -91,335 +75,7 @@ Example:
       "transactionHash": "0x...",
       "blockNumber": 0
     }
-  }
-}
-```
-
-The manifest is the canonical source for durable artifact identity and
-provenance, including:
-
-- chain ID
-- verifier address and runtime codehash
-- registry address and runtime codehash
-- deployment transaction and block provenance
-
-Chain policy such as `minimumLeadRounds` belongs in the chain-security profile,
-not in the deployment manifest.
-
-## Foundry filesystem permissions
-
-The deployment script reads files from the repository-level `deployments/`
-directory.
-
-`contracts/foundry.toml` must therefore allow read access:
-
-```toml
-[profile.default]
-src = "src"
-test = "test"
-script = "script"
-out = "out"
-libs = ["lib"]
-
-solc = "0.8.36"
-optimizer = true
-optimizer_runs = 200
-
-fs_permissions = [
-    { access = "read", path = "../deployments" }
-]
-```
-
-## Build
-
-From the repository root:
-
-```bash
-pnpm run build:contracts
-```
-
-Run tests:
-
-```bash
-pnpm run test:contracts
-```
-
-Check formatting:
-
-```bash
-pnpm run fmt:contracts:check
-```
-
-## Verify the verifier before deployment
-
-The deployment script performs these checks automatically, but they can also
-be inspected manually.
-
-For testnet:
-
-```bash
-VERIFIER=$(jq -r \
-  '.verifier.address' \
-  deployments/robinhood-testnet.json)
-
-EXPECTED_CODEHASH=$(jq -r \
-  '.verifier.runtimeCodehash' \
-  deployments/robinhood-testnet.json)
-```
-
-Check that the verifier has deployed code:
-
-```bash
-cast code \
-  "$VERIFIER" \
-  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
-```
-
-The result must not be:
-
-```text
-0x
-```
-
-Check its runtime codehash:
-
-```bash
-cast codehash \
-  "$VERIFIER" \
-  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
-```
-
-It must equal:
-
-```bash
-echo "$EXPECTED_CODEHASH"
-```
-
-The deployment script additionally exercises the verifier's positive and
-negative Quicknet KAT before creating the registry.
-
-## Dry-run deployment
-
-Always simulate before broadcasting.
-
-The registry floor is a deployment input whose normative value comes from the
-target chain-security profile, not from the deployment manifest. Before running
-the script, set:
-
-```bash
-export MINIMUM_LEAD_ROUNDS=<timing.minimumLeadRounds from the target chain profile>
-```
-
-`DeployRegistry.s.sol` requires this value explicitly and validates that it is a
-positive `uint64`.
-
-### Robinhood Testnet
-
-```bash
-DEPLOYMENT_FILE=robinhood-testnet.json \
-forge script \
-  --root contracts \
-  contracts/script/DeployRegistry.s.sol:DeployRegistry \
-  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
-```
-
-### Robinhood Mainnet
-
-```bash
-DEPLOYMENT_FILE=robinhood-mainnet.json \
-forge script \
-  --root contracts \
-  contracts/script/DeployRegistry.s.sol:DeployRegistry \
-  --rpc-url "$ROBINHOOD_MAINNET_RPC_URL"
-```
-
-The simulation must succeed before using `--broadcast`.
-
-## Deploy
-
-### Robinhood Testnet
-
-```bash
-DEPLOYMENT_FILE=robinhood-testnet.json \
-forge script \
-  --root contracts \
-  contracts/script/DeployRegistry.s.sol:DeployRegistry \
-  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL" \
-  --private-key "$PRIVATE_KEY" \
-  --verify \
-  --verifier blockscout \
-  --verifier-url "https://explorer.testnet.chain.robinhood.com/api" \
-  --broadcast \
-  -vvv
-```
-
-### Robinhood Mainnet
-
-```bash
-DEPLOYMENT_FILE=robinhood-mainnet.json \
-forge script \
-  --root contracts \
-  contracts/script/DeployRegistry.s.sol:DeployRegistry \
-  --rpc-url "$ROBINHOOD_MAINNET_RPC_URL" \
-  --private-key "$PRIVATE_KEY" \
-  --verify \
-  --verifier blockscout \
-  --verifier-url "https://robinhoodchain.blockscout.com/api" \
-  --broadcast \
-  -vvv
-```
-
-The deployment manifest supplies artifact identity. `MINIMUM_LEAD_ROUNDS` is a
-separate policy input sourced from the target chain profile. The Solidity script
-does not hard-code chain-specific verifier addresses or lead policy.
-
-## What the deployment script validates
-
-Before broadcasting the registry deployment, the script checks:
-
-1. The deployment manifest can be read.
-2. `block.chainid` matches `.chainId` from the manifest.
-3. `.verifier.address` has the runtime codehash recorded in the manifest.
-4. `MINIMUM_LEAD_ROUNDS` is a positive `uint64`.
-5. The verifier accepts the known-good Quicknet KAT vector.
-6. The verifier rejects the corrupted negative KAT vector.
-7. The registry constructor accepts the verifier identity and explicit floor.
-
-This protects against mistakes such as:
-
-```text
-Manifest:  robinhood-mainnet.json
-RPC:       Robinhood Testnet
-```
-
-or:
-
-```text
-Manifest verifier:      0xABC...
-Actual codehash:        0x111...
-Manifest codehash:      0x222...
-```
-
-Both deployments fail before the registry is created.
-
-## Post-deployment checks
-
-After deployment, set the registry address:
-
-```bash
-REGISTRY=0x...
-```
-
-Verify the immutable oracle:
-
-```bash
-cast call \
-  "$REGISTRY" \
-  "oracle()(address)" \
-  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
-```
-
-Compare it against the manifest:
-
-```bash
-jq -r \
-  '.oracle.address' \
-  deployments/robinhood-testnet.json
-```
-
-Verify the pinned oracle codehash:
-
-```bash
-cast call \
-  "$REGISTRY" \
-  "EXPECTED_ORACLE_CODEHASH()(bytes32)" \
-  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
-```
-
-Verify the Quicknet constants:
-
-```bash
-cast call \
-  "$REGISTRY" \
-  "GENESIS_TIMESTAMP()(uint64)" \
-  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
-
-cast call \
-  "$REGISTRY" \
-  "PERIOD_SECONDS()(uint64)" \
-  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
-```
-
-Expected:
-
-```text
-GENESIS_TIMESTAMP = 1692803367
-PERIOD_SECONDS    = 3
-```
-
-## Smoke test
-
-Submit a known-valid Quicknet round:
-
-```bash
-ROUND=<round>
-SIGNATURE=0x<signature>
-```
-
-Then:
-
-```bash
-TX=$(cast send \
-  "$REGISTRY" \
-  "submitBeacon(uint64,bytes)" \
-  "$ROUND" \
-  "$SIGNATURE" \
-  --private-key "$PRIVATE_KEY" \
-  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL" \
-  --json | jq -r '.transactionHash')
-```
-
-Check the receipt:
-
-```bash
-cast receipt \
-  "$TX" \
-  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
-```
-
-Check storage:
-
-```bash
-cast call \
-  "$REGISTRY" \
-  "isStored(uint64)(bool)" \
-  "$ROUND" \
-  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
-```
-
-Expected:
-
-```text
-true
-```
-
-Read the randomness:
-
-```bash
-cast call \
-  "$REGISTRY" \
-  "getBeacon(uint64)(bytes32)" \
-  "$ROUND" \
-  --rpc-url "$ROBINHOOD_TESTNET_RPC_URL"
-```
-
-## Record the deployment
-
-After deployment, update the corresponding deployment manifest with the
-registry's durable identity and provenance:
-
-```json
-{
+  },
   "registry": {
     "address": "0x...",
     "runtimeCodehash": "0x...",
@@ -431,44 +87,196 @@ registry's durable identity and provenance:
 }
 ```
 
-The completed deployment manifest should be committed to Git. Keep policy such
-as `minimumLeadRounds` in the chain-security profile rather than copying it into
-the manifest.
+Replace the example values with the actual deployment values. For a new
+deployment, start with the manifest version, network, and intended chain ID,
+then add each contract after deploying and authenticating it.
 
-## Mainnet checklist
+The registry deployment script reads the chain ID and verifier identity.
+The registry fields are populated after deployment.
 
-Before a mainnet deployment:
+Chain policy such as `minimumLeadRounds` belongs in the chain-security profile,
+not in the deployment manifest.
 
-- Foundry tests pass.
-- Fuzz/invariant tests pass.
-- `forge fmt --check` passes.
-- Compiler and optimizer settings are frozen.
-- The registry source is committed/tagged.
-- The correct deployment manifest is selected.
-- Manifest chain ID matches the target RPC.
-- Verifier address has been independently verified.
-- Verifier runtime codehash matches the manifest.
-- The chain-profile `minimumLeadRounds` value is supplied explicitly to the deployment script.
-- Verifier deployment self-tests pass.
-- Verifier is non-upgradeable.
-- Verifier has no mutable security-critical verification configuration.
-- Deployment account has sufficient gas funds.
-- Dry-run deployment succeeds.
-- Production deployment is broadcast.
-- Registry source is verified on the chain explorer.
-- Post-deployment smoke test succeeds.
-- Deployment manifest is updated and committed.
+## Build and test
+
+```bash
+pnpm run build:contracts
+pnpm run test:contracts
+pnpm run fmt:contracts:check
+pnpm test:quicknet-kat
+```
+
+Run the complete workspace check before finalizing changes:
+
+```bash
+pnpm check
+```
+
+Preserve the compiler, EVM target, and optimizer settings in
+`contracts/foundry.toml`. Its filesystem permissions must allow reading
+`../deployments` and the existing test fixtures.
+
+The target chain must provide compatible precompiles. Local test success
+alone does not establish target-chain compatibility.
+
+## Deploy
+
+Check the RPC chain ID against the selected manifest:
+
+```bash
+cast chain-id --rpc-url "$QUICKNET_RPC_URL"
+jq -er '.chainId' "$MANIFEST"
+```
+
+The values must match before proceeding. `DeployRegistry.s.sol` also checks
+this internally; `DeployVerifier.s.sol` does not read the manifest.
+
+### 1. Verifier
+
+Simulate deployment:
+
+```bash
+forge script contracts/script/DeployVerifier.s.sol:DeployVerifier \
+  --root contracts \
+  --rpc-url "$QUICKNET_RPC_URL" \
+  --private-key "$PRIVATE_KEY" \
+  -vvv
+```
+
+After simulation succeeds, repeat with `--broadcast`.
+
+From the mined receipt, record the verifier address, transaction hash, and
+block number. Confirm that its deployed runtime matches the compiled
+verifier artifact, then record its runtime codehash in the manifest:
+
+```bash
+cast codehash "$VERIFIER" --rpc-url "$QUICKNET_RPC_URL"
+```
+
+Set `VERIFIER` to the actual mined deployment address. Do not use a dry-run
+address as evidence of deployment.
+
+An existing verifier may be reused if its runtime is authenticated and it
+supports both verification methods.
+
+### 2. Registry
+
+Set and export `MINIMUM_LEAD_ROUNDS` to the value specified by the target
+chain-security profile:
+
+```bash
+export MINIMUM_LEAD_ROUNDS
+: "${MINIMUM_LEAD_ROUNDS:?Set this from the target chain-security profile}"
+```
+
+Simulate deployment:
+
+```bash
+forge script contracts/script/DeployRegistry.s.sol:DeployRegistry \
+  --root contracts \
+  --rpc-url "$QUICKNET_RPC_URL" \
+  --private-key "$PRIVATE_KEY" \
+  -vvv
+```
+
+After simulation succeeds, repeat with `--broadcast`.
+
+The script checks:
+
+- The manifest chain ID matches the target chain.
+- The verifier runtime codehash matches the manifest.
+- The minimum lead is a positive `uint64`.
+- Both verification methods accept the positive Quicknet KAT.
+- Both methods reject the negative KAT. The witness negative uses the
+  sign-flipped signature with its matching opposite y-coordinate.
+
+The constructor also requires deployed verifier code and a matching
+nonzero codehash.
+
+Record the registry's mined address, transaction hash, and block number.
+Authenticate its runtime before recording the runtime codehash:
+
+```bash
+cast codehash "$REGISTRY" --rpc-url "$QUICKNET_RPC_URL"
+```
+
+Set `REGISTRY` to the actual mined deployment address.
+
+The registry runtime contains immutable constructor values. Compare it
+against runtime reconstructed with the exact constructor arguments, rather
+than an unpatched compiled runtime template.
+
+## Post-deployment checks
+
+Using the completed manifest:
+
+```bash
+REGISTRY=$(jq -er '.registry.address' "$MANIFEST")
+
+cast call "$REGISTRY" "verifier()(address)" \
+  --rpc-url "$QUICKNET_RPC_URL"
+
+cast call "$REGISTRY" "verifierCodehash()(bytes32)" \
+  --rpc-url "$QUICKNET_RPC_URL"
+
+cast call "$REGISTRY" "minimumLeadRounds()(uint64)" \
+  --rpc-url "$QUICKNET_RPC_URL"
+```
+
+The verifier identity must match the manifest. The minimum lead must match
+the selected chain-security profile.
+
+Verify contract source through the target chain's explorer, then run the
+smoke test:
+
+```bash
+bash scripts/smoke-test-registry.sh "$MANIFEST"
+```
+
+The smoke test:
+
+- Checks chain ID, runtime codehashes, and configured verifier identity.
+- Simulates an incorrect witness and expects rejection.
+- Broadcasts one witness submission and one compressed submission.
+- Checks published randomness and matching `BeaconStored` events.
+- Simulates both cached submission methods with invalid inputs.
+
+It requires two distinct, unstored rounds from the KAT fixture. Defaults
+are 1000 and 13335. To select other fixture rounds:
+
+```bash
+SMOKE_WITNESS_ROUND=255 \
+SMOKE_COMPRESSED_ROUND=256 \
+  bash scripts/smoke-test-registry.sh "$MANIFEST"
+```
+
+Already-stored rounds bypass verification and cannot test a fresh import.
+The smoke test uses historical beacons; it does not validate consumer
+commitment timing.
+
+Finish by running `pnpm check` and committing the completed manifest.
 
 ## Security
 
-`DrandQuicknetBeaconRegistry` only authenticates and caches Quicknet
-randomness.
+The registry authenticates and caches Quicknet randomness.
 
-Consumers are responsible for:
+Consumers remain responsible for:
 
-- committing to a specific sufficiently-future round;
-- never selecting randomness based on registry availability;
-- never substituting another round;
-- domain-separating the returned randomness for their application.
+- authenticating their registry deployment;
+- committing to one sufficiently future round;
+- choosing a lead at least as large as the authenticated registry floor;
+- accounting for chain timing and finality assumptions;
+- selecting rounds independently of registry availability;
+- never substituting another round after commitment;
+- domain-separating randomness for their application.
+
+Neither submission method enforces the consumer lead policy.
+
+Witness coordinates are untrusted inputs validated on-chain. Verifier
+identity is pinned at construction, but codehash pinning does not guarantee
+correctness or freeze precompile behavior and pricing.
+
+Updating a deployment manifest does not migrate consumers pinned to an older
+registry.
 
 See the contract NatSpec for the complete consumer security requirements.

@@ -44,6 +44,31 @@ interface IDrandQuicknetBeaconRegistry {
         external
         returns (bytes32 randomness);
 
+    /// @notice Verifies and caches a Quicknet beacon using a supplied
+    ///         signature y-coordinate.
+    /// @dev Idempotent across both submission methods. If `round` has
+    ///      already been stored, returns the cached randomness without
+    ///      examining the signature or witness, or invoking the verifier.
+    ///
+    ///      For an unstored round, the verifier checks the witness against
+    ///      the canonical compressed signature. A rejected submission stores
+    ///      nothing and does not prevent a later corrected submission.
+    ///
+    ///      Reverts from the configured verifier are propagated unchanged.
+    /// @param round Quicknet round to verify and cache.
+    /// @param signature Canonical 48-byte compressed Quicknet signature.
+    /// @param yHi Most significant 128 bits of the signature y-coordinate.
+    /// @param yLo Least significant 256 bits of the signature y-coordinate.
+    /// @return randomness Verified randomness derived from the signature.
+    function submitBeaconWithWitness(
+        uint64 round,
+        bytes calldata signature,
+        uint128 yHi,
+        uint256 yLo
+    )
+        external
+        returns (bytes32 randomness);
+
     /// @notice Returns the verified randomness for `round`.
     /// @dev Reverts if `round` is zero or has not been stored.
     function getBeacon(

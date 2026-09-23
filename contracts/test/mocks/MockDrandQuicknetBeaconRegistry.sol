@@ -91,43 +91,27 @@ contract MockDrandQuicknetBeaconRegistry is
         override
         returns (bytes32 randomness)
     {
-        if (revertOnSubmitBeacon) {
-            revert UnexpectedCall();
-        }
-
-        if (round == 0) {
-            revert InvalidRound();
-        }
-
-        randomness = _beacons[round];
-
-        if (randomness != bytes32(0)) {
-            return randomness;
-        }
-
-        if (signature.length == 0) {
-            revert InvalidSignature();
-        }
-
-        ++verificationCount;
-
-        randomness = keccak256(
-            abi.encode(
-                round,
-                signature
-            )
-        );
-
-        if (randomness == bytes32(0)) {
-            randomness = bytes32(uint256(1));
-        }
-
-        _beacons[round] = randomness;
-
-        emit BeaconStored(
+        return _submitBeacon(
             round,
-            randomness,
-            msg.sender
+            signature
+        );
+    }
+
+    /// @dev Consumer test double only. Witness coordinates are ignored.
+    ///      Both submission methods share the cache and verification count.
+    function submitBeaconWithWitness(
+        uint64 round,
+        bytes calldata signature,
+        uint128,
+        uint256
+    )
+        external
+        override
+        returns (bytes32 randomness)
+    {
+        return _submitBeacon(
+            round,
+            signature
         );
     }
 
@@ -210,5 +194,54 @@ contract MockDrandQuicknetBeaconRegistry is
         returns (uint64)
     {
         return _latestScheduledRound;
+    }
+
+    /// @dev Shared deterministic submission behavior for consumer tests.
+    ///      The submission revert flag applies to both entry points.
+    function _submitBeacon(
+        uint64 round,
+        bytes calldata signature
+    )
+        private
+        returns (bytes32 randomness)
+    {
+        if (revertOnSubmitBeacon) {
+            revert UnexpectedCall();
+        }
+
+        if (round == 0) {
+            revert InvalidRound();
+        }
+
+        randomness = _beacons[round];
+
+        if (randomness != bytes32(0)) {
+            return randomness;
+        }
+
+        if (signature.length == 0) {
+            revert InvalidSignature();
+        }
+
+        ++verificationCount;
+
+        randomness = keccak256(
+            abi.encode(
+                round,
+                signature
+            )
+        );
+
+        if (randomness == bytes32(0)) {
+            randomness = bytes32(uint256(1));
+        }
+
+        _beacons[round] = randomness;
+
+        emit BeaconStored(
+            round,
+            randomness,
+            msg.sender
+        );
     }
 }

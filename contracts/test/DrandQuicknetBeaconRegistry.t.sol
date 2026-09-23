@@ -43,6 +43,26 @@ contract StatefulQuicknetVerifier {
             keccak256("randomness")
         );
     }
+
+    function verifyBeaconWithWitness(
+        uint64,
+        bytes calldata,
+        uint128,
+        uint256
+    )
+        external
+        returns (
+            bool verified,
+            bytes32 randomness
+        )
+    {
+        value = 1;
+
+        return (
+            true,
+            keccak256("randomness")
+        );
+    }
 }
 
 contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
@@ -635,6 +655,372 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
     }
 
     // ---------------------------------------------------------------------
+    // submitBeaconWithWitness
+    // ---------------------------------------------------------------------
+
+    function test_SubmitBeaconWithWitnessStoresVerifierRandomness()
+        public
+    {
+        uint64 round = 123;
+        bytes memory signature = hex"1234";
+        uint128 yHi = 17;
+        uint256 yLo = 29;
+        bytes32 randomness = keccak256("witness-randomness");
+
+        _mockVerifyWithWitness(
+            round,
+            signature,
+            yHi,
+            yLo,
+            true,
+            randomness
+        );
+
+        vm.expectEmit(true, true, false, true, address(registry));
+
+        emit IDrandQuicknetBeaconRegistry.BeaconStored(
+            round,
+            randomness,
+            otherSubmitter
+        );
+
+        vm.recordLogs();
+        vm.prank(otherSubmitter);
+
+        bytes32 returned = registry.submitBeaconWithWitness(
+            round,
+            signature,
+            yHi,
+            yLo
+        );
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        assertEq(logs.length, 1);
+        assertEq(returned, randomness);
+        assertTrue(registry.isStored(round));
+        assertEq(registry.getBeacon(round), randomness);
+    }
+
+    function test_SubmitBeaconWithWitnessRejectsRoundZeroBeforeVerifierCall()
+        public
+    {
+        vm.expectCall(
+            verifierAddress,
+            bytes(""),
+            uint64(0)
+        );
+
+        vm.expectRevert(
+            DrandQuicknetBeaconRegistry.InvalidRound.selector
+        );
+
+        registry.submitBeaconWithWitness(
+            0,
+            hex"1234",
+            17,
+            29
+        );
+
+        assertFalse(registry.isStored(0));
+    }
+
+    function test_SubmitBeaconWithWitnessRejectsFailedVerification()
+        public
+    {
+        uint64 round = 123;
+        bytes memory signature = hex"1234";
+
+        // A nonzero answer must still be rejected when verified is false.
+        _mockVerifyWithWitness(
+            round,
+            signature,
+            17,
+            29,
+            false,
+            keccak256("unused")
+        );
+
+        vm.expectRevert(
+            DrandQuicknetBeaconRegistry.InvalidBeacon.selector
+        );
+
+        registry.submitBeaconWithWitness(
+            round,
+            signature,
+            17,
+            29
+        );
+
+        assertFalse(registry.isStored(round));
+    }
+
+    function test_SubmitBeaconWithWitnessRejectsZeroRandomness()
+        public
+    {
+        uint64 round = 123;
+        bytes memory signature = hex"1234";
+
+        _mockVerifyWithWitness(
+            round,
+            signature,
+            17,
+            29,
+            true,
+            bytes32(0)
+        );
+
+        vm.expectRevert(
+            DrandQuicknetBeaconRegistry.InvalidBeacon.selector
+        );
+
+        registry.submitBeaconWithWitness(
+            round,
+            signature,
+            17,
+            29
+        );
+
+        assertFalse(registry.isStored(round));
+    }
+
+    function test_SubmitBeaconWithWitnessBubblesVerifierRevert()
+        public
+    {
+        uint64 round = 123;
+        bytes memory signature = hex"1234";
+
+        _mockVerifyWithWitnessRevert(
+            round,
+            signature,
+            17,
+            29
+        );
+
+        vm.expectRevert(MockVerifierFailure.selector);
+
+        registry.submitBeaconWithWitness(
+            round,
+            signature,
+            17,
+            29
+        );
+
+        assertFalse(registry.isStored(round));
+    }
+
+    function test_SubmitBeaconWithWitnessUnmockedCallRevertsLoudly()
+        public
+    {
+        uint64 round = 123;
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MockDrandQuicknetBeaconVerifier
+                    .UnmockedVerifierCall
+                    .selector,
+                round
+            )
+        );
+
+        registry.submitBeaconWithWitness(
+            round,
+            hex"1234",
+            17,
+            29
+        );
+
+        assertFalse(registry.isStored(round));
+    }
+
+    function test_CompressedSubmissionPopulatesCacheForBothMethods()
+        public
+    {
+        uint64 round = 123;
+        bytes memory signature = hex"1234";
+        bytes32 randomness = keccak256("compressed-first");
+
+        _mockVerify(
+            round,
+            signature,
+            true,
+            randomness
+        );
+
+        vm.prank(submitter);
+
+        bytes32 returned = registry.submitBeacon(
+            round,
+            signature
+        );
+
+        assertEq(returned, randomness);
+
+        _assertBothSubmissionMethodsUseCache(
+            round,
+            randomness
+        );
+    }
+
+    function test_WitnessSubmissionPopulatesCacheForBothMethods()
+        public
+    {
+        uint64 round = 123;
+        bytes memory signature = hex"1234";
+        bytes32 randomness = keccak256("witness-first");
+
+        _mockVerifyWithWitness(
+            round,
+            signature,
+            17,
+            29,
+            true,
+            randomness
+        );
+
+        vm.prank(submitter);
+
+        bytes32 returned = registry.submitBeaconWithWitness(
+            round,
+            signature,
+            17,
+            29
+        );
+
+        assertEq(returned, randomness);
+
+        _assertBothSubmissionMethodsUseCache(
+            round,
+            randomness
+        );
+    }
+
+    function test_SubmitBeaconWithWitnessRealVerifierCorrectedRetry()
+        public
+    {
+        uint64 round = 1000;
+
+        DrandQuicknetBeaconVerifier realVerifier =
+            new DrandQuicknetBeaconVerifier();
+
+        address realVerifierAddress = address(realVerifier);
+
+        DrandQuicknetBeaconRegistry realRegistry =
+            new DrandQuicknetBeaconRegistry(
+                realVerifierAddress,
+                realVerifierAddress.codehash,
+                TEST_MINIMUM_LEAD_ROUNDS
+            );
+
+        bytes memory signature =
+            hex"b44679b9a59af2ec876b1a6b1ad52ea9"
+            hex"b1615fc3982b19576350f93447cb1125"
+            hex"e342b73a8dd2bacbe47e4b6b63ed5e39";
+
+        uint128 yHi =
+            0x11f92e4521ef54f047b64b85fa98db2d;
+
+        uint256 yLo =
+            0x46f0f44add1f60b93f8a0dbddd63b34f238657c2d93aed18b90bddd60a01b6d2;
+
+        bytes32 expectedRandomness =
+            0xfe290beca10872ef2fb164d2aa4442de4566183ec51c56ff3cd603d930e54fdd;
+
+        assertEq(sha256(signature), expectedRandomness);
+
+        // A valid signature with the wrong witness must not store a beacon.
+        vm.expectRevert(
+            DrandQuicknetBeaconRegistry.InvalidBeacon.selector
+        );
+
+        realRegistry.submitBeaconWithWitness(
+            round,
+            signature,
+            0,
+            0
+        );
+
+        assertFalse(realRegistry.isStored(round));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DrandQuicknetBeaconRegistry.BeaconUnavailable.selector,
+                round
+            )
+        );
+
+        realRegistry.getBeacon(round);
+
+        // The same signature and round succeed with the correct witness.
+        vm.expectEmit(true, true, false, true, address(realRegistry));
+
+        emit IDrandQuicknetBeaconRegistry.BeaconStored(
+            round,
+            expectedRandomness,
+            otherSubmitter
+        );
+
+        vm.recordLogs();
+        vm.prank(otherSubmitter);
+
+        bytes32 returned = realRegistry.submitBeaconWithWitness(
+            round,
+            signature,
+            yHi,
+            yLo
+        );
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        assertEq(logs.length, 1);
+        assertEq(returned, expectedRandomness);
+        assertTrue(realRegistry.isStored(round));
+        assertEq(realRegistry.getBeacon(round), expectedRandomness);
+    }
+
+    function test_SubmitBeaconWithWitnessVerifierRunsInStaticContext()
+        public
+    {
+        StatefulQuicknetVerifier statefulVerifier =
+            new StatefulQuicknetVerifier();
+
+        address statefulVerifierAddress = address(statefulVerifier);
+
+        DrandQuicknetBeaconRegistry staticRegistry =
+            new DrandQuicknetBeaconRegistry(
+                statefulVerifierAddress,
+                statefulVerifierAddress.codehash,
+                TEST_MINIMUM_LEAD_ROUNDS
+            );
+
+        uint64 round = 123;
+
+        // Bound the gas consumed by the deliberate SSTORE violation.
+        // A non-static verifier call would instead succeed and store a beacon.
+        (
+            bool success,
+            bytes memory returndata
+        ) = address(staticRegistry).call{
+            gas: 1_000_000
+        }(
+            abi.encodeCall(
+                DrandQuicknetBeaconRegistry.submitBeaconWithWitness,
+                (
+                    round,
+                    hex"1234",
+                    uint128(17),
+                    uint256(29)
+                )
+            )
+        );
+
+        assertFalse(success);
+        assertEq(returndata.length, 0);
+        assertEq(statefulVerifier.value(), 0);
+        assertFalse(staticRegistry.isStored(round));
+    }
+
+    // ---------------------------------------------------------------------
     // getBeacon / isStored
     // ---------------------------------------------------------------------
 
@@ -832,5 +1218,54 @@ contract DrandQuicknetBeaconRegistryTest is RegistryTestBase {
             registry.roundScheduledTime(round + 1),
             registry.roundScheduledTime(round)
         );
+    }
+
+    /// @dev Checks both cached submission paths after the first import.
+    ///      Invalid inputs must be ignored without verifier calls or events.
+    function _assertBothSubmissionMethodsUseCache(
+        uint64 round,
+        bytes32 expectedRandomness
+    )
+        internal
+    {
+        vm.clearMockedCalls();
+
+        // An empty prefix matches any call to the configured verifier.
+        vm.expectCall(
+            verifierAddress,
+            bytes(""),
+            uint64(0)
+        );
+
+        vm.recordLogs();
+        vm.prank(otherSubmitter);
+
+        bytes32 witnessReturned = registry.submitBeaconWithWitness(
+            round,
+            hex"",
+            type(uint128).max,
+            type(uint256).max
+        );
+
+        Vm.Log[] memory witnessLogs = vm.getRecordedLogs();
+
+        assertEq(witnessReturned, expectedRandomness);
+        assertEq(witnessLogs.length, 0);
+        assertEq(registry.getBeacon(round), expectedRandomness);
+
+        vm.recordLogs();
+        vm.prank(otherSubmitter);
+
+        bytes32 compressedReturned = registry.submitBeacon(
+            round,
+            hex""
+        );
+
+        Vm.Log[] memory compressedLogs = vm.getRecordedLogs();
+
+        assertEq(compressedReturned, expectedRandomness);
+        assertEq(compressedLogs.length, 0);
+        assertTrue(registry.isStored(round));
+        assertEq(registry.getBeacon(round), expectedRandomness);
     }
 }

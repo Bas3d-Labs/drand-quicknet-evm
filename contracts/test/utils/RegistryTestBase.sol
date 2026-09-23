@@ -95,4 +95,57 @@ abstract contract RegistryTestBase is Test {
             )
         );
     }
+
+    function _mockVerifyWithWitness(
+        uint64 round,
+        bytes memory signature,
+        uint128 yHi,
+        uint256 yLo,
+        bool verified,
+        bytes32 randomness
+    )
+        internal
+    {
+        vm.mockCall(
+            verifierAddress,
+            abi.encodeWithSelector(
+                IDrandQuicknetBeaconVerifier
+                    .verifyBeaconWithWitness
+                    .selector,
+                round,
+                signature,
+                yHi,
+                yLo
+            ),
+            abi.encode(
+                verified,
+                randomness
+            )
+        );
+    }
+
+    function _mockVerifyWithWitnessRevert(
+        uint64 round,
+        bytes memory signature,
+        uint128 yHi,
+        uint256 yLo
+    )
+        internal
+    {
+        vm.mockCallRevert(
+            verifierAddress,
+            abi.encodeWithSelector(
+                IDrandQuicknetBeaconVerifier
+                    .verifyBeaconWithWitness
+                    .selector,
+                round,
+                signature,
+                yHi,
+                yLo
+            ),
+            abi.encodeWithSelector(
+                MockVerifierFailure.selector
+            )
+        );
+    }
 }

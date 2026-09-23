@@ -74,6 +74,41 @@ function verify(round, signature) {
   return bls.verify(point, message(round), publicKey);
 }
 
+// Independent witness oracle: compare the supplied integer y with Noble's
+// decoding of the compressed signature, then verify the decoded point.
+// Solidity's uint128/uint256 limb handling is tested by the Foundry suite.
+function verifyWithWitness(round, signature, y) {
+  if (
+    round === 0n ||
+    !canonical(signature) ||
+    y < 0n ||
+    y >= p
+  ) {
+    return false;
+  }
+
+  // Only point decoding/validation errors count as invalid input.
+  // Hashing, serialization, and pairing errors must fail the audit.
+  let point;
+  try {
+    point = bls12_381.G1.Point.fromBytes(signature);
+    point.assertValidity();
+  } catch {
+    return false;
+  }
+
+  const uncompressed = point.toBytes(false);
+  assert.equal(uncompressed.length, 96);
+
+  const expectedY = BigInt(hex(uncompressed.subarray(48)));
+
+  if (y !== expectedY) {
+    return false;
+  }
+
+  return bls.verify(point, message(round), publicKey);
+}
+
 assert.equal(corpus.schemaVersion, 1);
 assert.equal(corpus.quicknet.dst, dst);
 assert.equal(corpus.quicknet.publicKey, hex(publicKey));
@@ -102,15 +137,81 @@ for (const [index, vector] of Object.values(corpus.positive).entries()) {
     `${vector.id}: independent decompression`,
   );
 
+  const uncompressed = bytes(vector.uncompressed);
+  assert.equal(uncompressed.length, 96, vector.id);
+
+  const y = BigInt(hex(uncompressed.subarray(48)));
+  const oppositeY = p - y;
+
+  assert.equal(
+    verifyWithWitness(round, signature, y),
+    true,
+    `${vector.id}: independent witness`,
+  );
+
+  assert.equal(
+    verifyWithWitness(0n, signature, y),
+    false,
+    `${vector.id}: witness round zero`,
+  );
+
+  assert.equal(
+    verifyWithWitness(round, signature, oppositeY),
+    false,
+    `${vector.id}: original signature with opposite root`,
+  );
+
+  assert.equal(
+    verifyWithWitness(round, signature, p),
+    false,
+    `${vector.id}: witness y equals p`,
+  );
+
+  assert.equal(
+    verifyWithWitness(round, signature, p + 1n),
+    false,
+    `${vector.id}: witness y exceeds p`,
+  );
+
+  assert.equal(
+    verifyWithWitness(round, signature, y + 1n),
+    false,
+    `${vector.id}: mutated witness`,
+  );
+
   for (let byteIndex = 0n; byteIndex < 8n; byteIndex++) {
-    const offset = 1n << (8n * byteIndex);
-    assert.equal(verify(round + offset, signature), false, `${vector.id}: wrong round`);
+    const mask = 1n << (8n * byteIndex);
+    const wrongRound = round ^ mask;
+
+    assert.equal(
+      verify(wrongRound, signature),
+      false,
+      `${vector.id}: wrong round`,
+    );
+
+    assert.equal(
+      verifyWithWitness(wrongRound, signature, y),
+      false,
+      `${vector.id}: witness wrong round`,
+    );
   }
 
   const flipped = Buffer.from(signature);
   flipped[0] ^= 0x20;
 
   assert.equal(verify(round, flipped), false, `${vector.id}: sign flip`);
+
+  assert.equal(
+    verifyWithWitness(round, flipped, y),
+    false,
+    `${vector.id}: flipped signature with original root`,
+  );
+
+  assert.equal(
+    verifyWithWitness(round, flipped, oppositeY),
+    false,
+    `${vector.id}: consistently encoded negative signature`,
+  );
 }
 
 for (const [index, vector] of Object.values(corpus.negative).entries()) {
@@ -176,4 +277,9 @@ console.log(
   `Quicknet KAT audit passed: ${seen.size} published rounds, ` +
   `${Object.keys(corpus.negative).length} fixed negatives, ` +
   `${seen.size * 9} derived round/sign negatives, 1 source-key acceptance.`,
+);
+
+console.log(
+  'Independent witness audit passed: ' +
+  `${seen.size} acceptances and ${seen.size * 15} rejections.`,
 );

@@ -1,0 +1,747 @@
+{
+  "status": "PASS",
+  "chainId": "4663",
+  "block": "70229401",
+  "blockHash": "0x925f0521d073463cc13d5c924fd9ab4a410e080bc7f8547422217dd921c88eec",
+  "verifierRuntimeSha256": "2d3f9e5b3b9da9a8c137dc92ff364bbc440ecf37930dd777fd4194cd83531568",
+  "harnessRuntimeSha256": "bddaa7cb42c07b5266ffaabaffd6b411e5478fbf9c3fe7a7f41dd65d66803e5a",
+  "verifierInitcodeSha256": "980d775a4363a40918b540f638b247c8c663bf13b11a9dcaea8f1c44bba7ab56",
+  "harnessInitcodeSha256": "a57a9927dbfda095ffdc6aed0ca38032c111cff18aa15117b604064d464f301d",
+  "checks": [
+    {
+      "label": "verifier constructor",
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        },
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        },
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        },
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "harness constructor",
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        },
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        },
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        },
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-1: compressed",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-1: witness",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-1: opposite witness",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-1: sign mismatch",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-1: consistent sign flip",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-2: compressed",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-2: witness",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-2: opposite witness",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-2: sign mismatch",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-2: consistent sign flip",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-255: compressed",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-255: witness",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-255: opposite witness",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-255: sign mismatch",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-255: consistent sign flip",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-256: compressed",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-256: witness",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-256: opposite witness",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-256: sign mismatch",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-256: consistent sign flip",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-1000: compressed",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-1000: witness",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-1000: opposite witness",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-1000: sign mismatch",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-1000: consistent sign flip",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-13335: compressed",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-13335: witness",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-13335: opposite witness",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-13335: sign mismatch",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-13335: consistent sign flip",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-65535: compressed",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-65535: witness",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-65535: opposite witness",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-65535: sign mismatch",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-65535: consistent sign flip",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-65536: compressed",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-65536: witness",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-65536: opposite witness",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-65536: sign mismatch",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-65536: consistent sign flip",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-16777215: compressed",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-16777215: witness",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-16777215: opposite witness",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-16777215: sign mismatch",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-16777215: consistent sign flip",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-16777216: compressed",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-16777216: witness",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-16777216: opposite witness",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-16777216: sign mismatch",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-16777216: consistent sign flip",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-20791007: compressed",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-20791007: witness",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-20791007: opposite witness",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-20791007: sign mismatch",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-20791007: consistent sign flip",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-31089008: compressed",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-31089008: witness",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "quicknet-round-31089008: opposite witness",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-31089008: sign mismatch",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "quicknet-round-31089008: consistent sign flip",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "round zero",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "x equals p",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "y equals p",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "y exceeds p",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "infinity",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "length 0",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "length 47",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "length 49",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "length 96",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "flags 0",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "flags 192",
+      "verified": false,
+      "pairings": []
+    },
+    {
+      "label": "raw pairing: valid KAT",
+      "pairing": {
+        "callSuccess": true,
+        "gasForwarded": "500000",
+        "gasUsed": "102900"
+      }
+    },
+    {
+      "label": "wrapper: valid KAT",
+      "verified": true,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "raw pairing: negative KAT",
+      "pairing": {
+        "callSuccess": true,
+        "gasForwarded": "500000",
+        "gasUsed": "102900"
+      }
+    },
+    {
+      "label": "wrapper: negative KAT",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": true,
+          "gasForwarded": "500000",
+          "gasUsed": "102900"
+        }
+      ]
+    },
+    {
+      "label": "raw pairing: off curve",
+      "pairing": {
+        "callSuccess": false,
+        "gasForwarded": "500000",
+        "gasUsed": "500000"
+      }
+    },
+    {
+      "label": "wrapper: off curve",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": false,
+          "gasForwarded": "500000",
+          "gasUsed": "500000"
+        }
+      ]
+    },
+    {
+      "label": "raw pairing: order three, small root",
+      "pairing": {
+        "callSuccess": false,
+        "gasForwarded": "500000",
+        "gasUsed": "500000"
+      }
+    },
+    {
+      "label": "wrapper: order three, small root",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": false,
+          "gasForwarded": "500000",
+          "gasUsed": "500000"
+        }
+      ]
+    },
+    {
+      "label": "raw pairing: order three, large root",
+      "pairing": {
+        "callSuccess": false,
+        "gasForwarded": "500000",
+        "gasUsed": "500000"
+      }
+    },
+    {
+      "label": "wrapper: order three, large root",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": false,
+          "gasForwarded": "500000",
+          "gasUsed": "500000"
+        }
+      ]
+    },
+    {
+      "label": "raw pairing: x4 non-subgroup",
+      "pairing": {
+        "callSuccess": false,
+        "gasForwarded": "500000",
+        "gasUsed": "500000"
+      }
+    },
+    {
+      "label": "wrapper: x4 non-subgroup",
+      "verified": false,
+      "pairings": [
+        {
+          "callSuccess": false,
+          "gasForwarded": "500000",
+          "gasUsed": "500000"
+        }
+      ]
+    }
+  ]
+}
