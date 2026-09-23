@@ -27,7 +27,9 @@
     "check": "pnpm typecheck && pnpm test && pnpm build && pnpm security:profile",
     "check:relayer": "pnpm build:quicknet && pnpm build:registry-sdk && pnpm test:relayer && pnpm typecheck:relayer && pnpm build:relayer",
     "security:profile": "tsx scripts/security/profile.ts",
-    "security:check": "tsx scripts/security/check.ts"
+    "security:check": "tsx scripts/security/check.ts",
+    "changeset": "changeset",
+    "changeset:status": "changeset status"
   },
   "devEngines": {
     "packageManager": {
