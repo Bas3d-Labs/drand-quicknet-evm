@@ -66,13 +66,23 @@ jobs:
             --file apps/relayer/Dockerfile \
             --tag drand-quicknet-relayer:ci \
             .
-      - name: Verify relayer container
+
+      - name: Verify relayer image contents
         run: |
           docker run --rm \
-            --entrypoint sh \
-            drand-quicknet-relayer:ci \
-            -c '
-              test -f dist/cli.js &&
-              test -d node_modules &&
-              test -d /home/deployments
-            '
+          --entrypoint sh \
+          drand-quicknet-relayer:ci \
+          -c '
+            test -f dist/bootstrap.js &&
+            test -f dist/cli/cli.js &&
+            test -d node_modules &&
+            test -f /home/deployments/robinhood-testnet.json
+          '
+
+      - name: Verify relayer help
+        run: |
+          docker run --rm --network none \
+            drand-quicknet-relayer:ci --help
+
+          docker run --rm --network none \
+            drand-quicknet-relayer:ci daemon --help
