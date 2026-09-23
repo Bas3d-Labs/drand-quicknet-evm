@@ -27,7 +27,10 @@
     "check": "pnpm typecheck && pnpm test && pnpm build && pnpm security:profile",
     "check:relayer": "pnpm build:quicknet && pnpm build:registry-sdk && pnpm test:relayer && pnpm typecheck:relayer && pnpm build:relayer",
     "security:profile": "tsx scripts/security/profile.ts",
-    "security:check": "tsx scripts/security/check.ts"
+    "security:check": "tsx scripts/security/check.ts",
+    "changeset": "changeset",
+    "changeset:status": "changeset status",
+    "version:packages": "changeset version && pnpm install --lockfile-only --no-frozen-lockfile"
   },
   "devEngines": {
     "packageManager": {
@@ -42,6 +45,7 @@
     }
   },
   "devDependencies": {
+    "@changesets/cli": "3.0.3",
     "@types/node": "^26.2.0",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
