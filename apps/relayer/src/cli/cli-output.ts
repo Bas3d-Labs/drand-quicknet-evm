@@ -224,12 +224,35 @@ export function renderCliOutput(
 
     if (status === 'imported') {
       const hash = hex(own(result, 'transactionHash'), 32);
+      const submission = own(result, 'submission');
 
-      return [
+      const lines = [
         'Imported Quicknet round ' + round + '.',
         'Randomness: ' + randomness,
         'Transaction: ' + hash,
-      ].join('\n');
+      ];
+
+      if (submission === 'witness') {
+        lines.push('Submission: witness');
+      } else if (submission === 'compressed') {
+        const reason = own(result, 'fallbackReason');
+
+        if (
+          reason !== 'witness-rejected' &&
+          reason !== 'witness-decode-failed'
+        ) {
+          throw new TypeError('Invalid fallback reason.');
+        }
+
+        lines.push(
+          'Submission: compressed',
+          'Fallback reason: ' + reason,
+        );
+      } else {
+        throw new TypeError('Invalid submission method.');
+      }
+
+      return lines.join('\n');
     }
 
     throw new TypeError('Invalid import outcome.');

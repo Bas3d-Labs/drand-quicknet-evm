@@ -132,6 +132,7 @@ function createImportedRound(
     round,
     result: {
       status: 'imported',
+      submission: 'witness',
       round,
       randomness: RANDOMNESS,
       transactionHash: TRANSACTION_HASH,
@@ -232,6 +233,8 @@ describe('createDaemonLogger', () => {
       scanType: 'durable',
       round: ROUND,
       transactionHash: TRANSACTION_HASH,
+      submission: 'witness',
+      fallbackReason: undefined,
     });
 
     expect(loggerMocks.roundAlreadyStored).not.toHaveBeenCalled();
@@ -258,6 +261,8 @@ describe('createDaemonLogger', () => {
       scanType: 'soft',
       round: ROUND,
       transactionHash: TRANSACTION_HASH,
+      submission: 'witness',
+      fallbackReason: undefined,
     });
 
     expect(loggerMocks.roundAlreadyStored).not.toHaveBeenCalled();
@@ -562,6 +567,8 @@ describe('createDaemonLogger', () => {
       scanType: 'durable',
       round: 9_007_199_254_740_993n,
       transactionHash: TRANSACTION_HASH,
+      submission: 'witness',
+      fallbackReason: undefined,
     });
 
     expect(loggerMocks.checkpointAdvanced).toHaveBeenCalledWith({
@@ -719,5 +726,48 @@ describe('createDaemonLogger', () => {
     });
 
     expect(loggerMocks.consumerFailed).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'witness-rejected',
+    'witness-decode-failed',
+  ] as const)(
+    'reports a completed fallback through the configured logger: %s',
+    (fallbackReason) => {
+      const round: ProcessedQuicknetRound = {
+        round: ROUND,
+        result: {
+          status: 'imported',
+          round: ROUND,
+          randomness: RANDOMNESS,
+          transactionHash: TRANSACTION_HASH,
+          submission: 'compressed',
+          fallbackReason,
+        },
+      };
+
+      const iteration = createIteration({
+        durableScan: createScan([round]),
+      });
+
+      const daemonLogger = createDaemonLogger({
+        logger: LOGGER,
+        now: () => 0,
+      });
+
+      daemonLogger.onCycle(
+        createSuccessfulCycle(iteration),
+      );
+
+      expect(
+        loggerMocks.roundImported,
+      ).toHaveBeenCalledExactlyOnceWith({
+        consumer: CONSUMER_A,
+        scanType: 'durable',
+        round: ROUND,
+        transactionHash: TRANSACTION_HASH,
+        submission: 'compressed',
+        fallbackReason,
+      });
   });
 });

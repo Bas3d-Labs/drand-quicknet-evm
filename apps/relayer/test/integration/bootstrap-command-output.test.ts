@@ -118,6 +118,7 @@ it.each([
 
     const result = `{
       status: 'imported',
+      submission: 'witness',
       round: 100n,
       randomness: '0x' + '33'.repeat(32),
       transactionHash: '0x' + '44'.repeat(32),

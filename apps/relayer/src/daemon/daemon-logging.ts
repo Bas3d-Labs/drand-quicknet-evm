@@ -124,6 +124,8 @@ function logScanRounds(
         scanType,
         round: processedRound.round,
         transactionHash: result.transactionHash,
+        submission: result.submission,
+        fallbackReason: result.fallbackReason,
       });
 
       continue;

@@ -28,8 +28,16 @@ const quicknetMocks = vi.hoisted(() => ({
 
 const registryMocks = vi.hoisted(() => ({
   createRegistryReader: vi.fn(),
-  submitBeacon: vi.fn(),
 }));
+
+const submissionMocks = vi.hoisted(() => ({
+  simulateBeaconSubmission: vi.fn(),
+}));
+
+vi.mock(
+  '../../src/rounds/simulate-beacon-submission.js',
+  () => submissionMocks,
+);
 
 vi.mock(
   '@based-labs/drand-quicknet',
@@ -47,8 +55,11 @@ import {
 
 const CHAIN_ID = 46630;
 
-const REGISTRY_ADDRESS: Address = '0x1111111111111111111111111111111111111111';
-const ACCOUNT_ADDRESS: Address = '0x2222222222222222222222222222222222222222';
+const REGISTRY_ADDRESS: Address =
+  '0x1111111111111111111111111111111111111111';
+
+const ACCOUNT_ADDRESS: Address =
+  '0x2222222222222222222222222222222222222222';
 
 const REGISTRY_RUNTIME_CODEHASH: Hex =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -69,9 +80,11 @@ const SUBMITTED_TRANSACTION_HASH: Hex =
 
 const RECEIPT_TRANSACTION_HASH: Hex =
   '0x6666666666666666666666666666666666666666666666666666666666666666';
-  
-const VERIFIER_ADDRESS = '0x5555555555555555555555555555555555555555';
-const VERIFIER_RUNTIME_CODEHASH =
+
+const VERIFIER_ADDRESS: Address =
+  '0x5555555555555555555555555555555555555555';
+
+const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 const RECEIPT_BLOCK_NUMBER = 123_456n;
@@ -84,28 +97,29 @@ const DEPLOYMENT: RegistryDeployment = {
   verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
 };
 
+const SIMULATED_REQUEST = {
+  address: REGISTRY_ADDRESS,
+  functionName: 'submitBeaconWithWitness',
+  gas: 1_000_000n,
+} as const;
+
 describe('importQuicknetRound', () => {
   let verifyDeployment: ReturnType<typeof vi.fn>;
   let isStored: ReturnType<typeof vi.fn>;
   let getBeacon: ReturnType<typeof vi.fn>;
-  let waitForTransactionReceipt:
-    ReturnType<typeof vi.fn>;
+  let waitForTransactionReceipt: ReturnType<typeof vi.fn>;
+  let writeContract: ReturnType<typeof vi.fn>;
 
   let publicClient: PublicClient;
   let walletClient: WalletClient;
   let account: Account;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
 
-    verifyDeployment =
-      vi.fn().mockResolvedValue(undefined);
-
-    isStored =
-      vi.fn().mockResolvedValue(false);
-
-    getBeacon =
-      vi.fn().mockResolvedValue(RANDOMNESS);
+    verifyDeployment = vi.fn().mockResolvedValue(undefined);
+    isStored = vi.fn().mockResolvedValue(false);
+    getBeacon = vi.fn().mockResolvedValue(RANDOMNESS);
 
     registryMocks.createRegistryReader.mockReturnValue({
       deployment: DEPLOYMENT,
@@ -119,23 +133,29 @@ describe('importQuicknetRound', () => {
       signature: COMPRESSED_SIGNATURE,
     });
 
-    registryMocks.submitBeacon.mockResolvedValue({
-      hash: SUBMITTED_TRANSACTION_HASH,
-      randomness: RANDOMNESS,
+    submissionMocks.simulateBeaconSubmission.mockResolvedValue({
+      submission: 'witness',
+      request: SIMULATED_REQUEST,
+      result: RANDOMNESS,
     });
 
-    waitForTransactionReceipt =
-      vi.fn().mockResolvedValue({
-        status: 'success',
-        transactionHash: RECEIPT_TRANSACTION_HASH,
-        blockNumber: RECEIPT_BLOCK_NUMBER,
-      });
+    waitForTransactionReceipt = vi.fn().mockResolvedValue({
+      status: 'success',
+      transactionHash: RECEIPT_TRANSACTION_HASH,
+      blockNumber: RECEIPT_BLOCK_NUMBER,
+    });
 
     publicClient = {
       waitForTransactionReceipt,
     } as unknown as PublicClient;
 
-    walletClient = {} as WalletClient;
+    writeContract = vi.fn().mockResolvedValue(
+      SUBMITTED_TRANSACTION_HASH,
+    );
+
+    walletClient = {
+      writeContract,
+    } as unknown as WalletClient;
 
     account = {
       address: ACCOUNT_ADDRESS,
@@ -155,9 +175,7 @@ describe('importQuicknetRound', () => {
   }
 
   it('rejects round zero', async () => {
-    await expect(
-      importRound(0n),
-    ).rejects.toThrow(
+    await expect(importRound(0n)).rejects.toThrow(
       'Quicknet round must be greater than zero.',
     );
 
@@ -165,15 +183,11 @@ describe('importQuicknetRound', () => {
       registryMocks.createRegistryReader,
     ).not.toHaveBeenCalled();
 
-    expect(
-      quicknetMocks.fetchBeacon,
-    ).not.toHaveBeenCalled();
+    expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
   });
 
   it('rejects a negative round', async () => {
-    await expect(
-      importRound(-1n),
-    ).rejects.toThrow(RangeError);
+    await expect(importRound(-1n)).rejects.toThrow(RangeError);
 
     expect(
       registryMocks.createRegistryReader,
@@ -194,9 +208,7 @@ describe('importQuicknetRound', () => {
   it('verifies the registry deployment before reading it', async () => {
     await importRound();
 
-    expect(
-      verifyDeployment,
-    ).toHaveBeenCalledOnce();
+    expect(verifyDeployment).toHaveBeenCalledOnce();
 
     expect(
       firstInvocationOrder(verifyDeployment),
@@ -210,26 +222,17 @@ describe('importQuicknetRound', () => {
 
     verifyDeployment.mockRejectedValue(error);
 
-    await expect(
-      importRound(),
-    ).rejects.toBe(error);
+    await expect(importRound()).rejects.toBe(error);
 
-    expect(
-      isStored,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      quicknetMocks.fetchBeacon,
-    ).not.toHaveBeenCalled();
+    expect(isStored).not.toHaveBeenCalled();
+    expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
   });
 
   it('returns an already-stored beacon without fetching or submitting', async () => {
     isStored.mockResolvedValue(true);
-
     getBeacon.mockResolvedValue(RANDOMNESS);
 
-    const result =
-      await importRound();
+    const result = await importRound();
 
     expect(result).toEqual({
       status: 'already-stored',
@@ -237,37 +240,22 @@ describe('importQuicknetRound', () => {
       randomness: RANDOMNESS,
     });
 
-    expect(
-      isStored,
-    ).toHaveBeenCalledWith(ROUND);
+    expect(isStored).toHaveBeenCalledWith(ROUND);
+    expect(getBeacon).toHaveBeenCalledWith(ROUND);
+    expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
 
     expect(
-      getBeacon,
-    ).toHaveBeenCalledWith(ROUND);
-
-    expect(
-      quicknetMocks.fetchBeacon,
+      submissionMocks.simulateBeaconSubmission,
     ).not.toHaveBeenCalled();
 
-    expect(
-      registryMocks.submitBeacon,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      waitForTransactionReceipt,
-    ).not.toHaveBeenCalled();
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
   });
 
   it('fetches exactly the requested Quicknet round', async () => {
     await importRound();
 
-    expect(
-      quicknetMocks.fetchBeacon,
-    ).toHaveBeenCalledOnce();
-
-    expect(
-      quicknetMocks.fetchBeacon,
-    ).toHaveBeenCalledWith(ROUND);
+    expect(quicknetMocks.fetchBeacon).toHaveBeenCalledOnce();
+    expect(quicknetMocks.fetchBeacon).toHaveBeenCalledWith(ROUND);
   });
 
   it('rejects a fetched beacon for a different round', async () => {
@@ -276,38 +264,33 @@ describe('importQuicknetRound', () => {
       signature: COMPRESSED_SIGNATURE,
     });
 
-    await expect(
-      importRound(),
-    ).rejects.toThrow(
-      `Quicknet round mismatch: requested ${ROUND}, received ${ROUND + 1n}.`,
+    await expect(importRound()).rejects.toThrow(
+      `Quicknet round mismatch: requested ${ROUND}, ` +
+      `received ${ROUND + 1n}.`,
     );
 
     expect(
-      registryMocks.submitBeacon,
+      submissionMocks.simulateBeaconSubmission,
     ).not.toHaveBeenCalled();
   });
 
   it('propagates beacon fetch failures', async () => {
     const error = new Error('Quicknet unavailable');
 
-    quicknetMocks.fetchBeacon.mockRejectedValue(
-      error,
-    );
+    quicknetMocks.fetchBeacon.mockRejectedValue(error);
 
-    await expect(
-      importRound(),
-    ).rejects.toBe(error);
+    await expect(importRound()).rejects.toBe(error);
 
     expect(
-      registryMocks.submitBeacon,
+      submissionMocks.simulateBeaconSubmission,
     ).not.toHaveBeenCalled();
   });
 
-  it('submits the fetched compressed signature', async () => {
+  it('prepares submission with the fetched signature', async () => {
     await importRound();
 
     expect(
-      registryMocks.submitBeacon,
+      submissionMocks.simulateBeaconSubmission,
     ).toHaveBeenCalledWith(
       expect.objectContaining({
         round: ROUND,
@@ -316,32 +299,108 @@ describe('importQuicknetRound', () => {
     );
   });
 
-  it('propagates registry submission failures', async () => {
+  it('propagates submission simulation failures', async () => {
     const error = new Error('Simulation reverted');
 
-    registryMocks.submitBeacon.mockRejectedValue(
+    submissionMocks.simulateBeaconSubmission.mockRejectedValue(
       error,
     );
 
-    await expect(
-      importRound(),
-    ).rejects.toBe(error);
+    await expect(importRound()).rejects.toBe(error);
+
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'witness-rejected',
+    'witness-decode-failed',
+  ] as const)(
+    'preserves the compressed request and reports %s after import',
+    async (fallbackReason) => {
+      const request = {
+        ...SIMULATED_REQUEST,
+        functionName: 'submitBeacon',
+      };
+
+      submissionMocks.simulateBeaconSubmission.mockResolvedValue({
+        request,
+        result: RANDOMNESS,
+        submission: 'compressed',
+        fallbackReason,
+      });
+
+      const result = await importRound();
+
+      expect(writeContract).toHaveBeenCalledOnce();
+      expect(writeContract.mock.calls[0]?.[0]).toBe(request);
+
+      expect(result).toMatchObject({
+        status: 'imported',
+        submission: 'compressed',
+        fallbackReason,
+        randomness: RANDOMNESS,
+      });
+    },
+  );
+
+  it('broadcasts the exact simulated request once', async () => {
+    await importRound();
+
+    expect(writeContract).toHaveBeenCalledOnce();
 
     expect(
-      waitForTransactionReceipt,
-    ).not.toHaveBeenCalled();
+      writeContract.mock.calls[0]?.[0],
+    ).toBe(SIMULATED_REQUEST);
+  });
+
+  it('does not broadcast if simulation fails', async () => {
+    const error = new Error('Simulation failed');
+
+    submissionMocks.simulateBeaconSubmission.mockRejectedValue(
+      error,
+    );
+
+    await expect(importRound()).rejects.toBe(error);
+
+    expect(writeContract).not.toHaveBeenCalled();
+  });
+
+  it('does not resimulate or retry an uncertain wallet submission', async () => {
+    const error = new Error('Transaction submission uncertain');
+
+    writeContract.mockRejectedValue(error);
+
+    await expect(importRound()).rejects.toBe(error);
+
+    expect(
+      submissionMocks.simulateBeaconSubmission,
+    ).toHaveBeenCalledOnce();
+
+    expect(writeContract).toHaveBeenCalledOnce();
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it('does not resubmit after a receipt timeout', async () => {
+    const error = new Error('Receipt timeout');
+
+    waitForTransactionReceipt.mockRejectedValue(error);
+
+    await expect(importRound()).rejects.toBe(error);
+
+    expect(
+      submissionMocks.simulateBeaconSubmission,
+    ).toHaveBeenCalledOnce();
+
+    expect(writeContract).toHaveBeenCalledOnce();
+    expect(getBeacon).not.toHaveBeenCalled();
   });
 
   it('waits for the submitted transaction receipt', async () => {
     await importRound();
 
-    expect(
-      waitForTransactionReceipt,
-    ).toHaveBeenCalledOnce();
+    expect(waitForTransactionReceipt).toHaveBeenCalledOnce();
 
-    expect(
-      waitForTransactionReceipt,
-    ).toHaveBeenCalledWith({
+    expect(waitForTransactionReceipt).toHaveBeenCalledWith({
       hash: SUBMITTED_TRANSACTION_HASH,
     });
   });
@@ -353,27 +412,19 @@ describe('importQuicknetRound', () => {
       blockNumber: RECEIPT_BLOCK_NUMBER,
     });
 
-    await expect(
-      importRound(),
-    ).rejects.toThrow(
+    await expect(importRound()).rejects.toThrow(
       `Registry submission reverted: ${RECEIPT_TRANSACTION_HASH}`,
     );
 
-    expect(
-      getBeacon,
-    ).not.toHaveBeenCalled();
+    expect(getBeacon).not.toHaveBeenCalled();
   });
 
   it('reads the stored beacon at the receipt block after successful inclusion', async () => {
     await importRound();
 
-    expect(
-      getBeacon,
-    ).toHaveBeenCalledOnce();
+    expect(getBeacon).toHaveBeenCalledOnce();
 
-    expect(
-      getBeacon,
-    ).toHaveBeenCalledWith(
+    expect(getBeacon).toHaveBeenCalledWith(
       ROUND,
       RECEIPT_BLOCK_NUMBER,
     );
@@ -395,36 +446,27 @@ describe('importQuicknetRound', () => {
         .mockRejectedValueOnce(error)
         .mockResolvedValueOnce(RANDOMNESS);
 
-      const resultPromise =
-        importRound();
+      const resultPromise = importRound();
 
       await vi.runAllTimersAsync();
 
-      await expect(
-        resultPromise,
-      ).resolves.toEqual({
+      await expect(resultPromise).resolves.toEqual({
         status: 'imported',
+        submission: 'witness',
         round: ROUND,
         randomness: RANDOMNESS,
-        transactionHash:
-          RECEIPT_TRANSACTION_HASH,
+        transactionHash: RECEIPT_TRANSACTION_HASH,
       });
 
-      expect(
-        getBeacon,
-      ).toHaveBeenCalledTimes(2);
+      expect(getBeacon).toHaveBeenCalledTimes(2);
 
-      expect(
-        getBeacon,
-      ).toHaveBeenNthCalledWith(
+      expect(getBeacon).toHaveBeenNthCalledWith(
         1,
         ROUND,
         RECEIPT_BLOCK_NUMBER,
       );
 
-      expect(
-        getBeacon,
-      ).toHaveBeenNthCalledWith(
+      expect(getBeacon).toHaveBeenNthCalledWith(
         2,
         ROUND,
         RECEIPT_BLOCK_NUMBER,
@@ -449,19 +491,14 @@ describe('importQuicknetRound', () => {
         .mockRejectedValueOnce(lastError);
 
       const resultPromise = importRound();
-
-      const rejection =
-        expect(resultPromise).rejects.toBe(
-          lastError,
-        );
+      const rejection = expect(resultPromise).rejects.toBe(
+        lastError,
+      );
 
       await vi.runAllTimersAsync();
-
       await rejection;
 
-      expect(
-        getBeacon,
-      ).toHaveBeenCalledTimes(5);
+      expect(getBeacon).toHaveBeenCalledTimes(5);
 
       for (const call of getBeacon.mock.calls) {
         expect(call).toEqual([
@@ -475,14 +512,11 @@ describe('importQuicknetRound', () => {
   });
 
   it('rejects a stored randomness value that differs from simulation', async () => {
-    getBeacon.mockResolvedValue(
-      OTHER_RANDOMNESS,
-    );
+    getBeacon.mockResolvedValue(OTHER_RANDOMNESS);
 
-    await expect(
-      importRound(),
-    ).rejects.toThrow(
-      `Stored randomness mismatch for Quicknet round ${ROUND}: simulated ${RANDOMNESS}, stored ${OTHER_RANDOMNESS}`,
+    await expect(importRound()).rejects.toThrow(
+      `Stored randomness mismatch for Quicknet round ${ROUND}: ` +
+      `simulated ${RANDOMNESS}, stored ${OTHER_RANDOMNESS}`,
     );
   });
 
@@ -492,17 +526,17 @@ describe('importQuicknetRound', () => {
 
     const upper = `0x${lower.slice(2).toUpperCase()}` as Hex;
 
-    registryMocks.submitBeacon.mockResolvedValue({
-      hash: SUBMITTED_TRANSACTION_HASH,
-      randomness: upper,
+    submissionMocks.simulateBeaconSubmission.mockResolvedValue({
+      submission: 'witness',
+      request: SIMULATED_REQUEST,
+      result: upper,
     });
 
     getBeacon.mockResolvedValue(lower);
 
-    await expect(
-      importRound(),
-    ).resolves.toMatchObject({
+    await expect(importRound()).resolves.toMatchObject({
       status: 'imported',
+      submission: 'witness',
       randomness: lower,
     });
   });
@@ -512,52 +546,45 @@ describe('importQuicknetRound', () => {
 
     expect(result).toEqual({
       status: 'imported',
+      submission: 'witness',
       round: ROUND,
       randomness: RANDOMNESS,
-      transactionHash:
-        RECEIPT_TRANSACTION_HASH,
+      transactionHash: RECEIPT_TRANSACTION_HASH,
     });
   });
 
   it('uses a provided beacon without fetching it again', async () => {
     const beacon = {
       round: ROUND,
-      signature:
-        COMPRESSED_SIGNATURE,
+      signature: COMPRESSED_SIGNATURE,
     };
 
-    const result =
-      await importQuicknetRound({
-        publicClient,
-        walletClient,
-        account,
-        deployment: DEPLOYMENT,
-        round: ROUND,
-        beacon,
-      });
+    const result = await importQuicknetRound({
+      publicClient,
+      walletClient,
+      account,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      beacon,
+    });
+
+    expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
 
     expect(
-      quicknetMocks.fetchBeacon,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      registryMocks.submitBeacon,
+      submissionMocks.simulateBeaconSubmission,
     ).toHaveBeenCalledWith(
       expect.objectContaining({
         signature: COMPRESSED_SIGNATURE,
       }),
     );
 
-    expect(result.status).toBe(
-      'imported',
-    );
+    expect(result.status).toBe('imported');
   });
 
   it('rejects a provided beacon for a different round', async () => {
     const beacon = {
       round: ROUND + 1n,
-      signature:
-        COMPRESSED_SIGNATURE,
+      signature: COMPRESSED_SIGNATURE,
     };
 
     await expect(
@@ -570,15 +597,14 @@ describe('importQuicknetRound', () => {
         beacon,
       }),
     ).rejects.toThrow(
-      `Quicknet round mismatch: requested ${ROUND}, received ${ROUND + 1n}.`,
+      `Quicknet round mismatch: requested ${ROUND}, ` +
+      `received ${ROUND + 1n}.`,
     );
 
-    expect(
-      quicknetMocks.fetchBeacon,
-    ).not.toHaveBeenCalled();
+    expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
 
     expect(
-      registryMocks.submitBeacon,
+      submissionMocks.simulateBeaconSubmission,
     ).not.toHaveBeenCalled();
   });
 
@@ -586,7 +612,6 @@ describe('importQuicknetRound', () => {
     await importRound();
 
     const verifyOrder = firstInvocationOrder(verifyDeployment);
-
     const storedOrder = firstInvocationOrder(isStored);
 
     const fetchOrder = firstInvocationOrder(
@@ -594,8 +619,10 @@ describe('importQuicknetRound', () => {
     );
 
     const submitOrder = firstInvocationOrder(
-      registryMocks.submitBeacon,
+      submissionMocks.simulateBeaconSubmission,
     );
+
+    const writeOrder = firstInvocationOrder(writeContract);
 
     const receiptOrder = firstInvocationOrder(
       waitForTransactionReceipt,
@@ -603,25 +630,12 @@ describe('importQuicknetRound', () => {
 
     const readOrder = firstInvocationOrder(getBeacon);
 
-    expect(verifyOrder).toBeLessThan(
-      storedOrder,
-    );
-
-    expect(storedOrder).toBeLessThan(
-      fetchOrder,
-    );
-
-    expect(fetchOrder).toBeLessThan(
-      submitOrder,
-    );
-
-    expect(submitOrder).toBeLessThan(
-      receiptOrder,
-    );
-
-    expect(receiptOrder).toBeLessThan(
-      readOrder,
-    );
+    expect(verifyOrder).toBeLessThan(storedOrder);
+    expect(storedOrder).toBeLessThan(fetchOrder);
+    expect(fetchOrder).toBeLessThan(submitOrder);
+    expect(submitOrder).toBeLessThan(writeOrder);
+    expect(writeOrder).toBeLessThan(receiptOrder);
+    expect(receiptOrder).toBeLessThan(readOrder);
   });
 });
 
@@ -632,13 +646,10 @@ function firstInvocationOrder(
     };
   },
 ): number {
-  const order =
-    mock.mock.invocationCallOrder[0];
+  const order = mock.mock.invocationCallOrder[0];
 
   if (order === undefined) {
-    throw new Error(
-      'Expected mock to have been called.',
-    );
+    throw new Error('Expected mock to have been called.');
   }
 
   return order;

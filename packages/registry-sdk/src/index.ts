@@ -23,3 +23,9 @@ export type {
   SubmitBeaconOptions,
   SubmitBeaconWithWitnessOptions,
 } from './write.js';
+
+export {
+  RegistryDeployment,
+  type CreateRegistryDeploymentOptions,
+  type RegistrySignature,
+} from './types.js';

@@ -1,9 +1,3 @@
-import {
-  createRegistryReader,
-  type RegistryDeployment,
-  submitBeacon,
-} from '@based-labs/drand-quicknet-registry';
-
 import type {
   Account,
   Hex,
@@ -12,9 +6,19 @@ import type {
 } from 'viem';
 
 import {
+  createRegistryReader,
+  type RegistryDeployment,
+} from '@based-labs/drand-quicknet-registry';
+
+import {
   fetchBeacon,
   type QuicknetBeacon,
 } from '@based-labs/drand-quicknet';
+
+import {
+  simulateBeaconSubmission,
+  type BeaconSubmissionDetails,
+} from './simulate-beacon-submission.js';
 
 export interface ImportQuicknetRoundOptions {
   publicClient: PublicClient;
@@ -31,12 +35,12 @@ export type ImportQuicknetRoundResult =
       round: bigint;
       randomness: Hex;
     }
-  | {
+  | ({
       status: 'imported';
       round: bigint;
       randomness: Hex;
       transactionHash: Hex;
-    };
+    } & BeaconSubmissionDetails);
 
 export async function importQuicknetRound(
   options: ImportQuicknetRoundOptions,
@@ -79,14 +83,26 @@ export async function importQuicknetRound(
 
   const signature = beacon.signature;
 
-  const { hash, randomness: simulatedRandomness } = await submitBeacon({
+  const {
+    request,
+    result: simulatedRandomness,
+    ...submission
+  } = await simulateBeaconSubmission({
     publicClient,
-    walletClient,
     deployment,
     account,
     round,
     signature,
   });
+  
+  let hash: Hex;
+
+  // Narrow by function name so viem retains each request's ABI/args types.
+  if (request.functionName === 'submitBeaconWithWitness') {
+    hash = await walletClient.writeContract(request);
+  } else {
+    hash = await walletClient.writeContract(request);
+  }
 
   const receipt = await publicClient.waitForTransactionReceipt({hash});
   if (receipt.status !== 'success') {
@@ -106,6 +122,7 @@ export async function importQuicknetRound(
 
   return {
     status: 'imported',
+    ...submission,
     round,
     randomness: storedRandomness,
     transactionHash: receipt.transactionHash,
