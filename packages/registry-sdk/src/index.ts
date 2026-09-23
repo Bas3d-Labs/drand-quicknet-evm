@@ -12,11 +12,14 @@ export {
 
 export {
   simulateSubmitBeacon,
+  simulateSubmitBeaconWithWitness,
   submitBeacon,
+  submitBeaconWithWitness,
 } from './write.js';
 
-export {
-  RegistryDeployment,
-  type CreateRegistryDeploymentOptions,
-  type RegistrySignature,
-} from './types.js';
+export type {
+  SimulateSubmitBeaconOptions,
+  SimulateSubmitBeaconWithWitnessOptions,
+  SubmitBeaconOptions,
+  SubmitBeaconWithWitnessOptions,
+} from './write.js';
