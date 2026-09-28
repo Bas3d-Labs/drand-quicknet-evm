@@ -9,6 +9,10 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+import {
+  createChainHeadsReader,
+} from '../chain/chain-heads-reader.js';
+
 import type {
   CheckpointStore,
 } from '../state/checkpoint.js';
@@ -29,6 +33,8 @@ import type {
 import type {
   FinalityPolicy,
 } from '../chain/finality-policy.js';
+
+const DURABLE_HEAD_POLL_INTERVAL_MS = 30_000;
 
 export interface RunDaemonOptions {
   publicClient: PublicClient;
@@ -59,6 +65,12 @@ export async function runDaemon(
   const sleep = options.sleep ?? sleepUntilTimeoutOrAbort;
   const softCursors = new Map<Address, SoftScanCursor>();
 
+  const readChainHeads = createChainHeadsReader({
+    publicClient: options.publicClient,
+    finality: options.finality,
+    durableHeadPollIntervalMs: DURABLE_HEAD_POLL_INTERVAL_MS,
+  });
+
   while (!options.signal?.aborted) {
     const result = await runDaemonCycle({
       publicClient: options.publicClient,
@@ -71,6 +83,7 @@ export async function runDaemon(
       maxBlockRange: options.maxBlockRange,
       finality: options.finality,
       softCursors,
+      readChainHeads,
     });
 
     if (options.onCycle !== undefined) {

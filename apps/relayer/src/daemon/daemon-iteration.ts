@@ -53,6 +53,7 @@ export interface RunDaemonIterationOptions {
   maxBlockRange: bigint;
   finality: FinalityPolicy;
   softCursor?: SoftScanCursor;
+  readChainHeads?: () => Promise<ChainHeads>;
 }
 
 export interface RunDaemonIterationResult {
@@ -75,10 +76,16 @@ export async function runDaemonIteration(
   const checkpoint = await options.checkpointStore.load(options.consumer);
   let durableNextBlock = checkpoint ?? options.startBlock;
 
-  const heads = await getChainHeads({
-    publicClient: options.publicClient,
-    finality: options.finality,
-  });
+  let heads: ChainHeads;
+
+  if (options.readChainHeads !== undefined) {
+    heads = await options.readChainHeads();
+  } else {
+    heads = await getChainHeads({
+      publicClient: options.publicClient,
+      finality: options.finality,
+    });
+  }
 
   const durableHeadRegressed =
     checkpoint !== undefined &&
