@@ -506,6 +506,103 @@ describe('createScrubber', () => {
     })).toThrow('Invalid private key for diagnostic scrubbing.');
   });
 
+  it.each([
+    [
+      'Authorization: Bearer unknown-token\nstatus=429',
+      'Authorization: [REDACTED]\nstatus=429',
+    ],
+    [
+      'pRoXy-AuThOrIzAtIoN\t=\tBasic dXNlcjpwYXNz; retries=2',
+      'pRoXy-AuThOrIzAtIoN\t=\t[REDACTED]; retries=2',
+    ],
+    [
+      '{"Authorization":"Bearer unknown-token","status":429}',
+      '{"Authorization":"[REDACTED]","status":429}',
+    ],
+    [
+      "{'Proxy-Authorization': 'custom-token', 'status': 401}",
+      "{'Proxy-Authorization': '[REDACTED]', 'status': 401}",
+    ],
+    [
+      String.raw`{"Authorization":"token\"tail","status":401}`,
+      '{"Authorization":"[REDACTED]","status":401}',
+    ],
+    [
+      String.raw`Authorization: "token\\"; status=401`,
+      'Authorization: "[REDACTED]"; status=401',
+    ],
+    [
+      'Authorization: "unterminated-token\nstatus=401',
+      'Authorization: "[REDACTED]\nstatus=401',
+    ],
+    [
+      'Authorization=custom-token, status=401',
+      'Authorization=[REDACTED], status=401',
+    ],
+    [
+      'Authorization: first-token\nAuthorization: second-token',
+      'Authorization: [REDACTED]\nAuthorization: [REDACTED]',
+    ],
+    [
+      'İ 😀 Authorization: custom-token',
+      'İ 😀 Authorization: [REDACTED]',
+    ],
+  ])(
+    'redacts authorization values and preserves context: case %#',
+    (input, expected) => {
+      const local = createScrubber({ rpcUrls: [] });
+
+      expect(local(input)).toEqual({
+        text: expected,
+        removed: true,
+      });
+    },
+  );
+
+  it.each([
+    'Authorization failed during startup.',
+    'authorizationStatus=failed',
+    'Authorization:',
+    'Authorization: ""',
+    'Authorization:\nstatus=401',
+  ])(
+    'preserves text without an authorization value: case %#',
+    (text) => {
+      const local = createScrubber({ rpcUrls: [] });
+
+      expect(local(text)).toEqual({
+        text,
+        removed: false,
+      });
+    },
+  );
+
+  it.each([
+    'bEaReR abc.def-123',
+    'bAsIc dXNlcjpwYXNz==',
+  ])(
+    'redacts standalone authentication tokens: case %#',
+    (text) => {
+      const local = createScrubber({ rpcUrls: [] });
+
+      expect(local(text)).toEqual({
+        text: '[REDACTED]',
+        removed: true,
+      });
+    },
+  );
+
+  it('handles repeated header names inside a single long value', () => {
+    const local = createScrubber({ rpcUrls: [] });
+    const text =
+      'Authorization: ' + 'Authorization: '.repeat(4_000);
+
+    expect(local(text)).toEqual({
+      text: 'Authorization: [REDACTED]',
+      removed: true,
+    });
+  });
+
   it.each([200, 429])(
     'scrubs actual viem errors from a fixture RPC (HTTP %i)',
     async (status) => {

@@ -2,6 +2,13 @@ const MAX_INPUT_LENGTH = 65_536;
 const MAX_OUTPUT_LENGTH = 4_096;
 const MIN_INFERRED_SECRET_LENGTH = 16;
 const REDACTED = '[REDACTED]';
+
+const AUTH_HEADER_PATTERN =
+  /\b(?:proxy-authorization|authorization)\b/gi;
+
+const AUTH_TOKEN_PATTERN =
+  /\b(?:Bearer|Basic)[ \t]+[a-z0-9._~+/=-]+/gi;
+  
 const URL_PATTERN = /\b(?:https?|wss?):\/\/[^\s"'<>\\]+/gi;
 
 const CREDENTIAL_QUERY_NAMES = new Set([
@@ -175,15 +182,6 @@ export function createScrubber(
     }
   }
 
-  const patterns = [
-    String.raw`\b(?:${asciiCasePattern('proxy-authorization')}|${asciiCasePattern('authorization')})\b["']?[ \t]*[:=][ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n,;}]+)`,
-    String.raw`\b(?:${asciiCasePattern('Bearer')}|${asciiCasePattern('Basic')})[ \t]+[a-zA-Z0-9._~+/=-]+`,
-  ];
-
-  const detectors = patterns.map(
-    (source) => new RegExp(source, 'g'),
-  );
-
   return function scrub(text: string): ScrubbedText {
     if (text.length > MAX_INPUT_LENGTH) {
       return {
@@ -208,19 +206,14 @@ export function createScrubber(
     }
 
     collectUrlRanges(text, ranges, configuredUrls);
+    collectUrlRanges(text, ranges, configuredUrls);
+    collectAuthorizationRanges(text, ranges);
 
-    // Collect every detector's results before changing the original text.
-    for (const detector of detectors) {
-      detector.lastIndex = 0;
-
-      let match: RegExpExecArray | null;
-
-      while ((match = detector.exec(text)) !== null) {
-        ranges.push({
-          start: match.index,
-          end: match.index + match[0].length,
-        });
-      }
+    for (const match of text.matchAll(AUTH_TOKEN_PATTERN)) {
+      ranges.push({
+        start: match.index,
+        end: match.index + match[0].length,
+      });
     }
 
     let output = redactRanges(text, ranges);
@@ -463,11 +456,105 @@ function redactRanges(
   return parts.join('');
 }
 
-function asciiCasePattern(value: string): string {
-  return value.replace(
-    /[a-z]/gi,
-    (letter) => `[${letter.toLowerCase()}${letter.toUpperCase()}]`,
-  );
+function collectAuthorizationRanges(
+  text: string,
+  ranges: TextRange[],
+): void {
+  let coveredUntil = 0;
+
+  for (const match of text.matchAll(AUTH_HEADER_PATTERN)) {
+    if (match.index < coveredUntil) {
+      continue;
+    }
+
+    let cursor = match.index + match[0].length;
+
+    // Permit a quoted field name, such as "Authorization": "...".
+    if (
+      text.charAt(cursor) === '"' ||
+      text.charAt(cursor) === "'"
+    ) {
+      cursor += 1;
+    }
+
+    cursor = skipHorizontalWhitespace(text, cursor);
+
+    if (
+      text.charAt(cursor) !== ':' &&
+      text.charAt(cursor) !== '='
+    ) {
+      continue;
+    }
+
+    let start = skipHorizontalWhitespace(text, cursor + 1);
+    let quote = '';
+
+    if (
+      text.charAt(start) === '"' ||
+      text.charAt(start) === "'"
+    ) {
+      quote = text.charAt(start);
+      start += 1;
+    }
+
+    let end = start;
+    while (end < text.length) {
+      const character = text.charAt(end);
+      if (character === '\r' || character === '\n') {
+        break;
+      }
+
+      if (quote !== '') {
+        if (character === quote) {
+          break;
+        }
+
+        if (
+          character === '\\' &&
+          end + 1 < text.length &&
+          text.charAt(end + 1) !== '\r' &&
+          text.charAt(end + 1) !== '\n'
+        ) {
+          end += 2;
+          continue;
+        }
+      } else if (
+        character === ',' ||
+        character === ';' ||
+        character === '}'
+      ) {
+        break;
+      }
+
+      end += 1;
+    }
+
+    if (end > start) {
+      ranges.push({
+        start,
+        end
+      });
+    }
+
+    // Avoid rescanning header-like text inside an already covered value.
+    coveredUntil = end;
+  }
+}
+
+function skipHorizontalWhitespace(
+  text: string,
+  start: number,
+): number {
+  let cursor = start;
+
+  while (
+    text.charAt(cursor) === ' ' ||
+    text.charAt(cursor) === '\t'
+  ) {
+    cursor += 1;
+  }
+
+  return cursor;
 }
 
 function isHexDigit(character: string): boolean {
