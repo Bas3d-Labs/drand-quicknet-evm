@@ -81,30 +81,11 @@ export async function runDaemon(
       return;
     }
 
-    if (cycleMadeProgress(result)) {
-      continue;
-    }
-
     await sleep(
       options.pollIntervalMs,
       options.signal,
     );
   }
-}
-
-function cycleMadeProgress(
-  result: RunDaemonCycleResult,
-): boolean {
-  for (const consumer of result.consumers) {
-    if (
-      consumer.status === 'success' &&
-      consumer.iteration.status === 'processed'
-    ) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 async function sleepUntilTimeoutOrAbort(

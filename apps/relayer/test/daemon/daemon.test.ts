@@ -573,12 +573,13 @@ describe('runDaemon', () => {
     );
   });
 
-  it('immediately runs another cycle when progress was made', async () => {
+  it('sleeps between cycles when progress was made', async () => {
     const controller =
       new AbortController();
 
-    const sleep =
-      vi.fn();
+    const sleep = vi.fn(async () => {
+      expect(runDaemonCycle).toHaveBeenCalledTimes(1);
+    });
 
     vi.mocked(
       runDaemonCycle,
@@ -620,17 +621,20 @@ describe('runDaemon', () => {
       2
     );
 
-    expect(
-      sleep,
-    ).not.toHaveBeenCalled();
+    expect(sleep).toHaveBeenCalledOnce();
+    expect(sleep).toHaveBeenCalledWith(
+      1_000,
+      controller.signal,
+    );
   });
 
-  it('treats an empty successfully scanned range as progress', async () => {
+  it('sleeps after scanning an empty range', async () => {
     const controller =
       new AbortController();
 
-    const sleep =
-      vi.fn();
+    const sleep = vi.fn(async () => {
+      expect(runDaemonCycle).toHaveBeenCalledTimes(1);
+    });
 
     const processedEmpty:
       RunDaemonCycleResult = {
@@ -703,9 +707,11 @@ describe('runDaemon', () => {
       2
     );
 
-    expect(
-      sleep,
-    ).not.toHaveBeenCalled();
+    expect(sleep).toHaveBeenCalledOnce();
+    expect(sleep).toHaveBeenCalledWith(
+      1_000,
+      controller.signal,
+    );
   });
 
   it('sleeps when every successful consumer is caught up', async () => {
@@ -789,12 +795,13 @@ describe('runDaemon', () => {
     ).toHaveBeenCalledOnce();
   });
 
-  it('does not sleep when at least one consumer made progress', async () => {
+  it('sleeps after a cycle containing progress and failures', async () => {
     const controller =
       new AbortController();
 
-    const sleep =
-      vi.fn();
+    const sleep = vi.fn(async () => {
+      controller.abort();
+    });
 
     const cycleResult:
       RunDaemonCycleResult = {
@@ -858,14 +865,14 @@ describe('runDaemon', () => {
       pollIntervalMs: 1_000,
       signal: controller.signal,
       sleep,
-      onCycle: () => {
-        controller.abort();
-      },
     });
 
-    expect(
-      sleep,
-    ).not.toHaveBeenCalled();
+    expect(runDaemonCycle).toHaveBeenCalledOnce();
+    expect(sleep).toHaveBeenCalledOnce();
+    expect(sleep).toHaveBeenCalledWith(
+      1_000,
+      controller.signal,
+    );
   });
 
   it('does not sleep when onCycle aborts the daemon', async () => {
