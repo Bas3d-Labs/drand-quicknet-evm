@@ -9,7 +9,11 @@ import {
   type Hash,
 } from 'viem';
 
-import { summarizeError } from './error-summary.js';
+import {
+  summarizeError,
+  type ErrorSummary,
+  type SummarizeErrorOptions,
+} from './error-summary.js';
 
 import { isFixedHex } from '../shared/hex.js';
 
@@ -141,6 +145,7 @@ export interface CreateRelayerLogOptions {
   chainId: number;
   level?: string;
   destination?: LogDestination;
+  errorSummary?: SummarizeErrorOptions;
 }
 
 type FallbackCode =
@@ -151,6 +156,7 @@ const MAX_UINT256 = (1n << 256n) - 1n;
 const MAX_HEARTBEAT_CONSUMERS = 25;
 
 const MAX_RECORD_BYTES = 16_384 - 1_024;
+const MAX_ERROR_SUMMARY_BYTES = 8_192;
 const FALLBACK_INTERVAL_MS = 5 * 60_000;
 
 const LEVELS = new Set([
@@ -177,6 +183,11 @@ export function createRelayerLog(
   }
 
   const requested = own(options, 'level') ?? 'info';
+
+  const errorSummary = snapshotErrorSummaryOptions(
+    own(options, 'errorSummary'),
+  );
+
   const validLevel =
     typeof requested === 'string' &&
     LEVELS.has(requested);
@@ -286,7 +297,7 @@ export function createRelayerLog(
     let record: Record<string, unknown>;
 
     try {
-      record = project(schema, context);
+      record = project(schema, context, errorSummary);
       record.event = event;
       fitRecord(record);
     } catch {
@@ -338,12 +349,44 @@ function own(
   return descriptor.value;
 }
 
+function snapshotErrorSummaryOptions(
+  input: unknown,
+): SummarizeErrorOptions {
+  if (input === undefined) {
+    return { mode: 'strict' };
+  }
+
+  const mode = own(input, 'mode');
+  if (mode === undefined || mode === 'strict') {
+    return { mode: 'strict' };
+  }
+
+  if (mode === 'standard') {
+    const scrubText = own(input, 'scrubText');
+    if (typeof scrubText === 'function') {
+      return {
+        mode,
+        scrubText: scrubText as Extract<
+          SummarizeErrorOptions,
+          { mode: 'standard' }
+        >['scrubText'],
+      };
+    }
+  }
+
+  throw new TypeError('Invalid error summary policy.');
+}
+
 function scalar(
   kind: Exclude<Kind, 'consumers'>,
   value: unknown,
+  errorSummary: SummarizeErrorOptions,
 ): unknown {
   if (kind === 'error') {
-    return summarizeError(value);
+    const summary = summarizeError(value, errorSummary);
+    fitErrorSummary(summary);
+
+    return summary;
   }
 
   if (kind === 'address' && isFixedHex(value, 20)) {
@@ -394,6 +437,7 @@ function scalar(
 function project(
   schema: Schema,
   input: unknown,
+  errorSummary: SummarizeErrorOptions,
 ): Record<string, unknown> {
   const record: Record<string, unknown> = Object.create(null);
 
@@ -420,7 +464,11 @@ function project(
       for (let index = 0; index < count; index += 1) {
         const consumer = own(value, String(index));
         const status = own(consumer, 'status');
-        const health = project({ consumer: 'address' }, consumer);
+        const health = project(
+          { consumer: 'address' },
+          consumer,
+          errorSummary,
+        );
 
         if (status === 'healthy') {
           for (const field of [
@@ -429,7 +477,11 @@ function project(
             'durableNextBlock',
             'softNextBlock',
           ]) {
-            health[field] = scalar('uint', own(consumer, field));
+            health[field] = scalar(
+              'uint',
+              own(consumer, field),
+              errorSummary,
+            );
           }
         } else if (status !== 'failed') {
           throw new TypeError('Invalid consumer health.');
@@ -451,11 +503,71 @@ function project(
         outputKey = 'err';
       }
 
-      record[outputKey] = scalar(kind, value);
+      record[outputKey] = scalar(
+        kind,
+        value,
+        errorSummary,
+      );
     }
   }
 
   return record;
+}
+
+function fitErrorSummary(
+  summary: ErrorSummary,
+): void {
+  let maxTextLength = 2_048;
+
+  while (
+    Buffer.byteLength(JSON.stringify(summary)) > MAX_ERROR_SUMMARY_BYTES
+  ) {
+    shortenErrorText(summary, maxTextLength);
+    maxTextLength = Math.floor(maxTextLength / 2);
+
+    if (maxTextLength === 0) {
+      throw new RangeError('Error summary too large.');
+    }
+  }
+}
+
+// Only visits the fresh, bounded summary produced by summarizeError.
+function shortenErrorText(
+  summary: ErrorSummary,
+  maxTextLength: number,
+): void {
+  const suffix = ' [truncated]';
+
+  for (const key of ['name', 'message', 'code'] as const) {
+    const value = summary[key];
+    if (typeof value !== 'string' || value.length <= maxTextLength) {
+      continue;
+    }
+
+    if (maxTextLength <= suffix.length) {
+      summary[key] = '[truncated]';
+    } else {
+      let end = maxTextLength - suffix.length;
+      const lastCode = value.charCodeAt(end - 1);
+
+      // Avoid splitting a UTF-16 surrogate pair at the cut.
+      if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
+        end -= 1;
+      }
+
+      summary[key] = value.slice(0, end) + suffix;
+    }
+
+    summary.textModified = true;
+  }
+
+  if (summary.cause !== undefined) {
+    shortenErrorText(summary.cause, maxTextLength);
+  }
+
+  for (const child of summary.errors ?? []) {
+    shortenErrorText(child, maxTextLength);
+  }
 }
 
 function fitRecord(
