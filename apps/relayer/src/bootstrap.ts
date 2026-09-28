@@ -8,6 +8,9 @@ import process from 'node:process';
 type SummarizeError =
   typeof import('./diagnostics/error-summary.js').summarizeError;
 
+type SummarizeErrorOptions =
+  import('./diagnostics/error-summary.js').SummarizeErrorOptions;
+
 type RenderDiagnostic =
   typeof import('./diagnostics/diagnostics.js').renderDiagnostic;
 
@@ -25,6 +28,8 @@ let summarizeError: SummarizeError = () => ({
   name: 'UnknownError',
   message: 'Operation failed; details redacted.',
 });
+
+let errorSummary: SummarizeErrorOptions = { mode: 'strict' };
 
 let renderDiagnostic: RenderDiagnostic | undefined;
 
@@ -141,7 +146,7 @@ function fatal(
     const line = JSON.stringify({
       event,
       time: Date.now(),
-      err: summarizeError(error),
+      err: summarizeError(error, errorSummary),
     });
     writeLine(2, line);
   } catch {
@@ -165,6 +170,9 @@ try {
   const errors = await import('./diagnostics/error-summary.js');
   summarizeError = errors.summarizeError;
 
+  const errorOutput = await import('./diagnostics/error-output.js');
+  summarizeError = errorOutput.summarizeErrorForOutput;
+
   const diagnostics = await import('./diagnostics/diagnostics.js');
   renderDiagnostic = diagnostics.renderDiagnostic;
 
@@ -187,6 +195,10 @@ try {
 
       throw outputFailure;
     }
+  }, {
+    onDiagnostics(policy) {
+      errorSummary = policy;
+    },
   });
 } catch (error) {
   if (error === outputFailure) {
@@ -199,11 +211,11 @@ try {
         const line = JSON.stringify({
           event: 'cli_failed',
           kind: 'bootstrap',
-          err: summarizeError(error),
+          err: summarizeError(error, errorSummary),
         })
         writeLine(2, line);
       } else {
-        writeLine(2, renderDiagnostic(error));
+        writeLine(2, renderDiagnostic(error, errorSummary));
       }
     } catch {
       // Preserve failure status even if stderr cannot be written.

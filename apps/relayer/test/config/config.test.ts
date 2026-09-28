@@ -723,3 +723,36 @@ describe('resolveNetworkConfigPath', () => {
     ).toBe(configPath);
   });
 });
+
+describe('configured diagnostic policy', () => {
+  it.each([PRESET_SOURCE, CUSTOM_SOURCE])(
+    'uses the selected RPC and validated key: %j', async (source) => {
+    const token = 'selected-rpc-canary';
+    const rpcUrl = `https://rpc.example/${token}`;
+
+    const env = {
+      ROBINHOOD_TESTNET_RPC_URL: rpcUrl,
+      QUICKNET_RPC_URL: rpcUrl,
+      PRIVATE_KEY: `  ${PRIVATE_KEY}  `,
+    };
+
+    const config = await loadRelayerConfig({ source, env });
+
+    // Later changes must not alter the captured policy.
+    env.PRIVATE_KEY = `0x${'22'.repeat(32)}`;
+
+    const policy = config.errorSummary;
+
+    expect(policy?.mode).toBe('standard');
+
+    if (policy?.mode !== 'standard') {
+      throw new Error('Expected standard policy.');
+    }
+
+    expect(
+      policy.scrubText(`rejected ${token} ${PRIVATE_KEY}`).text,
+    ).toBe('rejected [REDACTED] [REDACTED]');
+
+    expect(config).not.toHaveProperty('privateKey');
+  });
+});

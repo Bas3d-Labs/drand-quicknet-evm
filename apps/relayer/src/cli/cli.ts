@@ -19,6 +19,14 @@ import {
   runDaemonCommand,
 } from './daemon-command.js';
 
+import type {
+  SummarizeErrorOptions,
+} from '../diagnostics/error-summary.js';
+
+import {
+  UsageError,
+} from '../diagnostics/usage-error.js';
+
 import {
   isDecimalInteger,
 } from '../shared/decimal.js';
@@ -31,13 +39,13 @@ import {
   importQuicknetRoundWhenAvailable,
 } from '../rounds/import-round-when-available.js';
 
-import {
-  UsageError,
-} from '../diagnostics/usage-error.js';
-
 const MAX_UINT64 = (1n << 64n) - 1n;
 
 type CliOutputHandler = (output: CliOutput) => void;
+
+export interface CliOptions {
+  onDiagnostics?: (policy: SummarizeErrorOptions) => void;
+}
 
 interface ImportCommandArguments {
   command: 'import';
@@ -74,21 +82,22 @@ type CommandArguments =
 export async function main(
   args: readonly string[],
   output: CliOutputHandler,
+  options: CliOptions = {},
 ): Promise<void> {
   const normalizedArgs = normalizeArguments(args);
   const command = parseCommandArguments(normalizedArgs);
 
   switch (command.command) {
     case 'import':
-      await runImportCommand(command, output);
+      await runImportCommand(command, output, options);
       return;
 
     case 'import-when-available':
-      await runImportWhenAvailableCommand(command, output);
+      await runImportWhenAvailableCommand(command, output, options);
       return;
     
     case 'daemon':
-      await runDaemonCli(command.source, output);
+      await runDaemonCli(command.source, output, options);
       return;    
       
     case 'daemon-help':
@@ -104,10 +113,15 @@ export async function main(
 async function runImportCommand(
   command: ImportCommandArguments,
   output: CliOutputHandler,
+  options: CliOptions,
 ): Promise<void> {
   const config = await loadRelayerConfig({
     source: command.source,
   });
+
+  options.onDiagnostics?.(
+    config.errorSummary ?? { mode: 'strict' },
+  );
 
   const clients = createRelayerClients(config);
 
@@ -129,10 +143,15 @@ async function runImportCommand(
 async function runImportWhenAvailableCommand(
   command: ImportWhenAvailableCommandArguments,
   output: CliOutputHandler,
+  options: CliOptions,
 ): Promise<void> {
   const config = await loadRelayerConfig({
     source: command.source,
   });
+
+  options.onDiagnostics?.(
+    config.errorSummary ?? { mode: 'strict' },
+  );
 
   const clients = createRelayerClients(config);
 
@@ -154,6 +173,7 @@ async function runImportWhenAvailableCommand(
 async function runDaemonCli(
   source: NetworkSource,
   output: CliOutputHandler,
+  options: CliOptions,
 ): Promise<void> {
   const controller = new AbortController();
 
@@ -173,6 +193,9 @@ async function runDaemonCli(
           type: 'daemon-startup',
           summary,
         });
+      },
+      onDiagnostics(policy) {
+        options.onDiagnostics?.(policy);
       },
     });
   } finally {

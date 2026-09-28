@@ -652,6 +652,7 @@ describe('main', () => {
           source,
           signal: expect.any(AbortSignal),
           onStartup: expect.any(Function),
+          onDiagnostics: expect.any(Function),
         });
 
         expect(
@@ -787,5 +788,77 @@ describe('main', () => {
         SIGNALS.map((signal) => process.listeners(signal)),
       ).toEqual(before);
     });
+  });
+});
+
+describe('diagnostic policy handoff', () => {
+  it.each(ROUND_COMMANDS)(
+    'installs policy before %s creates clients',
+    async (command) => {
+      const policy = {
+        mode: 'standard' as const,
+        scrubText: (text: string) => ({ text, removed: false }),
+      };
+
+      vi.mocked(loadRelayerConfig).mockResolvedValue({
+        ...CONFIG,
+        errorSummary: policy,
+      });
+
+      const onDiagnostics = vi.fn();
+
+      vi.mocked(createRelayerClients).mockImplementation(() => {
+        expect(onDiagnostics).toHaveBeenCalledExactlyOnceWith(policy);
+        throw new Error('client initialization failed');
+      });
+
+      await expect(
+        main([
+          command,
+          '--network',
+          PRESET,
+          '--round',
+          ROUND.toString(),
+        ], vi.fn(), { onDiagnostics }),
+      ).rejects.toThrow('client initialization failed');
+    },
+  );
+
+  it('does not install a policy when configuration fails', async () => {
+    vi.mocked(loadRelayerConfig).mockRejectedValue(
+      new Error('invalid configuration'),
+    );
+
+    const onDiagnostics = vi.fn();
+
+    await expect(
+      main([
+        'import',
+        '--network',
+        PRESET,
+        '--round',
+        ROUND.toString(),
+      ], vi.fn(), { onDiagnostics }),
+    ).rejects.toThrow('invalid configuration');
+
+    expect(onDiagnostics).not.toHaveBeenCalled();
+  });
+
+  it('forwards the daemon policy to the caller', async () => {
+    const policy = { mode: 'strict' as const };
+
+    vi.mocked(runDaemonCommand).mockImplementation(async (options) => {
+      options.onDiagnostics?.(policy);
+    });
+
+    const onDiagnostics = vi.fn();
+
+    await main(
+      ['daemon', '--network', PRESET],
+      vi.fn(),
+      { onDiagnostics },
+    );
+
+    expect(onDiagnostics).toHaveBeenCalledExactlyOnceWith(policy);
   });
 });

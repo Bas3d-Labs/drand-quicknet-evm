@@ -849,3 +849,61 @@ describe('bootstrap write policy', () => {
     });
   });
 });
+
+describe('configured bootstrap diagnostic policy', () => {
+  it.each([
+    {
+      event: 'cli_failed',
+      action: 'throw error;',
+    },
+    {
+      event: 'uncaught_exception',
+      action: `
+        setTimeout(() => { throw error; }, 0);
+        await new Promise(() => {});
+      `,
+    },
+    {
+      event: 'unhandled_rejection',
+      action: `
+        setTimeout(() => { void Promise.reject(error); }, 0);
+        await new Promise(() => {});
+      `,
+    },
+  ])('uses the installed policy for $event', ({ event, action }) => {
+    setModule('cli', `
+      export async function main(args, output, options) {
+        const secret = ${JSON.stringify(SECRET)};
+
+        options.onDiagnostics({
+          mode: 'standard',
+          scrubText(text) {
+            return {
+              text: text.replaceAll(secret, '[REDACTED]'),
+              removed: text.includes(secret),
+            };
+          },
+        });
+
+        const error = new Error(
+          'public rate limit exceeded; token=' + secret,
+        );
+
+        ${action}
+      }
+    `);
+
+    const result = launch();
+
+    expect(result.status).toBe(1);
+
+    expect(diagnostic(result.stderr)).toMatchObject({
+      event,
+      err: {
+        name: 'Error',
+        message: 'public rate limit exceeded; token=[REDACTED]',
+        textModified: true,
+      },
+    });
+  });
+});

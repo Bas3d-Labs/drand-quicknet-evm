@@ -680,6 +680,13 @@ progress. `heartbeat` is emitted periodically at info level.
 
 Logging failures are isolated so logging itself does not stop the daemon.
 
+After configuration loads successfully, diagnostics preserve scrubbed
+error explanations and bounded cause chains. Configured credentials
+and sensitive URL components are removed while endpoint hostnames remain
+visible. Failures before configuration succeeds use fixed fallback
+descriptions because the configured secret set is not yet available.
+`QUICKNET_LOG_LEVEL` controls event verbosity independently.
+
 ### Submission reporting
 
 Successful CLI imports include the selected submission method:

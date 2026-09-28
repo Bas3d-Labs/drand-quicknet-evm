@@ -31,6 +31,14 @@ import {
   runDaemon,
 } from '../daemon/daemon.js';
 
+import type {
+  SummarizeErrorOptions,
+} from '../diagnostics/error-summary.js';
+
+import {
+  createRelayerLog,
+} from '../diagnostics/relayer-log.js';
+
 import {
   FileCheckpointStore,
 } from '../state/file-checkpoint-store.js';
@@ -39,17 +47,16 @@ import {
   validateQuicknetConsumers,
 } from '../consumers/validate-consumers.js';
 
-import { FileCheckpointLock } from '../state/file-checkpoint-lock.js';
-
 import {
-  createRelayerLog,
-} from '../diagnostics/relayer-log.js';
+  FileCheckpointLock
+} from '../state/file-checkpoint-lock.js';
 
 export interface RunDaemonCommandOptions {
   source: NetworkSource;
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   onStartup?: (summary: DaemonStartupSummary) => void;
+  onDiagnostics?: (policy: SummarizeErrorOptions) => void;
 }
 
 export async function runDaemonCommand(
@@ -62,9 +69,15 @@ export async function runDaemonCommand(
       : {}),
   });
 
+  const errorSummary: SummarizeErrorOptions =
+    config.errorSummary ?? { mode: 'strict' };
+
+  options.onDiagnostics?.(errorSummary);
+
   const logger = createRelayerLog({
     chainId: config.chain.id,
     level: (options.env ?? process.env).QUICKNET_LOG_LEVEL ?? 'info',
+    errorSummary,
   });
 
   const daemonLogger = createDaemonLogger({
