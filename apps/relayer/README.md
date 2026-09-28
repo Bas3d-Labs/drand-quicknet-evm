@@ -265,24 +265,22 @@ Accepts a positive decimal integer.
 
 Default: `1000` milliseconds.
 
-Delay before starting another daemon cycle when the previous cycle made
-no scanning progress.
+The delay after each completed daemon cycle, including cycles that
+scan blocks or report consumer failures. The first cycle starts
+immediately.
 
-When at least one consumer successfully processes a soft or durable
-block range, the daemon starts the next cycle immediately. Scanning a
-range counts as progress even if it contains no request events. This
-allows historical catch-up without sleeping between every batch.
+The delay begins after cycle processing and reporting finish. The
+time between cycle starts therefore includes both the cycle's
+execution time and this delay.
 
-A shorter interval reduces idle polling delay but increases RPC traffic.
-A longer interval reduces idle RPC traffic but can delay detection of
-new requests.
+A shorter interval improves responsiveness and catch-up throughput
+but increases RPC traffic. A longer interval reduces cycle frequency
+but can delay discovery of new requests and historical catch-up.
 
-This is not a fixed cycle duration or an end-to-end import latency
-guarantee. Scanning, beacon retrieval, and transaction confirmation
-take additional time.
+This setting controls cycle frequency, not individual RPC calls.
+One cycle can make multiple calls and process multiple rounds.
 
-Accepts a positive decimal integer no greater than
-`Number.MAX_SAFE_INTEGER`.
+Accepts a positive decimal integer.
 
 #### `QUICKNET_LOG_LEVEL`
 
