@@ -206,7 +206,6 @@ export function createScrubber(
     }
 
     collectUrlRanges(text, ranges, configuredUrls);
-    collectUrlRanges(text, ranges, configuredUrls);
     collectAuthorizationRanges(text, ranges);
 
     for (const match of text.matchAll(AUTH_TOKEN_PATTERN)) {
@@ -532,7 +531,7 @@ function collectAuthorizationRanges(
     if (end > start) {
       ranges.push({
         start,
-        end
+        end,
       });
     }
 
