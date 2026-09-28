@@ -49,6 +49,7 @@ const RPC_URL =
 // Keep the fixture layout identical to the production layout.
 const MODULE_PATHS = {
   bootstrap: 'bootstrap.js',
+  'error-output': 'diagnostics/error-output.js',
   'error-summary': 'diagnostics/error-summary.js',
   'diagnostic-messages': 'diagnostics/diagnostic-messages.js',
   'usage-error': 'diagnostics/usage-error.js',

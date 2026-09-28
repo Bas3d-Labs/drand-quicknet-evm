@@ -49,6 +49,7 @@ const EXPECTED_OUTPUT = Buffer.from(
 
 const MODULE_PATHS = {
   bootstrap: 'bootstrap.js',
+  'error-output': 'diagnostics/error-output.js',
   'error-summary': 'diagnostics/error-summary.js',
   'diagnostic-messages': 'diagnostics/diagnostic-messages.js',
   'usage-error': 'diagnostics/usage-error.js',

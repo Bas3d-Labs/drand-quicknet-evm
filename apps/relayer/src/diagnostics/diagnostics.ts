@@ -7,9 +7,13 @@ import {
   USAGE_MESSAGES,
 } from './diagnostic-messages.js';
 
-import {
-  summarizeError,
+import type {
+  SummarizeErrorOptions,
 } from './error-summary.js';
+
+import {
+  summarizeErrorForOutput,
+} from './error-output.js';
 
 import {
   usageCode,
@@ -17,6 +21,7 @@ import {
 
 export function renderDiagnostic(
   error: unknown,
+  errorSummary: SummarizeErrorOptions = {},
 ): string {
   try {
     const code = usageCode(error);
@@ -46,6 +51,6 @@ export function renderDiagnostic(
   return JSON.stringify({
     event: 'cli_failed',
     kind: 'operation',
-    err: summarizeError(error),
+    err: summarizeErrorForOutput(error, errorSummary),
   });
 }
