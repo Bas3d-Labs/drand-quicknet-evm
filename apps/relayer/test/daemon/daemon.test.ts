@@ -332,8 +332,8 @@ describe('runDaemon', () => {
       startBlock: 500n,
       maxBlockRange: 250n,
       finality: FINALITY,
-      softCursors:
-        expect.any(Map),
+      softCursors: expect.any(Map),
+      readChainHeads: expect.any(Function),
     });
   });
 

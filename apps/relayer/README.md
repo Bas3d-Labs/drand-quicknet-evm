@@ -310,6 +310,28 @@ back to `info` and emits an `invalid_log_level` warning.
 This setting changes logging verbosity, not scanning, submission,
 or retry behavior. See [Logging](#logging) for event details.
 
+### Durable-head polling
+
+The daemon refreshes the `safe` or `finalized` head on the first
+successful read and then reuses it for up to 30 seconds, measured
+from the start of that refresh. The interval is currently an internal
+constant, not an environment setting.
+
+One reader is shared across consumers and cycles within each daemon.
+Latest-head reads continue on each consumer iteration, subject to
+the RPC client's existing caching.
+
+Durable-head advancement and regression detection can be delayed
+by the refresh interval plus scheduling and RPC time. Heartbeats
+report the cached durable head between refreshes.
+
+An expired refresh failure is propagated rather than served from
+stale data. A latest-head read failure or a cached durable head ahead
+of the latest head invalidates the cache.
+
+Confirmation-based finality continues using the existing uncached
+head-reading path.
+
 ## Network sources
 
 The CLI supports two network sources.

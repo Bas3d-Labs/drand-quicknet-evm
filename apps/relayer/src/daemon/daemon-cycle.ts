@@ -24,6 +24,10 @@ import {
 } from '../daemon/daemon-iteration.js';
 
 import type {
+  ChainHeads,
+} from '../chain/chain-heads.js';
+
+import type {
   FinalityPolicy,
 } from '../chain/finality-policy.js';
 
@@ -38,6 +42,7 @@ export interface RunDaemonCycleOptions {
   maxBlockRange: bigint;
   finality: FinalityPolicy;
   softCursors: Map<Address, SoftScanCursor>;
+  readChainHeads?: () => Promise<ChainHeads>;
 }
 
 export type DaemonConsumerCycleResult =
@@ -78,6 +83,9 @@ export async function runDaemonCycle(
           : {
               softCursor,
             }),
+        ...(options.readChainHeads !== undefined
+          ? { readChainHeads: options.readChainHeads }
+          : {}),
       });
 
       options.softCursors.set(consumer.address, iteration.softCursor);
