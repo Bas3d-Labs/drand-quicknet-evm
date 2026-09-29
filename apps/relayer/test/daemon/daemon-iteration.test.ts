@@ -604,6 +604,7 @@ describe('runDaemonIteration', () => {
       requests: [
         REQUEST,
       ],
+      onProgress: expect.any(Function),
     });
 
     expect(
@@ -919,6 +920,7 @@ describe('runDaemonIteration', () => {
         requests: [
           REQUEST,
         ],
+        onProgress: expect.any(Function),
       },
     );
   });
@@ -1017,6 +1019,7 @@ describe('runDaemonIteration', () => {
       account: ACCOUNT,
       deployment: DEPLOYMENT,
       requests: [],
+      onProgress: expect.any(Function),
     });
 
     expect(
@@ -1491,6 +1494,7 @@ describe('runDaemonIteration', () => {
       requests: [
         REQUEST,
       ],
+      onProgress: expect.any(Function),
     });
   });
 
@@ -1616,6 +1620,7 @@ describe('runDaemonIteration', () => {
       account: ACCOUNT,
       deployment: DEPLOYMENT,
       requests: [],
+      onProgress: expect.any(Function),
     });
 
     expect(

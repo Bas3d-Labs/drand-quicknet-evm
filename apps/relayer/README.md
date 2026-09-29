@@ -680,6 +680,91 @@ progress. `heartbeat` is emitted periodically at info level.
 
 Logging failures are isolated so logging itself does not stop the daemon.
 
+### Error diagnostics
+
+After configuration loads successfully, the CLI and daemon use a
+credential-aware scrubber for error diagnostics. There is no diagnostic
+mode setting. `QUICKNET_LOG_LEVEL` controls daemon event verbosity
+independently.
+
+Each error summary preserves its name, supported code and HTTP status,
+and a scrubbed explanation. Explanation selection prefers `details`,
+then `shortMessage`, then `message`, using the first non-empty string.
+Causes and aggregate members are summarized recursively within fixed
+limits.
+
+The scrubber removes recognized forms of the configured private key and
+RPC credentials, authorization values, and URL user information and
+path/query/fragment contents. Endpoint hostnames can remain visible.
+It does not guarantee removal of arbitrary secrets that were never
+configured or recognized.
+
+External error objects are not serialized directly. Stack traces,
+headers, request bodies, ABI objects, and other undeclared properties
+are not copied into the summary. Selected explanation text is scrubbed
+before output.
+
+Before configuration succeeds, registered usage and configuration
+errors use fixed catalog messages. Other failures use fixed fallback
+descriptions because the configured secret set is not yet available.
+If scrubbing a field throws, that field becomes
+`[diagnostic text unavailable]`.
+
+Summaries have these limits:
+
+- Four error levels, including the root.
+- Twelve error nodes in total.
+- Four members per aggregate.
+- 8,192 bytes per serialized error summary.
+
+`causeOmitted` and `errorsOmitted` indicate omitted traversal.
+`textModified` indicates that text was redacted, escaped, truncated,
+or replaced with a fallback.
+
+### Failure context
+
+When available, `consumer_failed` includes an `operation` object
+identifying the last operation entered, with relevant scan bounds
+or checkpoint position.
+
+Round-import context includes the exact round and a phase such as
+`fetch-beacon`, `prepare-submission`, `submit-transaction`,
+`wait-for-receipt`, or `verify-stored-beacon`. Receipt-wait and
+post-receipt verification context include the known transaction hash.
+
+CLI import failures include the corresponding round-import context.
+Context is attached to the original reported failure; unrelated fatal
+errors do not inherit it.
+
+A phase identifies where processing stopped. It does not establish
+whether a broadcast was accepted or whether retrying is safe.
+
+### Decoded contract reverts
+
+When available, contract-revert summaries include a `revert` object
+containing the decoded error name, reason, and up to four scalar
+arguments.
+
+Strings are scrubbed. Supported bigints become decimal strings.
+Unsupported argument values retain their position as `[omitted]`;
+`argsOmitted` indicates unsupported or additional arguments.
+Revert text shares the summary's output-size budget.
+
+Decoded fields are diagnostic information. They do not change
+simulation fallback, transaction retry, or recovery decisions.
+
+### CLI and output failures
+
+CLI failures are emitted as structured `cli_failed` records.
+Uncaught exceptions and unhandled rejections use the same configured
+scrubbing and summary limits when initialization has reached that point.
+
+If rendering or writing successful command output fails, the CLI
+attempts to emit `output_failed` and exits with status `2`.
+That diagnostic preserves validated import outcome fields when
+available, including the transaction hash. An output failure does not
+mean that an already-completed import failed.
+
 ### Submission reporting
 
 Successful CLI imports include the selected submission method:

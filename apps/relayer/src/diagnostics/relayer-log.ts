@@ -9,9 +9,22 @@ import {
   type Hash,
 } from 'viem';
 
-import { summarizeError } from './error-summary.js';
+import {
+  type SummarizeErrorOptions,
+} from './error-summary.js';
 
-import { isFixedHex } from '../shared/hex.js';
+import {
+  isFixedHex
+} from '../shared/hex.js';
+
+import {
+  summarizeErrorForOutput,
+} from './error-output.js';
+
+import {
+  projectRoundImportProgress,
+  type OperationContext,
+} from './operation-context.js';
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
 type ScanType = 'durable' | 'soft';
@@ -42,6 +55,7 @@ interface Values {
     | 'witness-rejected'
     | 'witness-decode-failed'
     | undefined;
+  operation: OperationContext | undefined;
 }
 
 type Kind = keyof Values;
@@ -56,6 +70,7 @@ const EVENTS = {
     {
       consumer: 'address',
       error: 'error',
+      operation: 'operation',
     },
   ],
   durableHeadRegressed: [
@@ -123,8 +138,12 @@ const EVENTS = {
 type EventDefinition = (typeof EVENTS)[keyof typeof EVENTS];
 type EventName = EventDefinition[1] | 'invalid_log_level';
 
+type OptionalKind = 'operation';
+
 type Context<S extends Schema> = {
-  [K in keyof S]: Values[S[K]];
+  [K in keyof S as S[K] extends OptionalKind ? never : K]: Values[S[K]];
+} & {
+  [K in keyof S as S[K] extends OptionalKind ? K : never]?: Values[S[K]];
 };
 
 export type RelayerLog = {
@@ -141,6 +160,7 @@ export interface CreateRelayerLogOptions {
   chainId: number;
   level?: string;
   destination?: LogDestination;
+  errorSummary?: SummarizeErrorOptions | undefined;
 }
 
 type FallbackCode =
@@ -177,6 +197,11 @@ export function createRelayerLog(
   }
 
   const requested = own(options, 'level') ?? 'info';
+
+  const errorSummary = snapshotErrorSummaryOptions(
+    own(options, 'errorSummary'),
+  );
+
   const validLevel =
     typeof requested === 'string' &&
     LEVELS.has(requested);
@@ -286,7 +311,7 @@ export function createRelayerLog(
     let record: Record<string, unknown>;
 
     try {
-      record = project(schema, context);
+      record = project(schema, context, errorSummary);
       record.event = event;
       fitRecord(record);
     } catch {
@@ -338,12 +363,90 @@ function own(
   return descriptor.value;
 }
 
+function snapshotErrorSummaryOptions(
+  input: unknown,
+): SummarizeErrorOptions | undefined {
+  if (input === undefined) {
+    return undefined;
+  }
+
+  const scrubText = own(input, 'scrubText');
+  if (typeof scrubText !== 'function') {
+    throw new TypeError('Invalid error summary policy.');
+  }
+
+  return {
+    scrubText: scrubText as SummarizeErrorOptions['scrubText'],
+  }
+}
+
 function scalar(
   kind: Exclude<Kind, 'consumers'>,
   value: unknown,
+  errorSummary: SummarizeErrorOptions | undefined,
 ): unknown {
+  if (kind === 'operation') {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    const name = own(value, 'name');
+    let schema: Schema;
+
+    switch(name) {
+      case 'load-checkpoint':
+      case 'read-chain-heads':
+        schema = {};
+        break;
+
+      case 'import-round': {
+        const context = project({
+          scanType: 'scanType',
+          fromBlock: 'uint',
+          toBlock: 'uint',
+        }, value, errorSummary);
+
+        Object.assign(context, projectRoundImportProgress(value));
+        context.name = name;
+
+        return context;
+      }
+
+      case 'scan-requests':
+        schema = {
+          scanType: 'scanType',
+          fromBlock: 'uint',
+          throughBlock: 'uint',
+          maxBlockRange: 'uint',
+        };
+        break;
+
+      case 'process-requests':
+        schema = {
+          scanType: 'scanType',
+          fromBlock: 'uint',
+          toBlock: 'uint',
+        };
+        break;
+
+      case 'save-checkpoint':
+        schema = {
+          nextBlock: 'uint',
+        };
+        break;
+
+      default:
+        throw new TypeError('Invalid operation context.');
+    }
+
+    const context = project(schema, value, errorSummary);
+    context.name = name;
+
+    return context;
+  }
+
   if (kind === 'error') {
-    return summarizeError(value);
+    return summarizeErrorForOutput(value, errorSummary);
   }
 
   if (kind === 'address' && isFixedHex(value, 20)) {
@@ -394,6 +497,7 @@ function scalar(
 function project(
   schema: Schema,
   input: unknown,
+  errorSummary: SummarizeErrorOptions | undefined,
 ): Record<string, unknown> {
   const record: Record<string, unknown> = Object.create(null);
 
@@ -420,7 +524,11 @@ function project(
       for (let index = 0; index < count; index += 1) {
         const consumer = own(value, String(index));
         const status = own(consumer, 'status');
-        const health = project({ consumer: 'address' }, consumer);
+        const health = project(
+          { consumer: 'address' },
+          consumer,
+          errorSummary,
+        );
 
         if (status === 'healthy') {
           for (const field of [
@@ -429,7 +537,11 @@ function project(
             'durableNextBlock',
             'softNextBlock',
           ]) {
-            health[field] = scalar('uint', own(consumer, field));
+            health[field] = scalar(
+              'uint',
+              own(consumer, field),
+              errorSummary,
+            );
           }
         } else if (status !== 'failed') {
           throw new TypeError('Invalid consumer health.');
@@ -451,7 +563,11 @@ function project(
         outputKey = 'err';
       }
 
-      record[outputKey] = scalar(kind, value);
+      record[outputKey] = scalar(
+        kind,
+        value,
+        errorSummary,
+      );
     }
   }
 

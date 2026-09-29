@@ -1,7 +1,15 @@
+import type {
+  ScrubbedText,
+} from './text-scrubber.js';
+
 const MAX_PROTOTYPE_NODES = 5;
 const MAX_ERROR_DEPTH = 4;
 const MAX_ERROR_NODES = 12;
 const MAX_AGGREGATE_ENTRIES = 4;
+
+const MAX_REVERT_ARGUMENTS = 4;
+const MIN_REVERT_INTEGER = -(1n << 255n);
+const MAX_REVERT_INTEGER = (1n << 256n) - 1n;
 
 const ERROR_MESSAGES = new Map<string, string>([
   ['UnknownError', 'Operation failed; details redacted.'],
@@ -46,6 +54,8 @@ const SYSTEM_CODES = new Set([
   'ETIMEDOUT',
 ]);
 
+export type RevertArgument = string | number | boolean | null;
+
 export interface ErrorSummary {
   name: string;
   message: string;
@@ -55,6 +65,19 @@ export interface ErrorSummary {
   causeOmitted?: true;
   errors?: ErrorSummary[];
   errorsOmitted?: true;
+  textModified?: true;
+  revert?: RevertSummary;
+}
+
+export interface RevertSummary {
+  name?: string;
+  reason?: string;
+  args?: RevertArgument[];
+  argsOmitted?: true;
+}
+
+export interface SummarizeErrorOptions {
+  scrubText: (text: string) => ScrubbedText;
 }
 
 interface Budget {
@@ -62,13 +85,16 @@ interface Budget {
   seen: Set<object>;
 }
 
-// Diagnostic labels are not evidence for transaction recovery. Fixed
-// strings and bounded nodes also bound the serialized output size.
-export function summarizeError(error: unknown): ErrorSummary {
+// Diagnostic text and labels are not evidence for transaction recovery.
+// External text requires the configured, bounded scrubber.
+export function summarizeError(
+  error: unknown,
+  options?: SummarizeErrorOptions,
+): ErrorSummary {
   return visit(error, {
     remaining: MAX_ERROR_NODES,
     seen: new Set<object>(),
-  }, 0) ?? unknownError();
+  }, 0, options) ?? unknownError();
 }
 
 function unknownError(): ErrorSummary {
@@ -82,6 +108,7 @@ function visit(
   error: unknown,
   budget: Budget,
   depth: number,
+  options: SummarizeErrorOptions | undefined,
 ): ErrorSummary | undefined {
   if (budget.remaining === 0 || depth >= MAX_ERROR_DEPTH) {
     return undefined;
@@ -91,6 +118,13 @@ function visit(
   budget.remaining -= 1;
 
   if (typeof error !== 'object' || error === null) {
+    if (options !== undefined) {
+      const message = scrubField(error, options.scrubText, summary);
+      if (message !== undefined) {
+        summary.message = message;
+      }
+    }
+
     return summary;
   }
 
@@ -101,11 +135,8 @@ function visit(
   budget.seen.add(error);
 
   const chain = prototypeChain(error);
-  if (chain === undefined) {
-    return summary;
-  }
-
   const name = dataProperty(chain, 'name');
+
   if (typeof name === 'string') {
     const message = ERROR_MESSAGES.get(name);
     if (message !== undefined) {
@@ -138,7 +169,7 @@ function visit(
 
   const cause = dataProperty(chain, 'cause');
   if (cause !== undefined && cause !== null) {
-    const child = visit(cause, budget, depth + 1);
+    const child = visit(cause, budget, depth + 1, options);
     if (child === undefined) {
       summary.causeOmitted = true;
     } else {
@@ -156,7 +187,7 @@ function visit(
     try {
       if (Array.isArray(errors)) {
         const arrayChain = prototypeChain(errors);
-        const length = dataProperty(arrayChain ?? [], 'length');
+        const length = dataProperty(arrayChain, 'length');
 
         if (
           typeof length !== 'number' ||
@@ -173,6 +204,7 @@ function visit(
               dataProperty([errors], String(index)),
               budget,
               depth + 1,
+              options,
             );
 
             if (child === undefined) {
@@ -197,37 +229,220 @@ function visit(
     }
   }
 
+  if (options !== undefined) {
+    const cleanName = scrubField(name, options.scrubText, summary);
+    if (cleanName !== undefined) {
+      summary.name = cleanName;
+    }
+
+    const cleanCode = scrubField(code, options.scrubText, summary);
+    if (cleanCode !== undefined) {
+      summary.code = cleanCode;
+    }
+
+    // Prefer provider evidence over generic wrapper descriptions.
+    for (const key of ['details', 'shortMessage', 'message']) {
+      const message = scrubField(
+        dataProperty(chain, key),
+        options.scrubText,
+        summary,
+      );
+
+      if (message !== undefined) {
+        summary.message = message;
+        break;
+      }
+    }
+
+    if (name === 'ContractFunctionRevertedError') {
+      const revert = summarizeRevert(
+        chain,
+        options.scrubText,
+        summary,
+      );
+
+      if (revert !== undefined) {
+        summary.revert = revert;
+      }
+    }
+  }
+
   return summary;
 }
 
-// Count the input itself. Validate termination even when it owns a name.
-function prototypeChain(value: object): object[] | undefined {
+function summarizeRevert(
+  chain: readonly object[],
+  scrubText: (text: string) => ScrubbedText,
+  summary: ErrorSummary,
+): RevertSummary | undefined {
+  const revert: RevertSummary = {};
+
+  const reason = scrubField(
+    dataProperty(chain, 'reason'),
+    scrubText,
+    summary,
+  );
+
+  if (reason !== undefined) {
+    revert.reason = reason;
+  }
+
+  const data = dataProperty(chain, 'data');
+  if (typeof data === 'object' && data !== null) {
+    const dataChain = prototypeChain(data);
+
+    const name = scrubField(
+      dataProperty(dataChain, 'errorName'),
+      scrubText,
+      summary,
+    );
+
+    if (name !== undefined) {
+      revert.name = name;
+    }
+
+    const args = dataProperty(dataChain, 'args');
+    if (args !== undefined) {
+      try {
+        if (!Array.isArray(args)) {
+          revert.argsOmitted = true;
+        } else {
+          const length = dataProperty([args], 'length');
+
+          if (
+            typeof length !== 'number' ||
+            !Number.isSafeInteger(length) ||
+            length < 0
+          ) {
+            revert.argsOmitted = true;
+          } else {
+            const limit = Math.min(length, MAX_REVERT_ARGUMENTS);
+            revert.args = [];
+
+            for (let index = 0; index < limit; index += 1) {
+              const value = revertArgument(
+                dataProperty([args], String(index)),
+                scrubText,
+                summary,
+              );
+
+              if (value === undefined) {
+                // Preserve argument positions when a value is omitted.
+                revert.args.push('[omitted]');
+                revert.argsOmitted = true;
+              } else {
+                revert.args.push(value);
+              }
+            }
+
+            if (length > limit) {
+              revert.argsOmitted = true;
+            }
+          }
+        }
+      } catch {
+        // Array.isArray can throw for a revoked Proxy.
+        revert.argsOmitted = true;
+      }
+    }
+  }
+
+  if (Object.keys(revert).length === 0) {
+    return undefined;
+  }
+
+  return revert;
+}
+
+function revertArgument(
+  value: unknown,
+  scrubText: (text: string) => ScrubbedText,
+  summary: ErrorSummary,
+): RevertArgument | undefined {
+  if (typeof value === 'string') {
+    if (value.length === 0) {
+      return '';
+    }
+
+    return scrubField(value, scrubText, summary);
+  }
+
+  if (typeof value === 'bigint') {
+    if (
+      value < MIN_REVERT_INTEGER ||
+      value > MAX_REVERT_INTEGER
+    ) {
+      return undefined;
+    }
+
+    return scrubField(value.toString(), scrubText, summary);
+  }
+
+  if (
+    typeof value === 'number' &&
+    Number.isSafeInteger(value)
+  ) {
+    return value;
+  }
+
+  if (typeof value === 'boolean' || value === null) {
+    return value;
+  }
+
+  // Never coerce or recursively serialize external argument objects.
+  return undefined;
+}
+
+function scrubField(
+  value: unknown,
+  scrubText: (text: string) => ScrubbedText,
+  summary: ErrorSummary,
+): string | undefined {
+  if (typeof value !== 'string' || value.length === 0) {
+    return undefined;
+  }
+
+  try {
+    const result = scrubText(value);
+    if (result.removed) {
+      summary.textModified = true;
+    }
+
+    return result.text;
+  } catch {
+    // Never fall back to raw text if scrubbing fails.
+    summary.textModified = true;
+    return '[diagnostic text unavailable]';
+  }
+}
+
+// Count the input itself and retain the bounded prefix we can inspect.
+function prototypeChain(value: object): object[] {
   const chain: object[] = [];
   let current: object | null = value;
 
   try {
     while (current !== null && chain.length < MAX_PROTOTYPE_NODES) {
       if (chain.includes(current)) {
-        return undefined;
+        break;
       }
 
       chain.push(current);
 
-      if (current === Object.prototype) {
-        return chain;
+      if (
+        current === Object.prototype ||
+        chain.length === MAX_PROTOTYPE_NODES
+      ) {
+        break;
       }
 
       current = Object.getPrototypeOf(current);
     }
-
-    if (current === null) {
-      return chain;
-    }
   } catch {
-    // Reflective operations may invoke Proxy traps.
+    // A throwing prototype trap does not invalidate earlier nodes.
   }
 
-  return undefined;
+  return chain;
 }
 
 function dataProperty(

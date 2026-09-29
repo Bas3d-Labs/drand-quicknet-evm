@@ -1,5 +1,9 @@
 import {
-  summarizeError,
+  summarizeErrorForOutput,
+} from '../diagnostics/error-output.js';
+
+import type {
+  SummarizeErrorOptions,
 } from '../diagnostics/error-summary.js';
 
 import {
@@ -288,6 +292,7 @@ export function renderCliOutput(
 export function renderOutputFailure(
   output: CliOutput,
   error: unknown,
+  errorSummary?: SummarizeErrorOptions,
 ): string {
   let context: Record<string, unknown> = {
     output: 'unknown',
@@ -335,6 +340,6 @@ export function renderOutputFailure(
     event: 'output_failed',
     code: 'CLI_OUTPUT_FAILED',
     ...context,
-    err: summarizeError(error),
+    err: summarizeErrorForOutput(error, errorSummary),
   });
 }

@@ -19,25 +19,44 @@ import {
   runDaemonCommand,
 } from './daemon-command.js';
 
+import type {
+  SummarizeErrorOptions,
+} from '../diagnostics/error-summary.js';
+
+import type {
+  RoundImportProgress,
+} from '../diagnostics/operation-context.js';
+
+import {
+  UsageError,
+} from '../diagnostics/usage-error.js';
+
 import {
   isDecimalInteger,
 } from '../shared/decimal.js';
 
 import {
   importQuicknetRound,
+  type ImportQuicknetRoundResult,
 } from '../rounds/import-round.js';
 
 import {
   importQuicknetRoundWhenAvailable,
 } from '../rounds/import-round-when-available.js';
 
-import {
-  UsageError,
-} from '../diagnostics/usage-error.js';
-
 const MAX_UINT64 = (1n << 64n) - 1n;
 
 type CliOutputHandler = (output: CliOutput) => void;
+
+export interface CliOptions {
+  onDiagnostics?: (
+    policy: SummarizeErrorOptions | undefined,
+  ) => void;
+  onImportFailure?: (
+    error: unknown,
+    progress: RoundImportProgress,
+  ) => void;
+}
 
 interface ImportCommandArguments {
   command: 'import';
@@ -74,21 +93,22 @@ type CommandArguments =
 export async function main(
   args: readonly string[],
   output: CliOutputHandler,
+  options: CliOptions = {},
 ): Promise<void> {
   const normalizedArgs = normalizeArguments(args);
   const command = parseCommandArguments(normalizedArgs);
 
   switch (command.command) {
     case 'import':
-      await runImportCommand(command, output);
+      await runImportCommand(command, output, options);
       return;
 
     case 'import-when-available':
-      await runImportWhenAvailableCommand(command, output);
+      await runImportWhenAvailableCommand(command, output, options);
       return;
     
     case 'daemon':
-      await runDaemonCli(command.source, output);
+      await runDaemonCli(command.source, output, options);
       return;    
       
     case 'daemon-help':
@@ -104,20 +124,34 @@ export async function main(
 async function runImportCommand(
   command: ImportCommandArguments,
   output: CliOutputHandler,
+  options: CliOptions,
 ): Promise<void> {
   const config = await loadRelayerConfig({
     source: command.source,
   });
 
+  options.onDiagnostics?.(config.errorSummary);
+
   const clients = createRelayerClients(config);
 
-  const result = await importQuicknetRound({
-    publicClient: clients.publicClient,
-    walletClient: clients.walletClient,
-    account: config.account,
-    deployment: config.deployment,
-    round: command.round,
-  });
+  let progress: RoundImportProgress | undefined;
+  let result: ImportQuicknetRoundResult;
+
+  try {
+    result = await importQuicknetRound({
+      publicClient: clients.publicClient,
+      walletClient: clients.walletClient,
+      account: config.account,
+      deployment: config.deployment,
+      round: command.round,
+      onProgress(current) {
+        progress = current;
+      },
+    });
+  } catch (error) {
+    reportImportFailure(options, error, progress);
+    throw error;
+  }
 
   output({
     type: 'import-result',
@@ -129,20 +163,34 @@ async function runImportCommand(
 async function runImportWhenAvailableCommand(
   command: ImportWhenAvailableCommandArguments,
   output: CliOutputHandler,
+  options: CliOptions,
 ): Promise<void> {
   const config = await loadRelayerConfig({
     source: command.source,
   });
 
+  options.onDiagnostics?.(config.errorSummary);
+
   const clients = createRelayerClients(config);
 
-  const result = await importQuicknetRoundWhenAvailable({
-    publicClient: clients.publicClient,
-    walletClient: clients.walletClient,
-    account: config.account,
-    deployment: config.deployment,
-    round: command.round,
-  });
+  let progress: RoundImportProgress | undefined;
+  let result: ImportQuicknetRoundResult;
+
+  try {
+    result = await importQuicknetRoundWhenAvailable({
+      publicClient: clients.publicClient,
+      walletClient: clients.walletClient,
+      account: config.account,
+      deployment: config.deployment,
+      round: command.round,
+      onProgress(current) {
+        progress = current;
+      },
+    });
+  } catch (error) {
+    reportImportFailure(options, error, progress);
+    throw error;
+  }
 
   output({
     type: 'import-result',
@@ -154,6 +202,7 @@ async function runImportWhenAvailableCommand(
 async function runDaemonCli(
   source: NetworkSource,
   output: CliOutputHandler,
+  options: CliOptions,
 ): Promise<void> {
   const controller = new AbortController();
 
@@ -173,6 +222,9 @@ async function runDaemonCli(
           type: 'daemon-startup',
           summary,
         });
+      },
+      onDiagnostics(policy) {
+        options.onDiagnostics?.(policy);
       },
     });
   } finally {
@@ -270,6 +322,22 @@ function parseDaemonArguments(
     command: 'daemon',
     source,
   };
+}
+
+function reportImportFailure(
+  options: CliOptions,
+  error: unknown,
+  progress: RoundImportProgress | undefined,
+): void {
+  if (progress === undefined) {
+    return;
+  }
+
+  try {
+    options.onImportFailure?.(error, progress);
+  } catch {
+    // Diagnostic observers must not replace the original import failure.
+  }
 }
 
 interface RoundCommandOptions {

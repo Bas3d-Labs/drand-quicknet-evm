@@ -7,16 +7,28 @@ import {
   USAGE_MESSAGES,
 } from './diagnostic-messages.js';
 
-import {
-  summarizeError,
+import type {
+  SummarizeErrorOptions,
 } from './error-summary.js';
+
+import {
+  summarizeErrorForOutput,
+} from './error-output.js';
 
 import {
   usageCode,
 } from './usage-error.js';
 
+import {
+  projectRoundImportProgress,
+  type RoundImportDiagnostic,
+  type RoundImportProgress,
+} from './operation-context.js';
+
 export function renderDiagnostic(
   error: unknown,
+  errorSummary?: SummarizeErrorOptions,
+  importProgress?: RoundImportProgress,
 ): string {
   try {
     const code = usageCode(error);
@@ -43,9 +55,25 @@ export function renderDiagnostic(
     // Unexpected diagnostic rendering failures use the generic summary.
   }
 
+  let operation:
+    | (RoundImportDiagnostic & { name: 'import-round' })
+    | undefined;
+
+  if (importProgress !== undefined) {
+    try {
+      operation = {
+        ...projectRoundImportProgress(importProgress),
+        name: 'import-round',
+      };
+    } catch {
+      // Invalid context must not suppress the original error diagnostic.
+    }
+  }
+
   return JSON.stringify({
     event: 'cli_failed',
     kind: 'operation',
-    err: summarizeError(error),
+    operation,
+    err: summarizeErrorForOutput(error, errorSummary),
   });
 }

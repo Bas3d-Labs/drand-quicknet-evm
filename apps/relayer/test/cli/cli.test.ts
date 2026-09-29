@@ -542,6 +542,7 @@ describe('main', () => {
           account: ACCOUNT,
           deployment: CONFIG.deployment,
           round: ROUND,
+          onProgress: expect.any(Function),
         });
 
         expect(output).toHaveBeenCalledExactlyOnceWith({
@@ -652,6 +653,7 @@ describe('main', () => {
           source,
           signal: expect.any(AbortSignal),
           onStartup: expect.any(Function),
+          onDiagnostics: expect.any(Function),
         });
 
         expect(
@@ -787,5 +789,157 @@ describe('main', () => {
         SIGNALS.map((signal) => process.listeners(signal)),
       ).toEqual(before);
     });
+  });
+});
+
+describe('diagnostic policy handoff', () => {
+  it.each(ROUND_COMMANDS)(
+    'installs policy before %s creates clients',
+    async (command) => {
+      const policy = {
+        scrubText: (text: string) => ({ text, removed: false }),
+      };
+
+      vi.mocked(loadRelayerConfig).mockResolvedValue({
+        ...CONFIG,
+        errorSummary: policy,
+      });
+
+      const onDiagnostics = vi.fn();
+
+      vi.mocked(createRelayerClients).mockImplementation(() => {
+        expect(onDiagnostics).toHaveBeenCalledExactlyOnceWith(policy);
+        throw new Error('client initialization failed');
+      });
+
+      await expect(
+        main([
+          command,
+          '--network',
+          PRESET,
+          '--round',
+          ROUND.toString(),
+        ], vi.fn(), { onDiagnostics }),
+      ).rejects.toThrow('client initialization failed');
+    },
+  );
+
+  it('does not install a policy when configuration fails', async () => {
+    vi.mocked(loadRelayerConfig).mockRejectedValue(
+      new Error('invalid configuration'),
+    );
+
+    const onDiagnostics = vi.fn();
+
+    await expect(
+      main([
+        'import',
+        '--network',
+        PRESET,
+        '--round',
+        ROUND.toString(),
+      ], vi.fn(), { onDiagnostics }),
+    ).rejects.toThrow('invalid configuration');
+
+    expect(onDiagnostics).not.toHaveBeenCalled();
+  });
+
+  it('forwards the daemon policy to the caller', async () => {
+    const policy = undefined;
+
+    vi.mocked(runDaemonCommand).mockImplementation(async (options) => {
+      options.onDiagnostics?.(policy);
+    });
+
+    const onDiagnostics = vi.fn();
+
+    await main(
+      ['daemon', '--network', PRESET],
+      vi.fn(),
+      { onDiagnostics },
+    );
+
+    expect(onDiagnostics).toHaveBeenCalledExactlyOnceWith(policy);
+  });
+});
+
+describe.each(ROUND_COMMANDS)('%s failure context', (command) => {
+  function operation() {
+    if (command === 'import') {
+      return vi.mocked(importQuicknetRound);
+    }
+
+    return vi.mocked(importQuicknetRoundWhenAvailable);
+  }
+
+  const args = [
+    command,
+    '--network',
+    PRESET,
+    '--round',
+    ROUND.toString(),
+  ];
+
+  const progress = {
+    round: ROUND,
+    phase: 'wait-for-receipt' as const,
+    transactionHash: HASH,
+  };
+
+  it('reports the failed import without replacing its error', async () => {
+    const failure = new Error('receipt timed out');
+
+    operation().mockImplementationOnce(async ({ onProgress }) => {
+      onProgress?.(progress);
+      throw failure;
+    });
+
+    const onImportFailure = vi.fn();
+
+    await expect(
+      main(args, vi.fn(), { onImportFailure }),
+    ).rejects.toBe(failure);
+
+    expect(onImportFailure).toHaveBeenCalledExactlyOnceWith(
+      failure,
+      progress,
+    );
+  });
+
+  it('preserves the import error when its diagnostic observer throws', async () => {
+    const failure = new Error('receipt timed out');
+
+    operation().mockImplementationOnce(async ({ onProgress }) => {
+      onProgress?.(progress);
+      throw failure;
+    });
+
+    await expect(
+      main(args, vi.fn(), {
+        onImportFailure() {
+          throw new Error('observer failed');
+        },
+      }),
+    ).rejects.toBe(failure);
+  });
+
+  it('does not attach import failure context to an output failure', async () => {
+    operation().mockImplementationOnce(async ({ onProgress }) => {
+      onProgress?.(progress);
+      return IMPORTED;
+    });
+
+    const failure = new Error('output failed');
+    const onImportFailure = vi.fn();
+
+    const output = () => {
+      throw failure;
+    };
+
+    await expect(
+      main(args, output, { onImportFailure }),
+    ).rejects.toBe(failure);
+
+    expect(onImportFailure).not.toHaveBeenCalled();
   });
 });

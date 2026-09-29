@@ -69,6 +69,7 @@ function logCycle(
       logger.consumerFailed({
         consumer: consumer.consumer.address,
         error: consumer.error,
+        operation: consumer.operation,
       });
       
       continue;

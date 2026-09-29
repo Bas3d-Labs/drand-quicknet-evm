@@ -49,6 +49,7 @@ const EXPECTED_OUTPUT = Buffer.from(
 
 const MODULE_PATHS = {
   bootstrap: 'bootstrap.js',
+  'error-output': 'diagnostics/error-output.js',
   'error-summary': 'diagnostics/error-summary.js',
   'diagnostic-messages': 'diagnostics/diagnostic-messages.js',
   'usage-error': 'diagnostics/usage-error.js',
@@ -58,6 +59,7 @@ const MODULE_PATHS = {
   cli: 'cli/cli.js',
   hex: 'shared/hex.js',
   'network-presets': 'config/network-presets.js',
+  'operation-context': 'diagnostics/operation-context.js',
 } as const;
 
 interface PipeResult {

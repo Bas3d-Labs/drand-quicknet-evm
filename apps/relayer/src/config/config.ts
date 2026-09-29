@@ -29,6 +29,14 @@ import {
 } from '../diagnostics/config-errors.js';
 
 import {
+  createScrubber,
+} from '../diagnostics/text-scrubber.js';
+
+import type {
+  SummarizeErrorOptions,
+} from '../diagnostics/error-summary.js';
+
+import {
   loadCustomNetworkDescriptor,
 } from './custom-network-config.js';
 
@@ -100,6 +108,9 @@ export interface ResolvedNetworkConfig {
 
 export interface RelayerConfig extends ResolvedNetworkConfig {
   account: ReturnType<typeof privateKeyToAccount>;
+
+  // Configs constructed by callers may omit this and retain strict output.
+  errorSummary?: SummarizeErrorOptions;
 }
 
 export interface LoadRelayerConfigOptions {
@@ -141,6 +152,12 @@ export async function loadRelayerConfig(
   return {
     ...network,
     account,
+    errorSummary: Object.freeze({
+      scrubText: createScrubber({
+        rpcUrls: [network.rpcUrl],
+        privateKey,
+      }),
+    }),
   };
 }
 

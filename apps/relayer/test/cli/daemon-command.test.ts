@@ -308,6 +308,7 @@ describe('runDaemonCommand', () => {
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
       level: 'info',
+      errorSummary: undefined,
     });
   });
 
@@ -322,6 +323,7 @@ describe('runDaemonCommand', () => {
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
       level: 'debug',
+      errorSummary: undefined,
     });
   });
 
@@ -333,6 +335,7 @@ describe('runDaemonCommand', () => {
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
       level: 'warn',
+      errorSummary: undefined,
     });
   });
 
@@ -347,6 +350,7 @@ describe('runDaemonCommand', () => {
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
       level: 'info',
+      errorSummary: undefined,
     });
   });
 
@@ -359,6 +363,7 @@ describe('runDaemonCommand', () => {
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
       level: 'invalid-level',
+      errorSummary: undefined,
     });
   });
 
@@ -813,5 +818,48 @@ describe('runDaemonCommand', () => {
     }
 
     expect(checkpointLockHandleMocks.release).toHaveBeenCalledOnce();
+  });
+
+  it('installs the same policy before logger creation and startup RPC work', async () => {
+    const policy = {
+      scrubText: (text: string) => ({ text, removed: false }),
+    };
+
+    vi.mocked(loadDaemonConfig).mockResolvedValue({
+      ...DAEMON_CONFIG,
+      errorSummary: policy,
+    });
+
+    const onDiagnostics = vi.fn();
+
+    vi.mocked(createRelayerLog).mockImplementation((options) => {
+      expect(onDiagnostics).toHaveBeenCalledExactlyOnceWith(policy);
+      expect(options.errorSummary).toBe(policy);
+
+      return relayerLogMocks;
+    });
+
+    const failure = new Error('public rate limit exceeded');
+    vi.mocked(verifyRegistryDeployment).mockRejectedValue(failure);
+
+    await expect(
+      runDaemonCommand({ source: SOURCE, onDiagnostics }),
+    ).rejects.toBe(failure);
+
+    expect(onDiagnostics).toHaveBeenCalledExactlyOnceWith(policy);
+  });
+
+  it('does not install a policy after invalid daemon configuration', async () => {
+    vi.mocked(loadDaemonConfig).mockRejectedValue(
+      new Error('invalid daemon configuration'),
+    );
+
+    const onDiagnostics = vi.fn();
+
+    await expect(
+      runDaemonCommand({ source: SOURCE, onDiagnostics }),
+    ).rejects.toThrow('invalid daemon configuration');
+
+    expect(onDiagnostics).not.toHaveBeenCalled();
   });
 });

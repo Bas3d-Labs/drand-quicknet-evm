@@ -230,6 +230,7 @@ describe('runDaemonCycle', () => {
       startBlock: 1_000n,
       maxBlockRange: 100n,
       finality: FINALITY,
+      onOperation: expect.any(Function),
     });
 
     expect(result).toEqual({
@@ -296,6 +297,7 @@ describe('runDaemonCycle', () => {
       maxBlockRange: 100n,
       finality: FINALITY,
       softCursor: existingCursor,
+      onOperation: expect.any(Function),
     });
   });
 
@@ -433,6 +435,7 @@ describe('runDaemonCycle', () => {
         startBlock: 500n,
         maxBlockRange: 250n,
         finality: FINALITY,
+        onOperation: expect.any(Function),
       },
     );
 
@@ -450,6 +453,7 @@ describe('runDaemonCycle', () => {
         startBlock: 500n,
         maxBlockRange: 250n,
         finality: FINALITY,
+        onOperation: expect.any(Function),
       },
     );
   });

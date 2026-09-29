@@ -7,7 +7,11 @@ import {
   vi,
 } from 'vitest';
 
-import { HttpRequestError } from 'viem';
+import {
+  HttpRequestError,
+  InvalidInputRpcError,
+  RpcRequestError,
+} from 'viem';
 
 import {
   summarizeError,
@@ -112,21 +116,32 @@ describe('summarizeError', () => {
     expect(access).not.toHaveBeenCalled();
   });
 
-  it('requires termination within five prototype nodes', () => {
-    let error = Object.create(null);
+  it('retains fields within five nodes without reading beyond them', () => {
+    const outside = Object.create(null);
+    outside.status = 429;
 
-    for (let i = 1; i < 5; i += 1) {
+    const boundary = Object.create(outside);
+    boundary.code = -32000;
+
+    let error = boundary;
+
+    for (let index = 0; index < 4; index += 1) {
       error = Object.create(error);
     }
 
-    error.name = 'TypeError';
+    error.name = 'HttpRequestError';
+    error.cause = { code: 'ECONNRESET' };
 
-    expect(summarizeError(error).name).toBe('TypeError');
-
-    const tooDeep = Object.create(error);
-    tooDeep.name = 'HttpRequestError';
-
-    expect(summarizeError(tooDeep).name).toBe('UnknownError');
+    expect(summarizeError(error)).toEqual({
+      name: 'HttpRequestError',
+      message: 'HTTP request failed.',
+      code: -32000,
+      cause: {
+        name: 'UnknownError',
+        message: 'Operation failed; details redacted.',
+        code: 'ECONNRESET',
+      },
+    });
   });
 
   it('bounds cyclic and perpetually fresh Proxy prototype chains', () => {
@@ -148,7 +163,7 @@ describe('summarizeError', () => {
     }
 
     expect(summarizeError(fresh()).name).toBe('UnknownError');
-    expect(calls).toBe(5);
+    expect(calls).toBe(4);
   });
 
   it('contains throwing descriptor traps and revoked proxies', () => {
@@ -263,5 +278,58 @@ describe('summarizeError', () => {
       message: 'Multiple operations failed.',
       errorsOmitted: true,
     });
+  });
+
+  it('retains codes and causes from a real viem RPC error', () => {
+    const rpcError = new RpcRequestError({
+      body: { method: 'eth_getLogs' },
+      error: {
+        code: -32000,
+        message: `historical state is not available; ${SECRET}`,
+      },
+      url: `https://rpc.example/${SECRET}`,
+    });
+
+    const error = new InvalidInputRpcError(rpcError);
+    const summary = summarizeError(error);
+
+    expect(summary.code).toBe(-32000);
+    expect(summary.cause?.name).toBe('RpcRequestError');
+    expect(summary.cause?.code).toBe(-32000);
+    expect(summary.cause?.cause?.code).toBe(-32000);
+    expect(JSON.stringify(summary)).not.toContain(SECRET);
+    expect(error.cause).toBe(rpcError);
+  });
+
+  it('retains own fields when a prototype trap throws', () => {
+    const error = new Proxy({
+      name: 'HttpRequestError',
+      status: 429,
+    }, {
+      getPrototypeOf() {
+        throw new Error(SECRET);
+      },
+    });
+
+    expect(summarizeError(error)).toEqual({
+      name: 'HttpRequestError',
+      message: 'HTTP request failed.',
+      status: 429,
+    });
+  });
+
+  it('does not skip an accessor to read an inherited code', () => {
+    const access = vi.fn(() => -32029);
+    const inherited = Object.create(null);
+    inherited.code = -32000;
+
+    const error = Object.create(inherited);
+
+    Object.defineProperty(error, 'code', {
+      get: access,
+    });
+
+    expect(summarizeError(error).code).toBeUndefined();
+    expect(access).not.toHaveBeenCalled();
   });
 });

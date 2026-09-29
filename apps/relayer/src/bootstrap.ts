@@ -8,8 +8,14 @@ import process from 'node:process';
 type SummarizeError =
   typeof import('./diagnostics/error-summary.js').summarizeError;
 
+type SummarizeErrorOptions =
+  import('./diagnostics/error-summary.js').SummarizeErrorOptions;
+
 type RenderDiagnostic =
   typeof import('./diagnostics/diagnostics.js').renderDiagnostic;
+
+type RoundImportProgress =
+  import('./diagnostics/operation-context.js').RoundImportProgress;
 
 const WRITE_BUDGET_MS = 250;
 const MAX_WRITE_ATTEMPTS = 128;
@@ -25,6 +31,13 @@ let summarizeError: SummarizeError = () => ({
   name: 'UnknownError',
   message: 'Operation failed; details redacted.',
 });
+
+let errorSummary: SummarizeErrorOptions | undefined;
+
+let importFailure: {
+  error: unknown;
+  progress: RoundImportProgress;
+} | undefined;
 
 let renderDiagnostic: RenderDiagnostic | undefined;
 
@@ -141,7 +154,7 @@ function fatal(
     const line = JSON.stringify({
       event,
       time: Date.now(),
-      err: summarizeError(error),
+      err: summarizeError(error, errorSummary),
     });
     writeLine(2, line);
   } catch {
@@ -165,6 +178,9 @@ try {
   const errors = await import('./diagnostics/error-summary.js');
   summarizeError = errors.summarizeError;
 
+  const errorOutput = await import('./diagnostics/error-output.js');
+  summarizeError = errorOutput.summarizeErrorForOutput;
+
   const diagnostics = await import('./diagnostics/diagnostics.js');
   renderDiagnostic = diagnostics.renderDiagnostic;
 
@@ -180,13 +196,20 @@ try {
       writeLine(1, renderCliOutput(record));
     } catch (error) {
       try {
-        writeLine(2, renderOutputFailure(record, error));
+        writeLine(2, renderOutputFailure(record, error, errorSummary));
       } catch {
         // Exit status still identifies output failure if stderr fails.
       }
 
       throw outputFailure;
     }
+  }, {
+    onDiagnostics(policy) {
+      errorSummary = policy;
+    },
+    onImportFailure(error, progress) {
+      importFailure = { error, progress };
+    },
   });
 } catch (error) {
   if (error === outputFailure) {
@@ -199,11 +222,20 @@ try {
         const line = JSON.stringify({
           event: 'cli_failed',
           kind: 'bootstrap',
-          err: summarizeError(error),
+          err: summarizeError(error, errorSummary),
         })
         writeLine(2, line);
       } else {
-        writeLine(2, renderDiagnostic(error));
+        let progress: RoundImportProgress | undefined;
+
+        if (
+          importFailure !== undefined &&
+          Object.is(importFailure.error, error)
+        ) {
+          progress = importFailure.progress;
+        }
+
+        writeLine(2, renderDiagnostic(error, errorSummary, progress));
       }
     } catch {
       // Preserve failure status even if stderr cannot be written.
