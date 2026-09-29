@@ -52,6 +52,7 @@ const MODULE_PATHS = {
   'error-output': 'diagnostics/error-output.js',
   'error-summary': 'diagnostics/error-summary.js',
   'diagnostic-messages': 'diagnostics/diagnostic-messages.js',
+  'text-scrubber': 'diagnostics/text-scrubber.js',
   'usage-error': 'diagnostics/usage-error.js',
   'config-errors': 'diagnostics/config-errors.js',
   diagnostics: 'diagnostics/diagnostics.js',
@@ -1033,6 +1034,176 @@ describe('bootstrap import failure context', () => {
       }
 
       expect(result.stderr).not.toContain(SECRET);
+    },
+  );
+});
+
+describe('configured submission-timeout diagnostics', () => {
+  it.each([
+    {
+      event: 'cli_failed',
+      action: 'throw error;',
+    },
+    {
+      event: 'uncaught_exception',
+      action: `
+        setTimeout(() => { throw error; }, 0);
+        await new Promise(() => {});
+      `,
+    },
+    {
+      event: 'unhandled_rejection',
+      action: `
+        setTimeout(() => {
+          void Promise.reject(error);
+        }, 0);
+
+        await new Promise(() => {});
+      `,
+    },
+  ])(
+    'preserves the timeout chain without raw output for $event',
+    ({ event, action }) => {
+      const privateKey = '0x' + 'ab'.repeat(32);
+      const bodyCanary = 'RAW_SIGNED_BYTES_CANARY';
+
+      setModule('cli', `
+        import {
+          createScrubber,
+        } from '../diagnostics/text-scrubber.js';
+
+        export async function main(args, output, options) {
+          const secret = ${JSON.stringify(SECRET)};
+          const privateKey = ${JSON.stringify(privateKey)};
+          const rpcUrl =
+            'https://rpc.incident.test/' + secret + '/';
+
+          options.onDiagnostics({
+            scrubText: createScrubber({
+              rpcUrls: [rpcUrl],
+              privateKey,
+            }),
+          });
+
+          // Reproduce the diagnostic shape of the production incident.
+          const timeout = Object.assign(
+            new Error('The request took too long to respond.'),
+            {
+              name: 'TimeoutError',
+              details: 'The request timed out.',
+              url: rpcUrl,
+              headers: {
+                authorization: 'Bearer ' + secret,
+              },
+              body: {
+                method: 'eth_sendRawTransaction',
+                params: [${JSON.stringify(bodyCanary)}],
+              },
+            },
+          );
+
+          const transaction = Object.assign(
+            new Error('Transaction failed.', {
+              cause: timeout,
+            }),
+            {
+              name: 'TransactionExecutionError',
+              details: 'The request timed out.',
+            },
+          );
+
+          const contract = Object.assign(
+            new Error('Contract call failed.', {
+              cause: transaction,
+            }),
+            {
+              name: 'ContractFunctionExecutionError',
+              details: 'The request timed out.',
+              metaMessages: [${JSON.stringify(bodyCanary)}],
+            },
+          );
+
+          const error = new Error(
+            'Submissions blocked; inspect signer state before restarting. ' +
+            'Endpoint: ' + rpcUrl +
+            ' key=' + privateKey +
+            ' encoded=' + encodeURIComponent(rpcUrl),
+            { cause: contract },
+          );
+
+          options.onImportFailure(error, {
+            round: 32607411n,
+            phase: 'submit-transaction',
+          });
+
+          ${action}
+        }
+      `);
+
+      const result = launch();
+
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toBe('');
+
+      // Also verifies that stderr contains exactly one JSON record.
+      const record = diagnostic(result.stderr);
+
+      expect(record).toMatchObject({
+        event,
+        err: {
+          name: 'Error',
+          message: expect.stringContaining(
+            'Submissions blocked; inspect signer state before restarting.',
+          ),
+          textModified: true,
+          cause: {
+            name: 'ContractFunctionExecutionError',
+            message: 'The request timed out.',
+            cause: {
+              name: 'TransactionExecutionError',
+              message: 'The request timed out.',
+              cause: {
+                name: 'TimeoutError',
+                message: 'The request timed out.',
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.stderr).toContain(
+        'https://rpc.incident.test/[REDACTED]',
+      );
+
+      expect(result.stderr).not.toContain(SECRET);
+      expect(result.stderr).not.toContain(privateKey.slice(2));
+      expect(result.stderr).not.toContain(bodyCanary);
+
+      for (const field of [
+        'stack',
+        'url',
+        'headers',
+        'body',
+        'metaMessages',
+      ]) {
+        expect(result.stderr).not.toContain(
+          JSON.stringify(field) + ':',
+        );
+      }
+
+      expect(Buffer.byteLength(JSON.stringify(record.err)))
+        .toBeLessThanOrEqual(8_192);
+
+      if (event === 'cli_failed') {
+        expect(record.operation).toEqual({
+          name: 'import-round',
+          round: '32607411',
+          phase: 'submit-transaction',
+        });
+      } else {
+        // Fatal errors must not inherit unrelated import context.
+        expect(record).not.toHaveProperty('operation');
+      }
     },
   );
 });
