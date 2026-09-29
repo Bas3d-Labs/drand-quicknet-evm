@@ -14,6 +14,9 @@ type SummarizeErrorOptions =
 type RenderDiagnostic =
   typeof import('./diagnostics/diagnostics.js').renderDiagnostic;
 
+type RoundImportProgress =
+  import('./diagnostics/operation-context.js').RoundImportProgress;
+
 const WRITE_BUDGET_MS = 250;
 const MAX_WRITE_ATTEMPTS = 128;
 
@@ -30,6 +33,11 @@ let summarizeError: SummarizeError = () => ({
 });
 
 let errorSummary: SummarizeErrorOptions | undefined;
+
+let importFailure: {
+  error: unknown;
+  progress: RoundImportProgress;
+} | undefined;
 
 let renderDiagnostic: RenderDiagnostic | undefined;
 
@@ -199,6 +207,9 @@ try {
     onDiagnostics(policy) {
       errorSummary = policy;
     },
+    onImportFailure(error, progress) {
+      importFailure = { error, progress };
+    },
   });
 } catch (error) {
   if (error === outputFailure) {
@@ -215,7 +226,16 @@ try {
         })
         writeLine(2, line);
       } else {
-        writeLine(2, renderDiagnostic(error, errorSummary));
+        let progress: RoundImportProgress | undefined;
+
+        if (
+          importFailure !== undefined &&
+          Object.is(importFailure.error, error)
+        ) {
+          progress = importFailure.progress;
+        }
+
+        writeLine(2, renderDiagnostic(error, errorSummary, progress));
       }
     } catch {
       // Preserve failure status even if stderr cannot be written.

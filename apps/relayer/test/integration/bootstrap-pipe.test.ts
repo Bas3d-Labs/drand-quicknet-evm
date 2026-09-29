@@ -59,6 +59,7 @@ const MODULE_PATHS = {
   cli: 'cli/cli.js',
   hex: 'shared/hex.js',
   'network-presets': 'config/network-presets.js',
+  'operation-context': 'diagnostics/operation-context.js',
 } as const;
 
 interface PipeResult {

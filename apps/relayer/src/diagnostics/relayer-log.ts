@@ -21,9 +21,9 @@ import {
   summarizeErrorForOutput,
 } from './error-output.js';
 
-import type {
-  OperationContext,
-  RoundImportProgress,
+import {
+  projectRoundImportProgress,
+  type OperationContext,
 } from './operation-context.js';
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
@@ -56,7 +56,6 @@ interface Values {
     | 'witness-decode-failed'
     | undefined;
   operation: OperationContext | undefined;
-  importPhase: RoundImportProgress['phase'];
 }
 
 type Kind = keyof Values;
@@ -401,26 +400,16 @@ function scalar(
         break;
 
       case 'import-round': {
-        schema = {
+        const context = project({
           scanType: 'scanType',
           fromBlock: 'uint',
           toBlock: 'uint',
-          round: 'uint',
-          phase: 'importPhase',
-        };
+        }, value, errorSummary);
 
-        const phase = own(value, 'phase');
-        if (
-          phase === 'wait-for-receipt' ||
-          phase === 'verify-stored-beacon'
-        ) {
-          schema = {
-            ...schema,
-            transactionHash: 'hash',
-          };
-        }
+        Object.assign(context, projectRoundImportProgress(value));
+        context.name = name;
 
-        break;
+        return context;
       }
 
       case 'scan-requests':
@@ -454,24 +443,6 @@ function scalar(
     context.name = name;
 
     return context;
-  }
-
-  if (kind === 'importPhase') {
-    switch (value) {
-      case 'verify-deployment':
-      case 'check-stored':
-      case 'wait-for-beacon':
-      case 'fetch-beacon':
-      case 'validate-beacon':
-      case 'prepare-submission':
-      case 'submit-transaction':
-      case 'wait-for-receipt':
-      case 'verify-stored-beacon':
-        return value;
-
-      default:
-        throw new TypeError('Invalid import phase.');
-    }
   }
 
   if (kind === 'error') {

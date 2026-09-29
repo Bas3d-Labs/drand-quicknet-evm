@@ -542,6 +542,7 @@ describe('main', () => {
           account: ACCOUNT,
           deployment: CONFIG.deployment,
           round: ROUND,
+          onProgress: expect.any(Function),
         });
 
         expect(output).toHaveBeenCalledExactlyOnceWith({
@@ -859,5 +860,86 @@ describe('diagnostic policy handoff', () => {
     );
 
     expect(onDiagnostics).toHaveBeenCalledExactlyOnceWith(policy);
+  });
+});
+
+describe.each(ROUND_COMMANDS)('%s failure context', (command) => {
+  function operation() {
+    if (command === 'import') {
+      return vi.mocked(importQuicknetRound);
+    }
+
+    return vi.mocked(importQuicknetRoundWhenAvailable);
+  }
+
+  const args = [
+    command,
+    '--network',
+    PRESET,
+    '--round',
+    ROUND.toString(),
+  ];
+
+  const progress = {
+    round: ROUND,
+    phase: 'wait-for-receipt' as const,
+    transactionHash: HASH,
+  };
+
+  it('reports the failed import without replacing its error', async () => {
+    const failure = new Error('receipt timed out');
+
+    operation().mockImplementationOnce(async ({ onProgress }) => {
+      onProgress?.(progress);
+      throw failure;
+    });
+
+    const onImportFailure = vi.fn();
+
+    await expect(
+      main(args, vi.fn(), { onImportFailure }),
+    ).rejects.toBe(failure);
+
+    expect(onImportFailure).toHaveBeenCalledExactlyOnceWith(
+      failure,
+      progress,
+    );
+  });
+
+  it('preserves the import error when its diagnostic observer throws', async () => {
+    const failure = new Error('receipt timed out');
+
+    operation().mockImplementationOnce(async ({ onProgress }) => {
+      onProgress?.(progress);
+      throw failure;
+    });
+
+    await expect(
+      main(args, vi.fn(), {
+        onImportFailure() {
+          throw new Error('observer failed');
+        },
+      }),
+    ).rejects.toBe(failure);
+  });
+
+  it('does not attach import failure context to an output failure', async () => {
+    operation().mockImplementationOnce(async ({ onProgress }) => {
+      onProgress?.(progress);
+      return IMPORTED;
+    });
+
+    const failure = new Error('output failed');
+    const onImportFailure = vi.fn();
+
+    const output = () => {
+      throw failure;
+    };
+
+    await expect(
+      main(args, output, { onImportFailure }),
+    ).rejects.toBe(failure);
+
+    expect(onImportFailure).not.toHaveBeenCalled();
   });
 });

@@ -59,6 +59,7 @@ const MODULE_PATHS = {
   cli: 'cli/cli.js',
   hex: 'shared/hex.js',
   'network-presets': 'config/network-presets.js',
+  'operation-context': 'diagnostics/operation-context.js',
 } as const;
 
 type ModuleName = keyof typeof MODULE_PATHS;
@@ -905,4 +906,73 @@ describe('configured bootstrap diagnostic policy', () => {
       },
     });
   });
+});
+
+describe('bootstrap import failure context', () => {
+  it.each([true, false])(
+    'attaches context only to the reported error: %s',
+    (sameError) => {
+      setModule('cli', `
+        export async function main(args, output, options) {
+          const secret = ${JSON.stringify(SECRET)};
+
+          options.onDiagnostics({
+            scrubText(text) {
+              return {
+                text: text.replaceAll(secret, '[REDACTED]'),
+                removed: text.includes(secret),
+              };
+            },
+          });
+
+          const error = new Error(
+            'receipt timed out; token=' + secret,
+          );
+
+          options.onImportFailure(error, {
+            round: 32607411n,
+            phase: 'wait-for-receipt',
+            transactionHash: '0x' + '12'.repeat(32),
+          });
+
+          if (${sameError}) {
+            throw error;
+          }
+
+          throw new Error('different failure; token=' + secret);
+        }
+      `);
+
+      const result = launch();
+
+      expect(result.status, result.stderr).toBe(1);
+
+      const record = diagnostic(result.stderr);
+
+      if (sameError) {
+        expect(record.operation).toEqual({
+          name: 'import-round',
+          round: '32607411',
+          phase: 'wait-for-receipt',
+          transactionHash: '0x' + '12'.repeat(32),
+        });
+
+        expect(record).toMatchObject({
+          err: {
+            message: 'receipt timed out; token=[REDACTED]',
+          },
+        });
+      } else {
+        expect(record).not.toHaveProperty('operation');
+
+        expect(record).toMatchObject({
+          err: {
+            message: 'different failure; token=[REDACTED]',
+          },
+        });
+      }
+
+      expect(result.stderr).not.toContain(SECRET);
+    },
+  );
 });

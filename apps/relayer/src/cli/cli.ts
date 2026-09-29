@@ -23,6 +23,10 @@ import type {
   SummarizeErrorOptions,
 } from '../diagnostics/error-summary.js';
 
+import type {
+  RoundImportProgress,
+} from '../diagnostics/operation-context.js';
+
 import {
   UsageError,
 } from '../diagnostics/usage-error.js';
@@ -33,6 +37,7 @@ import {
 
 import {
   importQuicknetRound,
+  type ImportQuicknetRoundResult,
 } from '../rounds/import-round.js';
 
 import {
@@ -46,6 +51,10 @@ type CliOutputHandler = (output: CliOutput) => void;
 export interface CliOptions {
   onDiagnostics?: (
     policy: SummarizeErrorOptions | undefined,
+  ) => void;
+  onImportFailure?: (
+    error: unknown,
+    progress: RoundImportProgress,
   ) => void;
 }
 
@@ -125,13 +134,24 @@ async function runImportCommand(
 
   const clients = createRelayerClients(config);
 
-  const result = await importQuicknetRound({
-    publicClient: clients.publicClient,
-    walletClient: clients.walletClient,
-    account: config.account,
-    deployment: config.deployment,
-    round: command.round,
-  });
+  let progress: RoundImportProgress | undefined;
+  let result: ImportQuicknetRoundResult;
+
+  try {
+    result = await importQuicknetRound({
+      publicClient: clients.publicClient,
+      walletClient: clients.walletClient,
+      account: config.account,
+      deployment: config.deployment,
+      round: command.round,
+      onProgress(current) {
+        progress = current;
+      },
+    });
+  } catch (error) {
+    reportImportFailure(options, error, progress);
+    throw error;
+  }
 
   output({
     type: 'import-result',
@@ -153,13 +173,24 @@ async function runImportWhenAvailableCommand(
 
   const clients = createRelayerClients(config);
 
-  const result = await importQuicknetRoundWhenAvailable({
-    publicClient: clients.publicClient,
-    walletClient: clients.walletClient,
-    account: config.account,
-    deployment: config.deployment,
-    round: command.round,
-  });
+  let progress: RoundImportProgress | undefined;
+  let result: ImportQuicknetRoundResult;
+
+  try {
+    result = await importQuicknetRoundWhenAvailable({
+      publicClient: clients.publicClient,
+      walletClient: clients.walletClient,
+      account: config.account,
+      deployment: config.deployment,
+      round: command.round,
+      onProgress(current) {
+        progress = current;
+      },
+    });
+  } catch (error) {
+    reportImportFailure(options, error, progress);
+    throw error;
+  }
 
   output({
     type: 'import-result',
@@ -291,6 +322,22 @@ function parseDaemonArguments(
     command: 'daemon',
     source,
   };
+}
+
+function reportImportFailure(
+  options: CliOptions,
+  error: unknown,
+  progress: RoundImportProgress | undefined,
+): void {
+  if (progress === undefined) {
+    return;
+  }
+
+  try {
+    options.onImportFailure?.(error, progress);
+  } catch {
+    // Diagnostic observers must not replace the original import failure.
+  }
 }
 
 interface RoundCommandOptions {
