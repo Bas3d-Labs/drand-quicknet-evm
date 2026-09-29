@@ -230,6 +230,7 @@ describe('runDaemonCycle', () => {
       startBlock: 1_000n,
       maxBlockRange: 100n,
       finality: FINALITY,
+      onOperation: expect.any(Function),
     });
 
     expect(result).toEqual({
@@ -296,6 +297,7 @@ describe('runDaemonCycle', () => {
       maxBlockRange: 100n,
       finality: FINALITY,
       softCursor: existingCursor,
+      onOperation: expect.any(Function),
     });
   });
 
@@ -433,6 +435,7 @@ describe('runDaemonCycle', () => {
         startBlock: 500n,
         maxBlockRange: 250n,
         finality: FINALITY,
+        onOperation: expect.any(Function),
       },
     );
 
@@ -450,6 +453,7 @@ describe('runDaemonCycle', () => {
         startBlock: 500n,
         maxBlockRange: 250n,
         finality: FINALITY,
+        onOperation: expect.any(Function),
       },
     );
   });
@@ -699,6 +703,7 @@ describe('runDaemonCycle', () => {
           status: 'failed',
           consumer: VALIDATED_CONSUMER_A,
           error: failure,
+          decision: 'continue-cycle',
         },
       ],
     });
@@ -906,6 +911,7 @@ describe('runDaemonCycle', () => {
           status: 'failed',
           consumer: VALIDATED_CONSUMER_B,
           error: failure,
+          decision: 'continue-cycle',
         },
         {
           status: 'success',
@@ -1197,6 +1203,7 @@ describe('runDaemonCycle', () => {
           status: 'failed',
           consumer: VALIDATED_CONSUMER_A,
           error: failure,
+          decision: 'continue-cycle',
         },
         {
           status: 'success',

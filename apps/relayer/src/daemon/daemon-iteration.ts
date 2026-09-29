@@ -31,6 +31,10 @@ import {
   scanQuicknetRequests,
 } from '../consumers/request-scanner.js';
 
+import type {
+  OperationContext,
+} from '../diagnostics/operation-context.js';
+
 export interface SoftScanCursor {
   nextBlock: bigint;
 }
@@ -54,6 +58,7 @@ export interface RunDaemonIterationOptions {
   finality: FinalityPolicy;
   softCursor?: SoftScanCursor;
   readChainHeads?: () => Promise<ChainHeads>;
+  onOperation?: (operation: OperationContext) => void;
 }
 
 export interface RunDaemonIterationResult {
@@ -71,10 +76,22 @@ export interface RunDaemonIterationResult {
 export async function runDaemonIteration(
   options: RunDaemonIterationOptions,
 ): Promise<RunDaemonIterationResult> {
+  function reportOperation(operation: OperationContext): void {
+    try {
+      options.onOperation?.(operation);
+    } catch {
+      // Diagnostic reporting must not change processing or replace its error.
+    }
+  }
+
   validateOptions(options);
+
+  reportOperation({ name: 'load-checkpoint' });
 
   const checkpoint = await options.checkpointStore.load(options.consumer);
   let durableNextBlock = checkpoint ?? options.startBlock;
+
+  reportOperation({ name: 'read-chain-heads' });
 
   let heads: ChainHeads;
 
@@ -95,6 +112,14 @@ export async function runDaemonIteration(
   let durableScan: ProcessedDaemonScan | undefined;
   
   if (hasDurableBlocksToScan(durableNextBlock, heads.durableBlock)) {
+    reportOperation({
+      name: 'scan-requests',
+      scanType: 'durable',
+      fromBlock: durableNextBlock,
+      throughBlock: heads.durableBlock,
+      maxBlockRange: options.maxBlockRange,
+    });
+
     const durableResult = await scanQuicknetRequests({
       publicClient: options.publicClient,
       consumers: [
@@ -106,12 +131,24 @@ export async function runDaemonIteration(
     });
 
     if (durableResult.status === 'scanned') {
+      reportOperation({
+        name: 'process-requests',
+        scanType: 'durable',
+        fromBlock: durableResult.fromBlock,
+        toBlock: durableResult.toBlock,
+      });
+
       const processing = await processQuicknetRequests({
         publicClient: options.publicClient,
         walletClient: options.walletClient,
         account: options.account,
         deployment: options.deployment,
         requests: durableResult.requests,
+      });
+
+      reportOperation({
+        name: 'save-checkpoint',
+        nextBlock: durableResult.nextBlock,
       });
 
       await options.checkpointStore.save(
@@ -139,6 +176,14 @@ export async function runDaemonIteration(
     nextBlock: softNextBlock,
   };
 
+  reportOperation({
+    name: 'scan-requests',
+    scanType: 'soft',
+    fromBlock: softNextBlock,
+    throughBlock: heads.latestBlock,
+    maxBlockRange: options.maxBlockRange,
+  });
+
   let softScan:
     ProcessedDaemonScan |
     undefined;
@@ -154,6 +199,13 @@ export async function runDaemonIteration(
   });
 
   if (softResult.status === 'scanned') {
+    reportOperation({
+      name: 'process-requests',
+      scanType: 'soft',
+      fromBlock: softResult.fromBlock,
+      toBlock: softResult.toBlock,
+    });
+
     const processing = await processQuicknetRequests({
       publicClient: options.publicClient,
       walletClient: options.walletClient,

@@ -13,10 +13,17 @@ import {
   type SummarizeErrorOptions,
 } from './error-summary.js';
 
-import { isFixedHex } from '../shared/hex.js';
+import {
+  isFixedHex
+} from '../shared/hex.js';
+
 import {
   summarizeErrorForOutput,
 } from './error-output.js';
+
+import type {
+  OperationContext,
+} from './operation-context.js';
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
 type ScanType = 'durable' | 'soft';
@@ -47,6 +54,8 @@ interface Values {
     | 'witness-rejected'
     | 'witness-decode-failed'
     | undefined;
+  operation: OperationContext | undefined;
+  decision: 'continue-cycle' | undefined;
 }
 
 type Kind = keyof Values;
@@ -61,6 +70,8 @@ const EVENTS = {
     {
       consumer: 'address',
       error: 'error',
+      operation: 'operation',
+      decision: 'decision',
     },
   ],
   durableHeadRegressed: [
@@ -128,8 +139,12 @@ const EVENTS = {
 type EventDefinition = (typeof EVENTS)[keyof typeof EVENTS];
 type EventName = EventDefinition[1] | 'invalid_log_level';
 
+type OptionalKind = 'operation' | 'decision';
+
 type Context<S extends Schema> = {
-  [K in keyof S]: Values[S[K]];
+  [K in keyof S as S[K] extends OptionalKind ? never : K]: Values[S[K]];
+} & {
+  [K in keyof S as S[K] extends OptionalKind ? K : never]?: Values[S[K]];
 };
 
 export type RelayerLog = {
@@ -371,6 +386,60 @@ function scalar(
   value: unknown,
   errorSummary: SummarizeErrorOptions | undefined,
 ): unknown {
+  if (kind === 'operation') {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    const name = own(value, 'name');
+    let schema: Schema;
+
+    switch(name) {
+      case 'load-checkpoint':
+      case 'read-chain-heads':
+        schema = {};
+        break;
+
+      case 'scan-requests':
+        schema = {
+          scanType: 'scanType',
+          fromBlock: 'uint',
+          throughBlock: 'uint',
+          maxBlockRange: 'uint',
+        };
+        break;
+
+      case 'process-requests':
+        schema = {
+          scanType: 'scanType',
+          fromBlock: 'uint',
+          toBlock: 'uint',
+        };
+        break;
+
+      case 'save-checkpoint':
+        schema = {
+          nextBlock: 'uint',
+        };
+        break;
+
+      default:
+        throw new TypeError('Invalid operation context.');
+    }
+
+    const context = project(schema, value, errorSummary);
+    context.name = name;
+
+    return context;
+  }
+
+  if (
+    kind === 'decision' &&
+    (value === undefined || value === 'continue-cycle')
+  ) {
+    return value;
+  }
+
   if (kind === 'error') {
     return summarizeErrorForOutput(value, errorSummary);
   }

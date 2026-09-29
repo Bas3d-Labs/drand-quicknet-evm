@@ -31,6 +31,10 @@ import type {
   FinalityPolicy,
 } from '../chain/finality-policy.js';
 
+import type {
+  OperationContext,
+} from '../diagnostics/operation-context.js';
+
 export interface RunDaemonCycleOptions {
   publicClient: PublicClient;
   walletClient: WalletClient;
@@ -55,6 +59,8 @@ export type DaemonConsumerCycleResult =
       status: 'failed';
       consumer: ValidatedQuicknetConsumer;
       error: unknown;
+      operation?: OperationContext;
+      decision?: 'continue-cycle';
     };
 
 export interface RunDaemonCycleResult {
@@ -66,6 +72,8 @@ export async function runDaemonCycle(
 ): Promise<RunDaemonCycleResult> {
   const consumers: DaemonConsumerCycleResult[] = [];
   for (const consumer of options.consumers) {
+    let operation: OperationContext | undefined;
+
     try {
       const softCursor = options.softCursors.get(consumer.address);
       const iteration = await runDaemonIteration({
@@ -78,6 +86,9 @@ export async function runDaemonCycle(
         startBlock: options.startBlock,
         maxBlockRange: options.maxBlockRange,
         finality: options.finality,
+        onOperation(current) {
+          operation = current;
+        },
         ...(softCursor === undefined
           ? {}
           : {
@@ -96,11 +107,21 @@ export async function runDaemonCycle(
         iteration,
       });
     } catch (error) {
-      consumers.push({
+      const failed: Extract<
+        DaemonConsumerCycleResult,
+        { status: 'failed' }
+      > = {
         status: 'failed',
         consumer,
         error,
-      });
+        decision: 'continue-cycle',
+      };
+
+      if (operation !== undefined) {
+        failed.operation = operation;
+      }
+
+      consumers.push(failed);
     }
   }
 
