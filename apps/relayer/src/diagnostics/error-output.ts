@@ -38,29 +38,54 @@ function shortenErrorText(
   summary: ErrorSummary,
   maxTextLength: number,
 ): void {
-  const suffix = ' [truncated]';
-
-  for (const key of ['name', 'message', 'code'] as const) {
-    const value = summary[key];
-    if (typeof value !== 'string' || value.length <= maxTextLength) {
-      continue;
-    }
-
-    if (maxTextLength <= suffix.length) {
-      summary[key] = '[truncated]';
-    } else {
-      let end = maxTextLength - suffix.length;
-      const lastCode = value.charCodeAt(end - 1);
-
-      // Avoid splitting a UTF-16 surrogate pair at the cut.
-      if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
-        end -= 1;
-      }
-
-      summary[key] = value.slice(0, end) + suffix;
+  function shorten(value: string): string {
+    if (value.length <= maxTextLength) {
+      return value;
     }
 
     summary.textModified = true;
+
+    const suffix = ' [truncated]';
+
+    if (maxTextLength <= suffix.length) {
+      return '[truncated]';
+    }
+
+    let end = maxTextLength - suffix.length;
+    const lastCode = value.charCodeAt(end - 1);
+
+    // Avoid splitting a UTF-16 surrogate pair at the cut.
+    if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
+      end -= 1;
+    }
+
+    return value.slice(0, end) + suffix;
+  }
+
+  for (const key of ['name', 'message', 'code'] as const) {
+    const value = summary[key];
+    if (typeof value === 'string') {
+      summary[key] = shorten(value);
+    }
+  }
+
+  const revert = summary.revert;
+  if (revert !== undefined) {
+    for (const key of ['name', 'reason'] as const) {
+      const value = revert[key];
+      if (typeof value === 'string') {
+        revert[key] = shorten(value);
+      }
+    }
+
+    if (revert.args !== undefined) {
+      for (let index = 0; index < revert.args.length; index += 1) {
+        const value = revert.args[index];
+        if (typeof value === 'string') {
+          revert.args[index] = shorten(value);
+        }
+      }
+    }
   }
 
   if (summary.cause !== undefined) {

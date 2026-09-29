@@ -7,6 +7,10 @@ const MAX_ERROR_DEPTH = 4;
 const MAX_ERROR_NODES = 12;
 const MAX_AGGREGATE_ENTRIES = 4;
 
+const MAX_REVERT_ARGUMENTS = 4;
+const MIN_REVERT_INTEGER = -(1n << 255n);
+const MAX_REVERT_INTEGER = (1n << 256n) - 1n;
+
 const ERROR_MESSAGES = new Map<string, string>([
   ['UnknownError', 'Operation failed; details redacted.'],
   ['Error', 'Operation failed; details redacted.'],
@@ -50,6 +54,8 @@ const SYSTEM_CODES = new Set([
   'ETIMEDOUT',
 ]);
 
+export type RevertArgument = string | number | boolean | null;
+
 export interface ErrorSummary {
   name: string;
   message: string;
@@ -60,6 +66,14 @@ export interface ErrorSummary {
   errors?: ErrorSummary[];
   errorsOmitted?: true;
   textModified?: true;
+  revert?: RevertSummary;
+}
+
+export interface RevertSummary {
+  name?: string;
+  reason?: string;
+  args?: RevertArgument[];
+  argsOmitted?: true;
 }
 
 export interface SummarizeErrorOptions {
@@ -239,9 +253,144 @@ function visit(
         break;
       }
     }
+
+    if (name === 'ContractFunctionRevertedError') {
+      const revert = summarizeRevert(
+        chain,
+        options.scrubText,
+        summary,
+      );
+
+      if (revert !== undefined) {
+        summary.revert = revert;
+      }
+    }
   }
 
   return summary;
+}
+
+function summarizeRevert(
+  chain: readonly object[],
+  scrubText: (text: string) => ScrubbedText,
+  summary: ErrorSummary,
+): RevertSummary | undefined {
+  const revert: RevertSummary = {};
+
+  const reason = scrubField(
+    dataProperty(chain, 'reason'),
+    scrubText,
+    summary,
+  );
+
+  if (reason !== undefined) {
+    revert.reason = reason;
+  }
+
+  const data = dataProperty(chain, 'data');
+  if (typeof data === 'object' && data !== null) {
+    const dataChain = prototypeChain(data);
+
+    const name = scrubField(
+      dataProperty(dataChain, 'errorName'),
+      scrubText,
+      summary,
+    );
+
+    if (name !== undefined) {
+      revert.name = name;
+    }
+
+    const args = dataProperty(dataChain, 'args');
+    if (args !== undefined) {
+      try {
+        if (!Array.isArray(args)) {
+          revert.argsOmitted = true;
+        } else {
+          const length = dataProperty([args], 'length');
+
+          if (
+            typeof length !== 'number' ||
+            !Number.isSafeInteger(length) ||
+            length < 0
+          ) {
+            revert.argsOmitted = true;
+          } else {
+            const limit = Math.min(length, MAX_REVERT_ARGUMENTS);
+            revert.args = [];
+
+            for (let index = 0; index < limit; index += 1) {
+              const value = revertArgument(
+                dataProperty([args], String(index)),
+                scrubText,
+                summary,
+              );
+
+              if (value === undefined) {
+                // Preserve argument positions when a value is omitted.
+                revert.args.push('[omitted]');
+                revert.argsOmitted = true;
+              } else {
+                revert.args.push(value);
+              }
+            }
+
+            if (length > limit) {
+              revert.argsOmitted = true;
+            }
+          }
+        }
+      } catch {
+        // Array.isArray can throw for a revoked Proxy.
+        revert.argsOmitted = true;
+      }
+    }
+  }
+
+  if (Object.keys(revert).length === 0) {
+    return undefined;
+  }
+
+  return revert;
+}
+
+function revertArgument(
+  value: unknown,
+  scrubText: (text: string) => ScrubbedText,
+  summary: ErrorSummary,
+): RevertArgument | undefined {
+  if (typeof value === 'string') {
+    if (value.length === 0) {
+      return '';
+    }
+
+    return scrubField(value, scrubText, summary);
+  }
+
+  if (typeof value === 'bigint') {
+    if (
+      value < MIN_REVERT_INTEGER ||
+      value > MAX_REVERT_INTEGER
+    ) {
+      return undefined;
+    }
+
+    return scrubField(value.toString(), scrubText, summary);
+  }
+
+  if (
+    typeof value === 'number' &&
+    Number.isSafeInteger(value)
+  ) {
+    return value;
+  }
+
+  if (typeof value === 'boolean' || value === null) {
+    return value;
+  }
+
+  // Never coerce or recursively serialize external argument objects.
+  return undefined;
 }
 
 function scrubField(
