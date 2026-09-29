@@ -909,6 +909,66 @@ describe('configured bootstrap diagnostic policy', () => {
 });
 
 describe('bootstrap import failure context', () => {
+  it('uses the configured scrubber when reporting an output failure', () => {
+    setModule('cli', `
+      export async function main(args, output, options) {
+        const secret = ${JSON.stringify(SECRET)};
+
+        options.onDiagnostics({
+          scrubText(text) {
+            return {
+              text: text.replaceAll(secret, '[REDACTED]'),
+              removed: text.includes(secret),
+            };
+          },
+        });
+
+        output({
+          type: 'import-result',
+          round: 100n,
+          result: {
+            status: 'imported',
+            submission: 'witness',
+            round: 100n,
+            randomness: '0x' + '11'.repeat(32),
+            transactionHash: '0x' + '22'.repeat(32),
+          },
+        });
+      }
+    `);
+
+    const preload = installWriteHook(`
+      throw Object.assign(
+        new Error(
+          'Output stream unavailable; token=' +
+          ${JSON.stringify(SECRET)},
+        ),
+        { code: 'EPIPE' },
+      );
+    `);
+
+    const result = launch({ preload });
+
+    expect(result.status, result.stderr).toBe(2);
+    expect(result.stdout).toBe('');
+
+    expect(diagnostic(result.stderr)).toMatchObject({
+      event: 'output_failed',
+      code: 'CLI_OUTPUT_FAILED',
+      output: 'import-result',
+      status: 'imported',
+      round: '100',
+      transactionHash: '0x' + '22'.repeat(32),
+      err: {
+        code: 'EPIPE',
+        message: 'Output stream unavailable; token=[REDACTED]',
+        textModified: true,
+      },
+    });
+
+    expect(result.stderr).not.toContain(SECRET);
+  });
+
   it.each([true, false])(
     'attaches context only to the reported error: %s',
     (sameError) => {

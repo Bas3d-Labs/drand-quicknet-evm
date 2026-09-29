@@ -196,7 +196,7 @@ try {
       writeLine(1, renderCliOutput(record));
     } catch (error) {
       try {
-        writeLine(2, renderOutputFailure(record, error));
+        writeLine(2, renderOutputFailure(record, error, errorSummary));
       } catch {
         // Exit status still identifies output failure if stderr fails.
       }
