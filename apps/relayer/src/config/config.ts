@@ -29,8 +29,8 @@ import {
 } from '../diagnostics/config-errors.js';
 
 import {
-  createConfiguredErrorSummary,
-} from '../diagnostics/configured-error-summary.js';
+  createScrubber,
+} from '../diagnostics/text-scrubber.js';
 
 import type {
   SummarizeErrorOptions,
@@ -152,9 +152,11 @@ export async function loadRelayerConfig(
   return {
     ...network,
     account,
-    errorSummary: createConfiguredErrorSummary({
-      rpcUrl: network.rpcUrl,
-      privateKey,
+    errorSummary: Object.freeze({
+      scrubText: createScrubber({
+        rpcUrls: [network.rpcUrl],
+        privateKey,
+      }),
     }),
   };
 }

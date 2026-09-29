@@ -41,6 +41,10 @@ import {
 } from '../../src/diagnostics/config-errors.js';
 
 import {
+  renderDiagnostic,
+} from '../../src/diagnostics/diagnostics.js';
+
+import {
   loadCustomNetworkDescriptor,
   type CustomNetworkDescriptor,
 } from '../../src/config/custom-network-config.js';
@@ -754,5 +758,79 @@ describe('configured diagnostic policy', () => {
     ).toBe('rejected [REDACTED] [REDACTED]');
 
     expect(config).not.toHaveProperty('privateKey');
+  });
+
+  it('preserves explanations and scrubs configured credentials', async () => {
+    const token = 'configured-rpc-canary';
+    const rpcUrl = `https://rpc.example/${token}`;
+
+    const config = await loadRelayerConfig({
+      source: PRESET_SOURCE,
+      env: createEnvironment({
+        ROBINHOOD_TESTNET_RPC_URL: rpcUrl,
+      }),
+    });
+
+    const policy = config.errorSummary;
+
+    if (policy === undefined) {
+      throw new Error('Expected configured scrubber.');
+    }
+
+    const error = new Error(
+      'historical state is not available; ' +
+      `${rpcUrl}; token=${token}; ` +
+      `key=${PRIVATE_KEY.toUpperCase()}`,
+    );
+
+    const line = renderDiagnostic(error, policy);
+    const diagnostic = JSON.parse(line);
+
+    expect(Object.isFrozen(policy)).toBe(true);
+    expect(diagnostic.err.message)
+      .toContain('historical state is not available');
+    expect(diagnostic.err.message)
+      .toContain('https://rpc.example/[REDACTED]');
+    expect(diagnostic.err.textModified).toBe(true);
+    expect(line).not.toContain(token);
+    expect(line.toLowerCase())
+      .not.toContain(PRIVATE_KEY.slice(2).toLowerCase());
+  });
+
+  it('captures credentials independently of later environment changes', async () => {
+    const token = 'configured-rpc-canary';
+
+    const env = {
+      ROBINHOOD_TESTNET_RPC_URL: `https://rpc.example/${token}`,
+      PRIVATE_KEY,
+    };
+
+    const config = await loadRelayerConfig({
+      source: PRESET_SOURCE,
+      env,
+    });
+
+    const policy = config.errorSummary;
+
+    if (policy === undefined) {
+      throw new Error('Expected configured scrubber.');
+    }
+
+    env.ROBINHOOD_TESTNET_RPC_URL = 'https://other.example';
+    env.PRIVATE_KEY = `0x${'22'.repeat(32)}`;
+
+    const line = renderDiagnostic(
+      new Error(
+        `request rejected; token=${token}; key=${PRIVATE_KEY}`,
+      ),
+      policy,
+    );
+
+    const diagnostic = JSON.parse(line);
+
+    expect(diagnostic.err.message).toBe(
+      'request rejected; token=[REDACTED]; key=[REDACTED]',
+    );
+    expect(diagnostic.err.textModified).toBe(true);
   });
 });
