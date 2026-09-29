@@ -743,10 +743,10 @@ describe('configured diagnostic policy', () => {
 
     const policy = config.errorSummary;
 
-    expect(policy?.mode).toBe('standard');
+    expect(policy).toBeDefined();
 
-    if (policy?.mode !== 'standard') {
-      throw new Error('Expected standard policy.');
+    if (policy === undefined) {
+      throw new Error('Expected configured scrubber.');
     }
 
     expect(

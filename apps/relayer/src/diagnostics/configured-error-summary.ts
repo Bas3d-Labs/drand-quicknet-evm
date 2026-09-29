@@ -20,7 +20,6 @@ export function createConfiguredErrorSummary(
   });
 
   return Object.freeze({
-    mode: 'standard',
     scrubText,
   });
 }

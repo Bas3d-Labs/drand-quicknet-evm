@@ -44,7 +44,9 @@ const MAX_UINT64 = (1n << 64n) - 1n;
 type CliOutputHandler = (output: CliOutput) => void;
 
 export interface CliOptions {
-  onDiagnostics?: (policy: SummarizeErrorOptions) => void;
+  onDiagnostics?: (
+    policy: SummarizeErrorOptions | undefined,
+  ) => void;
 }
 
 interface ImportCommandArguments {
@@ -119,9 +121,7 @@ async function runImportCommand(
     source: command.source,
   });
 
-  options.onDiagnostics?.(
-    config.errorSummary ?? { mode: 'strict' },
-  );
+  options.onDiagnostics?.(config.errorSummary);
 
   const clients = createRelayerClients(config);
 
@@ -149,9 +149,7 @@ async function runImportWhenAvailableCommand(
     source: command.source,
   });
 
-  options.onDiagnostics?.(
-    config.errorSummary ?? { mode: 'strict' },
-  );
+  options.onDiagnostics?.(config.errorSummary);
 
   const clients = createRelayerClients(config);
 

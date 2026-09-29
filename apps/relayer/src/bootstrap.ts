@@ -29,7 +29,7 @@ let summarizeError: SummarizeError = () => ({
   message: 'Operation failed; details redacted.',
 });
 
-let errorSummary: SummarizeErrorOptions = { mode: 'strict' };
+let errorSummary: SummarizeErrorOptions | undefined;
 
 let renderDiagnostic: RenderDiagnostic | undefined;
 

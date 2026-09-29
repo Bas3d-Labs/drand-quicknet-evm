@@ -24,7 +24,6 @@ const SECRET = 'provider-credential-canary';
 const RPC_URL = `https://rpc.example/${SECRET}`;
 
 const options: SummarizeErrorOptions = {
-  mode: 'standard',
   scrubText: createScrubber({
     rpcUrls: [RPC_URL],
   }),
@@ -198,7 +197,6 @@ describe('summarizeError standard mode', () => {
 
   it('never falls back to raw text when the scrubber throws', () => {
     const summary = summarizeError(new Error(SECRET), {
-      mode: 'standard',
       scrubText() {
         throw new Error(SECRET);
       },
@@ -217,7 +215,7 @@ describe('summarizeError standard mode', () => {
     };
 
     expect(summarizeError(error)).toEqual(expected);
-    expect(summarizeError(error, { mode: 'strict' }))
+    expect(summarizeError(error, undefined))
       .toEqual(expected);
   });
 

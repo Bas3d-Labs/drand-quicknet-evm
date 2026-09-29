@@ -62,12 +62,9 @@ export interface ErrorSummary {
   textModified?: true;
 }
 
-export type SummarizeErrorOptions =
-  | { mode?: 'strict' }
-  | {
-      mode: 'standard';
-      scrubText: (text: string) => ScrubbedText;
-    };
+export interface SummarizeErrorOptions {
+  scrubText: (text: string) => ScrubbedText;
+}
 
 interface Budget {
   remaining: number;
@@ -78,7 +75,7 @@ interface Budget {
 // Standard mode requires the configured, bounded text scrubber.
 export function summarizeError(
   error: unknown,
-  options: SummarizeErrorOptions = {},
+  options?: SummarizeErrorOptions,
 ): ErrorSummary {
   return visit(error, {
     remaining: MAX_ERROR_NODES,
@@ -97,7 +94,7 @@ function visit(
   error: unknown,
   budget: Budget,
   depth: number,
-  options: SummarizeErrorOptions,
+  options: SummarizeErrorOptions | undefined,
 ): ErrorSummary | undefined {
   if (budget.remaining === 0 || depth >= MAX_ERROR_DEPTH) {
     return undefined;
@@ -107,7 +104,7 @@ function visit(
   budget.remaining -= 1;
 
   if (typeof error !== 'object' || error === null) {
-    if (options.mode === 'standard') {
+    if (options !== undefined) {
       const message = scrubField(error, options.scrubText, summary);
       if (message !== undefined) {
         summary.message = message;
@@ -218,7 +215,7 @@ function visit(
     }
   }
 
-  if (options.mode === 'standard') {
+  if (options !== undefined) {
     const cleanName = scrubField(name, options.scrubText, summary);
     if (cleanName !== undefined) {
       summary.name = cleanName;

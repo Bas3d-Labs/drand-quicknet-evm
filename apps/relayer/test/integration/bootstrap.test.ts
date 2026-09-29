@@ -876,7 +876,6 @@ describe('configured bootstrap diagnostic policy', () => {
         const secret = ${JSON.stringify(SECRET)};
 
         options.onDiagnostics({
-          mode: 'standard',
           scrubText(text) {
             return {
               text: text.replaceAll(secret, '[REDACTED]'),

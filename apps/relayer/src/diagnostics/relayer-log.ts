@@ -146,7 +146,7 @@ export interface CreateRelayerLogOptions {
   chainId: number;
   level?: string;
   destination?: LogDestination;
-  errorSummary?: SummarizeErrorOptions;
+  errorSummary?: SummarizeErrorOptions | undefined;
 }
 
 type FallbackCode =
@@ -351,36 +351,25 @@ function own(
 
 function snapshotErrorSummaryOptions(
   input: unknown,
-): SummarizeErrorOptions {
+): SummarizeErrorOptions | undefined {
   if (input === undefined) {
-    return { mode: 'strict' };
+    return undefined;
   }
 
-  const mode = own(input, 'mode');
-  if (mode === undefined || mode === 'strict') {
-    return { mode: 'strict' };
+  const scrubText = own(input, 'scrubText');
+  if (typeof scrubText !== 'function') {
+    throw new TypeError('Invalid error summary policy.');
   }
 
-  if (mode === 'standard') {
-    const scrubText = own(input, 'scrubText');
-    if (typeof scrubText === 'function') {
-      return {
-        mode,
-        scrubText: scrubText as Extract<
-          SummarizeErrorOptions,
-          { mode: 'standard' }
-        >['scrubText'],
-      };
-    }
+  return {
+    scrubText: scrubText as SummarizeErrorOptions['scrubText'],
   }
-
-  throw new TypeError('Invalid error summary policy.');
 }
 
 function scalar(
   kind: Exclude<Kind, 'consumers'>,
   value: unknown,
-  errorSummary: SummarizeErrorOptions,
+  errorSummary: SummarizeErrorOptions | undefined,
 ): unknown {
   if (kind === 'error') {
     return summarizeErrorForOutput(value, errorSummary);
@@ -434,7 +423,7 @@ function scalar(
 function project(
   schema: Schema,
   input: unknown,
-  errorSummary: SummarizeErrorOptions,
+  errorSummary: SummarizeErrorOptions | undefined,
 ): Record<string, unknown> {
   const record: Record<string, unknown> = Object.create(null);
 

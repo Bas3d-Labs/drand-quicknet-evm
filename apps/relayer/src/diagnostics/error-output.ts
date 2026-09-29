@@ -8,7 +8,7 @@ const MAX_ERROR_SUMMARY_BYTES = 8_192;
 
 export function summarizeErrorForOutput(
   error: unknown,
-  options: SummarizeErrorOptions = {},
+  options?: SummarizeErrorOptions,
 ): ErrorSummary {
   const summary = summarizeError(error, options);
   fitErrorSummary(summary);

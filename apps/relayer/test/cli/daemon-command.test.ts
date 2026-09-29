@@ -308,7 +308,7 @@ describe('runDaemonCommand', () => {
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
       level: 'info',
-      errorSummary: { mode: 'strict' },
+      errorSummary: undefined,
     });
   });
 
@@ -323,7 +323,7 @@ describe('runDaemonCommand', () => {
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
       level: 'debug',
-      errorSummary: { mode: 'strict' },
+      errorSummary: undefined,
     });
   });
 
@@ -335,7 +335,7 @@ describe('runDaemonCommand', () => {
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
       level: 'warn',
-      errorSummary: { mode: 'strict' },
+      errorSummary: undefined,
     });
   });
 
@@ -350,7 +350,7 @@ describe('runDaemonCommand', () => {
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
       level: 'info',
-      errorSummary: { mode: 'strict' },
+      errorSummary: undefined,
     });
   });
 
@@ -363,7 +363,7 @@ describe('runDaemonCommand', () => {
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
       level: 'invalid-level',
-      errorSummary: { mode: 'strict' },
+      errorSummary: undefined,
     });
   });
 
@@ -822,7 +822,6 @@ describe('runDaemonCommand', () => {
 
   it('installs the same policy before logger creation and startup RPC work', async () => {
     const policy = {
-      mode: 'standard' as const,
       scrubText: (text: string) => ({ text, removed: false }),
     };
 

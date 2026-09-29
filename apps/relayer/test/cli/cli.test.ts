@@ -796,7 +796,6 @@ describe('diagnostic policy handoff', () => {
     'installs policy before %s creates clients',
     async (command) => {
       const policy = {
-        mode: 'standard' as const,
         scrubText: (text: string) => ({ text, removed: false }),
       };
 
@@ -845,7 +844,7 @@ describe('diagnostic policy handoff', () => {
   });
 
   it('forwards the daemon policy to the caller', async () => {
-    const policy = { mode: 'strict' as const };
+    const policy = undefined;
 
     vi.mocked(runDaemonCommand).mockImplementation(async (options) => {
       options.onDiagnostics?.(policy);

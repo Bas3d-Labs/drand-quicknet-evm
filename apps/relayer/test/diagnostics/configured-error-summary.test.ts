@@ -31,7 +31,6 @@ describe('createConfiguredErrorSummary', () => {
 
     const line = renderDiagnostic(error, policy);
 
-    expect(policy.mode).toBe('standard');
     expect(Object.isFrozen(policy)).toBe(true);
     expect(line).toContain('historical state is not available');
     expect(line).toContain('https://rpc.example/[REDACTED]');

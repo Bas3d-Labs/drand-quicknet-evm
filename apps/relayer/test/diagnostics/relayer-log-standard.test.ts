@@ -33,7 +33,6 @@ function scrubText(text: string) {
 function capture() {
   const lines: string[] = [];
   const policy = {
-    mode: 'standard' as const,
     scrubText,
   };
 
@@ -122,36 +121,30 @@ describe('relayer log standard policy', () => {
     expect(JSON.parse(lines[0]!).err.message).toBe('[REDACTED]');
   });
 
-  it.each(['mode', 'scrubText'])(
-    'rejects a policy accessor: %s',
-    (key) => {
-      const get = vi.fn(() => {
-        throw new Error(SECRET);
-      });
+  it('rejects a scrubText accessor without invoking it', () => {
+    const get = vi.fn(() => {
+      throw new Error(SECRET);
+    });
 
-      const policy = {
-        mode: 'standard' as const,
-        scrubText,
-      };
+    const policy = { scrubText };
 
-      Object.defineProperty(policy, key, { get });
+    Object.defineProperty(policy, 'scrubText', { get });
 
-      expect(() => createRelayerLog({
-        chainId: 4663,
-        errorSummary: policy,
-        destination: {
-          write() {},
-        },
-      })).toThrow(TypeError);
+    expect(() => createRelayerLog({
+      chainId: 4663,
+      errorSummary: policy,
+      destination: {
+        write() {},
+      },
+    })).toThrow(TypeError);
 
-      expect(get).not.toHaveBeenCalled();
-    },
-  );
+    expect(get).not.toHaveBeenCalled();
+  });
 
   it.each([
-    { mode: SECRET },
-    { mode: 'standard' },
-    { mode: 'standard', scrubText: SECRET },
+    {},
+    { scrubText: null },
+    { scrubText: SECRET },
   ])('rejects invalid policies without echoing values: %#', (policy) => {
     expect(() => createRelayerLog({
       chainId: 4663,
@@ -168,7 +161,6 @@ describe('relayer log standard policy', () => {
     const log = createRelayerLog({
       chainId: 4663,
       errorSummary: {
-        mode: 'standard',
         scrubText() {
           throw new Error(SECRET);
         },

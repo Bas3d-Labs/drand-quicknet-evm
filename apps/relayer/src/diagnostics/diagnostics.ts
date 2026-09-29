@@ -21,7 +21,7 @@ import {
 
 export function renderDiagnostic(
   error: unknown,
-  errorSummary: SummarizeErrorOptions = {},
+  errorSummary?: SummarizeErrorOptions,
 ): string {
   try {
     const code = usageCode(error);

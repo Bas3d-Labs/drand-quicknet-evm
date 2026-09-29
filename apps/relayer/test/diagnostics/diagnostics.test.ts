@@ -34,7 +34,6 @@ const CONSUMER = '0x1111111111111111111111111111111111111111';
 
 // Test policy handoff. Secret recognition has its own scrubber suite.
 const standard: SummarizeErrorOptions = {
-  mode: 'standard',
   scrubText(text) {
     return {
       text: text.replaceAll(SECRET, '[REDACTED]'),
@@ -150,7 +149,6 @@ describe('renderDiagnostic', () => {
       });
 
       const line = renderDiagnostic(error, {
-        mode: 'standard',
         scrubText,
       });
 
@@ -222,7 +220,6 @@ describe('renderDiagnostic', () => {
 
   it('does not expose raw text when the scrubber fails', () => {
     const line = renderDiagnostic(new Error(SECRET), {
-      mode: 'standard',
       scrubText() {
         throw new Error(SECRET);
       },

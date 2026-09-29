@@ -56,7 +56,9 @@ export interface RunDaemonCommandOptions {
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   onStartup?: (summary: DaemonStartupSummary) => void;
-  onDiagnostics?: (policy: SummarizeErrorOptions) => void;
+  onDiagnostics?: (
+    policy: SummarizeErrorOptions | undefined,
+  ) => void;
 }
 
 export async function runDaemonCommand(
@@ -69,8 +71,7 @@ export async function runDaemonCommand(
       : {}),
   });
 
-  const errorSummary: SummarizeErrorOptions =
-    config.errorSummary ?? { mode: 'strict' };
+  const errorSummary = config.errorSummary;
 
   options.onDiagnostics?.(errorSummary);
 
