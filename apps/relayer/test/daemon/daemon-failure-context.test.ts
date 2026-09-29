@@ -129,7 +129,6 @@ describe('daemon failure context', () => {
       throughBlock: 1_100n,
       maxBlockRange: 100n,
     });
-    expect(failed.decision).toBe('continue-cycle');
     expect(result.consumers[1]?.status).toBe('success');
     expect(options.softCursors.get(CONSUMER_A)).toBe(cursor);
     expect(save).not.toHaveBeenCalledWith(
@@ -169,7 +168,6 @@ describe('daemon failure context', () => {
         throughBlock: '1100',
         maxBlockRange: '100',
       },
-      decision: 'continue-cycle',
       err: {
         code: -32000,
         message:

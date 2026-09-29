@@ -703,7 +703,6 @@ describe('runDaemonCycle', () => {
           status: 'failed',
           consumer: VALIDATED_CONSUMER_A,
           error: failure,
-          decision: 'continue-cycle',
         },
       ],
     });
@@ -911,7 +910,6 @@ describe('runDaemonCycle', () => {
           status: 'failed',
           consumer: VALIDATED_CONSUMER_B,
           error: failure,
-          decision: 'continue-cycle',
         },
         {
           status: 'success',
@@ -1203,7 +1201,6 @@ describe('runDaemonCycle', () => {
           status: 'failed',
           consumer: VALIDATED_CONSUMER_A,
           error: failure,
-          decision: 'continue-cycle',
         },
         {
           status: 'success',

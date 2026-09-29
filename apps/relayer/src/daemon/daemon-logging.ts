@@ -70,7 +70,6 @@ function logCycle(
         consumer: consumer.consumer.address,
         error: consumer.error,
         operation: consumer.operation,
-        decision: consumer.decision,
       });
       
       continue;

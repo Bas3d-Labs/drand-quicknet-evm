@@ -55,7 +55,6 @@ interface Values {
     | 'witness-decode-failed'
     | undefined;
   operation: OperationContext | undefined;
-  decision: 'continue-cycle' | undefined;
 }
 
 type Kind = keyof Values;
@@ -71,7 +70,6 @@ const EVENTS = {
       consumer: 'address',
       error: 'error',
       operation: 'operation',
-      decision: 'decision',
     },
   ],
   durableHeadRegressed: [
@@ -139,7 +137,7 @@ const EVENTS = {
 type EventDefinition = (typeof EVENTS)[keyof typeof EVENTS];
 type EventName = EventDefinition[1] | 'invalid_log_level';
 
-type OptionalKind = 'operation' | 'decision';
+type OptionalKind = 'operation';
 
 type Context<S extends Schema> = {
   [K in keyof S as S[K] extends OptionalKind ? never : K]: Values[S[K]];
@@ -431,13 +429,6 @@ function scalar(
     context.name = name;
 
     return context;
-  }
-
-  if (
-    kind === 'decision' &&
-    (value === undefined || value === 'continue-cycle')
-  ) {
-    return value;
   }
 
   if (kind === 'error') {

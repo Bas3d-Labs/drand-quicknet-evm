@@ -60,7 +60,6 @@ export type DaemonConsumerCycleResult =
       consumer: ValidatedQuicknetConsumer;
       error: unknown;
       operation?: OperationContext;
-      decision?: 'continue-cycle';
     };
 
 export interface RunDaemonCycleResult {
@@ -114,7 +113,6 @@ export async function runDaemonCycle(
         status: 'failed',
         consumer,
         error,
-        decision: 'continue-cycle',
       };
 
       if (operation !== undefined) {
