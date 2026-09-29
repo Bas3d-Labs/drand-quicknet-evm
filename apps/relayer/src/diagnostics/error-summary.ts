@@ -86,7 +86,7 @@ interface Budget {
 }
 
 // Diagnostic text and labels are not evidence for transaction recovery.
-// Standard mode requires the configured, bounded text scrubber.
+// External text requires the configured, bounded scrubber.
 export function summarizeError(
   error: unknown,
   options?: SummarizeErrorOptions,
