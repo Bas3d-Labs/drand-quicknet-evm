@@ -20,12 +20,17 @@ import type {
   QuicknetRandomnessRequest,
 } from './request-events.js';
 
+import type {
+  RoundImportProgress,
+} from '../diagnostics/operation-context.js';
+
 export interface ProcessQuicknetRequestsOptions {
   publicClient: PublicClient;
   walletClient: WalletClient;
   account: Account;
   deployment: RegistryDeployment;
   requests: readonly QuicknetRandomnessRequest[];
+  onProgress?: ((progress: RoundImportProgress) => void) | undefined;
 }
 
 export interface ProcessedQuicknetRound {
@@ -50,6 +55,7 @@ export async function processQuicknetRequests(
       account: options.account,
       deployment: options.deployment,
       round,
+      onProgress: options.onProgress,
     });
 
     rounds.push({

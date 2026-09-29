@@ -23,6 +23,7 @@ import {
 
 import type {
   OperationContext,
+  RoundImportProgress,
 } from './operation-context.js';
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
@@ -55,6 +56,7 @@ interface Values {
     | 'witness-decode-failed'
     | undefined;
   operation: OperationContext | undefined;
+  importPhase: RoundImportProgress['phase'];
 }
 
 type Kind = keyof Values;
@@ -398,6 +400,29 @@ function scalar(
         schema = {};
         break;
 
+      case 'import-round': {
+        schema = {
+          scanType: 'scanType',
+          fromBlock: 'uint',
+          toBlock: 'uint',
+          round: 'uint',
+          phase: 'importPhase',
+        };
+
+        const phase = own(value, 'phase');
+        if (
+          phase === 'wait-for-receipt' ||
+          phase === 'verify-stored-beacon'
+        ) {
+          schema = {
+            ...schema,
+            transactionHash: 'hash',
+          };
+        }
+
+        break;
+      }
+
       case 'scan-requests':
         schema = {
           scanType: 'scanType',
@@ -429,6 +454,24 @@ function scalar(
     context.name = name;
 
     return context;
+  }
+
+  if (kind === 'importPhase') {
+    switch (value) {
+      case 'verify-deployment':
+      case 'check-stored':
+      case 'wait-for-beacon':
+      case 'fetch-beacon':
+      case 'validate-beacon':
+      case 'prepare-submission':
+      case 'submit-transaction':
+      case 'wait-for-receipt':
+      case 'verify-stored-beacon':
+        return value;
+
+      default:
+        throw new TypeError('Invalid import phase.');
+    }
   }
 
   if (kind === 'error') {

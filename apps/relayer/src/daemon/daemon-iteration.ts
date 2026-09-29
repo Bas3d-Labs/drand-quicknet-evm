@@ -144,6 +144,15 @@ export async function runDaemonIteration(
         account: options.account,
         deployment: options.deployment,
         requests: durableResult.requests,
+        onProgress(progress) {
+          reportOperation({
+            name: 'import-round',
+            scanType: 'durable',
+            fromBlock: durableResult.fromBlock,
+            toBlock: durableResult.toBlock,
+            ...progress,
+          });
+        },
       });
 
       reportOperation({
@@ -212,6 +221,15 @@ export async function runDaemonIteration(
       account: options.account,
       deployment: options.deployment,
       requests: softResult.requests,
+      onProgress(progress) {
+        reportOperation({
+          name: 'import-round',
+          scanType: 'soft',
+          fromBlock: softResult.fromBlock,
+          toBlock: softResult.toBlock,
+          ...progress,
+        });
+      },
     });
 
     softCursor = {
