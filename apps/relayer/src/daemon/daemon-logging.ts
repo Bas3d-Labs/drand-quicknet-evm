@@ -15,6 +15,14 @@ import type {
   RelayerLog,
 } from '../diagnostics/relayer-log.js';
 
+import type {
+  ProcessedQuicknetRound
+} from '../consumers/request-processor.js';
+
+import type {
+  DurableRequestResult
+} from '../consumers/durable-requests.js';
+
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
 
 type DaemonScanType =
@@ -66,6 +74,23 @@ function logCycle(
 ): void {
   for (const consumer of result.consumers) {
     if (consumer.status === 'failed') {
+      for (const completed of consumer.completed ?? []) {
+        logRound(
+          logger,
+          consumer.consumer.address,
+          completed.scanType,
+          completed.result,
+        );
+      }
+
+      if (consumer.reconciliation !== undefined) {
+        logReconciliation(
+          logger,
+          consumer.consumer.address,
+          consumer.reconciliation,
+        );
+      }
+
       logger.consumerFailed({
         consumer: consumer.consumer.address,
         error: consumer.error,
@@ -73,6 +98,14 @@ function logCycle(
       });
       
       continue;
+    }
+
+    if (consumer.reconciliation !== undefined) {
+      logReconciliation(
+        logger,
+        consumer.consumer.address,
+        consumer.reconciliation,
+      );
     }
 
     const iteration = consumer.iteration;
@@ -92,12 +125,17 @@ function logCycle(
         iteration.durableScan,
       );
 
-      logger.checkpointAdvanced({
-        consumer: consumer.consumer.address,
-        fromBlock: iteration.durableScan.fromBlock,
-        toBlock: iteration.durableScan.toBlock,
-        nextBlock: iteration.durableScan.nextBlock,
-      });
+      if (
+        iteration.durableScan.nextBlock >
+        iteration.durableScan.fromBlock
+      ) {
+        logger.checkpointAdvanced({
+          consumer: consumer.consumer.address,
+          fromBlock: iteration.durableScan.fromBlock,
+          toBlock: iteration.durableScan.nextBlock - 1n,
+          nextBlock: iteration.durableScan.nextBlock,
+        });
+      }
     }
 
     if (iteration.softScan !== undefined) {
@@ -111,6 +149,33 @@ function logCycle(
   }
 }
 
+function logRound(
+  logger: RelayerLog,
+  consumer: Address,
+  scanType: DaemonScanType,
+  processedRound: ProcessedQuicknetRound,
+): void {
+  const result = processedRound.result;
+  if (result.status === 'imported') {
+    logger.roundImported({
+      consumer,
+      scanType,
+      round: processedRound.round,
+      transactionHash: result.transactionHash,
+      submission: result.submission,
+      fallbackReason: result.fallbackReason,
+    });
+
+    return;
+  }
+
+  logger.roundAlreadyStored({
+    consumer,
+    scanType,
+    round: processedRound.round,
+  });
+}
+
 function logScanRounds(
   logger: RelayerLog,
   consumer: Address,
@@ -118,25 +183,66 @@ function logScanRounds(
   scan: ProcessedDaemonScan,
 ): void {
   for (const processedRound of scan.processing.rounds) {
-    const result = processedRound.result;
-    if (result.status === 'imported') {
-      logger.roundImported({
-        consumer,
-        scanType,
-        round: processedRound.round,
-        transactionHash: result.transactionHash,
-        submission: result.submission,
-        fallbackReason: result.fallbackReason,
-      });
+    logRound(logger, consumer, scanType, processedRound);
+  }
+}
 
-      continue;
-    }
+function logReconciliation(
+  logger: RelayerLog,
+  consumer: Address,
+  result: DurableRequestResult,
+): void {
+  if (result.status === 'caught-up') {
+    return;
+  }
 
-    logger.roundAlreadyStored({
+  if (result.status === 'anchor-unavailable') {
+    logger.durableAnchorUnavailable({
       consumer,
-      scanType,
-      round: processedRound.round,
+      durableBlock: result.durableBlock,
+      error: result.checkpoint.error,
     });
+
+    return;
+  }
+
+  const decision = result.checkpoint;
+  if (decision.status === 'anchor-changed') {
+    logger.durableAnchorChanged({
+      consumer,
+      durableBlock: result.anchor.blockNumber,
+      expectedHash: result.anchor.blockHash,
+      observedHash: decision.observedAnchor.blockHash,
+    });
+
+    return;
+  }
+
+  if (decision.status === 'anchor-unavailable') {
+    logger.durableAnchorUnavailable({
+      consumer,
+      durableBlock: result.anchor.blockNumber,
+      error: decision.error,
+    });
+
+    return;
+  }
+
+  for (const outcome of result.fulfillment) {
+    if (outcome.fulfillment.status === 'not-stored') {
+      logger.durableFulfillmentPending({
+        consumer,
+        round: outcome.round,
+        durableBlock: result.anchor.blockNumber,
+      });
+    } else if (outcome.fulfillment.status === 'unavailable') {
+      logger.durableFulfillmentUnavailable({
+        consumer,
+        round: outcome.round,
+        durableBlock: result.anchor.blockNumber,
+        error: outcome.fulfillment.error,
+      });
+    }
   }
 }
 

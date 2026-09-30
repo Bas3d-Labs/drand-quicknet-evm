@@ -51,8 +51,27 @@ const TOKEN = 'failure-context-canary';
 const RPC_URL = `https://rpc.example/${TOKEN}`;
 
 function fixture() {
-  const getBlock = vi.fn().mockResolvedValue({
-    number: 1_100n,
+  const getBlock = vi.fn(async (
+    request: {
+      blockTag?: string;
+      blockNumber?: bigint;
+    },
+  ) => {
+    if (request.blockNumber !== undefined) {
+      return {
+        number: request.blockNumber,
+        hash: `0x${'aa'.repeat(32)}`,
+      };
+    }
+
+    if (request.blockTag === 'safe') {
+      return {
+        number: 1_100n,
+        hash: `0x${'aa'.repeat(32)}`,
+      };
+    }
+
+    throw new Error('Unexpected block request in test.');
   });
 
   const getBlockNumber = vi.fn().mockResolvedValue(1_200n);

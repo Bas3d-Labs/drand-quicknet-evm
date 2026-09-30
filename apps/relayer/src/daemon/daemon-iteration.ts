@@ -23,7 +23,13 @@ import type {
 } from '../chain/finality-policy.js';
 
 import {
+  reconcileDurableRequests,
+  type DurableRequestResult,
+} from '../consumers/durable-requests.js';
+
+import {
   processQuicknetRequests,
+  type ProcessedQuicknetRound,
   type ProcessQuicknetRequestsResult,
 } from '../consumers/request-processor.js';
 
@@ -44,6 +50,7 @@ export interface ProcessedDaemonScan {
   toBlock: bigint;
   nextBlock: bigint;
   processing: ProcessQuicknetRequestsResult;
+  reconciliation?: DurableRequestResult;
 }
 
 export interface RunDaemonIterationOptions {
@@ -59,10 +66,17 @@ export interface RunDaemonIterationOptions {
   softCursor?: SoftScanCursor;
   readChainHeads?: () => Promise<ChainHeads>;
   onOperation?: (operation: OperationContext) => void;
+  onCompleted?: (
+    scanType: 'durable' | 'soft',
+    result: ProcessedQuicknetRound,
+  ) => void;
+  onReconciliation?: (
+    result: DurableRequestResult,
+  ) => void;
 }
 
 export interface RunDaemonIterationResult {
-  status: 'caught-up' | 'processed';
+  status: 'caught-up' | 'processed' | 'deferred';
   consumer: Address;
   latestBlock: bigint;
   durableBlock: bigint;
@@ -76,11 +90,27 @@ export interface RunDaemonIterationResult {
 export async function runDaemonIteration(
   options: RunDaemonIterationOptions,
 ): Promise<RunDaemonIterationResult> {
+
+  let currentOperation: OperationContext | undefined;
+
   function reportOperation(operation: OperationContext): void {
+    currentOperation = operation;
+
     try {
       options.onOperation?.(operation);
     } catch {
-      // Diagnostic reporting must not change processing or replace its error.
+      // Reporting must not change processing or replace its error.
+    }
+  }
+
+  function reportCompleted(
+    scanType: 'durable' | 'soft',
+    result: ProcessedQuicknetRound,
+  ): void {
+    try {
+      options.onCompleted?.(scanType, result);
+    } catch {
+      // Reporting must not change processing or replace its error.
     }
   }
 
@@ -120,59 +150,102 @@ export async function runDaemonIteration(
       maxBlockRange: options.maxBlockRange,
     });
 
-    const durableResult = await scanQuicknetRequests({
+    const reconciliation = await reconcileDurableRequests({
       publicClient: options.publicClient,
-      consumers: [
-        options.consumer,
-      ],
+      walletClient: options.walletClient,
+      account: options.account,
+      deployment: options.deployment,
+      consumer: options.consumer,
       nextBlock: durableNextBlock,
-      throughBlock: heads.durableBlock,
+      durableBlock: heads.durableBlock,
       maxBlockRange: options.maxBlockRange,
+
+      onCompleted(result) {
+        reportCompleted('durable', result);
+      },
+
+      onProgress(progress) {
+        reportOperation({
+          name: 'import-round',
+          scanType: 'durable',
+          fromBlock: durableNextBlock,
+          toBlock: minimum(
+            durableNextBlock + options.maxBlockRange - 1n,
+            heads.durableBlock,
+          ),
+          ...progress,
+        });
+      },
     });
 
-    if (durableResult.status === 'scanned') {
-      reportOperation({
-        name: 'process-requests',
-        scanType: 'durable',
-        fromBlock: durableResult.fromBlock,
-        toBlock: durableResult.toBlock,
-      });
+    try {
+      options.onReconciliation?.(reconciliation);
+    } catch {
+      // Reporting must not change checkpoint eligibility.
+    }
 
-      const processing = await processQuicknetRequests({
-        publicClient: options.publicClient,
-        walletClient: options.walletClient,
-        account: options.account,
-        deployment: options.deployment,
-        requests: durableResult.requests,
-        onProgress(progress) {
-          reportOperation({
-            name: 'import-round',
-            scanType: 'durable',
-            fromBlock: durableResult.fromBlock,
-            toBlock: durableResult.toBlock,
-            ...progress,
-          });
-        },
-      });
+    const importFailure = reconciliation.imports.find(
+      outcome => outcome.status === 'failed',
+    );
 
+    const importOperation = currentOperation;
+    const decision = reconciliation.checkpoint;
+
+    if (
+      decision.status === 'verified' &&
+      decision.nextBlock > durableNextBlock
+    ) {
       reportOperation({
         name: 'save-checkpoint',
-        nextBlock: durableResult.nextBlock,
+        nextBlock: decision.nextBlock,
       });
 
-      await options.checkpointStore.save(
-        options.consumer,
-        durableResult.nextBlock,
-      );
+      try {
+        await options.checkpointStore.save(
+          options.consumer,
+          decision.nextBlock,
+        );
+      } catch (saveError) {
+        if (importFailure !== undefined) {
+          throw new AggregateError(
+            [saveError, importFailure.error],
+            'Checkpoint persistence failed after a round import failed.',
+          );
+        }
 
-      durableNextBlock = durableResult.nextBlock;
+        throw saveError;
+      }
 
+      durableNextBlock = decision.nextBlock;
+    }
+
+    const rounds: ProcessedQuicknetRound[] = [];
+
+    for (const outcome of reconciliation.imports) {
+      if (outcome.status === 'completed') {
+        rounds.push({
+          round: outcome.round,
+          result: outcome.result,
+        });
+      }
+    }
+
+    if (reconciliation.status === 'scanned') {
       durableScan = {
-        fromBlock: durableResult.fromBlock,
-        toBlock: durableResult.toBlock,
-        nextBlock: durableResult.nextBlock,
-        processing,
+        fromBlock: reconciliation.fromBlock,
+        toBlock: reconciliation.toBlock,
+        nextBlock: durableNextBlock,
+        processing: { rounds },
+        reconciliation,
       };
+    }
+
+    if (importFailure !== undefined) {
+      if (importOperation !== undefined) {
+        reportOperation(importOperation);
+      }
+
+      throw importFailure.error;
     }
   }
 
@@ -230,6 +303,9 @@ export async function runDaemonIteration(
           ...progress,
         });
       },
+      onCompleted(result) {
+        reportCompleted('soft', result);
+      },
     });
 
     softCursor = {
@@ -254,6 +330,17 @@ export async function runDaemonIteration(
   });
 }
 
+function minimum(
+  first: bigint,
+  second: bigint,
+): bigint {
+  if (first < second) {
+    return first;
+  }
+
+  return second;
+}
+
 interface CreateResultOptions {
   consumer: Address;
   heads: ChainHeads;
@@ -271,11 +358,16 @@ interface CreateResultOptions {
 function createResult(
   options: CreateResultOptions,
 ): RunDaemonIterationResult {
-  const status =
+  let status: RunDaemonIterationResult['status'] = 'caught-up';
+
+  if (
     options.durableScan !== undefined ||
     options.softScan !== undefined
-      ? 'processed'
-      : 'caught-up';
+  ) {
+    status = 'processed';
+  } else if (options.durableNextBlock <= options.heads.durableBlock) {
+    status = 'deferred';
+  }
 
   return {
     status,

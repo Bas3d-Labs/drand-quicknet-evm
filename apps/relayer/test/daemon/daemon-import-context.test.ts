@@ -138,9 +138,32 @@ function fixture() {
 
   const save = vi.fn().mockResolvedValue(undefined);
 
+  const getBlock = vi.fn(async (
+    request: {
+      blockTag?: string;
+      blockNumber?: bigint;
+    },
+  ) => {
+    if (request.blockNumber !== undefined) {
+      return {
+        number: request.blockNumber,
+        hash: HASH,
+      };
+    }
+
+    if (request.blockTag === 'safe') {
+      return {
+        number: 1_100n,
+        hash: HASH,
+      };
+    }
+
+    throw new Error('Unexpected block request in test.');
+  });
+
   const options = {
     publicClient: {
-      getBlock: vi.fn().mockResolvedValue({ number: 1100n }),
+      getBlock,
       getBlockNumber: vi.fn().mockResolvedValue(1200n),
       getLogs,
       waitForTransactionReceipt,
@@ -167,6 +190,8 @@ function fixture() {
 
   return {
     options,
+    getBlock,
+    getLogs,
     writeContract,
     waitForTransactionReceipt,
     verifyDeployment,
@@ -218,11 +243,45 @@ describe('round import diagnostic context', () => {
       }
 
       expect(failed.error).toBe(failure);
+
+      // A failed local import must still be checked at the durable anchor.
+      expect(fixtureState.isStored).toHaveBeenCalledWith(
+        ROUND,
+        1_100n,
+      );
+
+      const anchorReads = fixtureState.getBlock.mock.calls.filter(
+        ([request]) => request.blockNumber !== undefined,
+      );
+
+      expect(anchorReads).toEqual([
+        [{ blockNumber: 1_100n }],
+        [{ blockNumber: 1_100n }],
+      ]);
+
+      // The iteration stops after the durable import failure.
+      expect(fixtureState.getLogs).toHaveBeenCalledOnce();
+
+      expect(failed.reconciliation).toMatchObject({
+        status: 'scanned',
+        fulfillment: [
+          {
+            round: ROUND,
+            firstRequestBlock: 1_000n,
+            fulfillment: { status: 'not-stored' },
+          },
+        ],
+        checkpoint: {
+          status: 'verified',
+          nextBlock: 1_000n,
+        },
+      });
+
       expect(failed.operation).toMatchObject({
         name: 'import-round',
         scanType: 'durable',
-        fromBlock: 1000n,
-        toBlock: 1099n,
+        fromBlock: 1_000n,
+        toBlock: 1_099n,
         round: ROUND,
         phase,
       });
@@ -267,7 +326,14 @@ describe('round import diagnostic context', () => {
 
       createDaemonLogger({ logger }).onCycle(result);
 
-      const record = JSON.parse(lines[0]!);
+      const records = lines.map((line) => JSON.parse(line));
+      const failures = records.filter(
+        (record) => record.event === 'consumer_failed',
+      );
+
+      expect(failures).toHaveLength(1);
+
+      const record = failures[0]!;
 
       expect(record.operation).toMatchObject({
         name: 'import-round',
@@ -304,6 +370,9 @@ describe('round import diagnostic context', () => {
 
     expect(failed.operation).toMatchObject({
       name: 'import-round',
+      scanType: 'durable',
+      fromBlock: 1_000n,
+      toBlock: 1_099n,
       phase: 'verify-stored-beacon',
       round: ROUND,
       transactionHash: HASH,
