@@ -86,6 +86,7 @@ describe('renderDiagnostic', () => {
     expect(line).not.toContain(SECRET);
     expect(record.err).not.toHaveProperty('url');
     expect(record.err).not.toHaveProperty('body');
+    expect(record).not.toHaveProperty('operationOmitted');
   });
 
   it('preserves the outer explanation and nested timeout', () => {
@@ -193,6 +194,8 @@ describe('renderDiagnostic', () => {
       expect(summary.message).toContain('[truncated]');
       expect(summary.cause).toBeDefined();
       expect(summary.textModified).toBe(true);
+      expect(summary.code).not.toBe('SUMMARY_UNAVAILABLE');
+      expect(summary.cause.errors).toBeDefined();
       expect(line).not.toContain(SECRET);
       expect(error.message).toBe(message);
 

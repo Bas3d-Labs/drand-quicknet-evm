@@ -825,9 +825,13 @@ describe('runDaemonCommand', () => {
       scrubText: (text: string) => ({ text, removed: false }),
     };
 
-    vi.mocked(loadDaemonConfig).mockResolvedValue({
-      ...DAEMON_CONFIG,
-      errorSummary: policy,
+    vi.mocked(loadDaemonConfig).mockImplementation(async (options) => {
+      options.onDiagnostics?.(policy);
+
+      return {
+        ...DAEMON_CONFIG,
+        errorSummary: policy,
+      };
     });
 
     const onDiagnostics = vi.fn();
@@ -849,7 +853,7 @@ describe('runDaemonCommand', () => {
     expect(onDiagnostics).toHaveBeenCalledExactlyOnceWith(policy);
   });
 
-  it('does not install a policy after invalid daemon configuration', async () => {
+  it('does not install a policy when daemon loading fails before the callback', async () => {
     vi.mocked(loadDaemonConfig).mockRejectedValue(
       new Error('invalid daemon configuration'),
     );

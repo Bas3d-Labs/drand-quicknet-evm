@@ -69,11 +69,12 @@ export async function runDaemonCommand(
     ...(options.env !== undefined
       ? { env: options.env }
       : {}),
+    ...(options.onDiagnostics !== undefined
+      ? { onDiagnostics: options.onDiagnostics }
+      : {}),
   });
 
   const errorSummary = config.errorSummary;
-
-  options.onDiagnostics?.(errorSummary);
 
   const logger = createRelayerLog({
     chainId: config.chain.id,

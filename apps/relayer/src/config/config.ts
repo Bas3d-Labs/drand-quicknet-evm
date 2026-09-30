@@ -109,13 +109,14 @@ export interface ResolvedNetworkConfig {
 export interface RelayerConfig extends ResolvedNetworkConfig {
   account: ReturnType<typeof privateKeyToAccount>;
 
-  // Configs constructed by callers may omit this and retain strict output.
+  // Configs constructed by callers may omit the configured scrubber.
   errorSummary?: SummarizeErrorOptions;
 }
 
 export interface LoadRelayerConfigOptions {
   source: NetworkSource;
   env?: Readonly<Record<string, string | undefined>>;
+  onDiagnostics?: (policy: SummarizeErrorOptions) => void;
 }
 
 export async function loadRelayerConfig(
@@ -127,19 +128,16 @@ export async function loadRelayerConfig(
   } = options;
 
   const privateKey = parsePrivateKey(
-    requireEnvironmentVariable(
-      env,
-      'PRIVATE_KEY',
-    ),
+    requireEnvironmentVariable(env, 'PRIVATE_KEY'),
   );
 
-  const network = await resolveNetworkConfig(source, env);
+  const rpcUrl = resolveRpcUrl(source, env);
+
   let account: RelayerConfig['account'];
 
   try {
-    // keep existing account creation and nonce-manager options.
     account = privateKeyToAccount(privateKey, {
-      nonceManager
+      nonceManager,
     });
   } catch (cause) {
     throw new RelayerConfigError(
@@ -149,15 +147,22 @@ export async function loadRelayerConfig(
     );
   }
 
+  const errorSummary: SummarizeErrorOptions = Object.freeze({
+    scrubText: createScrubber({
+      rpcUrls: [rpcUrl],
+      privateKey,
+    }),
+  });
+
+  // Install before file loading and deployment validation can fail.
+  options.onDiagnostics?.(errorSummary);
+
+  const network = await resolveNetworkConfig(source, rpcUrl);
+
   return {
     ...network,
     account,
-    errorSummary: Object.freeze({
-      scrubText: createScrubber({
-        rpcUrls: [network.rpcUrl],
-        privateKey,
-      }),
-    }),
+    errorSummary,
   };
 }
 
@@ -175,25 +180,22 @@ export function parseRelayerNetworkPreset(
 
 async function resolveNetworkConfig(
   source: NetworkSource,
-  env: Readonly<Record<string, string | undefined>>,
+  rpcUrl: string,
 ): Promise<ResolvedNetworkConfig> {
   switch (source.type) {
     case 'preset':
-      return resolveNetworkPreset(source.network, env);
+      return resolveNetworkPreset(source.network, rpcUrl);
 
     case 'custom':
-      return resolveCustomNetwork(source.configFile, env);
+      return resolveCustomNetwork(source.configFile, rpcUrl);
   }
 }
 
 async function resolveNetworkPreset(
   network: RelayerNetworkPreset,
-  env: Readonly<Record<string, string | undefined>>,
+  rpcUrl: string,
 ): Promise<ResolvedNetworkConfig> {
   const preset = NETWORK_PRESETS[network];
-  
-  const rpcUrl = requireEnvironmentVariable(env, preset.rpcUrlEnv);
-  validateRpcUrl(rpcUrl, preset.rpcUrlEnv);
 
   const deployment = await loadRegistryDeployment({
     manifestUrl: preset.deploymentManifestUrl,
@@ -211,12 +213,9 @@ async function resolveNetworkPreset(
 
 async function resolveCustomNetwork(
   configFile: string,
-  env: Readonly<Record<string, string | undefined>>,
+  rpcUrl: string,
 ): Promise<ResolvedNetworkConfig> {
   const descriptor = await loadCustomNetworkDescriptor(configFile);
-
-  const rpcUrl = requireEnvironmentVariable(env, 'QUICKNET_RPC_URL');
-  validateRpcUrl(rpcUrl, 'QUICKNET_RPC_URL');
 
   const chainDefinition: Chain = {
     id: descriptor.chain.id,
@@ -244,6 +243,28 @@ async function resolveCustomNetwork(
     deployment: descriptor.deployment,
     finality: descriptor.finality,
   };
+}
+
+function resolveRpcUrl(
+  source: NetworkSource,
+  env: Readonly<Record<string, string | undefined>>,
+): string {
+  let setting: ConfigSetting;
+
+  switch (source.type) {
+    case 'preset':
+      setting = NETWORK_PRESETS[source.network].rpcUrlEnv;
+      break;
+    
+    case 'custom':
+      setting = 'QUICKNET_RPC_URL';
+      break;
+  }
+
+  const rpcUrl = requireEnvironmentVariable(env, setting);
+  validateRpcUrl(rpcUrl, setting);
+
+  return rpcUrl;
 }
 
 export interface ResolveNetworkConfigPathOptions {

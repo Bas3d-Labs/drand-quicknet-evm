@@ -83,6 +83,8 @@ describe('import failure diagnostic', () => {
 
     expect(daemon.operation).toMatchObject(cli.operation);
     expect(daemon.err).toEqual(cli.err);
+    expect(cli).not.toHaveProperty('operationOmitted');
+    expect(daemon).not.toHaveProperty('operationOmitted');
   });
 
   it.each([
@@ -108,6 +110,7 @@ describe('import failure diagnostic', () => {
 
     expect(record).not.toHaveProperty('operation');
     expect(record.err.message).toBe('original explanation');
+    expect(record.operationOmitted).toBe(true);
     expect(JSON.stringify(record)).not.toContain('provider-secret');
   });
 
@@ -128,6 +131,7 @@ describe('import failure diagnostic', () => {
 
     expect(getter).not.toHaveBeenCalled();
     expect(record).not.toHaveProperty('operation');
+    expect(record.operationOmitted).toBe(true);
     expect(record.err.message).toBe('original explanation');
   });
 
@@ -148,6 +152,8 @@ describe('import failure diagnostic', () => {
       round: '1',
       phase: 'submit-transaction',
     });
+
+    expect(record).not.toHaveProperty('operationOmitted');
   });
 
   it.each([

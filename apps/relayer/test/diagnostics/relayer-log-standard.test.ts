@@ -89,6 +89,7 @@ describe('relayer log standard policy', () => {
 
     expect(record.err).not.toHaveProperty('url');
     expect(record.err).not.toHaveProperty('body');
+    expect(record).not.toHaveProperty('operationOmitted');
     expect(lines.join('')).not.toContain(SECRET);
     expect(writeSync).not.toHaveBeenCalled();
   });
@@ -182,9 +183,8 @@ describe('relayer log standard policy', () => {
     expect(lines.join('')).not.toContain(SECRET);
   });
 
-  it.each(['😀', '"\\\n'])(
-    'fits large summaries without discarding their tree: %j',
-    (fragment) => {
+  it.each(['😀', '"\\\n'])
+    ('fits large summaries without discarding their tree: %j', (fragment) => {
       const { log, lines } = capture();
       const message =
         'provider explanation: ' +
@@ -218,6 +218,7 @@ describe('relayer log standard policy', () => {
       expect(record.err.message).toContain('provider explanation:');
       expect(record.err.message).toContain('[truncated]');
       expect(record.err.textModified).toBe(true);
+      expect(record.err.code).not.toBe('SUMMARY_UNAVAILABLE');
       expect(record.err.cause).toBeDefined();
       expect(record.err.cause.errors).toBeDefined();
 
@@ -229,6 +230,90 @@ describe('relayer log standard policy', () => {
       expect(lines.join('')).not.toContain(SECRET);
       expect(error.message).toBe(message);
       expect(writeSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: 'unknown operation',
+      operation: { name: 'unknown-operation' },
     },
-  );
+    {
+      name: 'invalid import phase',
+      operation: {
+        name: 'import-round',
+        scanType: 'durable',
+        fromBlock: 100n,
+        toBlock: 199n,
+        round: 74n,
+        phase: 'invalid-phase',
+      },
+    },
+  ])('preserves the error with $name', ({ operation }) => {
+    const { log, lines } = capture();
+
+    log.consumerFailed({
+      consumer: CONSUMER,
+      error: new Error(`provider unavailable; token=${SECRET}`),
+      operation: operation as never,
+    });
+
+    expect(lines).toHaveLength(1);
+
+    const record = JSON.parse(lines[0]!);
+
+    expect(record).toMatchObject({
+      event: 'consumer_failed',
+      consumer: CONSUMER,
+      err: {
+        name: 'Error',
+        message: 'provider unavailable; token=[REDACTED]',
+        textModified: true,
+      },
+    });
+
+    expect(record).not.toHaveProperty('operation');
+    expect(record.operationOmitted).toBe(true);
+    expect(lines.join('')).not.toContain(SECRET);
+    expect(writeSync).not.toHaveBeenCalled();
+  });
+
+  it.each(['context', 'operation'] as const)
+    ('does not invoke an accessor on %s or lose the error', (location) => {
+    const { log, lines } = capture();
+    const get = vi.fn(() => {
+      throw new Error(SECRET);
+    });
+
+    const operation = {
+      name: 'read-chain-heads' as const,
+    };
+
+    const context = {
+      consumer: CONSUMER as typeof CONSUMER,
+      error: new Error(`provider unavailable; token=${SECRET}`),
+      operation,
+    };
+
+    if (location === 'context') {
+      Object.defineProperty(context, 'operation', { get });
+    } else {
+      Object.defineProperty(operation, 'name', { get });
+    }
+
+    log.consumerFailed(context);
+
+    expect(get).not.toHaveBeenCalled();
+    expect(lines).toHaveLength(1);
+
+    const record = JSON.parse(lines[0]!);
+
+    expect(record.event).toBe('consumer_failed');
+    expect(record.err.message).toBe(
+      'provider unavailable; token=[REDACTED]',
+    );
+    expect(record).not.toHaveProperty('operation');
+    expect(record.operationOmitted).toBe(true);
+    expect(lines.join('')).not.toContain(SECRET);
+    expect(writeSync).not.toHaveBeenCalled();
+  });
 });

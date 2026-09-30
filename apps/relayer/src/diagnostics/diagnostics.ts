@@ -59,6 +59,8 @@ export function renderDiagnostic(
     | (RoundImportDiagnostic & { name: 'import-round' })
     | undefined;
 
+  let operationOmitted: true | undefined;
+
   if (importProgress !== undefined) {
     try {
       operation = {
@@ -67,6 +69,7 @@ export function renderDiagnostic(
       };
     } catch {
       // Invalid context must not suppress the original error diagnostic.
+      operationOmitted = true;
     }
   }
 
@@ -74,6 +77,7 @@ export function renderDiagnostic(
     event: 'cli_failed',
     kind: 'operation',
     operation,
+    operationOmitted,
     err: summarizeErrorForOutput(error, errorSummary),
   });
 }

@@ -1,3 +1,9 @@
+import {
+  mismatchDetails,
+  mismatchMessage,
+  type MismatchDetails,
+} from './mismatch-errors.js';
+
 import type {
   ScrubbedText,
 } from './text-scrubber.js';
@@ -67,6 +73,7 @@ export interface ErrorSummary {
   errorsOmitted?: true;
   textModified?: true;
   revert?: RevertSummary;
+  mismatch?: MismatchDetails;
 }
 
 export interface RevertSummary {
@@ -240,18 +247,14 @@ function visit(
       summary.code = cleanCode;
     }
 
-    // Prefer provider evidence over generic wrapper descriptions.
-    for (const key of ['details', 'shortMessage', 'message']) {
-      const message = scrubField(
-        dataProperty(chain, key),
-        options.scrubText,
-        summary,
-      );
+    const message = scrubField(
+      selectErrorMessage(chain, cause),
+      options.scrubText,
+      summary,
+    );
 
-      if (message !== undefined) {
-        summary.message = message;
-        break;
-      }
+    if (message !== undefined) {
+      summary.message = message;
     }
 
     if (name === 'ContractFunctionRevertedError') {
@@ -264,6 +267,22 @@ function visit(
       if (revert !== undefined) {
         summary.revert = revert;
       }
+    }
+  }
+
+  const mismatch = mismatchDetails(error);
+  if (mismatch !== undefined) {
+    summary.mismatch = mismatch;
+
+    if (mismatch.kind === 'deployment-chain') {
+      summary.code = 'DEPLOYMENT_CHAIN_MISMATCH';
+    } else {
+      summary.code = 'CONSUMER_REGISTRY_MISMATCH';
+    }
+
+    if (options === undefined) {
+      // Reconstruct solely from registered, validated public values.
+      summary.message = mismatchMessage(mismatch);
     }
   }
 
@@ -391,6 +410,44 @@ function revertArgument(
 
   // Never coerce or recursively serialize external argument objects.
   return undefined;
+}
+
+function selectErrorMessage(
+  chain: readonly object[],
+  cause: unknown,
+): unknown {
+  const details = dataProperty(chain, 'details');
+  const shortMessage = dataProperty(chain, 'shortMessage');
+
+  if (typeof details === 'string' && details.length > 0) {
+    if (
+      typeof shortMessage === 'string' &&
+      shortMessage.length > 0 &&
+      typeof cause === 'object' &&
+      cause !== null
+    ) {
+      const causeDetails = dataProperty(
+        prototypeChain(cause),
+        'details',
+      );
+
+      // Compare raw strings, before either value is scrubbed or truncated.
+      if (
+        typeof causeDetails === 'string' &&
+        details === causeDetails
+      ) {
+        return shortMessage;
+      }
+    }
+
+    return details;
+  }
+
+  if (typeof shortMessage === 'string' && shortMessage.length > 0) {
+    return shortMessage;
+  }
+
+  return dataProperty(chain, 'message');
 }
 
 function scrubField(

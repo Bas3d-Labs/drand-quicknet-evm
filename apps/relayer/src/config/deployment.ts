@@ -4,6 +4,10 @@ import {
 
 import { readFile } from 'node:fs/promises';
 
+import {
+  createDeploymentChainMismatchError,
+} from '../diagnostics/mismatch-errors.js';
+
 interface DeploymentManifest {
   chainId?: unknown;
   verifier?: unknown;
@@ -92,8 +96,9 @@ export function parseRegistryDeployment(
     options.expectedChainId !== undefined &&
     deployment.chainId !== options.expectedChainId
   ) {
-    throw new Error(
-      `Deployment manifest chain mismatch: expected ${options.expectedChainId}, received ${deployment.chainId}.`
+    throw createDeploymentChainMismatchError(
+      options.expectedChainId,
+      deployment.chainId
     );
   }
 

@@ -1,5 +1,6 @@
 const MAX_INPUT_LENGTH = 65_536;
 const MAX_OUTPUT_LENGTH = 4_096;
+const MAX_PERCENT_DECODE_PASSES = 2;
 const MIN_INFERRED_SECRET_LENGTH = 16;
 const REDACTED = '[REDACTED]';
 
@@ -9,7 +10,7 @@ const AUTH_HEADER_PATTERN =
 const AUTH_TOKEN_PATTERN =
   /\b(?:Bearer|Basic)[ \t]+[a-z0-9._~+/=-]+/gi;
   
-const URL_PATTERN = /\b(?:https?|wss?):\/\/[^\s"'<>\\]+/gi;
+const URL_PATTERN = /(?:https?|wss?):\/\/[^\s"'<>\\]+/gi;
 
 const CREDENTIAL_QUERY_NAMES = new Set([
   'apikey',
@@ -42,6 +43,12 @@ export interface ScrubbedText {
 interface TextRange {
   start: number;
   end: number;
+}
+
+interface TextView {
+  text: string;
+  starts: number[];
+  ends: number[];
 }
 
 export function createScrubber(
@@ -182,15 +189,10 @@ export function createScrubber(
     }
   }
 
-  return function scrub(text: string): ScrubbedText {
-    if (text.length > MAX_INPUT_LENGTH) {
-      return {
-        text: '[diagnostic text omitted: input limit]',
-        removed: true,
-      };
-    }
-
-    const ranges: TextRange[] = [];
+  function collectSensitiveRanges(
+    text: string,
+    ranges: TextRange[],
+  ): void {
     const normalized = normalizePercentEscapes(text);
 
     for (const secret of exactSecrets) {
@@ -213,6 +215,49 @@ export function createScrubber(
         start: match.index,
         end: match.index + match[0].length,
       });
+    }
+  }
+
+  return function scrub(text: string): ScrubbedText {
+    if (text.length > MAX_INPUT_LENGTH) {
+      return {
+        text: '[diagnostic text omitted: input limit]',
+        removed: true,
+      };
+    }
+
+    const ranges: TextRange[] = [];
+
+    let view: TextView = {
+      text,
+      starts: Array.from({ length: text.length }, (_, index) => index),
+      ends: Array.from({ length: text.length }, (_, index) => index + 1),
+    };
+
+    for (let pass = 0; pass <= MAX_PERCENT_DECODE_PASSES; pass += 1) {
+      const matches: TextRange[] = [];
+      collectSensitiveRanges(view.text, matches);
+
+      for (const match of matches) {
+        ranges.push({
+          start: view.starts[match.start]!,
+          end: view.ends[match.end - 1]!,
+        });
+      }
+
+      const decoded = decodePercentView(view);
+      if (decoded.text === view.text) {
+        break;
+      }
+
+      if (pass === MAX_PERCENT_DECODE_PASSES) {
+        return {
+          text: '[diagnostic text omitted: encoding limit]',
+          removed: true,
+        };
+      }
+
+      view = decoded;
     }
 
     let output = redactRanges(text, ranges);
@@ -364,6 +409,100 @@ function collectUrlRanges(
         start + candidate.length,
       );
     }
+  }
+}
+
+function decodePercentView(view: TextView): TextView {
+  const characters: string[] = [];
+  const starts: number[] = [];
+  const ends: number[] = [];
+
+  for (let index = 0; index < view.text.length;) {
+    const decoded = readPercentCharacter(view.text, index);
+
+    let character = view.text.charAt(index);
+    let consumed = 1;
+
+    if (decoded !== undefined) {
+      character = decoded.text;
+      consumed = decoded.length;
+    }
+
+    const start = view.starts[index]!;
+    const end = view.ends[index + consumed - 1]!;
+
+    characters.push(character);
+
+    // Each UTF-16 unit maps to the complete original encoded character.
+    for (let unit = 0; unit < character.length; unit += 1) {
+      starts.push(start);
+      ends.push(end);
+    }
+
+    index += consumed;
+  }
+
+  return {
+    text: characters.join(''),
+    starts,
+    ends,
+  };
+}
+
+function readPercentCharacter(
+  text: string,
+  start: number,
+): { text: string; length: number } | undefined {
+  if (
+    text.charAt(start) !== '%' ||
+    !isHexDigit(text.charAt(start + 1)) ||
+    !isHexDigit(text.charAt(start + 2))
+  ) {
+    return undefined;
+  }
+
+  const first = Number.parseInt(
+    text.slice(start + 1, start + 3),
+    16,
+  );
+
+  let bytes: number;
+
+  if (first <= 0x7f) {
+    bytes = 1;
+  } else if (first >= 0xc2 && first <= 0xdf) {
+    bytes = 2;
+  } else if (first >= 0xe0 && first <= 0xef) {
+    bytes = 3;
+  } else if (first >= 0xf0 && first <= 0xf4) {
+    bytes = 4;
+  } else {
+    return undefined;
+  }
+
+  for (let byte = 1; byte < bytes; byte += 1) {
+    const offset = start + byte * 3;
+
+    if (
+      text.charAt(offset) !== '%' ||
+      !isHexDigit(text.charAt(offset + 1)) ||
+      !isHexDigit(text.charAt(offset + 2))
+    ) {
+      return undefined;
+    }
+  }
+
+  const length = bytes * 3;
+
+  try {
+    // Validate one UTF-8 scalar, including continuation and range rules.
+    return {
+      text: decodeURIComponent(text.slice(start, start + length)),
+      length,
+    };
+  } catch {
+    // Invalid escapes must not prevent scanning later valid text.
+    return undefined;
   }
 }
 
