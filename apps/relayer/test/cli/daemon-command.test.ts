@@ -35,6 +35,10 @@ const relayerLogMocks = vi.hoisted(() => ({
   roundAlreadyStored: vi.fn(),
   heartbeat: vi.fn(),
   loggingFailed: vi.fn(),
+  durableFulfillmentPending: vi.fn(),
+  durableFulfillmentUnavailable: vi.fn(),
+  durableAnchorChanged: vi.fn(),
+  durableAnchorUnavailable: vi.fn(),
 } satisfies RelayerLog));
 
 vi.mock('@based-labs/drand-quicknet-registry', () => ({

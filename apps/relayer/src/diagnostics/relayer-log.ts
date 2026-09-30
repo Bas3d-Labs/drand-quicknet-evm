@@ -83,6 +83,48 @@ const EVENTS = {
       durableNextBlock: 'uint',
     },
   ],
+  durableFulfillmentPending: [
+    'debug',
+    'durable_fulfillment_pending',
+    'Beacon is not stored at the selected durable block',
+    {
+      consumer: 'address',
+      round: 'uint',
+      durableBlock: 'uint',
+    },
+  ],
+  durableFulfillmentUnavailable: [
+    'warn',
+    'durable_fulfillment_unavailable',
+    'Durable fulfillment unavailable. Checkpoint advancement deferred',
+    {
+      consumer: 'address',
+      round: 'uint',
+      durableBlock: 'uint',
+      error: 'error',
+    },
+  ],
+  durableAnchorChanged: [
+    'warn',
+    'durable_anchor_changed',
+    'Durable anchor changed. Checkpoint advancement deferred',
+    {
+      consumer: 'address',
+      durableBlock: 'uint',
+      expectedHash: 'hash',
+      observedHash: 'hash',
+    },
+  ],
+  durableAnchorUnavailable: [
+    'warn',
+    'durable_anchor_unavailable',
+    'Durable anchor unavailable. Checkpoint advancement deferred',
+    {
+      consumer: 'address',
+      durableBlock: 'uint',
+      error: 'error',
+    },
+  ],
   checkpointAdvanced: [
     'debug',
     'checkpoint_advanced',
