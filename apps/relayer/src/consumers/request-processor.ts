@@ -31,6 +31,9 @@ export interface ProcessQuicknetRequestsOptions {
   deployment: RegistryDeployment;
   requests: readonly QuicknetRandomnessRequest[];
   onProgress?: ((progress: RoundImportProgress) => void) | undefined;
+  onCompleted?:
+    | ((result: ProcessedQuicknetRound) => void)
+    | undefined;
 }
 
 export interface ProcessedQuicknetRound {
@@ -42,47 +45,110 @@ export interface ProcessQuicknetRequestsResult {
   rounds: readonly ProcessedQuicknetRound[];
 }
 
-export async function processQuicknetRequests(
+export type QuicknetRoundOutcome = {
+  round: bigint;
+  firstRequestBlock: bigint;
+} & (
+  | {
+      status: 'completed';
+      result: ImportQuicknetRoundResult;
+    }
+  | {
+      status: 'failed';
+      error: unknown;
+    }
+  | {
+      status: 'deferred';
+      reason: 'earlier-import-failed';
+    }
+);
+
+export async function processQuicknetRequestsWithOutcomes(
   options: ProcessQuicknetRequestsOptions,
-): Promise<ProcessQuicknetRequestsResult> {
-  const uniqueRounds = getUniqueRounds(options.requests);
+): Promise<readonly QuicknetRoundOutcome[]> {
+  const firstBlocks = new Map<bigint, bigint>();
 
-  const rounds: ProcessedQuicknetRound[] = [];
-  for (const round of uniqueRounds) {
-    const result = await importQuicknetRoundWhenAvailable({
-      publicClient: options.publicClient,
-      walletClient: options.walletClient,
-      account: options.account,
-      deployment: options.deployment,
-      round,
-      onProgress: options.onProgress,
-    });
+  for (const request of options.requests) {
+    const previous = firstBlocks.get(request.round);
 
-    rounds.push({
-      round,
-      result,
-    });
+    if (
+      previous === undefined ||
+      request.blockNumber < previous
+    ) {
+      firstBlocks.set(request.round, request.blockNumber);
+    }
   }
 
-  return {
-    rounds,
-  };
-}
+  const outcomes: QuicknetRoundOutcome[] = [];
+  let failed = false;
 
-function getUniqueRounds(
-  requests: readonly QuicknetRandomnessRequest[],
-): readonly bigint[] {
-  const seen = new Set<bigint>();
-  const rounds: bigint[] = [];
+  for (const [round, firstRequestBlock] of firstBlocks) {
+    if (failed) {
+      outcomes.push({
+        round,
+        firstRequestBlock,
+        status: 'deferred',
+        reason: 'earlier-import-failed',
+      });
 
-  for (const request of requests) {
-    if (seen.has(request.round)) {
       continue;
     }
 
-    seen.add(request.round);
-    rounds.push(request.round);
+    try {
+      const result = await importQuicknetRoundWhenAvailable({
+        publicClient: options.publicClient,
+        walletClient: options.walletClient,
+        account: options.account,
+        deployment: options.deployment,
+        round,
+        onProgress: options.onProgress,
+      });
+
+      outcomes.push({
+        round,
+        firstRequestBlock,
+        status: 'completed',
+        result,
+      });
+
+      try {
+        options.onCompleted?.({ round, result });
+      } catch {
+        // Reporting must not replace a successful import.
+      }
+    } catch (error) {
+      outcomes.push({
+        round,
+        firstRequestBlock,
+        status: 'failed',
+        error,
+      });
+
+      failed = true;
+    }
   }
 
-  return rounds;
+  return outcomes;
+}
+
+export async function processQuicknetRequests(
+  options: ProcessQuicknetRequestsOptions,
+): Promise<ProcessQuicknetRequestsResult> {
+  const outcomes = await processQuicknetRequestsWithOutcomes(options);
+  const rounds: ProcessedQuicknetRound[] = [];
+
+  for (const outcome of outcomes) {
+    if (outcome.status === 'failed') {
+      throw outcome.error;
+    }
+
+    if (outcome.status === 'completed') {
+      rounds.push({
+        round: outcome.round,
+        result: outcome.result,
+      });
+    }
+  }
+
+  return { rounds };
 }
