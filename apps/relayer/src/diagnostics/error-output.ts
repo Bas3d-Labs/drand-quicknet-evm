@@ -10,10 +10,20 @@ export function summarizeErrorForOutput(
   error: unknown,
   options?: SummarizeErrorOptions,
 ): ErrorSummary {
-  const summary = summarizeError(error, options);
-  fitErrorSummary(summary);
+  try {
+    const summary = summarizeError(error, options);
+    fitErrorSummary(summary);
 
-  return summary;
+    return summary;
+  } catch {
+    // Neither the original error nor the rendering failure is safe to emit.
+    return {
+      name: 'UnknownError',
+      code: 'SUMMARY_UNAVAILABLE',
+      message: '[diagnostic summary unavailable]',
+      textModified: true,
+    };
+  }
 }
 
 function fitErrorSummary(

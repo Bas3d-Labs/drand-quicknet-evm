@@ -502,6 +502,25 @@ function project(
   const record: Record<string, unknown> = Object.create(null);
 
   for (const [key, kind] of Object.entries(schema)) {
+    if (kind === 'operation') {
+      try {
+        const operation = scalar(
+          kind,
+          own(input, key),
+          errorSummary,
+        );
+
+        if (operation !== undefined) {
+          record[key] = operation;
+        }
+      } catch {
+        // Optional context must not suppress the original error diagnostic.
+        record.operationOmitted = true;
+      }
+
+      continue;
+    }
+
     const value = own(input, key);
 
     if (kind === 'consumers') {
