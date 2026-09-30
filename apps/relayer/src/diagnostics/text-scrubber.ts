@@ -10,7 +10,7 @@ const AUTH_HEADER_PATTERN =
 const AUTH_TOKEN_PATTERN =
   /\b(?:Bearer|Basic)[ \t]+[a-z0-9._~+/=-]+/gi;
   
-const URL_PATTERN = /\b(?:https?|wss?):\/\/[^\s"'<>\\]+/gi;
+const URL_PATTERN = /(?:https?|wss?):\/\/[^\s"'<>\\]+/gi;
 
 const CREDENTIAL_QUERY_NAMES = new Set([
   'apikey',

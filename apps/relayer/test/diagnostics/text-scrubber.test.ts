@@ -250,8 +250,6 @@ describe('createScrubber', () => {
   it.each([
     'RPC failed: rpc.example:443',
     'connect ECONNREFUSED 127.0.0.1:443',
-    'myhttps://rpc.example/path',
-    '_https://rpc.example/path',
     'https:/rpc.example/path',
     'https://',
   ])('preserves text outside URL detection: case %#', (text) => {
@@ -602,6 +600,47 @@ describe('createScrubber', () => {
       removed: true,
     });
   });
+
+  it.each([
+    [
+      'myhttps://rpc.example/path',
+      'myhttps://rpc.example/[REDACTED]',
+    ],
+    [
+      '_https://rpc.example/path',
+      '_https://rpc.example/[REDACTED]',
+    ],
+    [
+      '1HTTPS://rpc.example/path',
+      '1HTTPS://rpc.example/[REDACTED]',
+    ],
+    [
+      'prefixwss://rpc.example/path',
+      'prefixwss://rpc.example/[REDACTED]',
+    ],
+    [
+      String.raw`prefixhttps:\/\/rpc.example\/path`,
+      String.raw`prefixhttps:\/\/rpc.example\/[REDACTED]`,
+    ],
+    [
+      'prefix%68ttps%3A%2F%2Frpc.example%2Fpath',
+      'prefix%68ttps%3A%2F%2Frpc.example%2F[REDACTED]',
+    ],
+    [
+      'prefixhttps://user:password@rpc.example/path',
+      'prefixhttps://[REDACTED]@rpc.example/[REDACTED]',
+    ],
+  ])(
+    'redacts URL components after a word character: %#',
+    (input, expected) => {
+      const local = createScrubber({ rpcUrls: [] });
+
+      expect(local(input)).toEqual({
+        text: expected,
+        removed: true,
+      });
+    },
+  );
 
   it.each([200, 429])(
     'scrubs actual viem errors from a fixture RPC (HTTP %i)',
