@@ -24,7 +24,11 @@ export async function getChainHeads(
     options.publicClient,
     options.finality,
   );
-  const latestBlock = await options.publicClient.getBlockNumber();
+
+  const latestBlock = await options.publicClient.getBlockNumber({
+    cacheTime: 0,
+  });
+
   if (durableBlock > latestBlock) {
     throw new Error(
       `Durable block ${durableBlock} is ahead of latest block ${latestBlock}.`

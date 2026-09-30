@@ -1,7 +1,10 @@
 import type {
   PublicClient,
 } from 'viem';
-import { isDecimalInteger } from '../shared/decimal.js';
+
+import {
+  isDecimalInteger
+} from '../shared/decimal.js';
 
 export type FinalityPolicy = 
   | {
@@ -76,12 +79,15 @@ export async function getDurableBlockNumber(
         throw new Error('Finality confirmations must not be negative.');
       }
 
-      const latest = await publicClient.getBlockNumber();
-      if (latest <= policy.confirmations) {
+      const latestBlock = await publicClient.getBlockNumber({
+        cacheTime: 0,
+      });
+
+      if (latestBlock <= policy.confirmations) {
         return 0n;
       }
 
-      return latest - policy.confirmations;
+      return latestBlock - policy.confirmations;
     }
   }
 }

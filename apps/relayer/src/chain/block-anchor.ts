@@ -3,6 +3,10 @@ import {
   type PublicClient,
 } from 'viem';
 
+import {
+  isFixedHex,
+} from '../shared/hex.js';
+
 export interface BlockAnchor {
   blockNumber: bigint;
   blockHash: Hash;
@@ -19,6 +23,13 @@ export async function getBlockAnchor(
   const block = await publicClient.getBlock({
     blockNumber,
   });
+
+  if (
+    block.number !== blockNumber ||
+    !isFixedHex(block.hash, 32)
+  ) {
+    throw new Error('Invalid block anchor response.');
+  }
 
   return {
     blockNumber,
