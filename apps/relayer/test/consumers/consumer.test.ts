@@ -22,6 +22,10 @@ import {
   validateQuicknetConsumer,
 } from '../../src/consumers/consumer.js';
 
+import {
+  mismatchDetails,
+} from '../../src/diagnostics/mismatch-errors.js';
+
 const CONSUMER_ADDRESS: Address =
   '0x1111111111111111111111111111111111111111';
 
@@ -226,6 +230,36 @@ describe(
       expect(
         readContract,
       ).not.toHaveBeenCalled();
+    });
+
+    it('registers expected and received registry addresses', async () => {
+      const {
+        publicClient,
+        getCode,
+        readContract,
+      } = createPublicClient();
+
+      getCode.mockResolvedValue('0x6001600055');
+      readContract.mockResolvedValue(OTHER_REGISTRY_ADDRESS);
+
+      const failure = await validateQuicknetConsumer({
+        publicClient,
+        consumer: CONSUMER_ADDRESS,
+        deployment: DEPLOYMENT,
+      }).then(
+        () => {
+          throw new Error('Expected consumer validation to fail.');
+        },
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(mismatchDetails(failure)).toEqual({
+        kind: 'consumer-registry',
+        consumer: getAddress(CONSUMER_ADDRESS),
+        expected: getAddress(REGISTRY_ADDRESS),
+        received: getAddress(OTHER_REGISTRY_ADDRESS),
+      });
     });
 
     it('rejects a consumer using a different registry', async () => {

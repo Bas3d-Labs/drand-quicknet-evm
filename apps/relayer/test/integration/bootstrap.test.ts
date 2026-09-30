@@ -59,6 +59,7 @@ const MODULE_PATHS = {
   'cli-output': 'cli/cli-output.js',
   cli: 'cli/cli.js',
   hex: 'shared/hex.js',
+  'mismatch-errors': 'diagnostics/mismatch-errors.js',
   'network-presets': 'config/network-presets.js',
   'operation-context': 'diagnostics/operation-context.js',
 } as const;

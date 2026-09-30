@@ -1,3 +1,9 @@
+import {
+  mismatchDetails,
+  mismatchMessage,
+  type MismatchDetails,
+} from './mismatch-errors.js';
+
 import type {
   ScrubbedText,
 } from './text-scrubber.js';
@@ -67,6 +73,7 @@ export interface ErrorSummary {
   errorsOmitted?: true;
   textModified?: true;
   revert?: RevertSummary;
+  mismatch?: MismatchDetails;
 }
 
 export interface RevertSummary {
@@ -260,6 +267,22 @@ function visit(
       if (revert !== undefined) {
         summary.revert = revert;
       }
+    }
+  }
+
+  const mismatch = mismatchDetails(error);
+  if (mismatch !== undefined) {
+    summary.mismatch = mismatch;
+
+    if (mismatch.kind === 'deployment-chain') {
+      summary.code = 'DEPLOYMENT_CHAIN_MISMATCH';
+    } else {
+      summary.code = 'CONSUMER_REGISTRY_MISMATCH';
+    }
+
+    if (options === undefined) {
+      // Reconstruct solely from registered, validated public values.
+      summary.message = mismatchMessage(mismatch);
     }
   }
 

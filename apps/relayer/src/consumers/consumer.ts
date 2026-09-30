@@ -7,6 +7,11 @@ import {
 import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
+
+import {
+  createConsumerRegistryMismatchError,
+} from '../diagnostics/mismatch-errors.js';
+
 import { QUICKNET_RANDOMNESS_CONSUMER_ABI } from './consumer-abi.js';
 
 export interface ValidateQuicknetConsumerOptions {
@@ -41,9 +46,10 @@ export async function validateQuicknetConsumer(
   const expectedRegistry = getAddress(options.deployment.address);
   const actualRegistry = getAddress(registry);
   if (actualRegistry !== expectedRegistry) {
-    throw new Error(
-      `Quicknet consumer ${consumer} uses registry ${actualRegistry}, ` +
-      `but relayer is configured for ${expectedRegistry}.`
+    throw createConsumerRegistryMismatchError(
+      consumer,
+      expectedRegistry,
+      actualRegistry,
     );
   }
 

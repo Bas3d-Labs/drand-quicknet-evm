@@ -118,9 +118,15 @@ describe('configuration failure diagnostics through the CLI', () => {
         event: 'cli_failed',
         kind: 'operation',
         err: {
+          code: 'DEPLOYMENT_CHAIN_MISMATCH',
           message:
             'Deployment manifest chain mismatch: ' +
             'expected 46630, received 4663.',
+          mismatch: {
+            kind: 'deployment-chain',
+            expected: 46630,
+            received: 4663,
+          },
         },
       });
     },
