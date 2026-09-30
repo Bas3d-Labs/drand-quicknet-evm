@@ -24,7 +24,8 @@ export function createChainHeadsReader(
   const intervalMs = options.durableHeadPollIntervalMs;
   if (!Number.isSafeInteger(intervalMs) || intervalMs <= 0) {
     throw new Error(
-      'durableHeadPollIntervalMs must be a positive safe integer.');
+      'durableHeadPollIntervalMs must be a positive safe integer.'
+    );
   }
 
   const publicClient = options.publicClient;
@@ -64,8 +65,11 @@ export function createChainHeadsReader(
     }
 
     try {
-      const latestBlock = await publicClient.getBlockNumber();
+      const latestBlock = await publicClient.getBlockNumber({
+        cacheTime: 0,
+      });
       const durableBlock = previous.blockNumber;
+
       if (durableBlock > latestBlock) {
         throw new Error(
           `Durable block ${durableBlock} is ahead of latest block ${latestBlock}.`

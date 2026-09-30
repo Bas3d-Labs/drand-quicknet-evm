@@ -60,11 +60,12 @@ export function createRegistryReader(
       });
     },
 
-    isStored(round: bigint) {
+    isStored(round: bigint, blockNumber?: bigint) {
       return client.readContract({
         ...contract,
         functionName: 'isStored',
         args: [round],
+        ...(blockNumber !== undefined ? { blockNumber } : {}),
       });
     },
 

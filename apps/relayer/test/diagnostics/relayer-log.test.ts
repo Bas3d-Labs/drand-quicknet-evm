@@ -161,6 +161,10 @@ describe('createRelayerLog', () => {
     expect(Object.keys(log).sort()).toEqual([
       'checkpointAdvanced',
       'consumerFailed',
+      'durableAnchorChanged',
+      'durableAnchorUnavailable',
+      'durableFulfillmentPending',
+      'durableFulfillmentUnavailable',
       'durableHeadRegressed',
       'heartbeat',
       'loggingFailed',

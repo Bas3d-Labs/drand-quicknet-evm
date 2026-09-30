@@ -71,6 +71,14 @@ const loggerMocks = {
   roundAlreadyStored: vi.fn<RelayerLog['roundAlreadyStored']>(),
   heartbeat: vi.fn<RelayerLog['heartbeat']>(),
   loggingFailed: vi.fn<RelayerLog['loggingFailed']>(),
+  durableFulfillmentPending:
+    vi.fn<RelayerLog['durableFulfillmentPending']>(),
+  durableFulfillmentUnavailable:
+    vi.fn<RelayerLog['durableFulfillmentUnavailable']>(),
+  durableAnchorChanged:
+    vi.fn<RelayerLog['durableAnchorChanged']>(),
+  durableAnchorUnavailable:
+    vi.fn<RelayerLog['durableAnchorUnavailable']>(),
 } satisfies RelayerLog;
 
 const LOGGER: RelayerLog = loggerMocks;

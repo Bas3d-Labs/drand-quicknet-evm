@@ -5,6 +5,7 @@ import {
   it,
   vi,
 } from 'vitest';
+
 import type {
   Hash,
   PublicClient,
@@ -56,45 +57,48 @@ describe('getBlockAnchor', () => {
   });
 
   it('returns the block number and hash', async () => {
-    getBlock.mockResolvedValue({
-      hash: BLOCK_HASH_A,
+    const blockNumber = 1_000n;
+    const blockHash = `0x${'aa'.repeat(32)}` as const;
+
+    const getBlock = vi.fn().mockResolvedValue({
+      number: blockNumber,
+      hash: blockHash,
     });
 
-    const result =
-      await getBlockAnchor(
-        publicClient,
-        1_500n,
-      );
+    const publicClient = {
+      getBlock,
+    } as unknown as PublicClient;
+
+    const result = await getBlockAnchor(publicClient, blockNumber);
 
     expect(result).toEqual({
-      blockNumber: 1_500n,
-      blockHash: BLOCK_HASH_A,
+      blockNumber,
+      blockHash,
     });
   });
 
   it('requests the exact block number', async () => {
-    getBlock.mockResolvedValue({
-      hash: BLOCK_HASH_A,
+    const blockNumber = 1_234n;
+
+    const getBlock = vi.fn().mockResolvedValue({
+      number: blockNumber,
+      hash: `0x${'aa'.repeat(32)}`,
     });
 
-    await getBlockAnchor(
-      publicClient,
-      1_500n,
-    );
-
-    expect(
+    const publicClient = {
       getBlock,
-    ).toHaveBeenCalledOnce();
+    } as unknown as PublicClient;
 
-    expect(
-      getBlock,
-    ).toHaveBeenCalledWith({
-      blockNumber: 1_500n,
+    await getBlockAnchor(publicClient, blockNumber);
+
+    expect(getBlock).toHaveBeenCalledExactlyOnceWith({
+      blockNumber,
     });
   });
 
   it('supports block zero', async () => {
     getBlock.mockResolvedValue({
+      number: 0n,
       hash: BLOCK_HASH_A,
     });
 

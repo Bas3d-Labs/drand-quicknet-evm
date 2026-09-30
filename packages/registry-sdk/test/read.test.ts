@@ -229,8 +229,57 @@ describe('createRegistryReader', () => {
     });
   });
 
-  it('checks whether a round is stored', async () => {
-    readContract.mockResolvedValue(true);
+  it.each([true, false])(
+    'returns %s without specifying a block',
+    async (stored) => {
+      readContract.mockResolvedValue(stored);
+
+      const registry = createRegistryReader({
+        client,
+        deployment: DEPLOYMENT,
+      });
+
+      await expect(
+        registry.isStored(ROUND),
+      ).resolves.toBe(stored);
+
+      expect(readContract).toHaveBeenCalledExactlyOnceWith({
+        address: REGISTRY_ADDRESS,
+        abi: drandQuicknetBeaconRegistryAbi,
+        functionName: 'isStored',
+        args: [ROUND],
+      });
+
+      expect(readContract.mock.calls[0]?.[0])
+        .not.toHaveProperty('blockNumber');
+  });
+
+  it.each([0n, 123_456n])(
+    'checks storage at the exact block %s',
+    async (blockNumber) => {
+      readContract.mockResolvedValue(true);
+
+      const registry = createRegistryReader({
+        client,
+        deployment: DEPLOYMENT,
+      });
+
+      await expect(
+        registry.isStored(ROUND, blockNumber),
+      ).resolves.toBe(true);
+
+      expect(readContract).toHaveBeenCalledExactlyOnceWith({
+        address: REGISTRY_ADDRESS,
+        abi: drandQuicknetBeaconRegistryAbi,
+        functionName: 'isStored',
+        args: [ROUND],
+        blockNumber,
+      });
+    },
+  );
+
+  it('returns false when the round is absent at the requested block', async () => {
+    readContract.mockResolvedValue(false);
 
     const registry = createRegistryReader({
       client,
@@ -238,14 +287,38 @@ describe('createRegistryReader', () => {
     });
 
     await expect(
-      registry.isStored(ROUND),
-    ).resolves.toBe(true);
+      registry.isStored(ROUND, 123_456n),
+    ).resolves.toBe(false);
 
-    expect(readContract).toHaveBeenCalledWith({
+    expect(readContract).toHaveBeenCalledExactlyOnceWith({
       address: REGISTRY_ADDRESS,
       abi: drandQuicknetBeaconRegistryAbi,
       functionName: 'isStored',
       args: [ROUND],
+      blockNumber: 123_456n,
+    });
+  });
+
+  it('propagates historical read failures without falling back to latest', async () => {
+    const error = new Error('Historical state unavailable.');
+
+    readContract.mockRejectedValue(error);
+
+    const registry = createRegistryReader({
+      client,
+      deployment: DEPLOYMENT,
+    });
+
+    await expect(
+      registry.isStored(ROUND, 123_456n),
+    ).rejects.toBe(error);
+
+    expect(readContract).toHaveBeenCalledExactlyOnceWith({
+      address: REGISTRY_ADDRESS,
+      abi: drandQuicknetBeaconRegistryAbi,
+      functionName: 'isStored',
+      args: [ROUND],
+      blockNumber: 123_456n,
     });
   });
 

@@ -14,6 +14,14 @@ import type {
 } from '../state/checkpoint.js';
 
 import type {
+  ProcessedQuicknetRound,
+} from '../consumers/request-processor.js';
+
+import type {
+  DurableRequestResult,
+} from '../consumers/durable-requests.js';
+
+import type {
   ValidatedQuicknetConsumer,
 } from '../consumers/consumer.js';
 
@@ -54,12 +62,18 @@ export type DaemonConsumerCycleResult =
       status: 'success';
       consumer: ValidatedQuicknetConsumer;
       iteration: RunDaemonIterationResult;
+      reconciliation?: DurableRequestResult;
     }
   | {
       status: 'failed';
       consumer: ValidatedQuicknetConsumer;
       error: unknown;
       operation?: OperationContext;
+      completed?: readonly {
+        scanType: 'durable' | 'soft';
+        result: ProcessedQuicknetRound;
+      }[];
+      reconciliation?: DurableRequestResult;
     };
 
 export interface RunDaemonCycleResult {
@@ -72,6 +86,13 @@ export async function runDaemonCycle(
   const consumers: DaemonConsumerCycleResult[] = [];
   for (const consumer of options.consumers) {
     let operation: OperationContext | undefined;
+
+    const completed: {
+      scanType: 'durable' | 'soft';
+      result: ProcessedQuicknetRound;
+    }[] = [];
+
+    let reconciliation: DurableRequestResult | undefined;
 
     try {
       const softCursor = options.softCursors.get(consumer.address);
@@ -88,6 +109,12 @@ export async function runDaemonCycle(
         onOperation(current) {
           operation = current;
         },
+        onCompleted(scanType, result) {
+          completed.push({ scanType, result });
+        },
+        onReconciliation(result) {
+          reconciliation = result;
+        },
         ...(softCursor === undefined
           ? {}
           : {
@@ -100,11 +127,20 @@ export async function runDaemonCycle(
 
       options.softCursors.set(consumer.address, iteration.softCursor);
 
-      consumers.push({
+      const successful: Extract<
+        DaemonConsumerCycleResult,
+        { status: 'success' }
+      > = {
         status: 'success',
         consumer,
         iteration,
-      });
+      };
+
+      if (reconciliation !== undefined) {
+        successful.reconciliation = reconciliation;
+      }
+
+      consumers.push(successful);
     } catch (error) {
       const failed: Extract<
         DaemonConsumerCycleResult,
@@ -117,6 +153,14 @@ export async function runDaemonCycle(
 
       if (operation !== undefined) {
         failed.operation = operation;
+      }
+
+      if (completed.length > 0) {
+        failed.completed = completed;
+      }
+
+      if (reconciliation !== undefined) {
+        failed.reconciliation = reconciliation;
       }
 
       consumers.push(failed);

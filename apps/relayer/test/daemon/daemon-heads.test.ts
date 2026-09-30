@@ -50,9 +50,34 @@ describe('daemon chain-head polling', () => {
 
     vi.spyOn(performance, 'now').mockImplementation(() => now);
 
-    const getBlock = vi.fn()
-      .mockResolvedValueOnce({ number: 100n })
-      .mockResolvedValue({ number: 110n });
+    const getBlock = vi.fn(async (
+      request: {
+        blockTag?: string;
+        blockNumber?: bigint;
+      },
+    ) => {
+      if (request.blockNumber !== undefined) {
+        return {
+          number: request.blockNumber,
+          hash: `0x${'aa'.repeat(32)}`,
+        };
+      }
+
+      if (request.blockTag === 'safe') {
+        let number = 100n;
+
+        if (now >= 30_000) {
+          number = 110n;
+        }
+
+        return {
+          number,
+          hash: `0x${'aa'.repeat(32)}`,
+        };
+      }
+
+      throw new Error('Unexpected block request in test.');
+    });
 
     const getBlockNumber = vi.fn(async () => {
       if (now >= 30_000) {
@@ -125,10 +150,27 @@ describe('daemon chain-head polling', () => {
       },
     });
 
-    expect(getBlock).toHaveBeenCalledTimes(2);
-    expect(getBlock).toHaveBeenCalledWith({
-      blockTag: 'safe',
-    });
+    const safeReads = getBlock.mock.calls.filter(
+      ([request]) => request.blockTag === 'safe',
+    );
+
+    expect(safeReads).toEqual([
+      [{ blockTag: 'safe' }],
+      [{ blockTag: 'safe' }],
+    ]);
+
+    const anchorReads = getBlock.mock.calls.filter(
+      ([request]) => request.blockNumber !== undefined,
+    );
+
+    // Only the third cycle has durable work. Each consumer brackets
+    // its empty durable scan with two fresh reads of block 110.
+    expect(anchorReads).toEqual([
+      [{ blockNumber: 110n }],
+      [{ blockNumber: 110n }],
+      [{ blockNumber: 110n }],
+      [{ blockNumber: 110n }],
+    ]);
 
     // Latest-head reads still occur for each consumer iteration.
     expect(getBlockNumber).toHaveBeenCalledTimes(6);
