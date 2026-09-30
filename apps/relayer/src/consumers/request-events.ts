@@ -4,7 +4,6 @@ import {
 } from 'viem';
 
 import {
-  QUICKNET_RANDOMNESS_CONSUMER_ABI,
   QUICKNET_RANDOMNESS_REQUESTED_EVENT,
 } from './consumer-abi.js';
 
