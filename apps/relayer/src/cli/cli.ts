@@ -128,9 +128,10 @@ async function runImportCommand(
 ): Promise<void> {
   const config = await loadRelayerConfig({
     source: command.source,
-  });
-
-  options.onDiagnostics?.(config.errorSummary);
+    ...(options.onDiagnostics !== undefined
+      ? { onDiagnostics: options.onDiagnostics }
+      : {}),
+  })
 
   const clients = createRelayerClients(config);
 
@@ -167,9 +168,10 @@ async function runImportWhenAvailableCommand(
 ): Promise<void> {
   const config = await loadRelayerConfig({
     source: command.source,
+    ...(options.onDiagnostics !== undefined
+      ? { onDiagnostics: options.onDiagnostics }
+      : {}),
   });
-
-  options.onDiagnostics?.(config.errorSummary);
 
   const clients = createRelayerClients(config);
 

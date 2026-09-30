@@ -9,6 +9,10 @@ import {
   RelayerConfigError,
 } from '../diagnostics/config-errors.js';
 
+import type {
+  SummarizeErrorOptions,
+} from '../diagnostics/error-summary.js';
+
 import {
   loadRelayerConfig,
   type NetworkSource,
@@ -33,6 +37,7 @@ export interface DaemonConfig extends RelayerConfig {
 export interface LoadDaemonConfigOptions {
   source: NetworkSource;
   env?: NodeJS.ProcessEnv;
+  onDiagnostics?: (policy: SummarizeErrorOptions) => void;
 }
 
 export async function loadDaemonConfig(
@@ -42,6 +47,9 @@ export async function loadDaemonConfig(
   const relayer = await loadRelayerConfig({
     source: options.source,
     env,
+    ...(options.onDiagnostics !== undefined
+      ? { onDiagnostics: options.onDiagnostics }
+      : {}),
   });
 
   const consumers = parseConsumerAddresses(env.QUICKNET_CONSUMERS);

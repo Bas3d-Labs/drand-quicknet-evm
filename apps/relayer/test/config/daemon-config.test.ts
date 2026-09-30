@@ -559,4 +559,24 @@ describe('loadDaemonConfig', () => {
       }),
     ).rejects.toBe(failure);
   });
+
+  it('forwards the diagnostics callback to relayer configuration', async () => {
+    const onDiagnostics = vi.fn();
+
+    await loadDaemonConfig({
+      source: SOURCE,
+      env: {
+        QUICKNET_CONSUMERS: '0x1111111111111111111111111111111111111111',
+        QUICKNET_START_BLOCK: '0',
+        QUICKNET_CHECKPOINT_FILE: '.state/test.json',
+      },
+      onDiagnostics,
+    });
+
+    expect(loadRelayerConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onDiagnostics,
+      }),
+    );
+  });
 });

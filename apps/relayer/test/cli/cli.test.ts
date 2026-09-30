@@ -800,9 +800,13 @@ describe('diagnostic policy handoff', () => {
         scrubText: (text: string) => ({ text, removed: false }),
       };
 
-      vi.mocked(loadRelayerConfig).mockResolvedValue({
-        ...CONFIG,
-        errorSummary: policy,
+      vi.mocked(loadRelayerConfig).mockImplementation(async (options) => {
+        options.onDiagnostics?.(policy);
+
+        return {
+          ...CONFIG,
+          errorSummary: policy,
+        };
       });
 
       const onDiagnostics = vi.fn();
@@ -824,7 +828,7 @@ describe('diagnostic policy handoff', () => {
     },
   );
 
-  it('does not install a policy when configuration fails', async () => {
+  it('does not install a policy when loading fails before the callback', async () => {
     vi.mocked(loadRelayerConfig).mockRejectedValue(
       new Error('invalid configuration'),
     );
