@@ -25,6 +25,10 @@ import {
   type RoundImportProgress,
 } from './operation-context.js';
 
+import {
+  serviceLockReason
+} from '../state/service-lock.js';
+
 export function renderDiagnostic(
   error: unknown,
   errorSummary?: SummarizeErrorOptions,
@@ -49,6 +53,22 @@ export function renderDiagnostic(
         code: config.code,
         setting: config.setting,
         message: configMessage(config.code, config.setting),
+      });
+    }
+
+    const reason = serviceLockReason(error);
+    if (reason !== undefined) {
+      return JSON.stringify({
+        event: 'cli_failed',
+        kind: 'service-lock',
+        code: 'SERVICE_LOCK_NOT_HELD',
+        reason,
+        message:
+          'The required service lock could not be verified. ' +
+          'Use the relayer launcher with util-linux flock ' +
+          '--exclusive --nonblock --no-fork on Linux. ' +
+          'For daemon mode, the checkpoint must be a direct ' +
+          'child of the configured state directory.',
       });
     }
   } catch {

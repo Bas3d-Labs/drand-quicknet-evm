@@ -42,6 +42,7 @@ const MODULE_PATHS = {
   'import-round-when-available':
     'rounds/import-round-when-available.js',
   'daemon-config': 'config/daemon-config.js',
+  'service-lock': 'state/service-lock.js',
   'validate-consumers': 'consumers/validate-consumers.js',
   daemon: 'daemon/daemon.js',
   'daemon-startup': 'daemon/daemon-startup.js',
@@ -60,6 +61,21 @@ function compiledModuleUrl(
 }
 
 beforeAll(() => {
+  if (process.platform !== 'linux') {
+    return;
+  }
+
+  const version = execFileSync(
+    'flock',
+    ['--version'],
+    {
+      encoding: 'utf8',
+      timeout: 5_000,
+    },
+  );
+
+  expect(version).toContain('util-linux');
+
   execFileSync(
     'pnpm',
     ['exec', 'tsc', '-p', 'tsconfig.json'],
@@ -84,7 +100,7 @@ afterAll(() => {
   }
 });
 
-it.each([
+it.skipIf(process.platform !== 'linux').each([
   'import',
   'import-when-available',
   'daemon',
@@ -125,7 +141,7 @@ it.each([
     }`;
 
     // Stub configuration and network work. Bootstrap, CLI dispatch,
-    // runDaemonCommand, output rendering, and FileCheckpointLock
+    // runDaemonCommand, output rendering, and service-lock verification
     // execute their actual compiled implementations.
     const replacements = new Map<ModuleName, string>([
       [
@@ -247,7 +263,6 @@ it.each([
         `
           import {
             closeSync,
-            readFileSync,
             writeFileSync,
           } from 'node:fs';
 
@@ -255,20 +270,17 @@ it.each([
             renderCliOutput,
           } from ${JSON.stringify(renderer)};
 
-          export async function collectDaemonStartupSummary() {
-            const lock = JSON.parse(
-              readFileSync(
-                ${JSON.stringify(checkpoint + '.lock')},
-                'utf8',
-              ),
-            );
+          import {
+            assertServiceLockHeld,
+          } from ${JSON.stringify(compiledModuleUrl('service-lock'))};
 
-            if (lock.pid !== process.pid) {
-              throw new Error('Expected an owned checkpoint lock.');
-            }
+          export async function collectDaemonStartupSummary({
+            config,
+          }) {
+            assertServiceLockHeld({
+              checkpointFile: config.checkpointFile,
+            });
 
-            // Prove the lock belonged to this process before
-            // startup output failed.
             writeFileSync(
               ${JSON.stringify(observed)},
               'owned',
@@ -280,6 +292,7 @@ it.each([
               signerBalance: 0n,
               registry: '0x' + '22'.repeat(20),
               registryRuntimeCodehash: '0x' + '33'.repeat(32),
+              checkpointFile: config.checkpointFile,
               finality: {
                 type: 'safe',
               },
@@ -363,6 +376,7 @@ it.each([
       PRIVATE_KEY: '',
       ROBINHOOD_TESTNET_RPC_URL: '',
       QUICKNET_RPC_URL: '',
+      QUICKNET_STATE_DIR: fixture,
     };
 
     delete env.NODE_OPTIONS;
@@ -380,9 +394,20 @@ it.each([
       args.push('--round', '100');
     }
 
+    const lockFile = join(fixture, 'relayer.flock');
+
     const child = spawnSync(
-      process.execPath,
-      args,
+      'flock',
+      [
+        '--exclusive',
+        '--nonblock',
+        '--no-fork',
+        '--conflict-exit-code',
+        '75',
+        lockFile,
+        process.execPath,
+        ...args,
+      ],
       {
         cwd: APP,
         env,
@@ -415,6 +440,35 @@ it.each([
         name: 'Error',
       },
     });
+
+    expect(existsSync(lockFile)).toBe(true);
+
+    // Process exit releases ownership without removing the lock file.
+    const reacquired = spawnSync(
+      'flock',
+      [
+        '--exclusive',
+        '--nonblock',
+        '--no-fork',
+        '--conflict-exit-code',
+        '75',
+        lockFile,
+        process.execPath,
+        '-e',
+        '',
+      ],
+      {
+        cwd: APP,
+        env,
+        encoding: 'utf8',
+        timeout: 5_000,
+        maxBuffer: 1_048_576,
+      },
+    );
+
+    expect(reacquired.error).toBeUndefined();
+    expect(reacquired.signal).toBeNull();
+    expect(reacquired.status, reacquired.stderr).toBe(0);
 
     if (command === 'daemon') {
       expect(failure.output).toBe('daemon-startup');

@@ -4,3 +4,9 @@ dist
 Dockerfile
 docker-compose.yml
 .env
+**/.env
+**/.env.*
+!**/.env.example
+apps/relayer/state
+apps/relayer/.bootstrap-*
+apps/relayer/.launcher-lifecycle-*

@@ -36,6 +36,10 @@ import {
 } from '../shared/decimal.js';
 
 import {
+  assertServiceLockHeld,
+} from '../state/service-lock.js';
+
+import {
   importQuicknetRound,
   type ImportQuicknetRoundResult,
 } from '../rounds/import-round.js';
@@ -100,10 +104,12 @@ export async function main(
 
   switch (command.command) {
     case 'import':
+      assertServiceLockHeld();
       await runImportCommand(command, output, options);
       return;
 
     case 'import-when-available':
+      assertServiceLockHeld();
       await runImportWhenAvailableCommand(command, output, options);
       return;
     
@@ -239,16 +245,24 @@ export function parseCommandArguments(
   args: readonly string[],
 ): CommandArguments {
   const command = args[0];
+
+  if (args.includes('--help') || args.includes('-h')) {
+    if (command === 'daemon') {
+      return { command: 'daemon-help' };
+    }
+
+    return { command: 'help' };
+  }
+
   if (
     command === undefined ||
-    command === '--help' ||
-    command === '-h' ||
     command === 'help'
   ) {
     return { command: 'help' };
   }
 
   const commandArgs = args.slice(1);
+
   switch (command) {
     case 'import':
       return parseImportArguments(commandArgs);

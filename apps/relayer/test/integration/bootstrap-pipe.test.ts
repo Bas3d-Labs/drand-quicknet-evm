@@ -61,6 +61,7 @@ const MODULE_PATHS = {
   'mismatch-errors': 'diagnostics/mismatch-errors.js',
   'network-presets': 'config/network-presets.js',
   'operation-context': 'diagnostics/operation-context.js',
+  'service-lock': 'state/service-lock.js',
 } as const;
 
 interface PipeResult {

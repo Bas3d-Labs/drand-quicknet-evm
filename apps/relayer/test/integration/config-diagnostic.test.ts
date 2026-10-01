@@ -18,6 +18,17 @@ vi.mock('../../src/config/custom-network-config.js', () => ({
   loadCustomNetworkDescriptor: vi.fn(),
 }));
 
+vi.mock('../../src/state/service-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../../src/state/service-lock.js')
+  >();
+
+  return {
+    ...actual,
+    assertServiceLockHeld: vi.fn(),
+  };
+});
+
 import {
   main,
 } from '../../src/cli/cli.js';
@@ -38,6 +49,10 @@ import {
 import type {
   SummarizeErrorOptions,
 } from '../../src/diagnostics/error-summary.js';
+
+import {
+  assertServiceLockHeld,
+} from '../../src/state/service-lock.js';
 
 const SECRET = 'configuration-diagnostic-canary';
 const PRIVATE_KEY = '0x' + '11'.repeat(32);
@@ -63,6 +78,10 @@ describe('configuration failure diagnostics through the CLI', () => {
     vi.stubEnv('PRIVATE_KEY', PRIVATE_KEY);
     vi.stubEnv('ROBINHOOD_TESTNET_RPC_URL', RPC_URL);
     vi.stubEnv('QUICKNET_RPC_URL', RPC_URL);
+
+    vi.mocked(assertServiceLockHeld)
+      .mockReset()
+      .mockReturnValue(process.cwd());
   });
 
   afterEach(() => {

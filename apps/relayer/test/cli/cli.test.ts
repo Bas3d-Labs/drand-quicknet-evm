@@ -46,6 +46,17 @@ vi.mock('../../src/rounds/import-round-when-available.js', () => ({
   importQuicknetRoundWhenAvailable: vi.fn(),
 }));
 
+vi.mock('../../src/state/service-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../../src/state/service-lock.js')
+  >();
+
+  return {
+    ...actual,
+    assertServiceLockHeld: vi.fn(),
+  };
+});
+
 import {
   main,
   parseCommandArguments,
@@ -72,6 +83,11 @@ import {
 import type {
   DaemonStartupSummary,
 } from '../../src/daemon/daemon-startup.js';
+
+import {
+  assertServiceLockHeld,
+  ServiceLockNotHeldError,
+} from '../../src/state/service-lock.js';
 
 import {
   importQuicknetRound,
@@ -295,6 +311,10 @@ beforeEach(() => {
   vi.mocked(runDaemonCommand)
     .mockReset()
     .mockResolvedValue(undefined);
+
+  vi.mocked(assertServiceLockHeld)
+    .mockReset()
+    .mockReturnValue('/verified-state');
 });
 
 afterEach(() => {
@@ -491,7 +511,18 @@ describe('main', () => {
   it.each([
     { args: [], type: 'help' },
     { args: ['--help'], type: 'help' },
+    { args: ['--', 'help'], type: 'help' },
     { args: ['daemon', '--help'], type: 'daemon-help' },
+    { args: ['import', '--help'], type: 'help' },
+    { args: ['import-when-available', '-h'], type: 'help' },
+    {
+      args: ['import', '--network-config', '--help'],
+      type: 'help',
+    },
+    {
+      args: ['daemon', '--network-config', '--help'],
+      type: 'daemon-help',
+    },
   ] as const)(
     'emits $type for $args',
     async ({ args, type }) => {
@@ -504,6 +535,8 @@ describe('main', () => {
       expect(runDaemonCommand).not.toHaveBeenCalled();
       expect(importQuicknetRound).not.toHaveBeenCalled();
       expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+      expect(assertServiceLockHeld).not.toHaveBeenCalled();
+      expect(createRelayerClients).not.toHaveBeenCalled();
     },
   );
 
@@ -556,6 +589,17 @@ describe('main', () => {
           vi.mocked(importQuicknetRoundWhenAvailable).mock.calls.length;
 
         expect(calls).toBe(1);
+
+        expect(assertServiceLockHeld)
+          .toHaveBeenCalledExactlyOnceWith();
+
+        expect(
+          vi.mocked(assertServiceLockHeld)
+            .mock.invocationCallOrder[0]!,
+        ).toBeLessThan(
+          vi.mocked(loadRelayerConfig)
+            .mock.invocationCallOrder[0]!,
+        );
       },
     );
 
@@ -640,6 +684,43 @@ describe('main', () => {
 
       expect(operation()).toHaveBeenCalledOnce();
       expect(output).toHaveBeenCalledOnce();
+    });
+
+    it('refuses execution before loading configuration when the lock is not verified', async () => {
+      const failure = new ServiceLockNotHeldError('descriptor');
+
+      vi.mocked(assertServiceLockHeld).mockImplementationOnce(() => {
+        throw failure;
+      });
+
+      const output = vi.fn();
+      const onDiagnostics = vi.fn();
+      const onImportFailure = vi.fn();
+
+      await expect(
+        main([
+          command,
+          '--network',
+          PRESET,
+          '--round',
+          ROUND.toString(),
+        ], output, {
+          onDiagnostics,
+          onImportFailure,
+        }),
+      ).rejects.toBe(failure);
+
+      expect(assertServiceLockHeld)
+        .toHaveBeenCalledExactlyOnceWith();
+
+      expect(loadRelayerConfig).not.toHaveBeenCalled();
+      expect(createRelayerClients).not.toHaveBeenCalled();
+      expect(importQuicknetRound).not.toHaveBeenCalled();
+      expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+      expect(runDaemonCommand).not.toHaveBeenCalled();
+      expect(output).not.toHaveBeenCalled();
+      expect(onDiagnostics).not.toHaveBeenCalled();
+      expect(onImportFailure).not.toHaveBeenCalled();
     });
   });
 

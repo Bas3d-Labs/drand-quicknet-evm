@@ -40,21 +40,28 @@ RUN pnpm --filter @based-labs/drand-quicknet-relayer \
 # Production Stage
 FROM node:24-alpine AS prod
 
-RUN mkdir -p /state \
-    && chown node:node /state
+RUN apk add --no-cache flock \
+    && mkdir -p /state \
+    && chown node:node /state \
+    && chmod 0700 /state
 
 USER node
 WORKDIR /home/node/app
 
 ENV NODE_ENV=production
+ENV QUICKNET_STATE_DIR=/state
 ENV QUICKNET_CHECKPOINT_FILE=/state/checkpoint.json
 
 COPY --chown=node:node \
     --from=build /home/node/deploy \
     ./
 
+COPY --chown=node:node --chmod=0755 \
+    --from=build /home/node/app/apps/relayer/scripts/relayer.sh \
+    ./scripts/relayer.sh
+
 COPY --chown=node:node \
     --from=build /home/node/app/deployments \
     /home/deployments
 
-ENTRYPOINT ["node", "dist/bootstrap.js"]
+ENTRYPOINT ["sh", "scripts/relayer.sh"]

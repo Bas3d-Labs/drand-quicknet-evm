@@ -1,4 +1,10 @@
 import {
+  basename,
+  join,
+  resolve,
+} from 'node:path';
+
+import {
   type Address,
 } from 'viem';
 
@@ -48,8 +54,8 @@ import {
 } from '../consumers/validate-consumers.js';
 
 import {
-  FileCheckpointLock
-} from '../state/file-checkpoint-lock.js';
+  assertServiceLockHeld,
+} from '../state/service-lock.js';
 
 export interface RunDaemonCommandOptions {
   source: NetworkSource;
@@ -64,15 +70,32 @@ export interface RunDaemonCommandOptions {
 export async function runDaemonCommand(
   options: RunDaemonCommandOptions,
 ): Promise<void> {
-  const config = await loadDaemonConfig({
+  const env = options.env ?? process.env;
+
+  const loadedConfig = await loadDaemonConfig({
     source: options.source,
-    ...(options.env !== undefined
-      ? { env: options.env }
-      : {}),
+    env,
     ...(options.onDiagnostics !== undefined
       ? { onDiagnostics: options.onDiagnostics }
       : {}),
   });
+
+  const configuredCheckpointFile = resolve(
+    loadedConfig.checkpointFile,
+  );
+
+  const stateDirectory = assertServiceLockHeld({
+    env,
+    checkpointFile: configuredCheckpointFile,
+  });
+
+  const config = {
+    ...loadedConfig,
+    checkpointFile: join (
+      stateDirectory,
+      basename(configuredCheckpointFile),
+    ),
+  };
 
   const errorSummary = config.errorSummary;
 
@@ -103,45 +126,36 @@ export async function runDaemonCommand(
     filePath: config.checkpointFile,
     deployment: config.deployment,
   });
-
-  const checkpointLock = new FileCheckpointLock({
-    checkpointFile: config.checkpointFile,
-  });
-  const lockHandle = await checkpointLock.acquire();
-
-  try {
-    const durableNextBlocks = new Map<Address, bigint>();
-    for (const consumer of validatedConsumers) {
-      const nextBlock = await checkpointStore.load(consumer.address);
-      if (nextBlock !== undefined) {
-        durableNextBlocks.set(consumer.address, nextBlock);
-      }
+  
+  const durableNextBlocks = new Map<Address, bigint>();
+  for (const consumer of validatedConsumers) {
+    const nextBlock = await checkpointStore.load(consumer.address);
+    if (nextBlock !== undefined) {
+      durableNextBlocks.set(consumer.address, nextBlock);
     }
-
-    const startupSummary = await collectDaemonStartupSummary({
-      publicClient: clients.publicClient,
-      config,
-      durableNextBlocks,
-    });
-    options.onStartup?.(startupSummary);
-
-    await runDaemon({
-      publicClient: clients.publicClient,
-      walletClient: clients.walletClient,
-      account: config.account,
-      deployment: config.deployment,
-      checkpointStore,
-      consumers: validatedConsumers,
-      startBlock: config.startBlock,
-      maxBlockRange: config.maxBlockRange,
-      finality: config.finality,
-      pollIntervalMs: config.pollIntervalMs,
-      onCycle: daemonLogger.onCycle,
-      ...(options.signal !== undefined
-        ? { signal: options.signal }
-        : {}),
-    });
-  } finally {
-    await lockHandle.release();
   }
+
+  const startupSummary = await collectDaemonStartupSummary({
+    publicClient: clients.publicClient,
+    config,
+    durableNextBlocks,
+  });
+  options.onStartup?.(startupSummary);
+
+  await runDaemon({
+    publicClient: clients.publicClient,
+    walletClient: clients.walletClient,
+    account: config.account,
+    deployment: config.deployment,
+    checkpointStore,
+    consumers: validatedConsumers,
+    startBlock: config.startBlock,
+    maxBlockRange: config.maxBlockRange,
+    finality: config.finality,
+    pollIntervalMs: config.pollIntervalMs,
+    onCycle: daemonLogger.onCycle,
+    ...(options.signal !== undefined
+      ? { signal: options.signal }
+      : {}),
+  });
 }
