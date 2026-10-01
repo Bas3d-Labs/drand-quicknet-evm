@@ -239,10 +239,18 @@ export function parseCommandArguments(
   args: readonly string[],
 ): CommandArguments {
   const command = args[0];
+
+  // Match the launcher's help dispatch before interpreting option values.
+  if (args.includes('--help') || args.includes('-h')) {
+    if (command === 'daeomon') {
+      return { command: 'daemon-help' };
+    }
+
+    return { command: 'help' };
+  }
+
   if (
     command === undefined ||
-    command === '--help' ||
-    command === '-h' ||
     command === 'help'
   ) {
     return { command: 'help' };

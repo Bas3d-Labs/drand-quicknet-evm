@@ -127,9 +127,11 @@ describe.skipIf(process.platform !== 'linux')(
       );
 
       const source = await readFile(
-        new URL(
-          '../../src/state/service-lock.ts',
-          import.meta.url,
+        join(
+          process.cwd(),
+          'src',
+          'state',
+          'service-lock.ts',
         ),
         'utf8',
       );
