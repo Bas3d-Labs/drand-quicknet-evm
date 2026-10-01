@@ -62,6 +62,7 @@ const MODULE_PATHS = {
   'mismatch-errors': 'diagnostics/mismatch-errors.js',
   'network-presets': 'config/network-presets.js',
   'operation-context': 'diagnostics/operation-context.js',
+  'service-lock': 'state/service-lock.js',
 } as const;
 
 type ModuleName = keyof typeof MODULE_PATHS;
@@ -71,6 +72,7 @@ interface LaunchOptions {
   env?: NodeJS.ProcessEnv;
   realCli?: boolean;
   preload?: string;
+  serviceLock?: boolean;
 }
 
 interface WriteStats {
@@ -202,12 +204,48 @@ function launch(
     ...options.env,
   };
 
-  // Inherited Node flags must not change the child's failure policy.
-  delete env.NODE_OPTIONS;
+  let executable = process.execPath;
+  let launchArgs = args;
+
+  if (options.serviceLock === true) {
+    if (process.platform !== 'linux') {
+      throw new Error('Locked bootstrap tests require Linux.');
+    }
+
+    const version = execFileSync(
+      'flock',
+      ['--version'],
+      {
+        encoding: 'utf8',
+        timeout: 5_000,
+      },
+    );
+
+    expect(version).toContain('util-linux');
+
+    // Each locked invocation gets an isolated coordination directory.
+    const stateDirectory = mkdtempSync(
+      fixturePath('service-state-'),
+    );
+
+    env.QUICKNET_STATE_DIR = stateDirectory;
+
+    executable = 'flock';
+    launchArgs = [
+      '--exclusive',
+      '--nonblock',
+      '--no-fork',
+      '--conflict-exit-code',
+      '75',
+      join(stateDirectory, 'relayer.flock'),
+      process.execPath,
+      ...args,
+    ];
+  }
 
   const result = spawnSync(
-    process.execPath,
-    args,
+    executable,
+    launchArgs,
     {
       cwd: APP,
       env,
@@ -359,51 +397,97 @@ describe('bootstrap process boundary', () => {
     });
   });
 
-  it('renders missing configuration as an ordinary CLI failure', () => {
-    const result = launch({
-      realCli: true,
-      args: [
-        'import',
-        '--network',
-        'robinhood-testnet',
-        '--round',
-        '1',
-      ],
-    });
+  it.skipIf(process.platform !== 'linux')(
+    'renders missing configuration as an ordinary CLI failure',
+    () => {
+      const result = launch({
+        realCli: true,
+        serviceLock: true,
+        args: [
+          'import',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          '1',
+        ],
+      });
 
-    expect(result.status).toBe(1);
+      expect(result.status, result.stderr).toBe(1);
 
-    expect(diagnostic(result.stderr)).toMatchObject({
-      event: 'cli_failed',
-      kind: 'configuration',
-      code: 'MISSING_REQUIRED_SETTING',
-      setting: 'PRIVATE_KEY',
-    });
+      expect(diagnostic(result.stderr)).toMatchObject({
+        event: 'cli_failed',
+        kind: 'configuration',
+        code: 'MISSING_REQUIRED_SETTING',
+        setting: 'PRIVATE_KEY',
+      });
   });
 
-  it('does not expose a rejected RPC URL from the environment', () => {
-    const result = launch({
-      realCli: true,
-      args: [
-        'import',
-        '--network',
-        'robinhood-testnet',
-        '--round',
-        '1',
-      ],
-      env: {
-        PRIVATE_KEY: '0x' + '11'.repeat(32),
-        ROBINHOOD_TESTNET_RPC_URL: 'file:///' + SECRET,
-      },
-    });
+  it.skipIf(process.platform !== 'linux')(
+    'does not expose a rejected RPC URL from the environment',
+    () => {
+      const result = launch({
+        realCli: true,
+        serviceLock: true,
+        args: [
+          'import',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          '1',
+        ],
+        env: {
+          PRIVATE_KEY: '0x' + '11'.repeat(32),
+          ROBINHOOD_TESTNET_RPC_URL: 'file:///' + SECRET,
+        },
+      });
 
-    expect(result.status).toBe(1);
+      expect(result.status, result.stderr).toBe(1);
 
-    expect(diagnostic(result.stderr)).toMatchObject({
-      kind: 'configuration',
-      code: 'UNSUPPORTED_RPC_PROTOCOL',
-      setting: 'ROBINHOOD_TESTNET_RPC_URL',
-    });
+      expect(diagnostic(result.stderr)).toMatchObject({
+        kind: 'configuration',
+        code: 'UNSUPPORTED_RPC_PROTOCOL',
+        setting: 'ROBINHOOD_TESTNET_RPC_URL',
+      });
+  });
+
+  it.skipIf(process.platform !== 'linux')(
+    'refuses a real import without service ownership',
+    () => {
+      const stateDirectory = mkdtempSync(
+        fixturePath('unlocked-state-'),
+      );
+
+      writeFileSync(
+        join(stateDirectory, 'relayer.flock'),
+        '',
+        { mode: 0o600 },
+      );
+
+      const result = launch({
+        realCli: true,
+        args: [
+          'import',
+          '--network',
+          'robinhood-testnet',
+          '--round',
+          '1',
+        ],
+        env: {
+          QUICKNET_STATE_DIR: stateDirectory,
+        },
+      });
+
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toBe('');
+
+      expect(diagnostic(result.stderr)).toMatchObject({
+        event: 'cli_failed',
+        kind: 'service-lock',
+        code: 'SERVICE_LOCK_NOT_HELD',
+        reason: 'descriptor',
+      });
+
+      expect(result.stderr).not.toContain(stateDirectory);
   });
 
   it('uses the fixed fallback if the summarizer import fails', () => {
