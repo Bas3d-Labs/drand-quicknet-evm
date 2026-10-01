@@ -37,15 +37,20 @@ import {
   it,
 } from 'vitest';
 
+import {
+  compileRelayerFixture,
+} from '../helpers/compiled-relayer.js';
+
 const APP = fileURLToPath(
   new URL('../..', import.meta.url),
 );
 
-const LAUNCHER = join(APP, 'scripts', 'relayer.sh');
 const WAIT_TIMEOUT_MS = 5_000;
 const CONTAINER_IMAGE = process.env.QUICKNET_TEST_CONTAINER_IMAGE;
 
 let fixture: string;
+let compiledApplication: string;
+let launcher: string;
 
 interface ExitResult {
   code: number | null;
@@ -64,22 +69,19 @@ beforeAll(() => {
 
   expect(version).toContain('util-linux');
 
-  execFileSync(
-    'pnpm',
-    ['exec', 'tsc', '-p', 'tsconfig.json'],
-    {
-      cwd: APP,
-      stdio: 'pipe',
-      timeout: 30_000,
-    },
-  );
-
   fixture = mkdtempSync(
     join(APP, '.launcher-lifecycle-'),
   );
 
-  // The launcher resolves "node" through PATH. Use the same runtime
-  // that is executing this test, including under pnpm.
+  compiledApplication = compileRelayerFixture(APP, fixture);
+
+  launcher = join(
+    compiledApplication,
+    'scripts',
+    'relayer.sh',
+  );
+
+  // The copied launcher still resolves Node through PATH.
   symlinkSync(
     process.execPath,
     join(fixture, 'node'),
@@ -97,7 +99,7 @@ afterAll(() => {
 
 function compiledModuleUrl(
   relativePath: string,
-  applicationDirectory: string = APP,
+  applicationDirectory: string = compiledApplication,
 ): string {
   return pathToFileURL(
     join(applicationDirectory, 'dist', relativePath),
@@ -126,7 +128,7 @@ function writePreload(
   directory: string,
   signal: NodeJS.Signals,
   runtimeDirectory: string = directory,
-  applicationDirectory: string = APP,
+  applicationDirectory: string = compiledApplication,
 ): string {
   const preload = join(directory, 'preload.mjs');
 
@@ -496,7 +498,7 @@ it.skipIf(process.platform !== 'linux').each([
     delete env.QUICKNET_ENV_FILE;
 
     const args = [
-      LAUNCHER,
+      launcher,
       'daemon',
       '--network',
       'robinhood-testnet',

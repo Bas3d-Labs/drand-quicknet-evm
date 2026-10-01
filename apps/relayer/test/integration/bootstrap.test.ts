@@ -36,6 +36,10 @@ import {
   renderCliOutput,
 } from '../../src/cli/cli-output.js';
 
+import {
+  compileRelayerFixture,
+} from '../helpers/compiled-relayer.js';
+
 const APP = fileURLToPath(
   new URL('../..', import.meta.url),
 );
@@ -83,6 +87,7 @@ interface WriteStats {
 }
 
 let fixture: string | undefined;
+let compiledApplication: string;
 
 function fixturePath(
   ...parts: string[]
@@ -114,21 +119,11 @@ function setModule(
 }
 
 beforeAll(() => {
-  // Compile current sources before exercising the process boundary.
-  execFileSync(
-    'pnpm',
-    ['exec', 'tsc', '-p', 'tsconfig.json'],
-    {
-      cwd: APP,
-      timeout: 30_000,
-      stdio: 'pipe',
-    },
-  );
-
-  // Keeping fixtures under APP preserves dependency resolution.
   fixture = mkdtempSync(
     join(APP, '.bootstrap-test-'),
   );
+
+  compiledApplication = compileRelayerFixture(APP, fixture);
 
   writeFileSync(
     fixturePath('package.json'),
@@ -152,7 +147,7 @@ beforeEach(() => {
     });
 
     copyFileSync(
-      join(APP, 'dist', relativePath),
+      join(compiledApplication, 'dist', relativePath),
       destination,
     );
   }
@@ -183,7 +178,11 @@ function launch(
   let entry = modulePath('bootstrap');
 
   if (options.realCli === true) {
-    entry = join(APP, 'dist', MODULE_PATHS.bootstrap);
+    entry = join(
+      compiledApplication,
+      'dist',
+      MODULE_PATHS.bootstrap,
+    );
   }
 
   const args: string[] = [];
@@ -357,7 +356,7 @@ function writeStats(): WriteStats {
 describe('bootstrap process boundary', () => {
   it('preserves the executable shebang in the compiled file', () => {
     const firstLine = readFileSync(
-      join(APP, 'dist', MODULE_PATHS.bootstrap),
+      join(compiledApplication, 'dist', MODULE_PATHS.bootstrap),
       'utf8',
     ).split('\n', 1)[0];
 

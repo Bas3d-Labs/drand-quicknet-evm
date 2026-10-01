@@ -29,6 +29,10 @@ import {
   it,
 } from 'vitest';
 
+import {
+  compileRelayerFixture,
+} from '../helpers/compiled-relayer.js';
+
 const APP = fileURLToPath(
   new URL('../..', import.meta.url),
 );
@@ -51,12 +55,13 @@ const MODULE_PATHS = {
 type ModuleName = keyof typeof MODULE_PATHS;
 
 let fixture: string;
+let compiledApplication: string;
 
 function compiledModuleUrl(
   name: ModuleName,
 ): string {
   return pathToFileURL(
-    join(APP, 'dist', MODULE_PATHS[name]),
+    join(compiledApplication, 'dist', MODULE_PATHS[name]),
   ).href;
 }
 
@@ -76,20 +81,12 @@ beforeAll(() => {
 
   expect(version).toContain('util-linux');
 
-  execFileSync(
-    'pnpm',
-    ['exec', 'tsc', '-p', 'tsconfig.json'],
-    {
-      cwd: APP,
-      stdio: 'pipe',
-      timeout: 30_000,
-    },
-  );
-
   fixture = mkdtempSync(
     join(APP, '.bootstrap-command-output-'),
   );
-}, 35_000);
+
+  compiledApplication = compileRelayerFixture(APP, fixture);
+}, 40_000);
 
 afterAll(() => {
   if (fixture !== undefined) {
@@ -384,7 +381,7 @@ it.skipIf(process.platform !== 'linux').each([
     const args = [
       '--import',
       preload,
-      join(APP, 'dist', MODULE_PATHS.bootstrap),
+      join(compiledApplication, 'dist', MODULE_PATHS.bootstrap),
       command,
       '--network',
       'robinhood-testnet',
