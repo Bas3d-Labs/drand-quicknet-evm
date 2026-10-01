@@ -37,15 +37,20 @@ import {
   it,
 } from 'vitest';
 
+import {
+  compileRelayerFixture,
+} from '../helpers/compiled-relayer.js';
+
 const APP = fileURLToPath(
   new URL('../..', import.meta.url),
 );
 
-const LAUNCHER = join(APP, 'scripts', 'relayer.sh');
 const WAIT_TIMEOUT_MS = 5_000;
 const CONTAINER_IMAGE = process.env.QUICKNET_TEST_CONTAINER_IMAGE;
 
 let fixture: string;
+let compiledApplication: string;
+let launcher: string;
 
 interface ExitResult {
   code: number | null;
@@ -64,22 +69,19 @@ beforeAll(() => {
 
   expect(version).toContain('util-linux');
 
-  execFileSync(
-    'pnpm',
-    ['exec', 'tsc', '-p', 'tsconfig.json'],
-    {
-      cwd: APP,
-      stdio: 'pipe',
-      timeout: 30_000,
-    },
-  );
-
   fixture = mkdtempSync(
     join(APP, '.launcher-lifecycle-'),
   );
 
-  // The launcher resolves "node" through PATH. Use the same runtime
-  // that is executing this test, including under pnpm.
+  compiledApplication = compileRelayerFixture(APP, fixture);
+
+  launcher = join(
+    compiledApplication,
+    'scripts',
+    'relayer.sh',
+  );
+
+  // The copied launcher still resolves Node through PATH.
   symlinkSync(
     process.execPath,
     join(fixture, 'node'),
@@ -97,7 +99,7 @@ afterAll(() => {
 
 function compiledModuleUrl(
   relativePath: string,
-  applicationDirectory: string = APP,
+  applicationDirectory: string = compiledApplication,
 ): string {
   return pathToFileURL(
     join(applicationDirectory, 'dist', relativePath),
@@ -126,7 +128,7 @@ function writePreload(
   directory: string,
   signal: NodeJS.Signals,
   runtimeDirectory: string = directory,
-  applicationDirectory: string = APP,
+  applicationDirectory: string = compiledApplication,
 ): string {
   const preload = join(directory, 'preload.mjs');
 
@@ -289,7 +291,7 @@ function writePreload(
 
       assertServiceLockHeld();
 
-      // Record the PID after the shell and flock have both exec'd.
+      // Record the PID after the launcher has exec'd Node.
       writeFileSync(
         join(directory, 'owner-pid'),
         String(process.pid),
@@ -311,12 +313,48 @@ function writePreload(
       const childSource = \`
         const {
           existsSync,
+          fstatSync,
+          readdirSync,
+          statSync,
           writeFileSync,
         } = require('node:fs');
 
         const { join } = require('node:path');
 
         const directory = process.argv[1];
+
+        const expected = statSync(
+          join(directory, 'relayer.flock'),
+          { bigint: true },
+        );
+
+        let lockDescriptors = 0;
+
+        for (const name of readdirSync('/proc/self/fd')) {
+          const fd = Number(name);
+
+          if (!Number.isSafeInteger(fd) || fd < 0) {
+            continue;
+          }
+
+          try {
+            const actual = fstatSync(fd, { bigint: true });
+
+            if (
+              actual.dev === expected.dev &&
+              actual.ino === expected.ino
+            ) {
+              lockDescriptors += 1;
+            }
+          } catch {
+            // Enumeration can include a descriptor that has since closed.
+          }
+        }
+
+        writeFileSync(
+          join(directory, 'child-lock-descriptors'),
+          String(lockDescriptors),
+        );
 
         writeFileSync(
           join(directory, 'child-ready'),
@@ -342,7 +380,7 @@ function writePreload(
         ['-e', childSource, directory],
         {
           detached: true,
-          stdio: 'ignore',
+          stdio: 'inherit',
           env: childEnv,
         },
       );
@@ -420,12 +458,25 @@ function writePreload(
 }
 
 it.skipIf(process.platform !== 'linux').each([
-  'SIGTERM',
-  'SIGINT',
-  'SIGKILL',
+  {
+    signal: 'SIGTERM',
+    closedStdin: false,
+  },
+  {
+    signal: 'SIGINT',
+    closedStdin: false,
+  },
+  {
+    signal: 'SIGKILL',
+    closedStdin: false,
+  },
+  {
+    signal: 'SIGTERM',
+    closedStdin: true,
+  },
 ] as const)(
-  '%s releases ownership only when the relayer exits',
-  async (signal) => {
+  '$signal releases ownership only after exit; closed stdin: $closedStdin',
+  async ({ signal, closedStdin }) => {
     const directory = mkdtempSync(
       join(fixture, `${signal}-`),
     );
@@ -447,13 +498,24 @@ it.skipIf(process.platform !== 'linux').each([
     delete env.QUICKNET_ENV_FILE;
 
     const args = [
-      LAUNCHER,
+      launcher,
       'daemon',
       '--network',
       'robinhood-testnet',
     ];
 
-    const owner = spawn('sh', args, {
+    let launchArgs = args;
+
+    if (closedStdin) {
+      launchArgs = [
+        '-c',
+        'exec 0<&-; exec sh "$@"',
+        'launcher-closed-stdin',
+        ...args,
+      ];
+    }
+
+    const owner = spawn('sh', launchArgs, {
       cwd: APP,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -473,11 +535,17 @@ it.skipIf(process.platform !== 'linux').each([
       spawnError = error;
     });
 
+    let streamsClosed = false;
+
     const exited = new Promise<ExitResult>((resolve) => {
-      owner.once('close', (code, exitSignal) => {
+      owner.once('exit', (code, exitSignal) => {
         outcome = { code, signal: exitSignal };
         resolve(outcome);
       });
+    });
+
+    owner.once('close', () => {
+      streamsClosed = true;
     });
 
     function detail(): string {
@@ -509,7 +577,7 @@ it.skipIf(process.platform !== 'linux').each([
     }
 
     function expectContention(): void {
-      const contender = spawnSync('sh', args, {
+      const contender = spawnSync('sh', launchArgs, {
         cwd: APP,
         env,
         encoding: 'utf8',
@@ -524,6 +592,13 @@ it.skipIf(process.platform !== 'linux').each([
     try {
       await waitForMarker('cycle-entered');
       await waitForMarker('child-ready');
+
+      expect(
+        readFileSync(
+          join(directory, 'child-lock-descriptors'),
+          'utf8',
+        ),
+      ).toBe('0');
 
       const ownerPid = Number(
         readFileSync(join(directory, 'owner-pid'), 'utf8'),
@@ -662,6 +737,12 @@ it.skipIf(process.platform !== 'linux').each([
           return existsSync(join(directory, 'child-done'));
         },
         'detached child cleanup',
+      );
+
+      await waitUntil(
+        () => streamsClosed,
+        'inherited output streams to close',
+        detail,
       );
     }
   },
@@ -821,6 +902,14 @@ it.skipIf(
         () => markerExists('child-ready'),
         'container child readiness',
       );
+
+      expect(evaluate(`
+        const { readFileSync } = require('node:fs');
+
+        process.stdout.write(
+          readFileSync('/state/child-lock-descriptors', 'utf8'),
+        );
+      `)).toBe('0');
 
       const ownerPid = evaluate(`
         const { readFileSync } = require('node:fs');

@@ -72,6 +72,8 @@ export async function runDaemonCommand(
 ): Promise<void> {
   const env = options.env ?? process.env;
 
+  assertServiceLockHeld({ env });
+
   const loadedConfig = await loadDaemonConfig({
     source: options.source,
     env,
@@ -122,7 +124,7 @@ export async function runDaemonCommand(
     consumers: config.consumers,
   });
 
-  const checkpointStore = new FileCheckpointStore({
+  const checkpointStore = await FileCheckpointStore.open({
     filePath: config.checkpointFile,
     deployment: config.deployment,
   });

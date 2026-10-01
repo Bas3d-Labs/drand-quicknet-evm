@@ -39,6 +39,10 @@ import {
   renderCliOutput,
 } from '../../src/cli/cli-output.js';
 
+import {
+  compileRelayerFixture,
+} from '../helpers/compiled-relayer.js';
+
 const APP = fileURLToPath(
   new URL('../..', import.meta.url),
 );
@@ -94,18 +98,13 @@ describe.skipIf(process.platform !== 'linux')(
     let fixture: string;
 
     beforeAll(() => {
-      execFileSync(
-        'pnpm',
-        ['exec', 'tsc', '-p', 'tsconfig.json'],
-        {
-          cwd: APP,
-          stdio: 'pipe',
-          timeout: 30_000,
-        },
-      );
-
       fixture = mkdtempSync(
         join(APP, '.bootstrap-pipe-'),
+      );
+
+      const compiledApplication = compileRelayerFixture(
+        APP,
+        fixture,
       );
 
       const dist = join(fixture, 'dist');
@@ -128,7 +127,7 @@ describe.skipIf(process.platform !== 'linux')(
         });
 
         copyFileSync(
-          join(APP, 'dist', relativePath),
+          join(compiledApplication, 'dist', relativePath),
           destination,
         );
       }

@@ -433,8 +433,10 @@ be expected. `daemon --help` displays daemon-specific help.
 
 ### Shutdown and recovery
 
-The launcher replaces itself with flock, which replaces itself with
-Node using `--no-fork`. Node receives signals directly.
+The launcher opens the persistent lock file on a dedicated descriptor
+and uses util-linux flock to acquire exclusive ownership. It then
+replaces itself with Node, preserving the locked descriptor and direct
+signal delivery.
 
 For daemon execution, SIGINT and SIGTERM request shutdown. The daemon
 awaits its active cycle before exiting; repeated shutdown signals do

@@ -1,16 +1,11 @@
 import {
-  randomUUID,
-} from 'node:crypto';
-import {
-  mkdir,
   readFile,
-  rename,
-  rm,
-  writeFile,
 } from 'node:fs/promises';
+
 import {
-  dirname,
+  resolve,
 } from 'node:path';
+
 import {
   getAddress,
   type Address,
@@ -24,6 +19,14 @@ import type {
   CheckpointStore,
 } from './checkpoint.js';
 import { isDecimalInteger } from '../shared/decimal.js';
+
+import {
+  durableReplace,
+} from './durable-replace.js';
+
+import {
+  removeCheckpointTempFiles,
+} from './checkpoint-temp-files.js';
 
 const CHECKPOINT_FILE_VERSION = 1;
 
@@ -54,24 +57,45 @@ export class FileCheckpointStore
   private readonly chainId: number;
   private readonly registry: Address;
 
-  constructor(
+  private state: CheckpointState | undefined;
+  private operations: Promise<void> = Promise.resolve();
+
+  private constructor(
     options: FileCheckpointStoreOptions,
   ) {
     if (options.filePath.length === 0) {
       throw new Error('Checkpoint file path must not be empty.');
     }
 
-    this.filePath = options.filePath;
+    this.filePath = resolve(options.filePath);
     this.chainId = options.deployment.chainId;
     this.registry = getAddress(options.deployment.address);
   }
 
+  /**
+   * Opens and prepares a checkpoint store before returning it.
+   * 
+   * Requires exclusive service ownership and an existing, trusted state
+   * directory. Opening validates existing state, removes orphaned
+   * temporary files, and durably writes the initial snapshot.
+   */
+  static async open(
+    options: FileCheckpointStoreOptions,
+  ): Promise<FileCheckpointStore> {
+    const store = new FileCheckpointStore(options);
+
+    await store.initializeState();
+
+    return store;
+  }
+
   async load(consumer: Address): Promise<bigint | undefined> {
-    const state = await this.readState();
-    
-    return state.consumers.get(
-      getAddress(consumer)
-    );
+    const normalizedConsumer = getAddress(consumer);
+
+    return this.exclusive(async () => {
+      const state = await this.initializeState();
+      return state.consumers.get(normalizedConsumer);
+    });
   }
 
   async save(consumer: Address, nextBlock: bigint): Promise<void> {
@@ -80,21 +104,65 @@ export class FileCheckpointStore
     }
 
     const normalizedConsumer = getAddress(consumer);
-    const state = await this.readState();
 
-    const current = state.consumers.get(normalizedConsumer);
-    if (current !== undefined && nextBlock < current) {
-      throw new Error(
-        `Checkpoint for consumer ${normalizedConsumer} cannot move backwards from ${current} to ${nextBlock}.`
-      );
+    await this.exclusive(async () => {
+      const state = await this.initializeState();
+      const current = state.consumers.get(normalizedConsumer);
+
+      if (current !== undefined && nextBlock < current) {
+        throw new Error(
+        `Checkpoint for consumer ${normalizedConsumer} ` +
+        `cannot move backwards from ${current} to ${nextBlock}.`
+        )
+      }
+
+      // Do not mutate the last known durable snapshot.
+      const next: CheckpointState = {
+        consumers: new Map(state.consumers),
+      };
+
+      next.consumers.set(normalizedConsumer, nextBlock);
+
+      await this.writeState(next);
+
+      // Publish only after file and directory synchorization succeed.
+      this.state = next;
+    });
+  }
+
+  private async initializeState(): Promise<CheckpointState> {
+    if (this.state !== undefined) {
+      return this.state;
     }
 
-    state.consumers.set(
-      normalizedConsumer,
-      nextBlock,
+    const state = await this.readState();
+
+    await removeCheckpointTempFiles(this.filePath);
+
+    // A previous process may have exited after rename but before
+    // directory synchronization. Rewrite the validated snapshot through
+    // a fresh file before considering it durable in this process.
+    //
+    // If no checkpoint exists, this creates a durable empty snapshot.
+    await this.writeState(state);
+
+    this.state = state;
+
+    return state;
+  }
+
+  private exclusive<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const pending = this.operations.then(operation);
+
+    // A rejected operation must not prevent a later complete rewrite.
+    this.operations = pending.then(
+      () => undefined,
+      () => undefined,
     );
 
-    await this.writeState(state);
+    return pending;
   }
 
   private async readState(): Promise<CheckpointState> {
@@ -127,12 +195,15 @@ export class FileCheckpointStore
     return this.parseState(parsed);
   }
 
-  private async writeState(state: CheckpointState): Promise<void> {
+  private async writeState(
+    state: CheckpointState,
+  ): Promise<void> {
     const consumers: Record<string, SerializedConsumerCheckpoint> = {};
+
     for (const [consumer, nextBlock] of state.consumers) {
       consumers[consumer] = {
-        nextBlock: nextBlock.toString()
-      }
+        nextBlock: nextBlock.toString(),
+      };
     }
 
     const serialized: SerializedCheckpointState = {
@@ -143,34 +214,8 @@ export class FileCheckpointStore
     };
 
     const contents = `${JSON.stringify(serialized, null, 2)}\n`;
-    const directory = dirname(this.filePath);
-    const tempPath = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
 
-    try {
-      await mkdir(directory, { recursive: true });
-      await writeFile(
-        tempPath,
-        contents,
-        {
-          encoding: 'utf8',
-          mode: 0o600,
-          flag: 'wx',
-        }
-      );
-
-      await rename(tempPath, this.filePath);
-    } catch (cause) {
-      try {
-        await rm(tempPath, { force: true });
-      } catch {
-        // Preserve the original write failure.
-      }
-
-      throw new Error(
-        `Failed to write checkpoint file ${this.filePath}.`,
-        { cause }
-      );
-    }
+    await durableReplace(this.filePath, contents);
   }
 
   private parseState(value: unknown): CheckpointState {

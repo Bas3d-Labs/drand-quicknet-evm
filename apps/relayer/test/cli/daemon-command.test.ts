@@ -79,9 +79,9 @@ vi.mock('../../src/state/service-lock.js', async (importOriginal) => {
 });
 
 vi.mock('../../src/state/file-checkpoint-store.js', () => ({
-  FileCheckpointStore: vi.fn(function FileCheckpointStore() {
-    return checkpointStoreMocks;
-  }),
+  FileCheckpointStore: {
+    open: vi.fn(async () => checkpointStoreMocks),
+  },
 }));
 
 import {
@@ -298,8 +298,7 @@ describe('runDaemonCommand', () => {
       .mockReset()
       .mockReturnValue(VERIFIED_STATE_DIRECTORY);
 
-    // Preserve the constructor implementations while clearing their calls.
-    vi.mocked(FileCheckpointStore).mockClear();
+    vi.mocked(FileCheckpointStore.open).mockClear();
 
     checkpointStoreMocks.load
       .mockReset()
@@ -335,11 +334,16 @@ describe('runDaemonCommand', () => {
       env,
     });
 
-    expect(assertServiceLockHeld)
-      .toHaveBeenCalledExactlyOnceWith({
-        env,
-        checkpointFile: resolve(DAEMON_CONFIG.checkpointFile),
-      });
+    expect(assertServiceLockHeld).toHaveBeenCalledTimes(2);
+
+    expect(assertServiceLockHeld).toHaveBeenNthCalledWith(1, {
+      env,
+    });
+
+    expect(assertServiceLockHeld).toHaveBeenNthCalledWith(2, {
+      env,
+      checkpointFile: resolve(DAEMON_CONFIG.checkpointFile),
+    });
   });
 
   it('uses the process environment when none is provided', async () => {
@@ -350,11 +354,16 @@ describe('runDaemonCommand', () => {
       env: process.env,
     });
 
-    expect(assertServiceLockHeld)
-      .toHaveBeenCalledExactlyOnceWith({
-        env: process.env,
-        checkpointFile: resolve(DAEMON_CONFIG.checkpointFile),
-      });
+    expect(assertServiceLockHeld).toHaveBeenCalledTimes(2);
+
+    expect(assertServiceLockHeld).toHaveBeenNthCalledWith(1, {
+      env: process.env,
+    });
+
+    expect(assertServiceLockHeld).toHaveBeenNthCalledWith(2, {
+      env: process.env,
+      checkpointFile: resolve(DAEMON_CONFIG.checkpointFile),
+    });
   });
 
   it('creates the relayer logger with chain ID and default level', async () => {
@@ -457,10 +466,10 @@ describe('runDaemonCommand', () => {
     });
   });
 
-  it('creates a checkpoint store for the configured deployment', async () => {
+  it('opens a checkpoint store for the configured deployment', async () => {
     await runDaemonCommand({ source: SOURCE });
 
-    expect(FileCheckpointStore).toHaveBeenCalledExactlyOnceWith({
+    expect(FileCheckpointStore.open).toHaveBeenCalledExactlyOnceWith({
       filePath: VERIFIED_CHECKPOINT_FILE,
       deployment: DEPLOYMENT,
     });
@@ -535,14 +544,17 @@ describe('runDaemonCommand', () => {
       runDaemonCommand({ source: SOURCE }),
     ).rejects.toBe(failure);
 
+    expect(assertServiceLockHeld).toHaveBeenCalledExactlyOnceWith({
+      env: process.env,
+    });
+
     expectNotCalled(
       vi.mocked(createRelayerLog),
       vi.mocked(createDaemonLogger),
       vi.mocked(createRelayerClients),
       vi.mocked(verifyRegistryDeployment),
       vi.mocked(validateQuicknetConsumers),
-      vi.mocked(assertServiceLockHeld),
-      vi.mocked(FileCheckpointStore),
+      vi.mocked(FileCheckpointStore.open),
       vi.mocked(runDaemon),
     );
   });
@@ -563,7 +575,7 @@ describe('runDaemonCommand', () => {
       vi.mocked(createRelayerClients),
       vi.mocked(verifyRegistryDeployment),
       vi.mocked(validateQuicknetConsumers),
-      vi.mocked(FileCheckpointStore),
+      vi.mocked(FileCheckpointStore.open),
       vi.mocked(runDaemon),
     );
   });
@@ -578,7 +590,7 @@ describe('runDaemonCommand', () => {
 
     expectNotCalled(
       vi.mocked(validateQuicknetConsumers),
-      vi.mocked(FileCheckpointStore),
+      vi.mocked(FileCheckpointStore.open),
       vi.mocked(runDaemon),
     );
   });
@@ -592,7 +604,7 @@ describe('runDaemonCommand', () => {
     ).rejects.toBe(failure);
 
     expectNotCalled(
-      vi.mocked(FileCheckpointStore),
+      vi.mocked(FileCheckpointStore.open),
       vi.mocked(runDaemon),
     );
   });
@@ -623,18 +635,29 @@ describe('runDaemonCommand', () => {
     ).rejects.toBe(failure);
   });
 
-  it('verifies ownership before initializing logging and clients', async () => {
+  it('verifies ownership before configuration and placement before logging', async () => {
     await runDaemonCommand({ source: SOURCE });
 
-    expect(
+    const verification = vi.mocked(assertServiceLockHeld);
+
+    expect(verification).toHaveBeenCalledTimes(2);
+
+    const first = verification.mock.invocationCallOrder[0];
+    const second = verification.mock.invocationCallOrder[1];
+
+    if (first === undefined || second === undefined) {
+      throw new Error('Expected both service-lock checks.');
+    }
+
+    expect(first).toBeLessThan(
       firstInvocationOrder(vi.mocked(loadDaemonConfig)),
-    ).toBeLessThan(
-      firstInvocationOrder(vi.mocked(assertServiceLockHeld)),
     );
 
     expect(
-      firstInvocationOrder(vi.mocked(assertServiceLockHeld)),
-    ).toBeLessThan(
+      firstInvocationOrder(vi.mocked(loadDaemonConfig)),
+    ).toBeLessThan(second);
+
+    expect(second).toBeLessThan(
       firstInvocationOrder(vi.mocked(createRelayerLog)),
     );
 
@@ -658,23 +681,23 @@ describe('runDaemonCommand', () => {
       vi.mocked(validateQuicknetConsumers),
     ],
     [
-      'validates consumers before creating the store',
+      'validates consumers before opening the store',
       vi.mocked(validateQuicknetConsumers),
-      vi.mocked(FileCheckpointStore),
+      vi.mocked(FileCheckpointStore.open),
     ],
     [
-      'verifies ownership before creating the store',
+      'verifies ownership before opening the store',
       vi.mocked(assertServiceLockHeld),
-      vi.mocked(FileCheckpointStore),
+      vi.mocked(FileCheckpointStore.open),
     ],
     [
-      'creates the store before loading checkpoints',
-      vi.mocked(FileCheckpointStore),
+      'opens the store before loading checkpoints',
+      vi.mocked(FileCheckpointStore.open),
       checkpointStoreMocks.load,
     ],
     [
-      'creates the store before starting the daemon',
-      vi.mocked(FileCheckpointStore),
+      'opens the store before starting the daemon',
+      vi.mocked(FileCheckpointStore.open),
       vi.mocked(runDaemon),
     ],
   ] as const)('%s', async (_name, earlier, later) => {
@@ -708,13 +731,11 @@ describe('runDaemonCommand', () => {
         }),
       ).rejects.toBe(failure);
 
-      expect(loadDaemonConfig).toHaveBeenCalledOnce();
+      expect(loadDaemonConfig).not.toHaveBeenCalled();
 
-      expect(assertServiceLockHeld)
-        .toHaveBeenCalledExactlyOnceWith({
-          env: process.env,
-          checkpointFile: resolve(DAEMON_CONFIG.checkpointFile),
-        });
+      expect(assertServiceLockHeld).toHaveBeenCalledExactlyOnceWith({
+        env: process.env,
+      });
 
       expectNotCalled(
         vi.mocked(createRelayerLog),
@@ -722,7 +743,7 @@ describe('runDaemonCommand', () => {
         vi.mocked(createRelayerClients),
         vi.mocked(verifyRegistryDeployment),
         vi.mocked(validateQuicknetConsumers),
-        vi.mocked(FileCheckpointStore),
+        vi.mocked(FileCheckpointStore.open),
         checkpointStoreMocks.load,
         checkpointStoreMocks.save,
         vi.mocked(collectDaemonStartupSummary),
@@ -730,7 +751,52 @@ describe('runDaemonCommand', () => {
         vi.mocked(runDaemon),
       );
   });
-  
+
+  it('stops initialization when checkpoint placement verification fails', async () => {
+    const failure = new ServiceLockNotHeldError('state-directory');
+
+    vi.mocked(assertServiceLockHeld)
+      .mockReturnValueOnce(VERIFIED_STATE_DIRECTORY)
+      .mockImplementationOnce(() => {
+        throw failure;
+      });
+
+    const onStartup = vi.fn();
+
+    await expect(
+      runDaemonCommand({
+        source: SOURCE,
+        onStartup,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(loadDaemonConfig).toHaveBeenCalledOnce();
+
+    expect(assertServiceLockHeld).toHaveBeenCalledTimes(2);
+
+    expect(assertServiceLockHeld).toHaveBeenNthCalledWith(1, {
+      env: process.env,
+    });
+
+    expect(assertServiceLockHeld).toHaveBeenNthCalledWith(2, {
+      env: process.env,
+      checkpointFile: resolve(DAEMON_CONFIG.checkpointFile),
+    });
+
+    expectNotCalled(
+      vi.mocked(createRelayerLog),
+      vi.mocked(createDaemonLogger),
+      vi.mocked(createRelayerClients),
+      vi.mocked(verifyRegistryDeployment),
+      vi.mocked(validateQuicknetConsumers),
+      vi.mocked(FileCheckpointStore.open),
+      checkpointStoreMocks.load,
+      checkpointStoreMocks.save,
+      vi.mocked(collectDaemonStartupSummary),
+      onStartup,
+      vi.mocked(runDaemon),
+    );
+  });
 
   it('passes daemon cycle results to the daemon logger', async () => {
     const cycle = { consumers: [] };
@@ -942,5 +1008,29 @@ describe('runDaemonCommand', () => {
     ).rejects.toThrow('invalid daemon configuration');
 
     expect(onDiagnostics).not.toHaveBeenCalled();
+  });
+
+  it('stops startup when opening the checkpoint store fails', async () => {
+    const failure = new Error('Checkpoint store opening failed.');
+
+    vi.mocked(FileCheckpointStore.open)
+      .mockRejectedValueOnce(failure);
+
+    const onStartup = vi.fn();
+
+    await expect(
+      runDaemonCommand({
+        source: SOURCE,
+        onStartup,
+      }),
+    ).rejects.toBe(failure);
+
+    expectNotCalled(
+      checkpointStoreMocks.load,
+      checkpointStoreMocks.save,
+      vi.mocked(collectDaemonStartupSummary),
+      onStartup,
+      vi.mocked(runDaemon),
+    );
   });
 });

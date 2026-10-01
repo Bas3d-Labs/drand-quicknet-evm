@@ -76,13 +76,19 @@ else
   set -- "$app_dir/dist/bootstrap.js" "$@"
 fi
 
-# Both exec operations preserve direct signal delivery to Node.
-# Exit 75 means contention. It can occur without a diagnostic message.
+# Reserve a descriptor outside stdin, stdout, and stderr.
+# Append mode creates a missing file without truncating an existing one.
 # Never unlink the persistent lock file while writers may be running.
-exec flock \
+exec 9>>"$state_dir/relayer.flock"
+
+# flock locks the shared open file description and then exits.
+# The shell retains ownership through fd 9.
+# Preserve exit 75 for contention and other acquisition error statuses.
+flock \
   --exclusive \
   --nonblock \
-  --no-fork \
   --conflict-exit-code 75 \
-  "$state_dir/relayer.flock" \
-  node "$@"
+  9 || exit $?
+
+# Replace the shell so Node receives signals directly and inherits fd 9
+exec node "$@"
