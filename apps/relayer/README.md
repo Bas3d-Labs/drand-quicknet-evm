@@ -22,6 +22,7 @@ It never substitutes another round.
 - [Trust boundary](#trust-boundary)
 - [Commands](#commands)
 - [Configuration](#configuration)
+- [Service ownership](#service-ownership)
 - [Network sources](#network-sources)
 - [Exact-round processing](#exact-round-processing)
 - [Signature handling](#signature-handling)
@@ -131,8 +132,20 @@ described below.
 
 ## Configuration
 
-The relayer loads the repository root `.env` through Node when started through
-the package script.
+The package `start` script requires the repository root `.env` and loads
+it through Node. A missing file stops startup.
+
+The `start:container` script uses the existing environment without
+automatically loading a file. It can also be used outside containers.
+
+The launcher reads `QUICKNET_STATE_DIR` before Node loads application
+configuration. Set it in the launching environment, service definition,
+or container environment. Setting it only in the application's `.env`
+does not select the directory that the launcher locks.
+
+Existing environment variables take precedence over the application
+env file. The launcher exports the canonical state-directory path so
+application configuration cannot select a different directory afterward.
 
 The custom-network examples require these environment variables:
 
@@ -161,7 +174,7 @@ signing configuration. They have no defaults.
 ```dotenv
 QUICKNET_CONSUMERS=0xConsumerA,0xConsumerB
 QUICKNET_START_BLOCK=123456
-QUICKNET_CHECKPOINT_FILE=.state/quicknet-relayer.json
+QUICKNET_CHECKPOINT_FILE=./state/checkpoint.json
 ```
 
 Replace the example consumer placeholders with actual contract addresses.
@@ -208,26 +221,32 @@ Each saved position identifies the next block to reconcile. The file
 also records the chain ID and registry address; mismatches with the
 configured deployment are rejected.
 
-If the file does not exist, consumers begin without saved checkpoints.
-The file and missing parent directories are created when progress is
-first saved. The daemon requires filesystem permissions to create its
-lock and update checkpoint state.
+The checkpoint must be a direct child of the canonical
+`QUICKNET_STATE_DIR`. Nested directories and paths outside that directory
+are rejected. The filename `relayer.flock` is reserved.
+
+An existing checkpoint must be a regular file with one hard link.
+Checkpoint symlinks and hard-link aliases are rejected. The state
+directory itself may be configured through a symlink; the relayer
+resolves its canonical location.
+
+A new checkpoint need not exist yet. Consumers without saved progress
+start from `QUICKNET_START_BLOCK`.
 
 Relative paths resolve from the relayer process's working directory.
-When using the workspace package's `start` script, that directory is
-`apps/relayer`, so `.state/quicknet-relayer.json` is stored beneath
-`apps/relayer/.state/`.
+For workspace package scripts, that directory is `apps/relayer`.
+The default state directory is therefore `apps/relayer/state`.
 
-Use an absolute path when you need an explicit storage location.
-For containers, place the checkpoint file on persistent storage.
+Use absolute paths for an explicit storage location. For example,
+launch with `QUICKNET_STATE_DIR=/srv/quicknet/robinhood-mainnet` and
+configure:
 
-Preserve this file across normal restarts and deployments. Use a
-dedicated checkpoint file for each independent daemon deployment, with
-only one process owning a checkpoint lineage at a time.
+    QUICKNET_CHECKPOINT_FILE=/srv/quicknet/robinhood-mainnet/checkpoint.json
 
-The checkpoint tracks request-scanning progress. It does not store
-pending transactions or provide transaction recovery after an uncertain
-broadcast.
+Preserve the checkpoint across normal restarts and deployments.
+
+The checkpoint records request-scanning progress. It does not record
+pending transactions or provide recovery after an uncertain broadcast.
 
 ### Optional daemon settings
 
@@ -265,13 +284,12 @@ Accepts a positive decimal integer.
 
 Default: `1000` milliseconds.
 
-The delay after each completed daemon cycle, including cycles that
-scan blocks or report consumer failures. The first cycle starts
-immediately.
+Delay after each completed daemon cycle before starting the next one.
+Shutdown interrupts this delay.
 
-The delay begins after cycle processing and reporting finish. The
-time between cycle starts therefore includes both the cycle's
-execution time and this delay.
+This is not a fixed cycle duration or an end-to-end import latency
+guarantee. Scanning, beacon retrieval, and transaction confirmation
+take additional time.
 
 A shorter interval improves responsiveness and catch-up throughput
 but increases RPC traffic. A longer interval reduces cycle frequency
@@ -331,6 +349,135 @@ of the latest head invalidates the cache.
 
 Confirmation-based finality continues using the existing uncached
 head-reading path.
+
+## Service ownership
+
+Protected commands require Linux and util-linux `flock`:
+
+- `import`
+- `import-when-available`
+- `daemon`
+
+Use the package scripts or installed `relayer` executable. They enter
+through `scripts/relayer.sh`, which acquires an exclusive, nonblocking
+lock on:
+
+    QUICKNET_STATE_DIR/relayer.flock
+
+The default state directory is `./state` when `QUICKNET_STATE_DIR` is
+unset. An explicitly empty value is invalid.
+
+The launcher creates a missing directory and canonicalizes its path.
+Check configured paths carefully: a typo can create a new state
+directory with no existing checkpoint.
+
+The launcher uses `umask 077`. Newly created state directories and lock
+files normally have permissions `0700` and `0600`. Existing permissions
+are not repaired automatically.
+
+The application verifies the inherited descriptor against the lock
+file's device and inode and checks for an exclusive whole-file flock.
+An existing lock file, or a lock owned by another process, is not enough.
+
+Direct execution of `dist/bootstrap.js` does not acquire ownership.
+Protected commands refuse execution unless the required lock is
+already inherited.
+
+### Scope
+
+All commands using the same signer on the same chain must use the same
+state directory and underlying lock file. Stop the daemon before running
+a manual import with that signer; otherwise the manual command exits
+with contention.
+
+This is a filesystem service lock, not a global signer registry.
+Different state directories, independent container volumes, or separate
+hosts can bypass coordination even when they use the same textual path.
+
+Do not run the same signer through another wallet, keeper, or relayer
+outside this coordination boundary.
+
+Independent relayers should use separate signing accounts and state
+directories.
+
+### Filesystem requirements
+
+Use persistent local storage with working flock semantics and trusted,
+stable parent directories.
+
+The verifier rejects a world-writable immediate state directory.
+The lock file must be a regular file with one hard link; symlinks and
+hard-linked lock files are rejected.
+
+These checks do not validate every ancestor's ownership, permissions,
+ACLs, or filesystem behavior. Restrict access to the state directory
+and its ancestors to trusted operators.
+
+Never remove, replace, or rotate `relayer.flock` while a writer may be
+running. Replacing the path can let separate processes lock different
+inodes and run concurrently.
+
+The lock file remains present after shutdown. Its presence does not
+mean that ownership is still held.
+
+### Help
+
+No arguments, a leading `help`, or `-h`/`--help` anywhere in the
+arguments takes the help path without loading the application env file
+or acquiring the service lock.
+
+A leading `--` argument separator is accepted.
+
+Help flags take precedence even where an option value would otherwise
+be expected. `daemon --help` displays daemon-specific help.
+
+### Shutdown and recovery
+
+The launcher replaces itself with flock, which replaces itself with
+Node using `--no-fork`. Node receives signals directly.
+
+For daemon execution, SIGINT and SIGTERM request shutdown. The daemon
+awaits its active cycle before exiting; repeated shutdown signals do
+not bypass that wait. Give the service enough shutdown time for its
+configured network and transaction waits.
+
+Ownership remains held until process exit. SIGKILL also releases
+ownership after the process exits, but bypasses application cleanup.
+
+Normally spawned children do not retain the lock. Application code must
+not explicitly forward the inherited lock descriptor through child
+stdio or close it while protected work remains active.
+
+Lock recovery is not transaction recovery. After a crash, forced stop,
+or uncertain submission, inspect pending transactions, signer nonce
+state, receipts, and registry state before retrying. A released lock
+does not prove that the previous process's transaction was rejected.
+
+### Exit status and diagnostics
+
+These statuses describe the underlying launcher or Node process.
+Package managers and supervisors may additionally report wrapper errors.
+
+| Status | Meaning |
+| --- | --- |
+| `0` | Successful command completion or graceful daemon shutdown. |
+| `1` | Application failure or an explicit launcher validation failure. |
+| `2` | CLI output failure; the operation may already have succeeded. |
+| `9` | Node startup failure observed when a configured env file is missing. |
+| `75` | Another process holds the service lock; this may have no diagnostic output. |
+
+Other startup failures can retain the exit status of the failing tool.
+Do not interpret every nonzero status as contention.
+
+Application verification failures use `SERVICE_LOCK_NOT_HELD` with a
+fixed diagnostic reason:
+
+| Reason | Check that failed |
+| --- | --- |
+| `platform` | Protected execution requires Linux. |
+| `state-directory` | State-directory validation or checkpoint placement. |
+| `lock-file` | Lock-file lookup, type, or link-count validation. |
+| `descriptor` | No matching inherited exclusive flock was verified. |
 
 ## Network sources
 
@@ -601,13 +748,15 @@ condition before its target beacon becomes knowable.
 
 ## Checkpoints
 
-Use a dedicated checkpoint file for each daemon deployment.
+Use a dedicated checkpoint file and state directory for each independent
+daemon deployment.
 
-Only one daemon process should own a checkpoint lineage at a time. The daemon
-uses a checkpoint lock to prevent concurrent processes from accidentally
-sharing the same local lineage.
+The launcher holds service ownership for the process lifetime. The
+daemon verifies that ownership before creating or loading checkpoint
+state. There is no separate application-managed checkpoint lock to
+acquire or release.
 
-Checkpoint state should be preserved across normal restarts and deployments.
+Preserve checkpoint state across normal restarts and deployments.
 
 The important invariants are:
 
@@ -682,10 +831,11 @@ Logging failures are isolated so logging itself does not stop the daemon.
 
 ### Error diagnostics
 
-After configuration loads successfully, the CLI and daemon use a
-credential-aware scrubber for error diagnostics. There is no diagnostic
-mode setting. `QUICKNET_LOG_LEVEL` controls daemon event verbosity
-independently.
+Once configuration loading installs the credential-aware diagnostic
+policy, the CLI and daemon use it for subsequent error diagnostics,
+including failures during remaining configuration validation.
+
+`QUICKNET_LOG_LEVEL` controls daemon event verbosity independently.
 
 Each error summary preserves its name, supported code and HTTP status,
 and a scrubbed explanation. Explanation selection prefers `details`,
@@ -704,9 +854,10 @@ headers, request bodies, ABI objects, and other undeclared properties
 are not copied into the summary. Selected explanation text is scrubbed
 before output.
 
-Before configuration succeeds, registered usage and configuration
-errors use fixed catalog messages. Other failures use fixed fallback
-descriptions because the configured secret set is not yet available.
+Registered usage, configuration, and service-lock errors use fixed
+messages. Other failures use fixed fallback descriptions until the
+credential-aware diagnostic policy is installed.
+
 If scrubbing a field throws, that field becomes
 `[diagnostic text unavailable]`.
 
@@ -839,9 +990,10 @@ without overwriting it or emitting another `BeaconStored` event.
 
 Duplicate transactions may still consume gas.
 
-Processes sharing a signing account must coordinate transaction nonces.
-Checkpoint ownership and signer ownership are separate concerns: separate
-checkpoint files do not prevent signer conflicts.
+Processes sharing a signing account on the same chain must share the
+service-ownership boundary described above. Separate checkpoint files
+or separate state directories do not prevent signer nonce conflicts.
+The service lock does not reconcile transactions after a restart.
 
 ## Docker
 
@@ -856,8 +1008,27 @@ docker build \
 Supply operator configuration through environment variables or your deployment
 platform's secret-management mechanism. Do not bake private keys into images.
 
-The process handles `SIGINT` and `SIGTERM` through an abort signal so normal
-container shutdown can stop the daemon cleanly.
+The image runs as the `node` user and defaults to:
+
+    QUICKNET_STATE_DIR=/state
+    QUICKNET_CHECKPOINT_FILE=/state/checkpoint.json
+
+Mount persistent storage at `/state`. Containers intended to coordinate
+must mount the same underlying storage there; separate volumes provide
+separate locks.
+
+Bind-mounted directories retain their host ownership and permissions.
+The image's `/state` permissions do not repair a mounted directory.
+Ensure the service user can create the lock and update checkpoints.
+A world-writable state directory is refused.
+
+The entrypoint uses the service launcher. Without `--init`, Node becomes
+PID 1. The daemon installs SIGINT/SIGTERM handlers and waits for active
+work before exiting. Configure the container stop timeout accordingly;
+expiry can force termination before work completes.
+
+Running with `--init` is also supported. Never delete the lock file to
+force a second container to start.
 
 ## Testing
 
@@ -903,7 +1074,9 @@ Coverage includes:
 - demand-driven scanning
 - soft/durable reconciliation
 - finality policies
-- checkpoint locking and persistence
+- inherited service-lock verification and checkpoint persistence
+- ownership through graceful shutdown and forced process termination
+- ordinary child processes not retaining service ownership
 - restart/replay behavior
 - consumer failure isolation
 - durable-head regression handling
