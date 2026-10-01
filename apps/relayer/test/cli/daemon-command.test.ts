@@ -335,11 +335,16 @@ describe('runDaemonCommand', () => {
       env,
     });
 
-    expect(assertServiceLockHeld)
-      .toHaveBeenCalledExactlyOnceWith({
-        env,
-        checkpointFile: resolve(DAEMON_CONFIG.checkpointFile),
-      });
+    expect(assertServiceLockHeld).toHaveBeenCalledTimes(2);
+
+    expect(assertServiceLockHeld).toHaveBeenNthCalledWith(1, {
+      env,
+    });
+
+    expect(assertServiceLockHeld).toHaveBeenNthCalledWith(2, {
+      env,
+      checkpointFile: resolve(DAEMON_CONFIG.checkpointFile),
+    });
   });
 
   it('uses the process environment when none is provided', async () => {
@@ -350,11 +355,16 @@ describe('runDaemonCommand', () => {
       env: process.env,
     });
 
-    expect(assertServiceLockHeld)
-      .toHaveBeenCalledExactlyOnceWith({
-        env: process.env,
-        checkpointFile: resolve(DAEMON_CONFIG.checkpointFile),
-      });
+    expect(assertServiceLockHeld).toHaveBeenCalledTimes(2);
+
+    expect(assertServiceLockHeld).toHaveBeenNthCalledWith(1, {
+      env: process.env,
+    });
+
+    expect(assertServiceLockHeld).toHaveBeenNthCalledWith(2, {
+      env: process.env,
+      checkpointFile: resolve(DAEMON_CONFIG.checkpointFile),
+    });
   });
 
   it('creates the relayer logger with chain ID and default level', async () => {
@@ -535,13 +545,16 @@ describe('runDaemonCommand', () => {
       runDaemonCommand({ source: SOURCE }),
     ).rejects.toBe(failure);
 
+    expect(assertServiceLockHeld).toHaveBeenCalledExactlyOnceWith({
+      env: process.env,
+    });
+
     expectNotCalled(
       vi.mocked(createRelayerLog),
       vi.mocked(createDaemonLogger),
       vi.mocked(createRelayerClients),
       vi.mocked(verifyRegistryDeployment),
       vi.mocked(validateQuicknetConsumers),
-      vi.mocked(assertServiceLockHeld),
       vi.mocked(FileCheckpointStore),
       vi.mocked(runDaemon),
     );
@@ -623,18 +636,29 @@ describe('runDaemonCommand', () => {
     ).rejects.toBe(failure);
   });
 
-  it('verifies ownership before initializing logging and clients', async () => {
+  it('verifies ownership before configuration and placement before logging', async () => {
     await runDaemonCommand({ source: SOURCE });
 
-    expect(
+    const verification = vi.mocked(assertServiceLockHeld);
+
+    expect(verification).toHaveBeenCalledTimes(2);
+
+    const first = verification.mock.invocationCallOrder[0];
+    const second = verification.mock.invocationCallOrder[1];
+
+    if (first === undefined || second === undefined) {
+      throw new Error('Expected both service-lock checks.');
+    }
+
+    expect(first).toBeLessThan(
       firstInvocationOrder(vi.mocked(loadDaemonConfig)),
-    ).toBeLessThan(
-      firstInvocationOrder(vi.mocked(assertServiceLockHeld)),
     );
 
     expect(
-      firstInvocationOrder(vi.mocked(assertServiceLockHeld)),
-    ).toBeLessThan(
+      firstInvocationOrder(vi.mocked(loadDaemonConfig)),
+    ).toBeLessThan(second);
+
+    expect(second).toBeLessThan(
       firstInvocationOrder(vi.mocked(createRelayerLog)),
     );
 
@@ -708,13 +732,11 @@ describe('runDaemonCommand', () => {
         }),
       ).rejects.toBe(failure);
 
-      expect(loadDaemonConfig).toHaveBeenCalledOnce();
+      expect(loadDaemonConfig).not.toHaveBeenCalled();
 
-      expect(assertServiceLockHeld)
-        .toHaveBeenCalledExactlyOnceWith({
-          env: process.env,
-          checkpointFile: resolve(DAEMON_CONFIG.checkpointFile),
-        });
+      expect(assertServiceLockHeld).toHaveBeenCalledExactlyOnceWith({
+        env: process.env,
+      });
 
       expectNotCalled(
         vi.mocked(createRelayerLog),
@@ -730,7 +752,52 @@ describe('runDaemonCommand', () => {
         vi.mocked(runDaemon),
       );
   });
-  
+
+  it('stops initialization when checkpoint placement verification fails', async () => {
+    const failure = new ServiceLockNotHeldError('state-directory');
+
+    vi.mocked(assertServiceLockHeld)
+      .mockReturnValueOnce(VERIFIED_STATE_DIRECTORY)
+      .mockImplementationOnce(() => {
+        throw failure;
+      });
+
+    const onStartup = vi.fn();
+
+    await expect(
+      runDaemonCommand({
+        source: SOURCE,
+        onStartup,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(loadDaemonConfig).toHaveBeenCalledOnce();
+
+    expect(assertServiceLockHeld).toHaveBeenCalledTimes(2);
+
+    expect(assertServiceLockHeld).toHaveBeenNthCalledWith(1, {
+      env: process.env,
+    });
+
+    expect(assertServiceLockHeld).toHaveBeenNthCalledWith(2, {
+      env: process.env,
+      checkpointFile: resolve(DAEMON_CONFIG.checkpointFile),
+    });
+
+    expectNotCalled(
+      vi.mocked(createRelayerLog),
+      vi.mocked(createDaemonLogger),
+      vi.mocked(createRelayerClients),
+      vi.mocked(verifyRegistryDeployment),
+      vi.mocked(validateQuicknetConsumers),
+      vi.mocked(FileCheckpointStore),
+      checkpointStoreMocks.load,
+      checkpointStoreMocks.save,
+      vi.mocked(collectDaemonStartupSummary),
+      onStartup,
+      vi.mocked(runDaemon),
+    );
+  });
 
   it('passes daemon cycle results to the daemon logger', async () => {
     const cycle = { consumers: [] };

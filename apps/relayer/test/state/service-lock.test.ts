@@ -320,6 +320,36 @@ try {
       });
     });
 
+    it('verifies an exclusive lock inherited on fd 0', async () => {
+      const stateDirectory = await createStateDirectory();
+
+      const result = await execFileAsync(
+        'sh',
+        [
+          '-c',
+          [
+            'set -eu',
+            'exec 0<>"$1"',
+            'flock --exclusive --nonblock --conflict-exit-code 75 0 || exit $?',
+            'exec "$2" "$3" probe "$4"',
+          ].join('\n'),
+          'service-lock-fd-zero',
+          join(stateDirectory, 'relayer.flock'),
+          process.execPath,
+          runnerFile,
+          stateDirectory,
+        ],
+        {
+          timeout: 5_000,
+        },
+      );
+
+      expect(JSON.parse(result.stdout)).toEqual({
+        status: 'held',
+        stateDirectory: await realpath(stateDirectory),
+      });
+    });
+
     it('does not confuse another process ownership with an open descriptor', async () => {
       const stateDirectory = await createStateDirectory();
 

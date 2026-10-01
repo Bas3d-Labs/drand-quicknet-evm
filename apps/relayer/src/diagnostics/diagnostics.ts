@@ -65,8 +65,7 @@ export function renderDiagnostic(
         reason,
         message:
           'The required service lock could not be verified. ' +
-          'Use the relayer launcher with util-linux flock ' +
-          '--exclusive --nonblock --no-fork on Linux. ' +
+          'Use the relayer launcher with util-linux flock on Linux. ' +
           'For daemon mode, the checkpoint must be a direct ' +
           'child of the configured state directory.',
       });

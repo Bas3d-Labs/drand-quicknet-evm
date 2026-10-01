@@ -123,7 +123,7 @@ export function assertServiceLockHeld(
       }
 
       const fd = Number(name);
-      if (!Number.isSafeInteger(fd) || fd < 3) {
+      if (!Number.isSafeInteger(fd) || fd < 0) {
         continue;
       }
 
@@ -137,6 +137,9 @@ export function assertServiceLockHeld(
           continue;
         }
 
+        // Open mode is not ownership evidence. The launcher uses a
+        // write-only append descriptor. Identity and exclusive flock
+        // metadata establish ownership.
         const info = readFileSync(
           `/proc/self/fdinfo/${fd}`,
           'utf8',

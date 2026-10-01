@@ -72,6 +72,8 @@ export async function runDaemonCommand(
 ): Promise<void> {
   const env = options.env ?? process.env;
 
+  assertServiceLockHeld({ env });
+
   const loadedConfig = await loadDaemonConfig({
     source: options.source,
     env,
