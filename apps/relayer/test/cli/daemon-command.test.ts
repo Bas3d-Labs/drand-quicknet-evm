@@ -13,6 +13,7 @@ import type {
 } from '../../src/diagnostics/relayer-log.js';
 
 const checkpointStoreMocks = vi.hoisted(() => ({
+  initialize: vi.fn(),
   load: vi.fn(),
   save: vi.fn(),
 }));
@@ -300,6 +301,10 @@ describe('runDaemonCommand', () => {
 
     // Preserve the constructor implementations while clearing their calls.
     vi.mocked(FileCheckpointStore).mockClear();
+
+    checkpointStoreMocks.initialize
+      .mockReset()
+      .mockResolvedValue(undefined);
 
     checkpointStoreMocks.load
       .mockReset()

@@ -255,24 +255,23 @@ describe('FileCheckpointStore', () => {
     });
   });
 
-  it('creates missing parent directories when saving', async () => {
+  it('refuses to create missing parent directories when saving', async () => {
     filePath = join(
       directory,
       'nested',
       'state',
-      'checkpoint.json'
+      'checkpoint.json',
     );
 
     const store = createStore();
-    await store.save(CONSUMER_A, 100n);
 
-    const contents = await readFile(filePath, 'utf8');
+    await expect(
+      store.save(CONSUMER_A, 100n),
+    ).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
 
-    expect(
-      contents.length
-    ).toBeGreaterThan(
-      0
-    );
+    expect(await readdir(directory)).toEqual([]);
   });
 
   it('does not leave temporary checkpoint files after a successful save', async () => {

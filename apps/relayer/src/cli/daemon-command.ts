@@ -128,6 +128,8 @@ export async function runDaemonCommand(
     filePath: config.checkpointFile,
     deployment: config.deployment,
   });
+
+  await checkpointStore.initialize();
   
   const durableNextBlocks = new Map<Address, bigint>();
   for (const consumer of validatedConsumers) {
