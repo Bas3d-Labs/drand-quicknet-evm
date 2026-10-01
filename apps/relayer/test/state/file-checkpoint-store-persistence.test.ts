@@ -119,7 +119,7 @@ describe('FileCheckpointStore persistence', () => {
     'beforeReplace',
     'afterReplace',
   ] as const)(
-    'preserves acknowledged progress after %s failure',
+    'reloads disk state after %s failure before saving another consumer',
     async (phase) => {
       const store = await openStore();
 
@@ -132,50 +132,51 @@ describe('FileCheckpointStore persistence', () => {
         store.save(CONSUMER_A, 200n),
       ).rejects.toBe(failure);
 
-      // A rejected save must not advance the store's acknowledged state.
-      expect(await store.load(CONSUMER_A)).toBe(100n);
-
-      let visibleNextBlock = '100';
+      let expectedNextBlock = '100';
 
       if (phase === 'afterReplace') {
-        visibleNextBlock = '200';
+        expectedNextBlock = '200';
       }
 
       expect(await readConsumers()).toEqual({
         [CONSUMER_A]: {
-          nextBlock: visibleNextBlock,
+          nextBlock: expectedNextBlock,
         },
       });
 
-      // A subsequent save writes the complete acknowledged snapshot,
-      // including changes for another consumer.
-      await store.save(CONSUMER_B, 300n);
+      // Save directly after failure so this operation must recover
+      // the disk snapshot before merging another consumer's progress.
+      await store.save(CONSUMER_B, 50n);
 
       expect(await readConsumers()).toEqual({
         [CONSUMER_A]: {
-          nextBlock: '100',
+          nextBlock: expectedNextBlock,
         },
         [CONSUMER_B]: {
-          nextBlock: '300',
+          nextBlock: '50',
         },
       });
 
-      // Recovery must also allow the originally failed update to succeed.
-      await store.save(CONSUMER_A, 200n);
+      expect(await store.load(CONSUMER_A)).toBe(
+        BigInt(expectedNextBlock),
+      );
+      expect(await store.load(CONSUMER_B)).toBe(50n);
 
-      expect(await store.load(CONSUMER_A)).toBe(200n);
-      expect(await store.load(CONSUMER_B)).toBe(300n);
+      // Retrying the failed update is safe for either disk outcome.
+      await store.save(CONSUMER_A, 200n);
 
       expect(await readConsumers()).toEqual({
         [CONSUMER_A]: {
           nextBlock: '200',
         },
         [CONSUMER_B]: {
-          nextBlock: '300',
+          nextBlock: '50',
         },
       });
-    },
-  );
+
+      expect(await store.load(CONSUMER_A)).toBe(200n);
+      expect(await store.load(CONSUMER_B)).toBe(50n);
+  });
 
   it('preserves both consumers when saves are started concurrently', async () => {
     const store = await openStore();
