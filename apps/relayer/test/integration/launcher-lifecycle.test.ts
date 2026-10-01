@@ -43,6 +43,7 @@ const APP = fileURLToPath(
 
 const LAUNCHER = join(APP, 'scripts', 'relayer.sh');
 const WAIT_TIMEOUT_MS = 5_000;
+const CONTAINER_IMAGE = process.env.QUICKNET_TEST_CONTAINER_IMAGE;
 
 let fixture: string;
 
@@ -94,9 +95,12 @@ afterAll(() => {
   }
 });
 
-function compiledModuleUrl(relativePath: string): string {
+function compiledModuleUrl(
+  relativePath: string,
+  applicationDirectory: string = APP,
+): string {
   return pathToFileURL(
-    join(APP, 'dist', relativePath),
+    join(applicationDirectory, 'dist', relativePath),
   ).href;
 }
 
@@ -121,6 +125,8 @@ async function waitUntil(
 function writePreload(
   directory: string,
   signal: NodeJS.Signals,
+  runtimeDirectory: string = directory,
+  applicationDirectory: string = APP,
 ): string {
   const preload = join(directory, 'preload.mjs');
 
@@ -128,7 +134,7 @@ function writePreload(
 
   function replace(relativePath: string, source: string): void {
     replacements.set(
-      compiledModuleUrl(relativePath),
+      compiledModuleUrl(relativePath, applicationDirectory),
       source,
     );
   }
@@ -262,10 +268,13 @@ function writePreload(
     import {
       assertServiceLockHeld,
     } from ${JSON.stringify(
-      compiledModuleUrl('state/service-lock.js'),
+      compiledModuleUrl(
+        'state/service-lock.js',
+        applicationDirectory,
+      ),
     )};
 
-    const directory = ${JSON.stringify(directory)};
+    const directory = ${JSON.stringify(runtimeDirectory)};
     const shutdownSignal = ${JSON.stringify(signal)};
 
     let calls = 0;
@@ -657,4 +666,305 @@ it.skipIf(process.platform !== 'linux').each([
     }
   },
   20_000,
+);
+
+it.skipIf(
+  process.platform !== 'linux' ||
+  CONTAINER_IMAGE === undefined,
+)(
+  'container PID 1 holds ownership until graceful shutdown completes',
+  async () => {
+    if (CONTAINER_IMAGE === undefined) {
+      throw new Error('Container image was not configured.');
+    }
+
+    const directory = mkdtempSync(
+      join(fixture, 'container-'),
+    );
+
+    const preload = writePreload(
+      directory,
+      'SIGTERM',
+      '/state',
+      '/home/node/app',
+    );
+
+    const suffix = directory.slice(directory.lastIndexOf('/') + 1);
+    const containerName = `quicknet-lifecycle-${suffix}`;
+    const volumeName = `${containerName}-state`;
+
+    let volumeCreated = false;
+    let containerCreated = false;
+
+    function docker(args: string[]): string {
+      return execFileSync('docker', args, {
+        encoding: 'utf8',
+        timeout: 15_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim();
+    }
+
+    function evaluate(source: string): string {
+      return docker([
+        'exec',
+        // Auxiliary probes must not inherit the application's preload.
+        '--env',
+        'NODE_OPTIONS=',
+        containerName,
+        'node',
+        '-e',
+        source,
+      ]);
+    }
+
+    function markerExists(name: string): boolean {
+      return evaluate(`
+        const { existsSync } = require('node:fs');
+
+        process.stdout.write(String(
+          existsSync(${JSON.stringify('/state/' + name)}),
+        ));
+      `) === 'true';
+    }
+
+    function touch(name: string): void {
+      evaluate(`
+        const { writeFileSync } = require('node:fs');
+
+        writeFileSync(
+          ${JSON.stringify('/state/' + name)},
+          '',
+        );
+      `);
+    }
+
+    function containerState(): {
+      Running: boolean;
+      ExitCode: number;
+      OOMKilled: boolean;
+    } {
+      return JSON.parse(
+        docker([
+          'inspect',
+          '--format',
+          '{{json .State}}',
+          containerName,
+        ]),
+      );
+    }
+
+    function expectContention(): void {
+      // Exercise the image's normal launcher against the same volume.
+      // It must refuse before loading application configuration.
+      const contender = spawnSync(
+        'docker',
+        [
+          'run',
+          '--rm',
+          '--network',
+          'none',
+          '--mount',
+          `type=volume,source=${volumeName},target=/state`,
+          CONTAINER_IMAGE!,
+          'daemon',
+          '--network',
+          'robinhood-testnet',
+        ],
+        {
+          encoding: 'utf8',
+          timeout: 15_000,
+        },
+      );
+
+      expect(contender.error).toBeUndefined();
+      expect(contender.signal).toBeNull();
+      expect(contender.status, contender.stderr).toBe(75);
+    }
+
+    try {
+      docker(['volume', 'create', volumeName]);
+      volumeCreated = true;
+
+      docker([
+        'create',
+        '--name',
+        containerName,
+        '--network',
+        'none',
+        '--mount',
+        `type=volume,source=${volumeName},target=/state`,
+        '--env',
+        'NODE_OPTIONS=--import=file:///tmp/lifecycle-preload.mjs',
+        CONTAINER_IMAGE,
+        'daemon',
+        '--network',
+        'robinhood-testnet',
+      ]);
+      containerCreated = true;
+
+      // Copy only the test preload. Production application files and
+      // the image entrypoint remain unchanged.
+      docker([
+        'cp',
+        preload,
+        `${containerName}:/tmp/lifecycle-preload.mjs`,
+      ]);
+
+      docker(['start', containerName]);
+
+      await waitUntil(
+        () => markerExists('cycle-entered'),
+        'container cycle entry',
+      );
+
+      await waitUntil(
+        () => markerExists('child-ready'),
+        'container child readiness',
+      );
+
+      const ownerPid = evaluate(`
+        const { readFileSync } = require('node:fs');
+
+        process.stdout.write(
+          readFileSync('/state/owner-pid', 'utf8'),
+        );
+      `);
+
+      expect(ownerPid).toBe('1');
+
+      const originalIdentity = evaluate(`
+        const { statSync } = require('node:fs');
+        const lock = statSync('/state/relayer.flock');
+
+        process.stdout.write(JSON.stringify({
+          dev: lock.dev,
+          ino: lock.ino,
+        }));
+      `);
+
+      expectContention();
+
+      docker([
+        'kill',
+        '--signal',
+        'SIGTERM',
+        containerName,
+      ]);
+
+      await waitUntil(
+        () => markerExists('signal-observed'),
+        'container SIGTERM delivery',
+      );
+
+      expect(containerState().Running).toBe(true);
+      expect(markerExists('cycle-completed')).toBe(false);
+      expectContention();
+
+      // A second signal must not terminate PID 1 while work is pending.
+      docker([
+        'kill',
+        '--signal',
+        'SIGTERM',
+        containerName,
+      ]);
+
+      expectContention();
+
+      // Stop the fixture's child first. Unlike the host test, this
+      // container cannot retain children after its PID 1 exits.
+      touch('stop-child');
+
+      await waitUntil(
+        () => markerExists('child-done'),
+        'container child completion',
+      );
+
+      touch('finish-cycle');
+
+      await waitUntil(
+        () => !containerState().Running,
+        'container graceful exit',
+      );
+
+      expect(containerState()).toMatchObject({
+        Running: false,
+        ExitCode: 0,
+        OOMKilled: false,
+      });
+
+      const logs = docker(['logs', containerName]);
+
+      expect(logs).not.toContain('cli_failed');
+      expect(logs).not.toContain('output_failed');
+
+      // Reacquire the persistent lock in a fresh container and inspect
+      // the completed work while holding it.
+      const probeSource = `
+        const {
+          existsSync,
+          statSync,
+        } = require('node:fs');
+
+        const lock = statSync('/state/relayer.flock');
+
+        process.stdout.write(JSON.stringify({
+          identity: {
+            dev: lock.dev,
+            ino: lock.ino,
+          },
+          completed: existsSync('/state/cycle-completed'),
+          unexpectedCycle: existsSync('/state/unexpected-cycle'),
+        }));
+      `;
+
+      const probe = spawnSync(
+        'docker',
+        [
+          'run',
+          '--rm',
+          '--network',
+          'none',
+          '--mount',
+          `type=volume,source=${volumeName},target=/state`,
+          '--entrypoint',
+          'flock',
+          CONTAINER_IMAGE,
+          '--exclusive',
+          '--nonblock',
+          '--no-fork',
+          '--conflict-exit-code',
+          '75',
+          '/state/relayer.flock',
+          'node',
+          '-e',
+          probeSource,
+        ],
+        {
+          encoding: 'utf8',
+          timeout: 15_000,
+        },
+      );
+
+      expect(probe.error).toBeUndefined();
+      expect(probe.signal).toBeNull();
+      expect(probe.status, probe.stderr).toBe(0);
+
+      expect(JSON.parse(probe.stdout)).toEqual({
+        identity: JSON.parse(originalIdentity),
+        completed: true,
+        unexpectedCycle: false,
+      });
+    } finally {
+      try {
+        if (containerCreated) {
+          docker(['rm', '--force', containerName]);
+        }
+      } finally {
+        if (volumeCreated) {
+          docker(['volume', 'rm', volumeName]);
+        }
+      }
+    }
+  },
+  90_000,
 );
