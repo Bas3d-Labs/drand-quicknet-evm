@@ -60,7 +60,7 @@ export class FileCheckpointStore
   private state: CheckpointState | undefined;
   private operations: Promise<void> = Promise.resolve();
 
-  constructor(
+  private constructor(
     options: FileCheckpointStoreOptions,
   ) {
     if (options.filePath.length === 0) {
@@ -72,10 +72,21 @@ export class FileCheckpointStore
     this.registry = getAddress(options.deployment.address);
   }
 
-  async initialize(): Promise<void> {
-    await this.exclusive(async () => {
-      await this.initializeState();
-    });
+  /**
+   * Opens and prepares a checkpoint store before returning it.
+   * 
+   * Requires exclusive service ownership and an existing, trusted state
+   * directory. Opening validates existing state, removes orphaned
+   * temporary files, and durably writes the initial snapshot.
+   */
+  static async open(
+    options: FileCheckpointStoreOptions,
+  ): Promise<FileCheckpointStore> {
+    const store = new FileCheckpointStore(options);
+
+    await store.initializeState();
+
+    return store;
   }
 
   async load(consumer: Address): Promise<bigint | undefined> {

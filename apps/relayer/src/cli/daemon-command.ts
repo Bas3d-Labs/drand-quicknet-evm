@@ -124,12 +124,10 @@ export async function runDaemonCommand(
     consumers: config.consumers,
   });
 
-  const checkpointStore = new FileCheckpointStore({
+  const checkpointStore = await FileCheckpointStore.open({
     filePath: config.checkpointFile,
     deployment: config.deployment,
   });
-
-  await checkpointStore.initialize();
   
   const durableNextBlocks = new Map<Address, bigint>();
   for (const consumer of validatedConsumers) {

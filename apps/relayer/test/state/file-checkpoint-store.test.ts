@@ -95,12 +95,12 @@ describe('FileCheckpointStore', () => {
     );
   });
 
-  function createStore(): FileCheckpointStore {
-    return new FileCheckpointStore({
-      filePath,
-      deployment: DEPLOYMENT,
-    });
-  }
+async function createStore(): Promise<FileCheckpointStore> {
+  return FileCheckpointStore.open({
+    filePath,
+    deployment: DEPLOYMENT,
+  });
+}
 
   async function writeCheckpointFile(
     value: unknown,
@@ -113,7 +113,7 @@ describe('FileCheckpointStore', () => {
   }
 
   it('returns undefined when the checkpoint file does not exist', async () => {
-    const store = createStore();
+    const store = await createStore()
     const result = await store.load(CONSUMER_A);
 
     expect(result).toBeUndefined();
@@ -127,14 +127,14 @@ describe('FileCheckpointStore', () => {
       consumers: {},
     });
 
-    const store = createStore();
+    const store = await createStore()
     const result = await store.load(CONSUMER_A);
 
     expect(result).toBeUndefined();
   });
 
   it('saves and loads a checkpoint', async () => {
-    const store = createStore();
+    const store = await createStore()
     await store.save(CONSUMER_A, 12_345n);
 
     const result = await store.load(CONSUMER_A);
@@ -142,7 +142,7 @@ describe('FileCheckpointStore', () => {
   });
 
   it('supports block zero as a checkpoint', async () => {
-    const store = createStore();
+    const store = await createStore()
     await store.save(CONSUMER_A, 0n);
 
     const result = await store.load(CONSUMER_A);
@@ -150,33 +150,17 @@ describe('FileCheckpointStore', () => {
   });
 
   it('rejects a negative checkpoint', async () => {
-    const store = createStore();
+    const store = await createStore()
 
     await expect(
       store.save(CONSUMER_A, -1n)
     ).rejects.toThrow(
       'Checkpoint nextBlock must not be negative.'
     );
-  });
-
-  it('does not create a checkpoint file when a negative checkpoint is rejected', async () => {
-    const store = createStore();
-
-    await expect(
-      store.save(CONSUMER_A, -1n)
-    ).rejects.toThrow(
-      'Checkpoint nextBlock must not be negative.'
-    );
-
-    await expect(
-      readFile(filePath, 'utf8')
-    ).rejects.toMatchObject({
-      code: 'ENOENT',
-    });
   });
 
   it('stores independent checkpoints for multiple consumers', async () => {
-    const store = createStore();
+    const store = await createStore()
     await store.save(CONSUMER_A, 12_345n);
     await store.save(CONSUMER_B, 67_890n);
 
@@ -194,7 +178,7 @@ describe('FileCheckpointStore', () => {
   });
 
   it('updates one consumer without losing another consumer checkpoint', async () => {
-    const store = createStore();
+    const store = await createStore()
     await store.save(CONSUMER_A, 100n);
     await store.save(CONSUMER_B, 200n);
     await store.save(CONSUMER_A, 300n);
@@ -213,7 +197,7 @@ describe('FileCheckpointStore', () => {
   });
 
   it('normalizes consumer addresses', async () => {
-    const store = createStore();
+    const store = await createStore()
     await store.save(LOWERCASE_CONSUMER, 500n);
 
     const result = await store.load(CHECKSUMMED_CONSUMER);
@@ -221,7 +205,7 @@ describe('FileCheckpointStore', () => {
   });
 
   it('serializes nextBlock as a decimal string', async () => {
-    const store = createStore();
+    const store = await createStore()
     await store.save(CONSUMER_A, 18_446_744_073_709_551_615n);
 
     const contents = await readFile(filePath, 'utf8');
@@ -237,7 +221,7 @@ describe('FileCheckpointStore', () => {
   });
 
   it('writes the checkpoint file version, chainId, and registry', async () => {
-    const store = createStore();
+    const store = await createStore()
     await store.save(CONSUMER_A, 100n);
 
     const contents = await readFile(filePath, 'utf8');
@@ -255,7 +239,7 @@ describe('FileCheckpointStore', () => {
     });
   });
 
-  it('refuses to create missing parent directories when saving', async () => {
+  it('refuses to create missing parent directories when opening', async () => {
     filePath = join(
       directory,
       'nested',
@@ -263,11 +247,7 @@ describe('FileCheckpointStore', () => {
       'checkpoint.json',
     );
 
-    const store = createStore();
-
-    await expect(
-      store.save(CONSUMER_A, 100n),
-    ).rejects.toMatchObject({
+    await expect(createStore()).rejects.toMatchObject({
       code: 'ENOENT',
     });
 
@@ -275,7 +255,7 @@ describe('FileCheckpointStore', () => {
   });
 
   it('does not leave temporary checkpoint files after a successful save', async () => {
-    const store = createStore();
+    const store = await createStore()
 
     await store.save(CONSUMER_A, 100n);
     await store.save(CONSUMER_A, 200n);
@@ -287,6 +267,20 @@ describe('FileCheckpointStore', () => {
     ]);
   });
 
+  it('does not change persisted state when a negative checkpoint is rejected', async () => {
+    const store = await createStore();
+    const before = await readFile(filePath, 'utf8');
+
+    await expect(
+      store.save(CONSUMER_A, -1n),
+    ).rejects.toThrow(
+      'Checkpoint nextBlock must not be negative.',
+    );
+
+    expect(await readFile(filePath, 'utf8')).toBe(before);
+    expect(await store.load(CONSUMER_A)).toBeUndefined();
+  });
+
   it('rejects invalid JSON', async () => {
     await writeFile(
       filePath,
@@ -294,10 +288,8 @@ describe('FileCheckpointStore', () => {
       'utf8'
     );
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       `Checkpoint file ${filePath} contains invalid JSON.`
     );
@@ -306,10 +298,8 @@ describe('FileCheckpointStore', () => {
   it('rejects a non-object checkpoint root', async () => {
     await writeCheckpointFile([]);
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       'Checkpoint file root must be an object.'
     );
@@ -323,10 +313,8 @@ describe('FileCheckpointStore', () => {
       consumers: {},
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       'Unsupported checkpoint file version: 2.'
     );
@@ -339,10 +327,8 @@ describe('FileCheckpointStore', () => {
       consumers: {},
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       'Unsupported checkpoint file version: undefined.'
     );
@@ -356,10 +342,8 @@ describe('FileCheckpointStore', () => {
       consumers: {},
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       'Checkpoint file contains an invalid chainId.'
     );
@@ -373,10 +357,8 @@ describe('FileCheckpointStore', () => {
       consumers: {},
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       `Checkpoint file chainId 1 does not match configured chainId ${DEPLOYMENT.chainId}.`
     );
@@ -390,10 +372,8 @@ describe('FileCheckpointStore', () => {
       consumers: {},
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       'Checkpoint file contains an invalid registry address.'
     );
@@ -407,10 +387,8 @@ describe('FileCheckpointStore', () => {
       consumers: {},
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       `Checkpoint file registry ${getAddress(OTHER_REGISTRY_ADDRESS)} does not match configured registry ${getAddress(REGISTRY_ADDRESS)}.`
     );
@@ -424,10 +402,8 @@ describe('FileCheckpointStore', () => {
       consumers: [],
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       'Checkpoint file consumers must be an object.'
     );
@@ -445,10 +421,8 @@ describe('FileCheckpointStore', () => {
       },
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       'Checkpoint file contains an invalid consumer address: not-an-address.'
     );
@@ -469,10 +443,8 @@ describe('FileCheckpointStore', () => {
       },
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       `Checkpoint file contains duplicate consumer address ${CHECKSUMMED_CONSUMER}.`
     );
@@ -488,10 +460,8 @@ describe('FileCheckpointStore', () => {
       },
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       `Checkpoint for consumer ${getAddress(CONSUMER_A)} must be an object.`
     );
@@ -509,10 +479,8 @@ describe('FileCheckpointStore', () => {
       },
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       `Checkpoint for consumer ${getAddress(CONSUMER_A)} contains an invalid nextBlock.`
     );
@@ -530,10 +498,8 @@ describe('FileCheckpointStore', () => {
       },
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       `Checkpoint for consumer ${getAddress(CONSUMER_A)} contains an invalid nextBlock.`
     );
@@ -551,10 +517,8 @@ describe('FileCheckpointStore', () => {
       },
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       `Checkpoint for consumer ${getAddress(CONSUMER_A)} contains an invalid nextBlock.`
     );
@@ -572,10 +536,8 @@ describe('FileCheckpointStore', () => {
       },
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       `Checkpoint for consumer ${getAddress(CONSUMER_A)} contains an invalid nextBlock.`
     );
@@ -593,10 +555,8 @@ describe('FileCheckpointStore', () => {
       },
     });
 
-    const store = createStore();
-
     await expect(
-      store.load(CONSUMER_A)
+      createStore()
     ).rejects.toThrow(
       `Checkpoint for consumer ${getAddress(CONSUMER_A)} contains an invalid nextBlock.`
     );
@@ -617,7 +577,7 @@ describe('FileCheckpointStore', () => {
       },
     });
 
-    const store = createStore();
+    const store = await createStore()
     const result = await store.load(CONSUMER_A);
 
     expect(result).toBe(
@@ -626,7 +586,7 @@ describe('FileCheckpointStore', () => {
   });
 
   it('replaces an existing checkpoint file while preserving valid state', async () => {
-    const store = createStore();
+    const store = await createStore()
 
     await store.save(CONSUMER_A, 100n);
     await store.save(CONSUMER_A, 200n);
