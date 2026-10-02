@@ -14,7 +14,7 @@ vi.mock('../../src/config/config.js', () => ({
 
 import {
   loadRelayerConfig,
-  type RelayerConfig,
+  type LoadedRelayerConfig,
 } from '../../src/config/config.js';
 
 import {
@@ -73,13 +73,21 @@ const DEPLOYMENT: RegistryDeployment = {
   verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
 };
 
-const RELAYER_CONFIG: RelayerConfig = {
+const ERROR_SUMMARY = Object.freeze({
+  scrubText(text: string) {
+    return { text, removed: false };
+  },
+});
+
+const RELAYER_CONFIG: LoadedRelayerConfig = {
   network: 'robinhood-testnet',
   chain: robinhoodTestnet,
   rpcUrl: 'https://rpc.example.test',
   account: ACCOUNT,
   deployment: DEPLOYMENT,
   finality: { type: 'safe' },
+  errorSummary: ERROR_SUMMARY,
+  createErrorSummary: () => ERROR_SUMMARY,
 };
 
 function createEnvironment(

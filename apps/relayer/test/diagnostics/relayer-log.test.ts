@@ -170,6 +170,7 @@ describe('createRelayerLog', () => {
       'loggingFailed',
       'roundAlreadyStored',
       'roundImported',
+      'withErrorSummary',
     ]);
   });
 

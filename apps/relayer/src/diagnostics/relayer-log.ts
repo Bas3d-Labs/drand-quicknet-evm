@@ -29,6 +29,12 @@ import {
 type Level = 'debug' | 'info' | 'warn' | 'error';
 type ScanType = 'durable' | 'soft';
 
+export type ScopedRelayerLog = RelayerLog & {
+  readonly withErrorSummary: (
+    policy: SummarizeErrorOptions,
+  ) => ScopedRelayerLog;
+};
+
 export type ConsumerHealth =
   | { 
       consumer: Address;
@@ -227,7 +233,7 @@ const LEVELS = new Set([
 
 export function createRelayerLog(
   options: CreateRelayerLogOptions,
-): RelayerLog {
+): ScopedRelayerLog {
   const chainId = own(options, 'chainId');
 
   if (
@@ -348,12 +354,13 @@ export function createRelayerLog(
   function dispatch(
     definition: EventDefinition,
     context: unknown,
+    policy: SummarizeErrorOptions | undefined,
   ): void {
     const [severity, event, message, schema] = definition;
     let record: Record<string, unknown>;
 
     try {
-      record = project(schema, context, errorSummary);
+      record = project(schema, context, policy);
       record.event = event;
       fitRecord(record);
     } catch {
@@ -376,12 +383,37 @@ export function createRelayerLog(
     );
   }
 
-  return Object.freeze(Object.fromEntries(
-    Object.entries(EVENTS).map(([method, definition]) => [
-      method,
-      (context: unknown) => dispatch(definition, context),
-    ]),
-  )) as RelayerLog;
+  function bindErrorSummary(
+    policy: SummarizeErrorOptions | undefined,
+  ): ScopedRelayerLog {
+    const methods = Object.fromEntries(
+      Object.entries(EVENTS).map(([method, definition]) => [
+        method,
+        (context: unknown) => dispatch(
+          definition,
+          context,
+          policy,
+        ),
+      ]),
+    ) as RelayerLog;
+
+    return Object.freeze({
+      ...methods,
+
+      withErrorSummary(
+        nextPolicy: SummarizeErrorOptions,
+      ): ScopedRelayerLog {
+        const snapshot = snapshotErrorSummaryOptions(nextPolicy);
+        if (snapshot === undefined) {
+          throw new TypeError('Invalid error summary policy.');
+        }
+
+        return bindErrorSummary(snapshot);
+      },
+    });
+  }
+
+  return bindErrorSummary(errorSummary);
 }
 
 // Read declared own data fields only. Do not copy extras or accessors.
@@ -417,9 +449,9 @@ function snapshotErrorSummaryOptions(
     throw new TypeError('Invalid error summary policy.');
   }
 
-  return {
+  return Object.freeze({
     scrubText: scrubText as SummarizeErrorOptions['scrubText'],
-  }
+  });
 }
 
 function scalar(

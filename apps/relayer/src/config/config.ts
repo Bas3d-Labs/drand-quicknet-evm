@@ -106,11 +106,21 @@ export interface ResolvedNetworkConfig {
   finality: FinalityPolicy;
 }
 
+export type ErrorSummaryFactory = (
+  extraSecrets?: readonly string[],
+) => Readonly<SummarizeErrorOptions>;
+
 export interface RelayerConfig extends ResolvedNetworkConfig {
   account: ReturnType<typeof privateKeyToAccount>;
 
-  // Configs constructed by callers may omit the configured scrubber.
+  // Configs constructed by callers may omit configured diagnostics.
   errorSummary?: SummarizeErrorOptions;
+  createErrorSummary?: ErrorSummaryFactory;
+}
+
+export interface LoadedRelayerConfig extends RelayerConfig {
+  errorSummary: Readonly<SummarizeErrorOptions>;
+  createErrorSummary: ErrorSummaryFactory;
 }
 
 export interface LoadRelayerConfigOptions {
@@ -121,7 +131,7 @@ export interface LoadRelayerConfigOptions {
 
 export async function loadRelayerConfig(
   options: LoadRelayerConfigOptions,
-): Promise<RelayerConfig> {
+): Promise<LoadedRelayerConfig> {
   const {
     source,
     env = process.env
@@ -147,12 +157,17 @@ export async function loadRelayerConfig(
     );
   }
 
-  const errorSummary: SummarizeErrorOptions = Object.freeze({
+  const createErrorSummary: ErrorSummaryFactory = (
+    extraSecrets =[],
+  ) => Object.freeze({
     scrubText: createScrubber({
       rpcUrls: [rpcUrl],
       privateKey,
+      secrets: [...extraSecrets],
     }),
   });
+
+  const errorSummary = createErrorSummary();
 
   // Install before file loading and deployment validation can fail.
   options.onDiagnostics?.(errorSummary);
@@ -163,6 +178,7 @@ export async function loadRelayerConfig(
     ...network,
     account,
     errorSummary,
+    createErrorSummary,
   };
 }
 

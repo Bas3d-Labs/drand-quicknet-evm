@@ -726,4 +726,66 @@ describe('relayer log standard policy', () => {
 
       expect(fallback).not.toContain(SECRET);
   });
+
+  it('isolates parent and sibling policies and snapshots the child policy', () => {
+    const { log, lines } = capture();
+
+    const childPolicy = {
+      scrubText(text: string) {
+        return {
+          text: text.replaceAll(SECRET, '[CHILD]'),
+          removed: text.includes(SECRET),
+        };
+      },
+    };
+
+    const child = log.withErrorSummary(childPolicy);
+
+    const sibling = log.withErrorSummary({
+      scrubText(text) {
+        return {
+          text: text.replaceAll(SECRET, '[SIBLING]'),
+          removed: text.includes(SECRET),
+        };
+      },
+    });
+
+    childPolicy.scrubText = (text: string) => ({
+      text,
+      removed: false,
+    });
+
+    for (const current of [child, log, sibling, child]) {
+      current.consumerFailed({
+        consumer: CONSUMER,
+        error: new Error(SECRET),
+      });
+    }
+
+    expect(lines.map((line) => JSON.parse(line).err.message)).toEqual([
+      '[CHILD]',
+      '[REDACTED]',
+      '[SIBLING]',
+      '[CHILD]',
+    ]);
+
+    expect(Object.isFrozen(child)).toBe(true);
+  });
+
+  it('does not register another destination listener for scoped policies', () => {
+    const on = vi.fn();
+
+    const log = createRelayerLog({
+      chainId: 4663,
+      destination: {
+        write: vi.fn(),
+        on,
+      },
+    });
+
+    log.withErrorSummary({ scrubText })
+      .withErrorSummary({ scrubText });
+
+    expect(on).toHaveBeenCalledTimes(1);
+  });
 });

@@ -45,6 +45,10 @@ import {
 } from '../../src/diagnostics/diagnostics.js';
 
 import {
+  createRelayerLog,
+} from '../../src/diagnostics/relayer-log.js';
+
+import {
   loadCustomNetworkDescriptor,
   type CustomNetworkDescriptor,
 } from '../../src/config/custom-network-config.js';
@@ -832,5 +836,125 @@ describe('configured diagnostic policy', () => {
       'request rejected; token=[REDACTED]; key=[REDACTED]',
     );
     expect(diagnostic.err.textModified).toBe(true);
+  });
+});
+
+describe('attempt error summary policies', () => {
+  it('retains base secrets and redacts signed bytes before truncation', async () => {
+    const rpcSecret = 'attempt-policy-rpc-secret';
+    let installedPolicy: unknown;
+
+    const config = await loadRelayerConfig({
+      source: PRESET_SOURCE,
+      env: createEnvironment({
+        ROBINHOOD_TESTNET_RPC_URL:
+          `https://rpc.example.com/${rpcSecret}`,
+      }),
+      onDiagnostics(policy) {
+        installedPolicy = policy;
+      },
+    });
+
+    expect(installedPolicy).toBe(config.errorSummary);
+    expect(Object.hasOwn(config, 'privateKey')).toBe(false);
+
+    const signedTransaction = await config.account.signTransaction({
+      type: 'eip1559',
+      chainId: config.chain.id,
+      nonce: 0,
+      to: REGISTRY_ADDRESS,
+      value: 0n,
+      gas: 21_000n,
+      maxFeePerGas: 2_000_000_000n,
+      maxPriorityFeePerGas: 1_000_000_000n,
+    });
+
+    const extraSecrets = [signedTransaction];
+    const policy = config.createErrorSummary(extraSecrets);
+
+    // Later caller mutation must not remove an installed secret.
+    extraSecrets.length = 0;
+
+    expect(Object.isFrozen(policy)).toBe(true);
+
+    const lines: string[] = [];
+    const root = createRelayerLog({
+      chainId: config.chain.id,
+      errorSummary: config.errorSummary,
+      destination: {
+        write(line) {
+          lines.push(line);
+        },
+      },
+    });
+
+    const attemptLog = root.withErrorSummary(policy);
+
+    // Without redaction first, truncation would expose a transaction prefix.
+    attemptLog.consumerFailed({
+      consumer: REGISTRY_ADDRESS,
+      error: new Error(
+        'x'.repeat(4_000) +
+        signedTransaction +
+        'y'.repeat(200),
+      ),
+    });
+
+    attemptLog.consumerFailed({
+      consumer: REGISTRY_ADDRESS,
+      error: new Error('Submission failed.', {
+        cause: new Error(
+          `${signedTransaction} ${PRIVATE_KEY} ${rpcSecret}`,
+        ),
+      }),
+    });
+
+    expect(lines).toHaveLength(2);
+
+    const first = JSON.parse(lines[0]!);
+    const second = JSON.parse(lines[1]!);
+
+    expect(first.err.message).toHaveLength(4_096);
+    expect(first.err.message).toContain(' [truncated]');
+    expect(
+      first.err.message.match(/\[REDACTED\]/g),
+    ).toHaveLength(1);
+
+    const output = lines.join('');
+
+    expect(output).not.toContain(signedTransaction);
+    expect(output).not.toContain(signedTransaction.slice(0, 32));
+    expect(output).not.toContain(PRIVATE_KEY.slice(2));
+    expect(output).not.toContain(rpcSecret);
+
+    expect(second.err.cause.message).toBe(
+      '[REDACTED] [REDACTED] [REDACTED]',
+    );
+  });
+
+  it('keeps default and attempt policies independent', async () => {
+    const config = await loadRelayerConfig({
+      source: PRESET_SOURCE,
+      env: createEnvironment(),
+    });
+
+    const first = config.createErrorSummary(['first-attempt-secret']);
+    const second = config.createErrorSummary(['second-attempt-secret']);
+
+    expect(
+      first.scrubText('first-attempt-secret').text,
+    ).toBe('[REDACTED]');
+
+    expect(
+      second.scrubText('first-attempt-secret').text,
+    ).toBe('first-attempt-secret');
+
+    expect(
+      config.errorSummary.scrubText('first-attempt-secret').text,
+    ).toBe('first-attempt-secret');
+
+    for (const policy of [config.errorSummary, first, second]) {
+      expect(policy.scrubText(PRIVATE_KEY).text).toBe('[REDACTED]');
+    }
   });
 });

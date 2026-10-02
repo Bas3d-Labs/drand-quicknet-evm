@@ -73,7 +73,7 @@ import {
 import {
   loadRelayerConfig,
   type NetworkSource,
-  type RelayerConfig,
+  type LoadedRelayerConfig,
 } from '../../src/config/config.js';
 
 import {
@@ -132,7 +132,14 @@ const ACCOUNT = privateKeyToAccount(
   '0x1111111111111111111111111111111111111111111111111111111111111111',
 );
 
-const CONFIG: RelayerConfig = {
+const ERROR_SUMMARY = Object.freeze({
+  scrubText(text: string) {
+    return { text, removed: false };
+  },
+});
+
+const CONFIG: LoadedRelayerConfig = {
+  // Keep all existing fields.
   network: PRESET,
   chain: robinhoodTestnet,
   rpcUrl: 'https://rpc.example.test',
@@ -145,6 +152,8 @@ const CONFIG: RelayerConfig = {
     verifierRuntimeCodehash: HASH,
   },
   finality: { type: 'safe' },
+  errorSummary: ERROR_SUMMARY,
+  createErrorSummary: () => ERROR_SUMMARY,
 };
 
 const PUBLIC_CLIENT = {} as PublicClient;
@@ -887,6 +896,7 @@ describe('diagnostic policy handoff', () => {
         return {
           ...CONFIG,
           errorSummary: policy,
+          createErrorSummary: () => policy,
         };
       });
 

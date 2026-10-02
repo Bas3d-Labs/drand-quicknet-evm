@@ -9,7 +9,7 @@ import {
 } from '@based-labs/drand-quicknet-registry';
 
 import type {
-  RelayerLog
+  ScopedRelayerLog
 } from '../../src/diagnostics/relayer-log.js';
 
 const checkpointStoreMocks = vi.hoisted(() => ({
@@ -33,7 +33,10 @@ const relayerLogMocks = vi.hoisted(() => ({
   durableFulfillmentUnavailable: vi.fn(),
   durableAnchorChanged: vi.fn(),
   durableAnchorUnavailable: vi.fn(),
-} satisfies RelayerLog));
+
+  withErrorSummary:
+    vi.fn<ScopedRelayerLog['withErrorSummary']>(),
+} satisfies ScopedRelayerLog));
 
 vi.mock('@based-labs/drand-quicknet-registry', () => ({
   verifyRegistryDeployment: vi.fn(),
@@ -313,6 +316,9 @@ describe('runDaemonCommand', () => {
     for (const mock of Object.values(relayerLogMocks)) {
       mock.mockReset();
     }
+
+    relayerLogMocks.withErrorSummary
+      .mockReturnValue(relayerLogMocks);
   });
 
   afterEach(() => {
