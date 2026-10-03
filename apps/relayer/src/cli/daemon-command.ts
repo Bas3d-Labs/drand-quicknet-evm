@@ -155,7 +155,14 @@ export async function runDaemonCommand(
     maxBlockRange: config.maxBlockRange,
     finality: config.finality,
     pollIntervalMs: config.pollIntervalMs,
-    onCycle: daemonLogger.onCycle,
+    onCycle(result, context) {
+      const cycleLogger = logger.withContext({
+        cycle: context.cycle,
+        signer: config.account.address,
+      });
+
+      daemonLogger.onCycle(result, cycleLogger);
+    },
     ...(options.signal !== undefined
       ? { signal: options.signal }
       : {}),

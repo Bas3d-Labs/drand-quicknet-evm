@@ -28,8 +28,9 @@ import type {
   RunDaemonIterationResult,
 } from '../../src/daemon/daemon-iteration.js';
 
-import type {
-  RelayerLog,
+import {
+  createRelayerLog,
+  type RelayerLog,
 } from '../../src/diagnostics/relayer-log.js';
 
 import type {
@@ -777,5 +778,112 @@ describe('createDaemonLogger', () => {
         submission: 'compressed',
         fallbackReason,
       });
+  });
+});
+
+describe('cycle-scoped daemon output', () => {
+  it('correlates failures and heartbeats without resetting the heartbeat timer', () => {
+    const lines: string[] = [];
+
+    const root = createRelayerLog({
+      chainId: 4663,
+      destination: {
+        write(line) {
+          lines.push(line);
+        },
+      },
+    });
+
+    let time = 0;
+
+    const reporter = createDaemonLogger({
+      logger: root,
+      heartbeatIntervalMs: 100,
+      now: () => time,
+    });
+
+    time = 100;
+
+    reporter.onCycle(
+      createFailedCycle(new Error('Failed.')),
+      root.withContext({
+        cycle: 1,
+        signer: CONSUMER_A,
+      }),
+    );
+
+    time = 150;
+
+    reporter.onCycle(
+      createFailedCycle(new Error('Failed.')),
+      root.withContext({
+        cycle: 2,
+        signer: CONSUMER_A,
+      }),
+    );
+
+    time = 200;
+
+    reporter.onCycle(
+      createSuccessfulCycle(),
+      root.withContext({
+        cycle: 3,
+        signer: CONSUMER_A,
+      }),
+    );
+
+    root.loggingFailed({
+      error: new Error('Outside cycle.'),
+    });
+
+    const records = lines.map((line) => JSON.parse(line));
+
+    expect(
+      records.slice(0, 4).map(({ event, cycle }) => ({
+        event,
+        cycle,
+      })),
+    ).toEqual([
+      { event: 'consumer_failed', cycle: 1 },
+      { event: 'heartbeat', cycle: 1 },
+      { event: 'consumer_failed', cycle: 2 },
+      { event: 'heartbeat', cycle: 3 },
+    ]);
+
+    for (const record of records.slice(0, 4)) {
+      expect(record.signer).toBe(CONSUMER_A);
+      expect(record.runId).toBe(records[0].runId);
+      expect(record).not.toHaveProperty('attemptId');
+    }
+
+    expect(records[4]).not.toHaveProperty('cycle');
+    expect(records[4]).not.toHaveProperty('signer');
+  });
+
+  it('reports a logging failure through the supplied cycle logger', () => {
+    const failure = new Error('Injected logging failure.');
+    const loggingFailed = vi.fn();
+
+    const scoped: RelayerLog = {
+      ...LOGGER,
+      consumerFailed() {
+        throw failure;
+      },
+      loggingFailed,
+    };
+
+    const reporter = createDaemonLogger({
+      logger: LOGGER,
+      now: () => 0,
+    });
+
+    reporter.onCycle(
+      createFailedCycle(new Error('Provider failure.')),
+      scoped,
+    );
+
+    expect(loggingFailed).toHaveBeenCalledExactlyOnceWith({
+      error: failure,
+    });
   });
 });

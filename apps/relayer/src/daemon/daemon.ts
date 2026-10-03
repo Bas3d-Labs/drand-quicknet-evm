@@ -36,6 +36,10 @@ import type {
 
 const DURABLE_HEAD_POLL_INTERVAL_MS = 30_000;
 
+export interface DaemonCycleContext {
+  readonly cycle: number;
+}
+
 export interface RunDaemonOptions {
   publicClient: PublicClient;
   walletClient: WalletClient;
@@ -49,7 +53,10 @@ export interface RunDaemonOptions {
   pollIntervalMs: number;
   signal?: AbortSignal;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
-  onCycle?: (result: RunDaemonCycleResult) => void | Promise<void>;
+  onCycle?: (
+    result: RunDaemonCycleResult,
+    context: DaemonCycleContext,
+  ) => void | Promise<void>;
 }
 
 export async function runDaemon(
@@ -71,7 +78,19 @@ export async function runDaemon(
     durableHeadPollIntervalMs: DURABLE_HEAD_POLL_INTERVAL_MS,
   });
 
+  let cycle = 0;
+
   while (!options.signal?.aborted) {
+    if (cycle === Number.MAX_SAFE_INTEGER) {
+      throw new Error('Daemon cycle counter exhausted.');
+    }
+
+    cycle += 1;
+
+    const context: DaemonCycleContext = Object.freeze({
+      cycle,
+    });
+
     const result = await runDaemonCycle({
       publicClient: options.publicClient,
       walletClient: options.walletClient,
@@ -87,7 +106,7 @@ export async function runDaemon(
     });
 
     if (options.onCycle !== undefined) {
-      await options.onCycle(result);
+      await options.onCycle(result, context);
     }
 
     if (options.signal?.aborted) {

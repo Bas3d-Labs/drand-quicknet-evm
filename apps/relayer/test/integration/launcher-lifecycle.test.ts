@@ -206,7 +206,13 @@ function writePreload(
 
   replace('diagnostics/relayer-log.js', `
     export function createRelayerLog() {
-      return {};
+      const logger = {
+        withContext() {
+          return logger;
+        },
+      };
+
+      return logger;
     }
   `);
 

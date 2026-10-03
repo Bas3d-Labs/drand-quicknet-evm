@@ -36,7 +36,10 @@ export interface CreateDaemonLoggerOptions {
 }
 
 export interface DaemonLogger {
-  onCycle(result: RunDaemonCycleResult): void;
+  onCycle(
+    result: RunDaemonCycleResult,
+    cycleLogger?: RelayerLog,
+  ): void;
 }
 
 export function createDaemonLogger(
@@ -52,17 +55,21 @@ export function createDaemonLogger(
   let lastHeartbeatAt = now();
 
   return {
-    onCycle(result: RunDaemonCycleResult): void {
+    onCycle(
+      result: RunDaemonCycleResult,
+      cycleLogger: RelayerLog = options.logger,
+    ): void {
       try {
-        logCycle(options.logger, result);
+        logCycle(cycleLogger, result);
 
         const currentTime = now();
+
         if (currentTime - lastHeartbeatAt >= heartbeatIntervalMs) {
-          logHeartbeat(options.logger, result);
+          logHeartbeat(cycleLogger, result);
           lastHeartbeatAt = currentTime;
         }
       } catch (error) {
-        logLoggingFailure(options.logger, error);
+        logLoggingFailure(cycleLogger, error);
       }
     },
   };
