@@ -9,7 +9,7 @@ import {
 } from '@based-labs/drand-quicknet-registry';
 
 import type {
-  RelayerLog
+  ScopedRelayerLog
 } from '../../src/diagnostics/relayer-log.js';
 
 const checkpointStoreMocks = vi.hoisted(() => ({
@@ -33,7 +33,13 @@ const relayerLogMocks = vi.hoisted(() => ({
   durableFulfillmentUnavailable: vi.fn(),
   durableAnchorChanged: vi.fn(),
   durableAnchorUnavailable: vi.fn(),
-} satisfies RelayerLog));
+  attemptResolved: vi.fn(),
+
+  withContext: 
+    vi.fn<ScopedRelayerLog['withContext']>(),
+  withErrorSummary:
+    vi.fn<ScopedRelayerLog['withErrorSummary']>(),
+} satisfies ScopedRelayerLog));
 
 vi.mock('@based-labs/drand-quicknet-registry', () => ({
   verifyRegistryDeployment: vi.fn(),
@@ -131,6 +137,10 @@ import {
 import {
   createRelayerLog
 } from '../../src/diagnostics/relayer-log.js';
+
+import {
+  createRpcMetrics,
+} from '../../src/diagnostics/rpc-metrics.js';
 
 import {
   validateQuicknetConsumers
@@ -276,6 +286,7 @@ describe('runDaemonCommand', () => {
       .mockReturnValue({
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
+        rpcMetrics: createRpcMetrics(),
       });
 
     vi.mocked(verifyRegistryDeployment)
@@ -313,6 +324,12 @@ describe('runDaemonCommand', () => {
     for (const mock of Object.values(relayerLogMocks)) {
       mock.mockReset();
     }
+
+    relayerLogMocks.withErrorSummary
+      .mockReturnValue(relayerLogMocks);
+
+    relayerLogMocks.withContext
+      .mockReturnValue(relayerLogMocks);
   });
 
   afterEach(() => {
@@ -503,7 +520,7 @@ describe('runDaemonCommand', () => {
       maxBlockRange: 2_000n,
       finality: { type: 'safe' },
       pollIntervalMs: 1_000,
-      onCycle: daemonLoggerMocks.onCycle,
+      onCycle: expect.any(Function),
     });
   });
 
@@ -799,16 +816,19 @@ describe('runDaemonCommand', () => {
   });
 
   it('passes daemon cycle results to the daemon logger', async () => {
-    const cycle = { consumers: [] };
+    const cycle = {
+      consumers: [],
+    };
 
     vi.mocked(runDaemon).mockImplementation(async ({ onCycle }) => {
-      onCycle?.(cycle);
+      await onCycle?.(cycle, { cycle: 1 });
     });
 
     await runDaemonCommand({ source: SOURCE });
 
     expect(daemonLoggerMocks.onCycle).toHaveBeenCalledExactlyOnceWith(
       cycle,
+      relayerLogMocks,
     );
   });
 
@@ -1032,5 +1052,31 @@ describe('runDaemonCommand', () => {
       onStartup,
       vi.mocked(runDaemon),
     );
+  });
+
+  it('passes a signer and cycle scoped logger to the cycle reporter', async () => {
+    await runDaemonCommand({ source: SOURCE });
+
+    const options = vi.mocked(runDaemon).mock.calls[0]![0];
+
+    const child = {
+      ...relayerLogMocks,
+    };
+
+    relayerLogMocks.withContext.mockReturnValueOnce(child);
+
+    const result = {
+      consumers: [],
+    };
+
+    await options.onCycle!(result, { cycle: 7 });
+
+    expect(relayerLogMocks.withContext).toHaveBeenCalledExactlyOnceWith({
+      cycle: 7,
+      signer: ACCOUNT.address,
+    });
+
+    expect(daemonLoggerMocks.onCycle)
+      .toHaveBeenCalledExactlyOnceWith(result, child);
   });
 });

@@ -1,6 +1,5 @@
 import {
   afterEach,
-  beforeEach,
   describe,
   expect,
   it,
@@ -190,6 +189,7 @@ describe('error output boundaries', () => {
     expect(recordAt(lines)).toEqual({
       level: 50,
       time: expect.any(String),
+      runId: expect.any(String),
       component: 'daemon',
       chainId: CHAIN_ID,
       event: 'consumer_failed',

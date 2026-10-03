@@ -44,7 +44,12 @@ export async function durableReplace(
 
     const completedDirectory = directory;
     directory = undefined;
-    await completedDirectory.close();
+    
+    try {
+      await completedDirectory.close();
+    } catch {
+      // Directory sync succeeded. Cleanup must not change that result.
+    }
   } catch (cause) {
     // Never retry sync on failed handle. A future attempt must write
     // the complete snapshot through a new temporary file.
@@ -76,7 +81,7 @@ export async function durableReplace(
     // the destination, and do not claim the previous state survived.
     throw new Error(
       'Checkpoint persistence did not complete. ' +
-      'the on-disk outcome may be uncertain.',
+      'The on-disk outcome may be uncertain.',
       { cause },
     );
   }

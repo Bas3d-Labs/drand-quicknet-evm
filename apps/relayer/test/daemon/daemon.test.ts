@@ -569,7 +569,8 @@ describe('runDaemon', () => {
     expect(
       onCycle,
     ).toHaveBeenCalledWith(
-      cycleResult
+      cycleResult,
+      { cycle: 1 },
     );
   });
 
@@ -1083,5 +1084,55 @@ describe('runDaemon', () => {
     ).rejects.toBe(
       failure
     );
+  });
+});
+
+describe('daemon cycle correlation', () => {
+  it('numbers idle and failed cycles and restarts the count for a new run', async () => {
+    const failed: RunDaemonCycleResult = {
+      consumers: [{
+        status: 'failed',
+        consumer: VALIDATED_CONSUMER_A,
+        error: new Error('Provider unavailable.'),
+      }],
+    };
+
+    for (let run = 0; run < 2; run += 1) {
+      vi.mocked(runDaemonCycle).mockReset();
+
+      vi.mocked(runDaemonCycle)
+        .mockResolvedValueOnce(caughtUpCycle())
+        .mockResolvedValueOnce(failed)
+        .mockResolvedValueOnce(processedCycle());
+
+      const controller = new AbortController();
+      const observed: number[] = [];
+
+      await runDaemon({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        deployment: DEPLOYMENT,
+        checkpointStore: CHECKPOINT_STORE,
+        consumers: [VALIDATED_CONSUMER_A],
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        pollIntervalMs: 1_000,
+        signal: controller.signal,
+        sleep: async () => {},
+        onCycle(_result, context) {
+          observed.push(context.cycle);
+
+          expect(Object.isFrozen(context)).toBe(true);
+
+          if (observed.length === 3) {
+            controller.abort();
+          }
+        },
+      });
+
+      expect(observed).toEqual([1, 2, 3]);
+    }
   });
 });

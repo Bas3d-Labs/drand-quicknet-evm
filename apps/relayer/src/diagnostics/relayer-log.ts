@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { writeSync } from 'node:fs';
 
 import { performance } from 'node:perf_hooks';
@@ -26,8 +28,29 @@ import {
   type OperationContext,
 } from './operation-context.js';
 
+import type {
+  AttemptResolutionEvidence,
+} from './transaction-evidence.js';
+
 type Level = 'debug' | 'info' | 'warn' | 'error';
 type ScanType = 'durable' | 'soft';
+
+export interface RelayerLogContext {
+  readonly cycle?: number;
+  readonly signer?: Address;
+  readonly attemptId?: string;
+  readonly operation?: OperationContext;
+}
+
+export type ScopedRelayerLog = RelayerLog & TransactionLog & {
+  readonly withContext: (
+    context: RelayerLogContext,
+  ) => ScopedRelayerLog;
+
+  readonly withErrorSummary: (
+    policy: SummarizeErrorOptions,
+  ) => ScopedRelayerLog;
+};
 
 export type ConsumerHealth =
   | { 
@@ -44,6 +67,7 @@ export type ConsumerHealth =
     };
 
 interface Values {
+  id: string;
   address: Address;
   hash: Hash;
   uint: bigint;
@@ -56,6 +80,7 @@ interface Values {
     | 'witness-decode-failed'
     | undefined;
   operation: OperationContext | undefined;
+  resolution: AttemptResolutionEvidence;
 }
 
 type Kind = keyof Values;
@@ -177,7 +202,25 @@ const EVENTS = {
   ],
 } as const satisfies Record<string, Definition>;
 
-type EventDefinition = (typeof EVENTS)[keyof typeof EVENTS];
+const TRANSACTION_EVENTS = {
+  attemptResolved: [
+    'info',
+    'attempt_resolved',
+    'Transaction attempt resolved and journal clear persisted',
+    {
+      signer: 'address',
+      attemptId: 'id',
+      transactionHash: 'hash',
+      nonce: 'uint',
+      resolution: 'resolution',
+    },
+  ],
+} as const satisfies Record<string, Definition>;
+
+type EventDefinition =
+  | (typeof EVENTS)[keyof typeof EVENTS]
+  | (typeof TRANSACTION_EVENTS)[keyof typeof TRANSACTION_EVENTS];
+
 type EventName = EventDefinition[1] | 'invalid_log_level';
 
 type OptionalKind = 'operation';
@@ -191,6 +234,11 @@ type Context<S extends Schema> = {
 export type RelayerLog = {
   readonly [K in keyof typeof EVENTS]:
     (context: Context<(typeof EVENTS)[K][3]>) => void;
+};
+
+type TransactionLog = {
+  readonly [K in keyof typeof TRANSACTION_EVENTS]:
+    (context: Context<(typeof TRANSACTION_EVENTS)[K][3]>) => void;
 };
 
 export interface LogDestination {
@@ -209,6 +257,9 @@ type FallbackCode =
   | 'LOG_RECORD_REJECTED'
   | 'LOG_OUTPUT_FAILED';
 
+const RUN_ID = randomUUID();
+const UUID_V4 =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_UINT256 = (1n << 256n) - 1n;
 const MAX_HEARTBEAT_CONSUMERS = 25;
 
@@ -227,7 +278,7 @@ const LEVELS = new Set([
 
 export function createRelayerLog(
   options: CreateRelayerLogOptions,
-): RelayerLog {
+): ScopedRelayerLog {
   const chainId = own(options, 'chainId');
 
   if (
@@ -289,6 +340,7 @@ export function createRelayerLog(
         time: Date.now(),
         component: 'daemon',
         chainId,
+        runId: RUN_ID,
         event: 'logging_failed',
         code,
         rejected,
@@ -323,6 +375,7 @@ export function createRelayerLog(
     base: {
       component: 'daemon',
       chainId,
+      runId: RUN_ID,
     },
     timestamp: pino.stdTimeFunctions.isoTime,
     // Projection already produced fresh summaries, preserve their structure.
@@ -348,13 +401,42 @@ export function createRelayerLog(
   function dispatch(
     definition: EventDefinition,
     context: unknown,
+    policy: SummarizeErrorOptions | undefined,
+    bindings: Readonly<Record<string, unknown>>,
   ): void {
     const [severity, event, message, schema] = definition;
     let record: Record<string, unknown>;
 
     try {
-      record = project(schema, context, errorSummary);
-      record.event = event;
+      const projected = project(schema, context, policy);
+
+      for (const key of ['signer', 'attemptId']) {
+        const bound = bindings[key];
+        const supplied = projected[key];
+
+        if (
+          typeof bound === 'string' &&
+          typeof supplied === 'string' &&
+          bound.toLowerCase() !== supplied.toLowerCase()
+        ) {
+          throw new TypeError('Conflicting logging identity.');
+        }
+      }
+
+      record = {
+        ...bindings,
+        ...projected,
+        event,
+      };
+
+      if (record.operationOmitted === true) {
+        delete record.operation;
+      }
+
+      if (event === 'attempt_resolved') {
+        validateResolutionRecord(record);
+      }
+
       fitRecord(record);
     } catch {
       fallback('LOG_RECORD_REJECTED', event);
@@ -376,12 +458,51 @@ export function createRelayerLog(
     );
   }
 
-  return Object.freeze(Object.fromEntries(
-    Object.entries(EVENTS).map(([method, definition]) => [
-      method,
-      (context: unknown) => dispatch(definition, context),
-    ]),
-  )) as RelayerLog;
+  function bind(
+    policy: SummarizeErrorOptions | undefined,
+    bindings: Readonly<Record<string, unknown>>,
+  ): ScopedRelayerLog {
+    const definitions = {
+      ...EVENTS,
+      ...TRANSACTION_EVENTS,
+    };
+
+    const methods = Object.fromEntries(
+      Object.entries(definitions).map(([method, definition]) => [
+        method,
+        (context: unknown) => dispatch(
+          definition,
+          context,
+          policy,
+          bindings,
+        ),
+      ]),
+    ) as RelayerLog & TransactionLog;
+
+    return Object.freeze({
+      ...methods,
+
+      withContext(context: RelayerLogContext): ScopedRelayerLog {
+        return bind(policy, Object.freeze({
+          ...bindings,
+          ...projectBindings(context, policy),
+        }));
+      },
+
+      withErrorSummary(
+        nextPolicy: SummarizeErrorOptions,
+      ): ScopedRelayerLog {
+        const snapshot = snapshotErrorSummaryOptions(nextPolicy);
+        if (snapshot === undefined) {
+          throw new TypeError('Invalid error summary policy.');
+        }
+
+        return bind(snapshot, bindings);
+      },
+    });
+  }
+
+  return bind(errorSummary, Object.freeze({}));
 }
 
 // Read declared own data fields only. Do not copy extras or accessors.
@@ -417,9 +538,9 @@ function snapshotErrorSummaryOptions(
     throw new TypeError('Invalid error summary policy.');
   }
 
-  return {
+  return Object.freeze({
     scrubText: scrubText as SummarizeErrorOptions['scrubText'],
-  }
+  });
 }
 
 function scalar(
@@ -438,6 +559,11 @@ function scalar(
     switch(name) {
       case 'load-checkpoint':
       case 'read-chain-heads':
+      case 'prepare-attempt':
+      case 'broadcast-attempt':
+      case 'reconcile-attempt':
+      case 'search-supersession':
+      case 'persist-journal':
         schema = {};
         break;
 
@@ -485,6 +611,19 @@ function scalar(
     context.name = name;
 
     return context;
+  }
+
+  if (kind === 'resolution') {
+    return projectResolution(value, errorSummary);
+  }
+
+  if (
+    kind === 'id' &&
+    typeof value === 'string' &&
+    value.length === 36 &&
+    UUID_V4.test(value)
+  ) {
+    return value;
   }
 
   if (kind === 'error') {
@@ -633,6 +772,115 @@ function project(
   }
 
   return record;
+}
+
+function projectBindings(
+  input: unknown,
+  policy: SummarizeErrorOptions | undefined,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = Object.create(null);
+  const cycle = own(input, 'cycle');
+
+  if (cycle !== undefined) {
+    if (
+      typeof cycle != 'number' ||
+      !Number.isSafeInteger(cycle) ||
+      cycle < 1
+    ) {
+      throw new TypeError('Invalid logging cycle.');
+    }
+
+    result.cycle = cycle;
+  }
+
+  for (const [key, kind] of [
+    ['signer', 'address'],
+    ['attemptId', 'id'],
+    ['operation', 'operation'],
+  ] as const) {
+    const value = own(input, key);
+    if (value !== undefined) {
+      result[key] = scalar(kind, value, policy);
+    }
+  }
+
+  return result;
+}
+
+function projectResolution(
+  input: unknown,
+  policy: SummarizeErrorOptions | undefined,
+): Record<string, unknown> {
+  const schema = {
+    blockNumber: 'uint',
+    blockHash: 'hash',
+  } as const;
+
+  const anchor = project(schema, own(input, 'anchor'), policy);
+  const inclusion = project(schema, own(input, 'inclusion'), policy);
+
+  const anchorNumber = BigInt(anchor.blockNumber as string);
+  const inclusionNumber = BigInt(inclusion.blockNumber as string);
+
+  if (
+    inclusionNumber > anchorNumber ||
+    (
+      inclusionNumber === anchorNumber &&
+      (inclusion.blockHash as string).toLowerCase() !==
+        (anchor.blockHash as string).toLowerCase()
+    )
+  ) {
+    throw new TypeError('Invalid resolution inclusion.');
+  }
+
+  const outcome = own(input, 'outcome');
+  let details: Record<string, unknown>;
+
+  switch (outcome) {
+    case 'success':
+    case 'reverted':
+      details = project({
+        transactionHash: 'hash',
+      }, input, policy);
+      break;
+
+    case 'superseded':
+      details = project({
+        consumingTransactionHash: 'hash',
+        nonceAtAnchor: 'uint',
+      }, input, policy);
+      break;
+
+    default:
+      throw new TypeError('Invalid resolution outcome.');
+  }
+
+  return {
+    outcome,
+    anchor,
+    inclusion,
+    ...details,
+  };
+}
+
+function validateResolutionRecord(
+  record: Record<string, unknown>,
+): void {
+  const evidence = record.resolution as Record<string, unknown>;
+  const hash = (record.transactionHash as string).toLowerCase();
+
+  if (evidence.outcome === 'superseded') {
+    if (
+      (evidence.consumingTransactionHash as string).toLowerCase() === hash ||
+      BigInt(evidence.nonceAtAnchor as string) <= BigInt(record.nonce as string)
+    ) {
+      throw new TypeError('Invalid supersession evidence.');
+    }
+  } else if (
+    (evidence.transactionHash as string).toLowerCase() !== hash
+  ) {
+    throw new TypeError('Mismatched receipt transaction hash.');
+  }
 }
 
 function fitRecord(

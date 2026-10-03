@@ -106,11 +106,21 @@ export interface ResolvedNetworkConfig {
   finality: FinalityPolicy;
 }
 
+export type ErrorSummaryFactory = (
+  signedTransactions?: readonly string[],
+) => Readonly<SummarizeErrorOptions>;
+
 export interface RelayerConfig extends ResolvedNetworkConfig {
   account: ReturnType<typeof privateKeyToAccount>;
 
-  // Configs constructed by callers may omit the configured scrubber.
+  // Configs constructed by callers may omit configured diagnostics.
   errorSummary?: SummarizeErrorOptions;
+  createErrorSummary?: ErrorSummaryFactory;
+}
+
+export interface LoadedRelayerConfig extends RelayerConfig {
+  errorSummary: Readonly<SummarizeErrorOptions>;
+  createErrorSummary: ErrorSummaryFactory;
 }
 
 export interface LoadRelayerConfigOptions {
@@ -121,7 +131,7 @@ export interface LoadRelayerConfigOptions {
 
 export async function loadRelayerConfig(
   options: LoadRelayerConfigOptions,
-): Promise<RelayerConfig> {
+): Promise<LoadedRelayerConfig> {
   const {
     source,
     env = process.env
@@ -147,12 +157,39 @@ export async function loadRelayerConfig(
     );
   }
 
-  const errorSummary: SummarizeErrorOptions = Object.freeze({
-    scrubText: createScrubber({
-      rpcUrls: [rpcUrl],
-      privateKey,
-    }),
-  });
+  const createErrorSummary: ErrorSummaryFactory = (
+    signedTransactions = [],
+  ) => {
+    if (!Array.isArray(signedTransactions)) {
+      throw new TypeError('Invalid signed transactions.');
+    }
+
+    const secrets: string[] = [];
+    
+    for (const signedTransaction of signedTransactions) {
+      if (
+        typeof signedTransaction !== 'string' ||
+        signedTransaction.length < 66 ||
+        signedTransaction.length % 2 !== 0 ||
+        !signedTransaction.startsWith('0x') ||
+        /[^0-9a-f]/.test(signedTransaction.slice(2))
+      ) {
+        throw new TypeError('Invalid signed transaction.');
+      }
+
+      secrets.push(signedTransaction);
+    }
+
+    return Object.freeze({
+      scrubText: createScrubber({
+        rpcUrls: [rpcUrl],
+        privateKey,
+        secrets,
+      }),
+    });
+  };
+
+  const errorSummary = createErrorSummary();
 
   // Install before file loading and deployment validation can fail.
   options.onDiagnostics?.(errorSummary);
@@ -163,6 +200,7 @@ export async function loadRelayerConfig(
     ...network,
     account,
     errorSummary,
+    createErrorSummary,
   };
 }
 

@@ -26,6 +26,7 @@ import {
 
 const faults = vi.hoisted(() => ({
   fileSync: undefined as Error | undefined,
+  directoryClose: undefined as Error | undefined,
   directorySync: undefined as Error | undefined,
   rename: undefined as Error | undefined,
   events: [] as string[],
@@ -79,7 +80,19 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
       vi.spyOn(handle, 'close').mockImplementation(async () => {
         faults.events.push(`${kind}:close`);
+
+        let failure: Error | undefined;
+
+        if (!isTemporaryFile) {
+          failure = faults.directoryClose;
+          faults.directoryClose = undefined;
+        }
+
         await close();
+
+        if (failure !== undefined) {
+          throw failure;
+        }
       });
 
       return handle;
@@ -116,6 +129,7 @@ describe('durableReplace', () => {
 
   beforeEach(async () => {
     faults.fileSync = undefined;
+    faults.directoryClose = undefined;
     faults.directorySync = undefined;
     faults.rename = undefined;
     faults.events.length = 0;
@@ -235,6 +249,59 @@ describe('durableReplace', () => {
     ).toHaveLength(1);
 
     expect(faults.events).toContain('directory:close');
+
+    await expectOnlyCheckpoint();
+  });
+
+  it('resolves when directory close fails after successful sync', async () => {
+    faults.directoryClose =
+      new Error('Injected directory close failure.');
+
+    await expect(
+      durableReplace(filePath, UPDATED),
+    ).resolves.toBeUndefined();
+
+    expect(faults.events).toEqual([
+      'directory:open',
+      'file:open',
+      'file:sync',
+      'file:close',
+      'rename',
+      'directory:sync',
+      'directory:close',
+    ]);
+
+    expect(await readFile(filePath, 'utf8')).toBe(UPDATED);
+
+    await expectOnlyCheckpoint();
+  });
+
+  it('preserves the directory sync error when directory close also fails', async () => {
+    const syncFailure =
+      new Error('Injected directory sync failure.');
+    const closeFailure =
+      new Error('Injected directory close failure.');
+
+    faults.directorySync = syncFailure;
+    faults.directoryClose = closeFailure;
+
+    await expect(
+      durableReplace(filePath, UPDATED),
+    ).rejects.toMatchObject({
+      cause: syncFailure,
+    });
+
+    expect(faults.events).toEqual([
+      'directory:open',
+      'file:open',
+      'file:sync',
+      'file:close',
+      'rename',
+      'directory:sync',
+      'directory:close',
+    ]);
+
+    expect(await readFile(filePath, 'utf8')).toBe(UPDATED);
 
     await expectOnlyCheckpoint();
   });

@@ -80,12 +80,10 @@ function isProcessId(
   return Number.isSafeInteger(Number(value));
 }
 
-type UUIDv4 = string & { readonly __brand: unique symbol };
-
 const UUID_V4_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-function isUuidV4(value: string | undefined): value is UUIDv4 {
+function isUuidV4(value: string | undefined): boolean {
   if (value === undefined || value.length !== 36) {
     return false;
   }

@@ -159,6 +159,7 @@ describe('createRelayerLog', () => {
     expect(Object.isFrozen(log)).toBe(true);
 
     expect(Object.keys(log).sort()).toEqual([
+      'attemptResolved',
       'checkpointAdvanced',
       'consumerFailed',
       'durableAnchorChanged',
@@ -170,6 +171,8 @@ describe('createRelayerLog', () => {
       'loggingFailed',
       'roundAlreadyStored',
       'roundImported',
+      'withContext',
+      'withErrorSummary',
     ]);
   });
 
@@ -286,6 +289,7 @@ describe('createRelayerLog', () => {
       expect(recordAt(lines, index)).toEqual({
         component: 'daemon',
         chainId: CHAIN_ID,
+        runId: expect.any(String),
         time: expect.any(String),
         ...record,
       });
@@ -386,6 +390,7 @@ describe('createRelayerLog', () => {
       time: expect.any(String),
       component: 'daemon',
       chainId: CHAIN_ID,
+      runId: expect.any(String),
       event: 'consumer_failed',
       msg: 'Consumer processing failed',
       consumer: CONSUMER,
@@ -936,6 +941,7 @@ describe('createRelayerLog', () => {
       time: expect.any(Number),
       component: 'daemon',
       chainId: CHAIN_ID,
+      runId: expect.any(String),
       event: 'logging_failed',
       code: 'LOG_RECORD_REJECTED',
       rejected: 'consumer_failed',

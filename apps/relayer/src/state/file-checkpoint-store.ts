@@ -123,7 +123,14 @@ export class FileCheckpointStore
 
       next.consumers.set(normalizedConsumer, nextBlock);
 
-      await this.writeState(next);
+      try {
+        await this.writeState(next);
+      } catch (error) {
+        // Replacement may have occurred before durability failed. Reload
+        // and durably rewrite the disk snapshot on next access.
+        this.state = undefined;
+        throw error;
+      }
 
       // Publish only after file and directory synchorization succeed.
       this.state = next;

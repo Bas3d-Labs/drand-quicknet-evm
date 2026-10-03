@@ -73,7 +73,7 @@ import {
 import {
   loadRelayerConfig,
   type NetworkSource,
-  type RelayerConfig,
+  type LoadedRelayerConfig,
 } from '../../src/config/config.js';
 
 import {
@@ -96,6 +96,10 @@ import {
 import {
   importQuicknetRoundWhenAvailable,
 } from '../../src/rounds/import-round-when-available.js';
+
+import {
+  createRpcMetrics,
+} from '../../src/diagnostics/rpc-metrics.js';
 
 import {
   UsageError,
@@ -132,7 +136,14 @@ const ACCOUNT = privateKeyToAccount(
   '0x1111111111111111111111111111111111111111111111111111111111111111',
 );
 
-const CONFIG: RelayerConfig = {
+const ERROR_SUMMARY = Object.freeze({
+  scrubText(text: string) {
+    return { text, removed: false };
+  },
+});
+
+const CONFIG: LoadedRelayerConfig = {
+  // Keep all existing fields.
   network: PRESET,
   chain: robinhoodTestnet,
   rpcUrl: 'https://rpc.example.test',
@@ -145,6 +156,8 @@ const CONFIG: RelayerConfig = {
     verifierRuntimeCodehash: HASH,
   },
   finality: { type: 'safe' },
+  errorSummary: ERROR_SUMMARY,
+  createErrorSummary: () => ERROR_SUMMARY,
 };
 
 const PUBLIC_CLIENT = {} as PublicClient;
@@ -298,6 +311,7 @@ beforeEach(() => {
     .mockReturnValue({
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
+      rpcMetrics: createRpcMetrics(),
     });
 
   vi.mocked(importQuicknetRound)
@@ -887,6 +901,7 @@ describe('diagnostic policy handoff', () => {
         return {
           ...CONFIG,
           errorSummary: policy,
+          createErrorSummary: () => policy,
         };
       });
 
