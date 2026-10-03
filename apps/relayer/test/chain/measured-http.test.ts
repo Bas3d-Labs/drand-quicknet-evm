@@ -19,7 +19,7 @@ import {
 } from '../../src/diagnostics/rpc-metrics.js';
 
 const SECRET = 'rpc-metrics-credential-canary';
-const URL = `https://rpc.example/${SECRET}`;
+const RPC_URL = `https://rpc.example/${SECRET}`;
 
 function reply(
   result: unknown,
@@ -41,7 +41,7 @@ function setup(config: HttpTransportConfig) {
   const metrics = createRpcMetrics();
 
   const client = createPublicClient({
-    transport: measuredHttp(URL, metrics, 'public', {
+    transport: measuredHttp(RPC_URL, metrics, 'public', {
       retryCount: 0,
       ...config,
     }),
@@ -116,52 +116,68 @@ describe('measured HTTP transport', () => {
       method: 'eth_blockNumber',
     })).toBe('0x2a');
 
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+
     expect(metrics.snapshot().logical[0]).toMatchObject({
       started: 1,
       succeeded: 1,
+      failed: 0,
+      inFlight: 0,
     });
 
     expect(metrics.snapshot().http[0]).toMatchObject({
       started: 2,
       succeeded: 1,
       failed: 1,
+      inFlight: 0,
+      statuses: {
+        '2xx': 1,
+        '3xx': 0,
+        '4xx': 0,
+        '5xx': 0,
+      },
     });
 
     expect(JSON.stringify(metrics.snapshot())).not.toContain(SECRET);
   });
 
   it('counts one batch envelope for two logical calls', async () => {
-    const fetchFn: typeof fetch = async (_input, init) => {
-      // Fixture response generation only.
-      // Production metrics never inspect bodies.
-      const requests = JSON.parse(
-        init!.body as string,
-      ) as { id: number }[];
+    const fetchFn = vi.fn<typeof fetch>(
+      async (_input, init) => {
+        // Fixture response generation only.
+        // Production metrics never inspect bodies.
+        const requests = JSON.parse(
+          init!.body as string,
+        ) as { id: number }[];
 
-      expect(requests).toHaveLength(2);
+        expect(requests).toHaveLength(2);
 
-      return new Response(JSON.stringify(
-        requests.map(({ id }) => ({
-          jsonrpc: '2.0',
-          id,
-          result: '0x2a',
-        })),
-      ), {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-    };
+        return new Response(JSON.stringify(
+          requests.map(({ id }) => ({
+            jsonrpc: '2.0',
+            id,
+            result: '0x2a',
+          })),
+        ), {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+      },
+    );
 
     const { client, metrics } = setup({
       batch: true,
       fetchFn,
     });
 
-    await Promise.all([
+    const results = await Promise.all([
       client.request({ method: 'eth_blockNumber' }),
       client.request({ method: 'eth_chainId' }),
     ]);
+
+    expect(results).toEqual(['0x2a', '0x2a']);
+    expect(fetchFn).toHaveBeenCalledOnce();
 
     expect(
       metrics.snapshot().logical.map((row) => row.started),
@@ -170,6 +186,8 @@ describe('measured HTTP transport', () => {
     expect(metrics.snapshot().http[0]).toMatchObject({
       started: 1,
       succeeded: 1,
+      failed: 0,
+      inFlight: 0,
     });
   });
 
@@ -196,11 +214,13 @@ describe('measured HTTP transport', () => {
     expect(metrics.snapshot().logical[0]).toMatchObject({
       failed: 1,
       succeeded: 0,
+      inFlight: 0,
     });
 
     expect(metrics.snapshot().http[0]).toMatchObject({
       failed: 0,
       succeeded: 1,
+      inFlight: 0,
       statuses: {
         '2xx': 1,
       },
@@ -222,6 +242,8 @@ describe('measured HTTP transport', () => {
 
     expect(metrics.snapshot().http[0]).toMatchObject({
       succeeded: 1,
+      failed: 0,
+      inFlight: 0,
       statuses: {
         '5xx': 1,
       },
@@ -229,7 +251,10 @@ describe('measured HTTP transport', () => {
 
     expect(metrics.snapshot().logical[0]).toMatchObject({
       failed: 1,
+      inFlight: 0,
     });
+
+    expect(JSON.stringify(metrics.snapshot())).not.toContain(SECRET);
   });
 
   it('forwards cancellation and counts a fetch rejection', async () => {
@@ -254,8 +279,15 @@ describe('measured HTTP transport', () => {
 
     expect(metrics.snapshot().http[0]).toMatchObject({
       started: 1,
+      succeeded: 0,
       failed: 1,
       inFlight: 0,
+      statuses: {
+        '2xx': 0,
+        '3xx': 0,
+        '4xx': 0,
+        '5xx': 0,
+      },
     });
 
     expect(metrics.snapshot().logical[0]).toMatchObject({
@@ -317,19 +349,24 @@ describe('measured HTTP transport', () => {
       }),
     );
 
-    expect(metrics.snapshot().logical[0]).toMatchObject({
-      started: 1,
-      inFlight: 1,
-      succeeded: 0,
-    });
-
-    finish(7);
+    try {
+      expect(metrics.snapshot().logical[0]).toMatchObject({
+        started: 1,
+        inFlight: 1,
+        succeeded: 0,
+        failed: 0,
+      });
+    } finally {
+      finish(7);
+      await pending;
+    }
 
     expect(await pending).toBe(7);
 
     expect(metrics.snapshot().logical[0]).toMatchObject({
       inFlight: 0,
       succeeded: 1,
+      failed: 0,
     });
   });
 
@@ -374,7 +411,8 @@ describe('measured HTTP transport', () => {
           statuses,
         },
       ]);
-  });
+    },
+  );
 
   it.each([
     0,
@@ -388,8 +426,8 @@ describe('measured HTTP transport', () => {
     async (status) => {
       const metrics = createRpcMetrics();
 
-      // Use a stub to preserve the exact status value without
-      // Response constructor validation or numeric coercion.
+      // Preserve the exact status without Response constructor
+      // validation or numeric coercion.
       const response = { status } as Response;
 
       const result = await metrics.http(
@@ -414,5 +452,145 @@ describe('measured HTTP transport', () => {
           },
         },
       ]);
+    },
+  );
+
+  it('preserves collector identity across snapshots and separates collectors', async () => {
+    const metrics = createRpcMetrics();
+    const before = metrics.snapshot();
+
+    await metrics.logical(
+      'public',
+      'eth_blockNumber',
+      async () => '0x2a',
+    );
+
+    const after = metrics.snapshot();
+    const another = createRpcMetrics().snapshot();
+
+    expect(before.collectorId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+
+    expect(after.collectorId).toBe(before.collectorId);
+    expect(after.startedAt).toBe(before.startedAt);
+
+    expect(new Date(before.startedAt).toISOString())
+      .toBe(before.startedAt);
+
+    expect(another.collectorId).not.toBe(before.collectorId);
+
+    expect(before.logical).toEqual([]);
+    expect(after.logical[0]).toMatchObject({
+      started: 1,
+      succeeded: 1,
+    });
+  });
+
+  it('keeps the logical call in flight when the response body stalls', async () => {
+    vi.useFakeTimers();
+
+    try {
+      let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+      let observeHeaders!: () => void;
+
+      const headersObserved = new Promise<void>((resolve) => {
+        observeHeaders = resolve;
+      });
+
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            bodyController = controller;
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+
+      const { client, metrics } = setup({
+        timeout: 10,
+        fetchFn: async () => response,
+        onFetchResponse() {
+          observeHeaders();
+        },
+      });
+
+      let settled = false;
+
+      // Handle rejection immediately, including during fixture cleanup.
+      const pending = client.request({
+        method: 'eth_blockNumber',
+      }).then(
+        (value) => {
+          settled = true;
+          return { kind: 'fulfilled' as const, value };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { kind: 'rejected' as const, error };
+        },
+      );
+
+      try {
+        // Surface an early request failure rather than waiting forever
+        // for a response hook that was never called.
+        await Promise.race([
+          headersObserved,
+          pending.then(() => {
+            throw new Error(
+              'Request settled before body-stall observation.',
+            );
+          }),
+        ]);
+
+        await vi.advanceTimersByTimeAsync(100);
+
+        expect(settled).toBe(false);
+
+        const snapshot = metrics.snapshot();
+
+        expect(snapshot.http[0]).toMatchObject({
+          started: 1,
+          succeeded: 1,
+          failed: 0,
+          inFlight: 0,
+          statuses: {
+            '2xx': 1,
+          },
+        });
+
+        expect(snapshot.logical[0]).toMatchObject({
+          started: 1,
+          succeeded: 0,
+          failed: 0,
+          inFlight: 1,
+        });
+      } finally {
+        // Terminate the reader even if an assertion fails.
+        bodyController.error(new Error('Fixture body terminated.'));
+        await pending;
+      }
+
+      expect((await pending).kind).toBe('rejected');
+
+      expect(metrics.snapshot().logical[0]).toMatchObject({
+        succeeded: 0,
+        failed: 1,
+        inFlight: 0,
+      });
+
+      expect(metrics.snapshot().http[0]).toMatchObject({
+        succeeded: 1,
+        failed: 0,
+        inFlight: 0,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

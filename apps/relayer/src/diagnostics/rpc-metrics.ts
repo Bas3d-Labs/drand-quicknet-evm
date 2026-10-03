@@ -1,5 +1,9 @@
 import { performance } from 'node:perf_hooks';
 
+import {
+  randomUUID,
+} from 'node:crypto';
+
 export type RpcClientRole = 'public' | 'wallet';
 
 // Unknown methods share one bucket. Arbitrary strings never become labels.
@@ -54,15 +58,17 @@ interface HttpCounters extends Counters {
 }
 
 /**
- * Cumulative for this collector's lifetime. Snapshots are detached copies.
- * Logical duration covers the transport request, including retries/body
- * decoding.
+ * Cumulative measurements since this collector was created.
+ * Compare counter deltas only between snapshots with the same collectorId.
+ * startedAt is the collector's creation time, not the snapshot time.
  * 
  * HTTP succeeded means a response was returned, including 4xx/5xx responses.
  * HTTP duration ends at response headers or fetch rejection, not 
  * body completion.
  */
 export interface RpcMetricsSnapshot {
+  readonly collectorId: string;
+  readonly startedAt: string;
   logical: LogicalCounters[];
   http: HttpCounters[];
 }
@@ -128,6 +134,8 @@ function statusClass(status: number): StatusClass | undefined {
 }
 
 export function createRpcMetrics(): RpcMetrics {
+  const collectorId = randomUUID();
+  const startedAt = new Date().toISOString();
   const logical = new Map<string, LogicalCounters>();
   const http = new Map<RpcClientRole, HttpCounters>();
 
@@ -158,6 +166,8 @@ export function createRpcMetrics(): RpcMetrics {
   return Object.freeze({
     snapshot(): RpcMetricsSnapshot {
       return {
+        collectorId,
+        startedAt,
         logical: [...logical.values()].map((row) => ({
           ...row,
         })),
