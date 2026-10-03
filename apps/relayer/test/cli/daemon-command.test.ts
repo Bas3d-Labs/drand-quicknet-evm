@@ -139,6 +139,10 @@ import {
 } from '../../src/diagnostics/relayer-log.js';
 
 import {
+  createRpcMetrics,
+} from '../../src/diagnostics/rpc-metrics.js';
+
+import {
   validateQuicknetConsumers
 } from '../../src/consumers/validate-consumers.js';
 
@@ -282,6 +286,7 @@ describe('runDaemonCommand', () => {
       .mockReturnValue({
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
+        rpcMetrics: createRpcMetrics(),
       });
 
     vi.mocked(verifyRegistryDeployment)

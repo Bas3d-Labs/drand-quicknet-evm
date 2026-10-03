@@ -98,6 +98,10 @@ import {
 } from '../../src/rounds/import-round-when-available.js';
 
 import {
+  createRpcMetrics,
+} from '../../src/diagnostics/rpc-metrics.js';
+
+import {
   UsageError,
   usageCode,
   type UsageCode,
@@ -307,6 +311,7 @@ beforeEach(() => {
     .mockReturnValue({
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
+      rpcMetrics: createRpcMetrics(),
     });
 
   vi.mocked(importQuicknetRound)
