@@ -432,6 +432,7 @@ describe('relayer log standard policy', () => {
         level,
         component: 'daemon',
         chainId: 4663,
+        runId: expect.any(String),
         event,
         msg: message,
         ...fields,
@@ -444,6 +445,7 @@ describe('relayer log standard policy', () => {
         'time',
         'component',
         'chainId',
+        'runId',
         'event',
         'msg',
         ...Object.keys(fields),
@@ -787,5 +789,319 @@ describe('relayer log standard policy', () => {
       .withErrorSummary({ scrubText });
 
     expect(on).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('correlation and resolution projection', () => {
+  const attemptId = '11111111-1111-4111-8111-111111111111';
+
+  const anchor = {
+    blockNumber: LARGE_UINT,
+    blockHash: EXPECTED_HASH,
+  };
+
+  const inclusion = {
+    blockNumber: LARGE_UINT - 1n,
+    blockHash: OBSERVED_HASH,
+  };
+
+  beforeEach(() => {
+    vi.mocked(writeSync).mockReset();
+  });
+
+  it('snapshots context and preserves it across policy replacement', () => {
+    const { log, lines } = capture();
+
+    const context = {
+      cycle: 7,
+      signer: CONSUMER as typeof CONSUMER,
+      attemptId,
+      operation: {
+        name: 'reconcile-attempt' as const,
+      },
+    };
+
+    const scoped = log
+      .withContext(context)
+      .withErrorSummary({ scrubText });
+
+    context.cycle = 99;
+
+    scoped.consumerFailed({
+      consumer: CONSUMER,
+      error: new Error(SECRET),
+    });
+
+    log.withErrorSummary({ scrubText })
+      .withContext({ cycle: 8 })
+      .consumerFailed({
+        consumer: CONSUMER,
+        error: new Error(SECRET),
+      });
+
+    log.heartbeat({ consumers: [] });
+
+    const records = lines.map((line) => JSON.parse(line));
+
+    expect(records[0]).toMatchObject({
+      cycle: 7,
+      signer: CONSUMER,
+      attemptId,
+      operation: {
+        name: 'reconcile-attempt',
+      },
+      err: {
+        message: '[REDACTED]',
+      },
+    });
+
+    expect(records[1]).toMatchObject({
+      cycle: 8,
+      err: {
+        message: '[REDACTED]',
+      },
+    });
+
+    expect(records[1]).not.toHaveProperty('attemptId');
+    expect(records[2]).not.toHaveProperty('cycle');
+    expect(records[2]).not.toHaveProperty('operation');
+    expect(records[2]).not.toHaveProperty('attemptId');
+
+    expect(records[0].runId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(new Set(records.map((record) => record.runId)).size).toBe(1);
+    expect(lines.join('')).not.toContain(SECRET);
+  });
+
+  it('does not retain an inherited operation when event context is invalid', () => {
+    const { log, lines } = capture();
+    const getter = vi.fn(() => SECRET);
+
+    const event = {
+      consumer: CONSUMER,
+      error: new Error('Failed.'),
+    } as const;
+
+    Object.defineProperty(event, 'operation', {
+      get: getter,
+    });
+
+    log.withContext({
+      operation: {
+        name: 'reconcile-attempt',
+      },
+    }).consumerFailed(event);
+
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      operationOmitted: true,
+    });
+
+    expect(JSON.parse(lines[0]!)).not.toHaveProperty('operation');
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it('rejects binding accessors without invoking them', () => {
+    const { log } = capture();
+    const getter = vi.fn(() => 7);
+    const context = {};
+
+    Object.defineProperty(context, 'cycle', {
+      get: getter,
+    });
+
+    expect(() => log.withContext(context)).toThrow(TypeError);
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    0,
+    -1,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+  ])('rejects invalid cycle %s', (cycle) => {
+    expect(() => capture().log.withContext({ cycle }))
+      .toThrow(TypeError);
+  });
+
+  it('projects only declared evidence and retains exact decimal integers', () => {
+    const { log, lines } = capture();
+
+    log.withContext({
+      attemptId,
+      signer: CONSUMER,
+    }).attemptResolved({
+      signer: CONSUMER,
+      attemptId,
+      transactionHash: EXPECTED_HASH,
+      nonce: LARGE_UINT,
+      resolution: {
+        outcome: 'success',
+        transactionHash: EXPECTED_HASH,
+        anchor: {
+          ...anchor,
+          signedTransaction: SECRET,
+        },
+        inclusion,
+        rawResponse: SECRET,
+      } as Parameters<typeof log.attemptResolved>[0]['resolution'],
+    });
+
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      event: 'attempt_resolved',
+      nonce: LARGE_UINT.toString(),
+      resolution: {
+        outcome: 'success',
+        transactionHash: EXPECTED_HASH,
+        anchor: {
+          blockNumber: LARGE_UINT.toString(),
+          blockHash: EXPECTED_HASH,
+        },
+        inclusion: {
+          blockNumber: (LARGE_UINT - 1n).toString(),
+          blockHash: OBSERVED_HASH,
+        },
+      },
+    });
+
+    expect(lines.join('')).not.toContain(SECRET);
+    expect(writeSync).not.toHaveBeenCalled();
+  });
+
+  it.each(['success', 'reverted'] as const)(
+    'rejects a mismatched %s receipt hash',
+    (outcome) => {
+      const { log, lines } = capture();
+
+      log.attemptResolved({
+        signer: CONSUMER,
+        attemptId,
+        transactionHash: EXPECTED_HASH,
+        nonce: 4n,
+        resolution: {
+          outcome,
+          transactionHash: OBSERVED_HASH,
+          anchor,
+          inclusion,
+        },
+      });
+
+      expect(lines).toHaveLength(0);
+      expect(writeSync).toHaveBeenCalledWith(
+        2,
+        expect.stringContaining('LOG_RECORD_REJECTED'),
+      );
+    },
+  );
+
+  it.each([
+    {
+      consumingTransactionHash: EXPECTED_HASH,
+      nonceAtAnchor: 5n,
+    },
+    {
+      consumingTransactionHash: OBSERVED_HASH,
+      nonceAtAnchor: 4n,
+    },
+  ])('rejects inconsistent supersession case %#', (evidence) => {
+    const { log, lines } = capture();
+
+    log.attemptResolved({
+      signer: CONSUMER,
+      attemptId,
+      transactionHash: EXPECTED_HASH,
+      nonce: 4n,
+      resolution: {
+        outcome: 'superseded',
+        anchor,
+        inclusion,
+        ...evidence,
+      },
+    });
+
+    expect(lines).toHaveLength(0);
+    expect(writeSync).toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      blockNumber: LARGE_UINT + 1n,
+      blockHash: EXPECTED_HASH,
+    },
+    {
+      blockNumber: LARGE_UINT,
+      blockHash: OBSERVED_HASH,
+    },
+  ])('rejects invalid inclusion case %#', (badInclusion) => {
+    const { log, lines } = capture();
+
+    log.attemptResolved({
+      signer: CONSUMER,
+      attemptId,
+      transactionHash: EXPECTED_HASH,
+      nonce: 4n,
+      resolution: {
+        outcome: 'success',
+        transactionHash: EXPECTED_HASH,
+        anchor,
+        inclusion: badInclusion,
+      },
+    });
+
+    expect(lines).toHaveLength(0);
+    expect(writeSync).toHaveBeenCalled();
+  });
+
+  it('rejects an event for a different bound attempt', () => {
+    const { log, lines } = capture();
+
+    log.withContext({ attemptId }).attemptResolved({
+      signer: CONSUMER,
+      attemptId: '22222222-2222-4222-8222-222222222222',
+      transactionHash: EXPECTED_HASH,
+      nonce: 4n,
+      resolution: {
+        outcome: 'success',
+        transactionHash: EXPECTED_HASH,
+        anchor,
+        inclusion,
+      },
+    });
+
+    expect(lines).toHaveLength(0);
+    expect(writeSync).toHaveBeenCalled();
+  });
+
+  it('accepts supersession and reverted outcomes without implying gate release', () => {
+    const { log, lines } = capture();
+
+    log.attemptResolved({
+      signer: CONSUMER,
+      attemptId,
+      transactionHash: EXPECTED_HASH,
+      nonce: 4n,
+      resolution: {
+        outcome: 'superseded',
+        consumingTransactionHash: OBSERVED_HASH,
+        nonceAtAnchor: 5n,
+        anchor,
+        inclusion,
+      },
+    });
+
+    log.attemptResolved({
+      signer: CONSUMER,
+      attemptId,
+      transactionHash: EXPECTED_HASH,
+      nonce: 4n,
+      resolution: {
+        outcome: 'reverted',
+        transactionHash: EXPECTED_HASH,
+        anchor,
+        inclusion,
+      },
+    });
+
+    expect(lines).toHaveLength(2);
+    expect(lines.join('')).not.toContain('signer_gate_released');
+    expect(writeSync).not.toHaveBeenCalled();
   });
 });

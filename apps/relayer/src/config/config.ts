@@ -107,7 +107,7 @@ export interface ResolvedNetworkConfig {
 }
 
 export type ErrorSummaryFactory = (
-  extraSecrets?: readonly string[],
+  signedTransactions?: readonly string[],
 ) => Readonly<SummarizeErrorOptions>;
 
 export interface RelayerConfig extends ResolvedNetworkConfig {
@@ -158,14 +158,36 @@ export async function loadRelayerConfig(
   }
 
   const createErrorSummary: ErrorSummaryFactory = (
-    extraSecrets =[],
-  ) => Object.freeze({
-    scrubText: createScrubber({
-      rpcUrls: [rpcUrl],
-      privateKey,
-      secrets: [...extraSecrets],
-    }),
-  });
+    signedTransactions = [],
+  ) => {
+    if (!Array.isArray(signedTransactions)) {
+      throw new TypeError('Invalid signed transactions.');
+    }
+
+    const secrets: string[] = [];
+    
+    for (const signedTransaction of signedTransactions) {
+      if (
+        typeof signedTransaction !== 'string' ||
+        signedTransaction.length < 66 ||
+        signedTransaction.length % 2 !== 0 ||
+        !signedTransaction.startsWith('0x') ||
+        /[^0-9a-f]/.test(signedTransaction.slice(2))
+      ) {
+        throw new TypeError('Invalid signed transaction.');
+      }
+
+      secrets.push(signedTransaction);
+    }
+
+    return Object.freeze({
+      scrubText: createScrubber({
+        rpcUrls: [rpcUrl],
+        privateKey,
+        secrets,
+      }),
+    });
+  };
 
   const errorSummary = createErrorSummary();
 

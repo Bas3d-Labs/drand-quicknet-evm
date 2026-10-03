@@ -29,7 +29,14 @@ export type RoundImportProgress = {
 
 export type OperationContext =
   | {
-      name: 'load-checkpoint' | 'read-chain-heads';
+      name: 
+        | 'load-checkpoint'
+        | 'read-chain-heads'
+        | 'prepare-attempt'
+        | 'broadcast-attempt'
+        | 'reconcile-attempt'
+        | 'search-supersession'
+        | 'persist-journal';
     }
   | {
       name: 'scan-requests';

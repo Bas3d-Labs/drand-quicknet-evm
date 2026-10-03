@@ -938,23 +938,46 @@ describe('attempt error summary policies', () => {
       env: createEnvironment(),
     });
 
-    const first = config.createErrorSummary(['first-attempt-secret']);
-    const second = config.createErrorSummary(['second-attempt-secret']);
+    const firstSecret = `0x${'ab'.repeat(64)}`;
+    const secondSecret = `0x${'cd'.repeat(64)}`;
+
+    const first = config.createErrorSummary([firstSecret]);
+    const second = config.createErrorSummary([secondSecret]);
 
     expect(
-      first.scrubText('first-attempt-secret').text,
+      first.scrubText(firstSecret).text,
     ).toBe('[REDACTED]');
 
     expect(
-      second.scrubText('first-attempt-secret').text,
-    ).toBe('first-attempt-secret');
+      second.scrubText(firstSecret).text,
+    ).toBe(firstSecret);
 
     expect(
-      config.errorSummary.scrubText('first-attempt-secret').text,
-    ).toBe('first-attempt-secret');
+      config.errorSummary.scrubText(firstSecret).text,
+    ).toBe(firstSecret);
 
     for (const policy of [config.errorSummary, first, second]) {
       expect(policy.scrubText(PRIVATE_KEY).text).toBe('[REDACTED]');
     }
+  });
+});
+
+describe('signed transaction secret guard', () => {
+  it.each([
+    '5',
+    '',
+    '0x',
+    `0x${'aa'.repeat(31)}`,
+    `0x${'AA'.repeat(32)}`,
+    `0x${'aa'.repeat(32)}a`,
+    `0x${'aa'.repeat(32)}a\n`,
+  ])('rejects implausible bytes without echoing them', async (secret) => {
+    const config = await loadRelayerConfig({
+      source: PRESET_SOURCE,
+      env: createEnvironment(),
+    });
+
+    expect(() => config.createErrorSummary([secret]))
+      .toThrow(new TypeError('Invalid signed transaction.'));
   });
 });

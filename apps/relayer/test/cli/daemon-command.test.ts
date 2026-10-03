@@ -33,7 +33,10 @@ const relayerLogMocks = vi.hoisted(() => ({
   durableFulfillmentUnavailable: vi.fn(),
   durableAnchorChanged: vi.fn(),
   durableAnchorUnavailable: vi.fn(),
+  attemptResolved: vi.fn(),
 
+  withContext: 
+    vi.fn<ScopedRelayerLog['withContext']>(),
   withErrorSummary:
     vi.fn<ScopedRelayerLog['withErrorSummary']>(),
 } satisfies ScopedRelayerLog));
@@ -318,6 +321,9 @@ describe('runDaemonCommand', () => {
     }
 
     relayerLogMocks.withErrorSummary
+      .mockReturnValue(relayerLogMocks);
+
+    relayerLogMocks.withContext
       .mockReturnValue(relayerLogMocks);
   });
 
