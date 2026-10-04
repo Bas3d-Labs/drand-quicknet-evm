@@ -12,12 +12,12 @@ export type CoordinatorBlocker =
   | 'unattributed-signer-activity'
   | 'conflict-search-exhausted';
 
-const BLOCKER_PRECEDENCE: readonly SignerBlocker[] = [
+export const BLOCKER_PRECEDENCE: readonly SignerBlocker[] = Object.freeze([
   'persistence-failure',
   'unattributed-signer-activity',
   'conflict-search-exhausted',
   'unresolved-attempt',
-];
+]);
 
 export interface SignerGateDecision {
   readonly open: boolean;

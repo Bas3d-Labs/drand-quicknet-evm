@@ -12,12 +12,17 @@ import {
 } from 'viem';
 
 import {
-  type SummarizeErrorOptions,
-} from './error-summary.js';
+  BLOCKER_PRECEDENCE,
+  type SignerBlocker,
+} from '../state/signer-gate.js';
 
 import {
   isFixedHex
 } from '../shared/hex.js';
+
+import {
+  type SummarizeErrorOptions,
+} from './error-summary.js';
 
 import {
   summarizeErrorForOutput,
@@ -27,6 +32,11 @@ import {
   projectRoundImportProgress,
   type OperationContext,
 } from './operation-context.js';
+
+import {
+  snapshotResolutionEvidence,
+  assertResolutionTransaction,
+} from './resolution-validation.js';
 
 import type {
   AttemptResolutionEvidence,
@@ -83,6 +93,9 @@ interface Values {
     | undefined;
   operation: OperationContext | undefined;
   resolution: AttemptResolutionEvidence;
+  blocker: SignerBlocker;
+  blockers: readonly SignerBlocker[];
+  timestamp: string;
 }
 
 type Kind = keyof Values;
@@ -205,6 +218,27 @@ const EVENTS = {
 } as const satisfies Record<string, Definition>;
 
 const TRANSACTION_EVENTS = {
+  signerBlocked: [
+    'warn',
+    'signer_blocked',
+    'Signer blocked',
+    {
+      signer: 'address',
+      reason: 'blocker',
+      blockers: 'blockers',
+      blockedSince: 'timestamp',
+    },
+  ],
+  signerGateReleased: [
+    'info',
+    'signer_gate_released',
+    'Signer gate released',
+    {
+      signer: 'address',
+      cleared: 'blockers',
+      blockedSince: 'timestamp',
+    },
+  ],
   attemptResolved: [
     'info',
     'attempt_resolved',
@@ -437,6 +471,13 @@ export function createRelayerLog(
         validateResolutionRecord(record);
       }
 
+      if (
+        event === 'signer_blocked' &&
+        record.reason !== (record.blockers as unknown[])[0]
+      ) {
+        throw new TypeError('Inconsistent primary signer block.');
+      }
+
       fitRecord(record);
     } catch {
       fallback('LOG_RECORD_REJECTED', event);
@@ -611,6 +652,66 @@ function scalar(
     context.name = name;
 
     return context;
+  }
+
+  if (kind === 'blocker') {
+    if (BLOCKER_PRECEDENCE.includes(value as SignerBlocker)) {
+      return value;
+    }
+
+    throw new TypeError('Invalid signed blocker.');
+  }
+
+  if (kind === 'blockers') {
+    if (!Array.isArray(value)) {
+      throw new TypeError('Invalid signer blockers.');
+    }
+
+    const length = own(value, 'length');
+
+    if (
+      typeof length !== 'number' ||
+      !Number.isSafeInteger(length) ||
+      length < 1 ||
+      length > BLOCKER_PRECEDENCE.length
+    ) {
+      throw new TypeError('Invalid signer blockers.');
+    }
+
+    const result: SignerBlocker[] = [];
+    let previous = -1;
+
+    for (let index = 0; index < length; index += 1) {
+      const reason = scalar(
+        'blocker',
+        own(value, String(index)),
+        errorSummary,
+      ) as SignerBlocker;
+
+      const position = BLOCKER_PRECEDENCE.indexOf(reason);
+
+      if (position <= previous) {
+        throw new TypeError('Invalid signer blocker order.');
+      }
+
+      previous = position;
+      result.push(reason);
+    }
+
+    return result;
+  }
+
+  if (kind === 'timestamp') {
+    if (
+      typeof value !== 'string' ||
+      value.length > 27 ||
+      !Number.isFinite(Date.parse(value)) ||
+      new Date(value).toISOString() !== value
+    ) {
+      throw new TypeError('Invalid diagnostic timestamp.');
+    }
+
+    return value;
   }
 
   if (kind === 'resolution') {

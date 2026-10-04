@@ -171,6 +171,8 @@ describe('createRelayerLog', () => {
       'loggingFailed',
       'roundAlreadyStored',
       'roundImported',
+      'signerBlocked',
+      'signerGateReleased',
       'withContext',
       'withErrorSummary',
     ]);
