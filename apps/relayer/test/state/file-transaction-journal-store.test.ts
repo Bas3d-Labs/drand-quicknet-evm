@@ -154,7 +154,7 @@ describe('file transaction journal store', () => {
     await writeFile(filePath, contents);
 
     await expect(openStore())
-      .rejects.toThrow('Transaction journal could not be loaded.');
+      .rejects.toThrow('Transaction journal could not be decoded.');
 
     expect(await readFile(filePath, 'utf8')).toBe(contents);
     expect(durableReplace).not.toHaveBeenCalled();
@@ -173,7 +173,7 @@ describe('file transaction journal store', () => {
     }, otherIdentity));
 
     await expect(openStore())
-      .rejects.toThrow('Transaction journal could not be loaded.');
+      .rejects.toThrow('Transaction journal could not be decoded.');
 
     expect(durableReplace).not.toHaveBeenCalled();
   });

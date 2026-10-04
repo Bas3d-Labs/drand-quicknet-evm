@@ -122,14 +122,24 @@ export class FileTransactionJournalStore
 
   async load(): Promise<TransactionJournalRead> {
     return this.exclusive(async () => {
-      try {
-        const contents = await readBoundedJournal(this.filePath);
-        if (contents === undefined) {
-          return {
-            kind: 'missing',
-          };
-        }
+      let contents: string | undefined;
 
+      try {
+        contents = await readBoundedJournal(this.filePath);
+      } catch (cause) {
+        throw new Error(
+          'Transaction journal could not be loaded.',
+          { cause },
+        );
+      }
+
+      if (contents === undefined) {
+        return {
+          kind: 'missing',
+        };
+      }
+
+      try {
         const snapshot = await decodeJournalSnapshot(
           contents,
           this.identity,
@@ -139,8 +149,11 @@ export class FileTransactionJournalStore
           kind: 'present',
           snapshot,
         };
-      } catch {
-        throw new Error('Transaction journal could not be loaded.');
+      } catch (cause) {
+        throw new Error(
+          'Transaction journal could not be decoded.',
+          { cause },
+        );
       }
     });
   }
@@ -186,6 +199,23 @@ export class FileTransactionJournalStore
   }
 }
 
+type JournalFileOperation = 'open' | 'stat' | 'read' | 'close';
+
+const FILE_ERROR_CODES = new Set([
+  'EACCES',
+  'EAGAIN',
+  'EBADF',
+  'EINTR',
+  'EIO',
+  'EISDIR',
+  'ELOOP',
+  'EMFILE',
+  'ENFILE',
+  'ENOENT',
+  'ENOTDIR',
+  'EPERM',
+]);
+
 async function readBoundedJournal(
   filePath: string,
 ): Promise<string | undefined> {
@@ -198,18 +228,25 @@ async function readBoundedJournal(
       constants.O_NOFOLLOW |
       constants.O_NONBLOCK,
     );
-  } catch (error) {
-    if (isMissingFile(error)) {
+  } catch (cause) {
+    const failure = fileOperationError('open', cause);
+    if (failure.code === 'ENOENT') {
       return undefined;
     }
 
-    throw error;
+    throw failure;
   }
 
+  let failed = false;
+
   try {
-    const stat = await file.stat();
-    if (!stat.isFile() || stat.size > MAX_JOURNAL_BYTES) {
-      throw new Error('Invalid journal file.');
+    const stat = await fileOperation('stat', () => file.stat());
+    if (!stat.isFile()) {
+      throw new Error('Journal path is not a regular file.');
+    }
+
+    if (stat.size > MAX_JOURNAL_BYTES) {
+      throw new Error('Journal file exceeds its size limit.');
     }
 
     // The extra byte distinguishes an exactly-full file from an
@@ -218,12 +255,12 @@ async function readBoundedJournal(
     let length = 0;
 
     while (length < buffer.length) {
-      const result = await file.read(
+      const result = await fileOperation('read', () => file.read(
         buffer,
         length,
         buffer.length - length,
         length,
-      );
+      ));
 
       if (result.bytesRead === 0) {
         break;
@@ -236,19 +273,72 @@ async function readBoundedJournal(
       throw new Error('Journal file exceeds its size limit.');
     }
 
-    // Reject invalid UTF-8 rather than silently replacing bytes.
-    return new TextDecoder('utf-8', {
-      fatal: true,
-    }).decode(buffer.subarray(0, length));
+    try {
+      return new TextDecoder('utf-8', {
+        fatal: true,
+      }).decode(buffer.subarray(0, length));
+    } catch {
+      throw new Error('Journal file contains invalid UTF-8.');
+    }
+  } catch (cause) {
+    failed = true;
+    throw cause;
   } finally {
-    await file.close();
+    try {
+      await fileOperation('close', () => file.close());
+    } catch (cause) {
+      // A cleanup failure must not replace the original read failure.
+      if (!failed) {
+        throw cause;
+      }
+    }
   }
 }
 
-function isMissingFile(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
+async function fileOperation<T>(
+  operation: JournalFileOperation,
+  action: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await action();
+  } catch (cause) {
+    throw fileOperationError(operation, cause);
+  }
+}
+
+function fileOperationError(
+  operation: JournalFileOperation,
+  cause: unknown,
+): Error & { code?: string } {
+  let code: string | undefined;
+
+  try {
+    if (typeof cause === 'object' && cause !== null) {
+      const descriptor = Object.getOwnPropertyDescriptor(cause, 'code');
+
+      if (
+        descriptor !== undefined &&
+        Object.hasOwn(descriptor, 'value') &&
+        typeof descriptor.value === 'string' &&
+        FILE_ERROR_CODES.has(descriptor.value)
+      ) {
+        code = descriptor.value;
+      }
+    }
+  } catch {
+    // Reflection failure must not expose the original exception.
   }
 
-  return Object.getOwnPropertyDescriptor(error, 'code')?.value === 'ENOENT';
+  let message = `Journal file ${operation} failed.`;
+
+  if (code !== undefined) {
+    message = `Journal file ${operation} failed (${code}).`;
+  }
+
+  const error: Error & { code?: string } = new Error(message);
+  if (code !== undefined) {
+    error.code = code;
+  }
+
+  return error;
 }
