@@ -35,7 +35,7 @@ export type OperationContext =
         | 'prepare-attempt'
         | 'broadcast-attempt'
         | 'reconcile-attempt'
-        | 'search-supersession'
+        | 'search-replacement'
         | 'persist-journal';
     }
   | {

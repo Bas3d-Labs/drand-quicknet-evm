@@ -994,14 +994,14 @@ describe('correlation and resolution projection', () => {
 
   it.each([
     {
-      consumingTransactionHash: EXPECTED_HASH,
+      replacementTransactionHash: EXPECTED_HASH,
       nonceAtAnchor: 5n,
     },
     {
-      consumingTransactionHash: OBSERVED_HASH,
+      replacementTransactionHash: OBSERVED_HASH,
       nonceAtAnchor: 4n,
     },
-  ])('rejects inconsistent supersession case %#', (evidence) => {
+  ])('rejects inconsistent replacement case %#', (evidence) => {
     const { log, lines } = capture();
 
     log.attemptResolved({
@@ -1010,7 +1010,7 @@ describe('correlation and resolution projection', () => {
       transactionHash: EXPECTED_HASH,
       nonce: 4n,
       resolution: {
-        outcome: 'superseded',
+        outcome: 'replaced',
         anchor,
         inclusion,
         ...evidence,
@@ -1070,7 +1070,7 @@ describe('correlation and resolution projection', () => {
     expect(writeSync).toHaveBeenCalled();
   });
 
-  it('accepts supersession and reverted outcomes without implying gate release', () => {
+  it('accepts replaced and reverted outcomes without implying gate release', () => {
     const { log, lines } = capture();
 
     log.attemptResolved({
@@ -1079,8 +1079,8 @@ describe('correlation and resolution projection', () => {
       transactionHash: EXPECTED_HASH,
       nonce: 4n,
       resolution: {
-        outcome: 'superseded',
-        consumingTransactionHash: OBSERVED_HASH,
+        outcome: 'replaced',
+        replacementTransactionHash: OBSERVED_HASH,
         nonceAtAnchor: 5n,
         anchor,
         inclusion,

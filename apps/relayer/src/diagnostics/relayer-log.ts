@@ -562,7 +562,7 @@ function scalar(
       case 'prepare-attempt':
       case 'broadcast-attempt':
       case 'reconcile-attempt':
-      case 'search-supersession':
+      case 'search-replacement':
       case 'persist-journal':
         schema = {};
         break;
@@ -844,9 +844,9 @@ function projectResolution(
       }, input, policy);
       break;
 
-    case 'superseded':
+    case 'replaced':
       details = project({
-        consumingTransactionHash: 'hash',
+        replacementTransactionHash: 'hash',
         nonceAtAnchor: 'uint',
       }, input, policy);
       break;
@@ -869,12 +869,12 @@ function validateResolutionRecord(
   const evidence = record.resolution as Record<string, unknown>;
   const hash = (record.transactionHash as string).toLowerCase();
 
-  if (evidence.outcome === 'superseded') {
+  if (evidence.outcome === 'replaced') {
     if (
-      (evidence.consumingTransactionHash as string).toLowerCase() === hash ||
+      (evidence.replacementTransactionHash as string).toLowerCase() === hash ||
       BigInt(evidence.nonceAtAnchor as string) <= BigInt(record.nonce as string)
     ) {
-      throw new TypeError('Invalid supersession evidence.');
+      throw new TypeError('Invalid replacement evidence.');
     }
   } else if (
     (evidence.transactionHash as string).toLowerCase() !== hash
