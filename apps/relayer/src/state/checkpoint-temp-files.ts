@@ -10,6 +10,10 @@ import {
   join,
 } from 'node:path';
 
+import {
+  isUuidV4
+} from '../shared/uuid.js';
+
 // Requires exclusive service ownership and a trusted state directory.
 // Call during initialization, before any checkpoint writes begin.
 export async function removeCheckpointTempFiles(
@@ -78,17 +82,6 @@ function isProcessId(
   }
 
   return Number.isSafeInteger(Number(value));
-}
-
-const UUID_V4_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-
-function isUuidV4(value: string | undefined): boolean {
-  if (value === undefined || value.length !== 36) {
-    return false;
-  }
-
-  return UUID_V4_REGEX.test(value);
 }
 
 function isMissingFile(error: unknown): boolean {
