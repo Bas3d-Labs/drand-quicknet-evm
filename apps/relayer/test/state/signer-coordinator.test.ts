@@ -270,7 +270,7 @@ describe('signer coordinator transitions', () => {
     expect(t.load).toHaveBeenCalledTimes(1);
 
     await expect(t.coordinator.retryPersistence())
-      .rejects.toThrow('No failed resolution');
+      .rejects.toThrow('No failed journal');
   });
 
   it('resolves without releasing while another blocker remains', async () => {
@@ -506,5 +506,357 @@ describe('signer coordinator transitions', () => {
     });
 
     expect(save).not.toHaveBeenCalled();
+  });
+});
+
+describe('durable signer observations', () => {
+  const observation = (
+    nonce: bigint,
+    blockNumber = 110n,
+  ) => ({
+    anchor: {
+      blockNumber,
+      blockHash: HASH,
+    },
+    nonce,
+  });
+
+  it('records observations without advancing the nonce or resolving the attempt', async () => {
+    const t = await setup();
+    t.lines.length = 0;
+
+    await t.coordinator.recordObservation(observation(4n), 2);
+
+    const saved = t.save.mock.calls[0]![0];
+
+    expect(saved).toMatchObject({
+      nextNonce: 4n,
+      lastObservation: observation(4n),
+      attempt: {
+        attemptId: t.attempt.attemptId,
+        replacementSearch: {
+          lowerBound: observation(4n),
+          searchedThrough: null,
+        },
+      },
+    });
+
+    expect(t.records()).toEqual([]);
+    expect(t.coordinator.status.open).toBe(false);
+  });
+
+  it('preserves the earlier observation when the nonce has already advanced', async () => {
+    const t = await setup();
+
+    await t.coordinator.recordObservation(observation(5n));
+
+    expect(
+      t.save.mock.calls[0]![0].attempt?.replacementSearch,
+    ).toEqual({
+      lowerBound: t.snapshot.lastObservation,
+      searchedThrough: null,
+    });
+  });
+
+  it('keeps an established lower bound across later observations', async () => {
+    const t = await setup();
+
+    await t.coordinator.recordObservation(observation(4n));
+    await t.coordinator.recordObservation(observation(5n, 120n));
+
+    expect(
+      t.save.mock.calls[1]![0].attempt?.replacementSearch,
+    ).toEqual({
+      lowerBound: observation(4n),
+      searchedThrough: null,
+    });
+  });
+
+  it('closes an otherwise open gate while saving and rejects overlapping operations', async () => {
+    const t = await setup({ empty: true });
+    t.coordinator.completeRecovery();
+
+    let finish!: () => void;
+    let entered!: () => void;
+
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+
+    t.save.mockImplementationOnce(() => {
+      entered();
+
+      return new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    });
+
+    const pending = t.coordinator.recordObservation(
+      observation(4n),
+    );
+
+    try {
+      await started;
+
+      expect(t.coordinator.status.open).toBe(false);
+
+      await expect(
+        t.coordinator.recordObservation(observation(4n)),
+      ).rejects.toThrow('already in progress');
+
+      await expect(
+        t.coordinator.retryPersistence(),
+      ).rejects.toThrow('already in progress');
+    } finally {
+      finish();
+      await pending;
+    }
+
+    expect(t.coordinator.status.open).toBe(true);
+    expect(t.records()).toEqual([]);
+  });
+
+  it('retries the exact failed observation and preserves unexpected activity across restart', async () => {
+    const t = await setup({ empty: true });
+    t.coordinator.completeRecovery();
+
+    let visible = t.snapshot;
+
+    t.save.mockImplementationOnce(async (snapshot) => {
+      visible = snapshot;
+      throw new Error('Durability uncertain');
+    });
+
+    const input = observation(8n);
+
+    await expect(
+      t.coordinator.recordObservation(input),
+    ).rejects.toThrow('Journal persistence');
+
+    expect(visible.lastObservation.nonce).toBe(8n);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      primaryReason: 'persistence-failure',
+    });
+
+    input.nonce = 4n;
+
+    await expect(
+      t.coordinator.recordObservation(input),
+    ).rejects.toThrow('must be retried');
+
+    await expect(
+      t.coordinator.resolveAttempt(t.evidence),
+    ).rejects.toThrow('must be retried');
+
+    t.save.mockRejectedValueOnce(new Error('Retry failed'));
+
+    await expect(
+      t.coordinator.retryPersistence(),
+    ).rejects.toThrow('Journal persistence');
+
+    await t.coordinator.retryPersistence(3);
+
+    expect(t.save.mock.calls[2]![0])
+      .toBe(t.save.mock.calls[0]![0]);
+
+    expect(t.load).toHaveBeenCalledTimes(1);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      primaryReason: 'unattributed-signer-activity',
+    });
+
+    expect(t.records().some((record) =>
+      record.event === 'attempt_resolved' ||
+      record.event === 'signer_gate_released',
+    )).toBe(false);
+
+    const restarted = await SignerCoordinator.create({
+      identity: IDENTITY,
+      store: {
+        load: async () => ({
+          kind: 'present',
+          snapshot: visible,
+        }),
+        save: t.save,
+      },
+      log: createRelayerLog({
+        chainId: IDENTITY.chainId,
+      }),
+      createErrorSummary: t.factory,
+    });
+
+    restarted.completeRecovery();
+
+    expect(restarted.status).toMatchObject({
+      open: false,
+      primaryReason: 'unattributed-signer-activity',
+    });
+
+    await expect(
+      restarted.recordObservation(observation(4n)),
+    ).rejects.toThrow('Cannot overwrite');
+
+    expect(t.save).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries an ordinary observation without emitting an attempt resolution', async () => {
+    const t = await setup({ empty: true });
+    t.coordinator.completeRecovery();
+
+    t.save.mockRejectedValueOnce(new Error('Failed'));
+
+    await expect(
+      t.coordinator.recordObservation(observation(4n)),
+    ).rejects.toThrow();
+
+    await t.coordinator.retryPersistence();
+
+    expect(t.records().map((record) => record.event)).toEqual([
+      'signer_blocked',
+      'signer_gate_released',
+    ]);
+
+    expect(t.coordinator.status.open).toBe(true);
+  });
+
+  it('does not complete startup recovery merely by saving an observation', async () => {
+    const t = await setup({ empty: true });
+
+    await t.coordinator.recordObservation(observation(4n));
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+    });
+  });
+
+  it('requires fresh recovery when the observed nonce is behind the journal', async () => {
+    const t = await setup({ empty: true });
+    t.coordinator.completeRecovery();
+
+    await expect(
+      t.coordinator.recordObservation(observation(3n)),
+    ).rejects.toThrow('Observed nonce is behind the journal. Recovery is required.');
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+    });
+
+    expect(t.save).not.toHaveBeenCalled();
+
+    await t.coordinator.recordObservation(observation(4n));
+
+    expect(t.coordinator.status.open).toBe(false);
+  });
+
+  it('rejects invalid observation fields before saving without invoking accessors', async () => {
+    const t = await setup();
+    const input = observation(4n);
+    const getter = vi.fn(() => 4n);
+
+    Object.defineProperty(input, 'nonce', {
+      get: getter,
+    });
+
+    await expect(
+      t.coordinator.recordObservation(input),
+    ).rejects.toThrow('Invalid transaction journal snapshot');
+
+    expect(getter).not.toHaveBeenCalled();
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.coordinator.status.persistenceState).toBe('idle');
+  });
+
+  it('persists excess nonce evidence with a replacement clear for restart recovery', async () => {
+    const t = await setup();
+
+    await t.coordinator.resolveAttempt({
+      outcome: 'replaced',
+      anchor: t.evidence.anchor,
+      inclusion: t.evidence.inclusion,
+      replacementTransactionHash: OTHER,
+      nonceAtAnchor: 8n,
+    });
+
+    const saved = t.save.mock.calls[0]![0];
+
+    expect(saved).toMatchObject({
+      attempt: null,
+      nextNonce: 5n,
+      lastObservation: observation(8n),
+    });
+
+    const restarted = await SignerCoordinator.create({
+      identity: IDENTITY,
+      store: {
+        load: async () => ({
+          kind: 'present',
+          snapshot: saved,
+        }),
+        save: t.save,
+      },
+      log: createRelayerLog({
+        chainId: IDENTITY.chainId,
+      }),
+      createErrorSummary: t.factory,
+    });
+
+    restarted.completeRecovery();
+
+    expect(restarted.status).toMatchObject({
+      open: false,
+      primaryReason: 'unattributed-signer-activity',
+    });
+  });
+
+  it('does not erase an existing higher nonce observation during replacement clear', async () => {
+    const t = await setup({ extraNonce: true });
+
+    await t.coordinator.resolveAttempt({
+      outcome: 'replaced',
+      anchor: t.evidence.anchor,
+      inclusion: t.evidence.inclusion,
+      replacementTransactionHash: OTHER,
+      nonceAtAnchor: 5n,
+    });
+
+    expect(t.save.mock.calls[0]![0].lastObservation)
+      .toEqual(t.snapshot.lastObservation);
+
+    expect(t.coordinator.status.open).toBe(false);
+  });
+
+  it('does not initialize a missing journal from an ordinary observation', async () => {
+    const save = vi.fn<TransactionJournalStore['save']>();
+
+    const coordinator = await SignerCoordinator.create({
+      identity: IDENTITY,
+      store: {
+        load: async () => ({
+          kind: 'missing',
+        }),
+        save,
+      },
+      log: createRelayerLog({
+        chainId: IDENTITY.chainId,
+      }),
+      createErrorSummary: () => ({
+        scrubText: createScrubber({
+          privateKey: KEY,
+          rpcUrls: [],
+        }),
+      }),
+    });
+
+    await expect(
+      coordinator.recordObservation(observation(4n)),
+    ).rejects.toThrow('initialized journal');
+
+    expect(save).not.toHaveBeenCalled();
+    expect(coordinator.status.open).toBe(false);
   });
 });

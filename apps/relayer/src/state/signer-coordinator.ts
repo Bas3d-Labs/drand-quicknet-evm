@@ -27,9 +27,14 @@ import {
 } from './signer-gate.js';
 
 import type {
+  AnchoredNonceObservation,
   JournalIdentity,
   TransactionJournalStore,
 } from './transaction-journal.js';
+
+import {
+  validateJournalSnapshotStructure,
+} from './transaction-journal-validation.js';
 
 export interface SignerCoordinatorOptions {
   readonly identity: JournalIdentity;
@@ -42,12 +47,18 @@ export interface SignerCoordinatorOptions {
 type ResolutionEvent =
   Parameters<ScopedRelayerLog['attemptResolved']>[0];
 
+type PendingWrite =
+  | {
+      kind: 'resolution';
+      event: ResolutionEvent;
+    }
+  | {
+      kind: 'observation';
+    };
+
 /**
- * Owns recovery gate transitions and evidence-backed clears of
- * existing attempts.
- * 
- * The reconciler must establish canonicality before supplying
- * resolution evidence.
+ * Coordinates durable nonce observations and attempt resolution so restart
+ * recovery and signer availability follow the same journal state.
  */
 export class SignerCoordinator {
   private recoveryComplete = false;
@@ -59,7 +70,7 @@ export class SignerCoordinator {
 
   private blockedSince: string | null = null;
   private previousPrimary: SignerBlocker | null = null;
-  private pendingResolution: ResolutionEvent | undefined;
+  private pendingWrite: PendingWrite | undefined;
   private attemptLog: ScopedRelayerLog | undefined;
 
   private constructor(
@@ -102,19 +113,8 @@ export class SignerCoordinator {
 
       coordinator.blockedSince = attempt.createdAt;
     }
-
-    if (current.kind === 'present') {
-      let accountedNonce = current.snapshot.nextNonce;
-
-      if (current.snapshot.attempt !== null) {
-        accountedNonce += 1n;
-      }
-
-      if (current.snapshot.lastObservation.nonce > accountedNonce) {
-        coordinator.blockers.add('unattributed-signer-activity');
-      }
-    }
-
+    
+    coordinator.latchUnattributedActivity();
     coordinator.refresh();
 
     return coordinator;
@@ -166,12 +166,6 @@ export class SignerCoordinator {
     this.refresh(cycle);
   }
 
-  recordSearchProgress(cycle?: number): void {
-    this.assertAvailable();
-    this.blockers.delete('conflict-search-exhausted');
-    this.refresh(cycle);
-  }
-
   async resolveAttempt(
     evidence: AttemptResolutionEvidence,
     cycle?: number,
@@ -179,7 +173,7 @@ export class SignerCoordinator {
     this.assertAvailable();
 
     if (
-      this.pendingResolution !== undefined ||
+      this.pendingWrite !== undefined ||
       this.persistence.state !== 'idle'
     ) {
       throw new Error('A pending journal write must be retried first.');
@@ -191,7 +185,7 @@ export class SignerCoordinator {
       current.kind !== 'present' ||
       current.snapshot.attempt === null
     ) {
-      throw new Error('No recorded attempt is available to translate.');
+      throw new Error('No recorded attempt is available to resolve.');
     }
 
     const attempt = current.snapshot.attempt;
@@ -206,13 +200,28 @@ export class SignerCoordinator {
       this.blockers.add('unattributed-signer-activity');
     }
 
-    this.pendingResolution = Object.freeze({
-      signer: this.identity.signer,
-      attemptId: attempt.attemptId,
-      transactionHash: attempt.transactionHash,
-      nonce: attempt.nonce,
-      resolution,
-    });
+    this.pendingWrite = {
+      kind: 'resolution',
+      event: Object.freeze({
+        signer: this.identity.signer,
+        attemptId: attempt.attemptId,
+        transactionHash: attempt.transactionHash,
+        nonce: attempt.nonce,
+        resolution,
+      }),
+    };
+
+    let lastObservation = current.snapshot.lastObservation;
+
+    if (
+      resolution.outcome === 'replaced' &&
+      resolution.nonceAtAnchor > lastObservation.nonce
+    ) {
+      lastObservation = Object.freeze({
+        anchor: resolution.anchor,
+        nonce: resolution.nonceAtAnchor,
+      });
+    }
 
     this.busy = true;
 
@@ -221,10 +230,11 @@ export class SignerCoordinator {
         ...current.snapshot,
         nextNonce: attempt.nonce + 1n,
         attempt: null,
+        lastObservation,
       });
     } catch (error) {
       if (this.persistence.state === 'idle') {
-        this.pendingResolution = undefined;
+        this.pendingWrite = undefined;
       }
 
       this.busy = false;
@@ -233,17 +243,160 @@ export class SignerCoordinator {
       throw error;
     }
 
-    this.finishResolution(cycle);
+    this.finishWrite(cycle);
   }
 
+  /** 
+   * Saves a verified nonce observation for restart recovery and preserves a
+   * starting point for replacement search before the nonce is consumed.
+   */
+  async recordObservation(
+    observation: AnchoredNonceObservation,
+    cycle?: number,
+  ): Promise<void> {
+    this.assertAvailable();
+
+    if (
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      throw new Error('A pending journal write must be retried first.');
+    }
+
+    const current = this.persistence.current;
+    if (current.kind !== 'present') {
+      throw new Error(
+        'Cannot record an observation without an initialized journal.'
+      );
+    }
+
+    if (this.blockers.has('unattributed-signer-activity')) {
+      throw new Error(
+        'Cannot overwrite the observation of unattributed signer activity.'
+      );
+    }
+
+    const next = validateJournalSnapshotStructure({
+      ...current.snapshot,
+      lastObservation: observation,
+    }, this.identity);
+
+    if (next.lastObservation.nonce < next.nextNonce) {
+      this.recoveryComplete = false;
+      this.refresh(cycle);
+
+      throw new Error(
+        'Observed nonce is behind the journal. Recovery is required.'
+      );
+    }
+
+    let attempt = next.attempt;
+
+    if (
+      attempt !== null &&
+      attempt.replacementSearch === null
+    ) {
+      let lowerBound: AnchoredNonceObservation | undefined;
+
+      if (next.lastObservation.nonce <= attempt.nonce) {
+        lowerBound = next.lastObservation;
+      } else if (
+        current.snapshot.lastObservation.nonce <= attempt.nonce
+      ) {
+        lowerBound = current.snapshot.lastObservation;
+      }
+
+      if (lowerBound !== undefined) {
+        attempt = Object.freeze({
+          ...attempt,
+          replacementSearch: Object.freeze({
+            lowerBound,
+            searchedThrough: null,
+          }),
+        });
+      }
+    }
+
+    this.pendingWrite = {
+      kind: 'observation',
+    };
+
+    this.busy = true;
+
+    try {
+      await this.persistence.save({
+        ...next,
+        attempt,
+      });
+    } catch (error) {
+      if (this.persistence.state === 'idle') {
+        this.pendingWrite = undefined;
+      }
+
+      this.busy = false;
+      this.refresh(cycle);
+
+      throw error;
+    }
+
+    this.finishWrite(cycle);
+  }
+
+  recordSearchProgress(cycle?: number): void {
+    this.assertAvailable();
+    this.blockers.delete('conflict-search-exhausted');
+    this.refresh(cycle);
+  }
+
+  private finishWrite(cycle?: number): void {
+    const pending = this.pendingWrite!;
+
+    if (pending.kind === 'resolution') {
+      // Keep the gate closed and the attempt policy alive through
+      // this emission.
+      this.emit(
+        (log) => log.attemptResolved(pending.event),
+        cycle,
+      );
+    }
+
+    this.pendingWrite = undefined;
+    this.busy = false;
+
+    this.latchUnattributedActivity();
+    this.refresh(cycle);
+  }
+
+  private latchUnattributedActivity(): void {
+    const current = this.persistence.current;
+
+    if (current.kind !== 'present') {
+      return;
+    }
+
+    let accountedNonce = current.snapshot.nextNonce;
+
+    if (current.snapshot.attempt !== null) {
+      accountedNonce += 1n;
+    }
+
+    if (current.snapshot.lastObservation.nonce > accountedNonce) {
+      this.blockers.add('unattributed-signer-activity');
+    }
+  }
+
+  /**
+   * Retries the retained journal snapshot after a persistence failure,
+   * then applies the corresponding observation or resolution transition.
+   */
   async retryPersistence(cycle?: number): Promise<void> {
     this.assertAvailable();
 
     if (
-      this.pendingResolution === undefined ||
+      this.pendingWrite === undefined ||
       this.persistence.state !== 'failed'
     ) {
-      throw new Error('No failed resolution write is available to retry.');
+      throw new Error('No failed journal write is available to retry.');
     }
 
     this.busy = true;
@@ -257,18 +410,7 @@ export class SignerCoordinator {
       throw error;
     }
 
-    this.finishResolution(cycle);
-  }
-
-  private finishResolution(cycle?: number): void {
-    const event = this.pendingResolution!;
-
-    // Keep the gate closed and the attempt policy alive through this emission.
-    this.emit((log) => log.attemptResolved(event), cycle);
-
-    this.pendingResolution = undefined;
-    this.busy = false;
-    this.refresh(cycle);
+    this.finishWrite(cycle);
   }
 
   private refresh(cycle?: number): void {
@@ -312,7 +454,7 @@ export class SignerCoordinator {
       this.episodeReasons.clear();
     }
 
-    if (status.open && this.pendingResolution === undefined) {
+    if (status.open && this.pendingWrite === undefined) {
       this.attemptLog = undefined;
     }
   }
