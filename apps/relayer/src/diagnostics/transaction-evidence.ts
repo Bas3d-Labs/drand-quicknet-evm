@@ -12,7 +12,7 @@ interface InclusionEvidence {
 }
 
 /**
- * `replaced means a transaction with a different hash from the recorded
+ * `replaced` means a transaction with a different hash from the recorded
  * attempt, sent from the same signer, consumed the recorded nonce at the
  * configured durable anchor.
  * 
