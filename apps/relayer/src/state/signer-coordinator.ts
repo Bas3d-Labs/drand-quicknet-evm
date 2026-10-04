@@ -1,3 +1,11 @@
+import {
+  blockAnchorsMatch,
+} from '../chain/block-anchor.js';
+
+import type {
+  ReplacementSearchResult,
+} from '../chain/search-attempt-replacement.js';
+
 import type {
   ErrorSummaryFactory,
 } from '../config/config.js';
@@ -44,6 +52,15 @@ export interface SignerCoordinatorOptions {
   readonly now?: () => number;
 }
 
+export interface RecordSearchProgressOptions {
+  readonly attemptId: string;
+  readonly observation: AnchoredNonceObservation;
+  readonly result: Extract<
+    ReplacementSearchResult,
+    { status: 'not-found' }
+  >;
+}
+
 type ResolutionEvent =
   Parameters<ScopedRelayerLog['attemptResolved']>[0];
 
@@ -54,6 +71,10 @@ type PendingWrite =
     }
   | {
       kind: 'observation';
+    }
+  | {
+      kind: 'search-progress';
+      exhausted: boolean;
     };
 
 /**
@@ -115,6 +136,7 @@ export class SignerCoordinator {
     }
     
     coordinator.latchUnattributedActivity();
+    coordinator.latchExhaustedSearch();
     coordinator.refresh();
 
     return coordinator;
@@ -342,28 +364,150 @@ export class SignerCoordinator {
     this.finishWrite(cycle);
   }
 
-  recordSearchProgress(cycle?: number): void {
+  /**
+   * Saves the boundary reached by a checked replacement search so a later
+   * cycle or restart can continue without rescanning completed blocks.
+   * A fully searched range without a match remains an unresolved conflict.
+   */
+  async recordSearchProgress(
+    options: RecordSearchProgressOptions,
+    cycle?: number,
+  ): Promise<void> {
     this.assertAvailable();
-    this.blockers.delete('conflict-search-exhausted');
-    this.refresh(cycle);
+
+    if (
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      throw new Error('A pending journal write must be retried first.');
+    }
+
+    const current = this.persistence.current;
+
+    if (
+      current.kind !== 'present' ||
+      current.snapshot.attempt === null
+    ) {
+      throw new Error('No record attempt is available for search progress.');
+    }
+
+    const attempt = current.snapshot.attempt;
+    const search = attempt.replacementSearch;
+
+    if (
+      options.attemptId !== attempt.attemptId ||
+      search === null
+    ) {
+      throw new TypeError('Search progress does not match the recorded attempt.');
+    }
+
+    const {
+      result,
+      observation,
+    } = options;
+
+    if (result.status !== 'not-found') {
+      throw new TypeError('Invalid replacement search progress.');
+    }
+
+    const next = validateJournalSnapshotStructure({
+      ...current.snapshot,
+      lastObservation: observation,
+      attempt: {
+        ...attempt,
+        replacementSearch: {
+          lowerBound: search.lowerBound,
+          searchedThrough: result.searchedThrough,
+        },
+      },
+    }, this.identity);
+
+    const savedObservation = current.snapshot.lastObservation;
+    const through = next.attempt!.replacementSearch!.searchedThrough!;
+    const previous = search.searchedThrough ?? search.lowerBound.anchor;
+
+    const scanned = through.blockNumber - previous.blockNumber;
+    const remaining =
+      next.lastObservation.anchor.blockNumber - through.blockNumber;
+
+    if (
+      !blockAnchorsMatch(
+        next.lastObservation.anchor,
+        savedObservation.anchor,
+      ) ||
+      next.lastObservation.nonce !== savedObservation.nonce ||
+      next.lastObservation.nonce <= attempt.nonce ||
+      scanned < 0n ||
+      remaining < 0n ||
+      result.scannedBlocks !== scanned ||
+      result.remainingBlocks !== remaining
+    ) {
+      throw new TypeError('Invalid replacement search progress.');
+    }
+
+    if (
+      remaining === 0n &&
+      !blockAnchorsMatch(through, next.lastObservation.anchor)
+    ) {
+      throw new TypeError('Invalid replacement search progress.');
+    }
+
+    if (scanned === 0n) {
+      if (!blockAnchorsMatch(previous, through)) {
+        throw new TypeError('Invalid replacement search progress.');
+      }
+
+      return;
+    }
+
+    this.pendingWrite = {
+      kind: 'search-progress',
+      exhausted: remaining === 0n,
+    };
+
+    this.busy = true;
+
+    try {
+      await this.persistence.save(next);
+    } catch (error) {
+      if (this.persistence.state === 'idle') {
+        this.pendingWrite = undefined;
+      }
+
+      this.busy = false;
+      this.refresh(cycle);
+
+      throw error;
+    }
+
+    this.finishWrite(cycle);
   }
 
   private finishWrite(cycle?: number): void {
     const pending = this.pendingWrite!;
 
     if (pending.kind === 'resolution') {
+      this.blockers.delete('conflict-search-exhausted');
+
       // Keep the gate closed and the attempt policy alive through
       // this emission.
       this.emit(
         (log) => log.attemptResolved(pending.event),
         cycle,
       );
+    } else if (pending.kind === 'search-progress') {
+      if (pending.exhausted) {
+        this.blockers.add('conflict-search-exhausted');
+      } else {
+        this.blockers.delete('conflict-search-exhausted');
+      }
     }
 
     this.pendingWrite = undefined;
     this.busy = false;
 
     this.latchUnattributedActivity();
+    this.latchExhaustedSearch();
     this.refresh(cycle);
   }
 
@@ -382,6 +526,30 @@ export class SignerCoordinator {
 
     if (current.snapshot.lastObservation.nonce > accountedNonce) {
       this.blockers.add('unattributed-signer-activity');
+    }
+  }
+
+  private latchExhaustedSearch(): void {
+    const current = this.persistence.current;
+
+    if (current.kind !== 'present') {
+      return;
+    }
+
+    const attempt = current.snapshot.attempt;
+    const through = attempt?.replacementSearch?.searchedThrough;
+
+    if (
+      attempt !== null &&
+      through !== null &&
+      through !== undefined &&
+      current.snapshot.lastObservation.nonce > attempt.nonce &&
+      blockAnchorsMatch(
+        through,
+        current.snapshot.lastObservation.anchor,
+      )
+    ) {
+      this.blockers.add('conflict-search-exhausted');
     }
   }
 
