@@ -32,6 +32,8 @@ import type {
   AttemptResolutionEvidence,
 } from './transaction-evidence.js';
 
+import { isUuidV4 } from '../shared/uuid.js';
+
 type Level = 'debug' | 'info' | 'warn' | 'error';
 type ScanType = 'durable' | 'soft';
 
@@ -258,8 +260,6 @@ type FallbackCode =
   | 'LOG_OUTPUT_FAILED';
 
 const RUN_ID = randomUUID();
-const UUID_V4 =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_UINT256 = (1n << 256n) - 1n;
 const MAX_HEARTBEAT_CONSUMERS = 25;
 
@@ -617,12 +617,7 @@ function scalar(
     return projectResolution(value, errorSummary);
   }
 
-  if (
-    kind === 'id' &&
-    typeof value === 'string' &&
-    value.length === 36 &&
-    UUID_V4.test(value)
-  ) {
+  if (kind === 'id' && isUuidV4(value)) {
     return value;
   }
 
