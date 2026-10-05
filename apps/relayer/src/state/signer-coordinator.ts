@@ -4,8 +4,14 @@ import type {
 
 import {
   blockAnchorsMatch,
+  getBlockAnchor,
   type BlockAnchor,
 } from '../chain/block-anchor.js';
+
+import {
+  readAnchoredNonce,
+  type AnchoredNonceResult,
+} from '../chain/read-anchored-nonce.js';
 
 import {
   inspectSignerRecovery,
@@ -71,16 +77,35 @@ export interface RecordSearchProgressOptions {
   >;
 }
 
+export interface SignerBootstrapAuthorization {
+  readonly expectedNonce: bigint;
+
+  /** 
+   * Operator confirms no signed or broadcast transactions 
+   * remain unaccounted for. 
+   */
+  readonly confirmNoUntrackedTransactions: true;
+}
+
 export interface RecoverSignerOptions {
   readonly publicClient: PublicClient;
   readonly anchor: Readonly<BlockAnchor>;
   readonly maxBlockRange: bigint;
+
+  /**
+   * Explicit first-use authorization, considered only when the journal
+   * is missing.
+   */
+  readonly bootstrap?: SignerBootstrapAuthorization;
 }
 
 type ResolutionEvent =
   Parameters<ScopedRelayerLog['attemptResolved']>[0];
 
 type PendingWrite =
+  | {
+      kind: 'bootstrap';
+    }
   | {
       kind: 'resolution';
       event: ResolutionEvent;
@@ -194,14 +219,41 @@ export class SignerCoordinator {
     }
 
     const current = this.persistence.current;
-    if (current.kind !== 'present') {
-      throw new Error('Cannot recover without an initialized journal.');
-    }
 
     this.busy = true;
     this.recoveryComplete = false;
 
     try {
+      if (current.kind === 'missing') {
+        const result = await this.readBootstrapObservation(options);
+        if (result.status === 'anchor-changed') {
+          return result;
+        }
+
+        const { observation } = result;
+
+        this.pendingWrite = {
+          kind: 'bootstrap',
+        };
+
+        await this.persistence.save({
+          version: 1,
+          identity: this.identity,
+          baseline: observation,
+          lastObservation: observation,
+          nextNonce: observation.nonce,
+          attempt: null,
+        });
+
+        this.recoveryComplete = true;
+        this.finishWrite(cycle);
+
+        return {
+          status: 'no-attempt',
+          observation,
+        };
+      }
+      
       const result = await inspectSignerRecovery({
         publicClient: options.publicClient,
         snapshot: current.snapshot,
@@ -551,6 +603,103 @@ export class SignerCoordinator {
     }
 
     this.finishWrite(cycle);
+  }
+
+  /**
+   * Reads the operator-approved starting nonce for a missing journal. Latest
+   * and pending counts can veto adoption, but only the anchored observation
+   * becomes the persisted baseline.
+   */
+  private async readBootstrapObservation(
+    options: RecoverSignerOptions,
+  ): Promise<AnchoredNonceResult> {
+    if (options.bootstrap === undefined) {
+      throw new Error(
+        'Cannot recover without an initialized journal or explicit bootstrap authorization'
+      );
+    }
+
+    if (this.blockers.size !== 0) {
+      throw new Error('Cannot bootstrap while coordinator blockers remain.');
+    }
+
+    const {
+      publicClient,
+      maxBlockRange,
+    } = options;
+
+    const {
+      expectedNonce,
+      confirmNoUntrackedTransactions,
+    } = options.bootstrap;
+
+    if (
+      confirmNoUntrackedTransactions !== true ||
+      typeof expectedNonce !== 'bigint' ||
+      expectedNonce < 0n ||
+      expectedNonce >= (1n << 256n)
+    ) {
+      throw new TypeError('Invalid signer bootstrap authorization.');
+    }
+
+    if (
+      typeof maxBlockRange !== 'bigint' ||
+      maxBlockRange <= 0n ||
+      maxBlockRange >= (1n << 256n)
+    ) {
+      throw new TypeError('Invalid signer recovery input.');
+    }
+
+    const result = await readAnchoredNonce({
+      publicClient,
+      signer: this.identity.signer,
+      anchor: options.anchor,
+    });
+
+    if (result.status === 'anchor-changed') {
+      return result;
+    }
+
+    const { observation } = result;
+
+    if (observation.nonce !== expectedNonce) {
+      throw new Error(
+        'The anchored nonce does not match the authorized baseline.'
+      );
+    }
+
+    for (const blockTag of ['latest', 'pending'] as const) {
+      const nonce = await publicClient.getTransactionCount({
+        address: this.identity.signer,
+        blockTag,
+      });
+
+      if (
+        typeof nonce !== 'number' ||
+        !Number.isSafeInteger(nonce) ||
+        nonce < 0
+      ) {
+        throw new TypeError('Invalid bootstrap nonce response.');
+      }
+
+      if (BigInt(nonce) !== observation.nonce) {
+        throw new Error('Signer nonce counts do not match the bootstrap baselines.');
+      }
+    }
+
+    const closingAnchor = await getBlockAnchor(
+      publicClient,
+      observation.anchor.blockNumber,
+    );
+
+    if (!blockAnchorsMatch(observation.anchor, closingAnchor)) {
+      return {
+        status: 'anchor-changed',
+        observedAnchor: Object.freeze(closingAnchor),
+      };
+    }
+
+    return result;
   }
 
   /**
