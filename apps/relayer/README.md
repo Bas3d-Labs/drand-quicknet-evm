@@ -300,6 +300,22 @@ One cycle can make multiple calls and process multiple rounds.
 
 Accepts a positive decimal integer.
 
+#### Transaction broadcast retry settings
+
+`QUICKNET_BROADCAST_RETRY_INITIAL_MS` defaults to `5000` milliseconds.
+`QUICKNET_BROADCAST_RETRY_MAX_MS` defaults to `60000` milliseconds.
+Both accept decimal integers from `1` through `2147483647`. The maximum
+must be at least the initial delay. Equal values select a fixed interval.
+
+These settings configure the journal-backed broadcast retry schedule.
+They are parsed by the config loader; live command submission wiring is
+still pending. They do not affect the existing wallet submission path yet.
+
+The schedule doubles the delay between send attempts up to the maximum,
+without delaying receipt reconciliation. A restored attempt that may have
+been broadcast waits the initial delay. Timing is process-local and starts
+again after restart. These settings do not authorize journal bootstrap.
+
 #### `QUICKNET_LOG_LEVEL`
 
 Default: `info`.

@@ -680,6 +680,36 @@ describe('loadRelayerConfig', () => {
       }
     });
   });
+
+  it('loads broadcast retry settings from the supplied environment', async () => {
+    const config = await loadRelayerConfig({
+      source: PRESET_SOURCE,
+      env: createEnvironment({
+        QUICKNET_BROADCAST_RETRY_INITIAL_MS: '2000',
+        QUICKNET_BROADCAST_RETRY_MAX_MS: '30000',
+      }),
+    });
+
+    expect(config.broadcastRetry).toEqual({
+      initialDelayMs: 2_000,
+      maxDelayMs: 30_000,
+    });
+  });
+
+  it('installs diagnostics before rejecting retry configuration', async () => {
+    const onDiagnostics = vi.fn();
+
+    await expect(loadRelayerConfig({
+      source: PRESET_SOURCE,
+      env: createEnvironment({
+        QUICKNET_BROADCAST_RETRY_INITIAL_MS: 'credential-canary',
+      }),
+      onDiagnostics,
+    })).rejects.toThrow(RelayerConfigError);
+
+    expect(onDiagnostics).toHaveBeenCalledTimes(1);
+    expect(loadRegistryDeployment).not.toHaveBeenCalled();
+  });
 });
 
 describe('resolveNetworkConfigPath', () => {
