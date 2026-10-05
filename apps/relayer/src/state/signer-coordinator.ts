@@ -50,6 +50,10 @@ import {
 } from '../diagnostics/resolution-validation.js';
 
 import {
+  isFixedHex,
+} from '../shared/hex.js';
+
+import {
   JournalPersistence,
 } from './journal-persistence.js';
 
@@ -130,6 +134,9 @@ type PendingWrite =
     }
   | {
       kind: 'prepared';
+    }
+  | {
+      kind: 'broadcast';
     };
 
 export interface PrepareAttemptOptions {
@@ -144,7 +151,17 @@ export type PreparedAttempt = Readonly<Pick<
 
 type SignerEventOperation =
   | 'prepare-attempt'
+  | 'broadcast-attempt'
   | 'reconcile-attempt';
+
+export interface BroadcastAttemptOptions {
+  readonly publicClient: PublicClient;
+  readonly attemptId: string;
+}
+
+export type BroadcastAttemptResult = PreparedAttempt & {
+  readonly status: 'acknowledged';
+};
 
 /**
  * Coordinates durable nonce observations and attempt resolution so restart
@@ -154,6 +171,7 @@ export class SignerCoordinator {
   private recoveryComplete = false;
   private busy = false;
   private emitting = false;
+  private broadcastPermit: string | undefined;
 
   private readonly blockers = new Set<CoordinatorBlocker>();
   private readonly episodeReasons = new Set<SignerBlocker>();
@@ -299,6 +317,7 @@ export class SignerCoordinator {
       await this.persistence.save(next);
 
       this.finishWrite(cycle);
+      this.broadcastPermit = attemptId;
 
       return Object.freeze({
         attemptId,
@@ -318,6 +337,108 @@ export class SignerCoordinator {
     } finally {
       this.busy = false;
       this.refresh(cycle, 'prepare-attempt');
+    }
+  }
+
+  /**
+   * Sends the recorded transaction after durably marking that broadcast
+   * may occur.
+   */
+  async broadcastAttempt(
+    options: BroadcastAttemptOptions,
+    cycle?: number,
+  ): Promise<BroadcastAttemptResult> {
+    this.assertAvailable();
+
+    if (
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      throw new Error('A pending journal write must be retried first.');
+    }
+
+    const current = this.persistence.current;
+
+    if (
+      current.kind !== 'present' ||
+      current.snapshot.attempt === null ||
+      options.attemptId !== current.snapshot.attempt.attemptId
+    ) {
+      throw new Error('Broadcast does not match a recorded attempt.');
+    }
+
+    const attempt = current.snapshot.attempt;
+
+    if (
+      !this.recoveryComplete ||
+      this.broadcastPermit !== attempt.attemptId ||
+      this.blockers.size !== 0 ||
+      current.snapshot.lastObservation.nonce > attempt.nonce
+    ) {
+      throw new Error('Fresh reconciliation is required before broadcasting.');
+    }
+
+    const publicClient = options.publicClient;
+
+    this.broadcastPermit = undefined;
+    this.recoveryComplete = false;
+    this.busy = true;
+
+    try {
+      if (attempt.phase === 'signed') {
+        this.pendingWrite = { kind: 'broadcast' };
+
+        await this.persistence.save({
+          ...current.snapshot,
+          attempt: {
+            ...attempt,
+            phase: 'broadcast-may-have-occurred',
+          },
+        });
+
+        // Retain exclusive ownership through the RPC call
+        this.pendingWrite = undefined;
+      }
+
+      let returnedHash: unknown;
+
+      try {
+        returnedHash = await publicClient.request({
+          method: 'eth_sendRawTransaction',
+          params: [attempt.signedTransaction],
+        }, { 
+          retryCount: 0,
+        });
+      } catch {
+        throw new Error(
+          'Transaction broadcast outcome is uncertain. Reconciliation is required.'
+        );
+      }
+
+      if (
+        !isFixedHex(returnedHash, 32) ||
+        returnedHash.toLowerCase() !== attempt.transactionHash.toLowerCase()
+      ) {
+        throw new Error(
+          'RPC returned an unexpected transaction hash. Reconciliation is required.'
+        );
+      }
+
+      return Object.freeze({
+        status: 'acknowledged',
+        attemptId: attempt.attemptId,
+        transactionHash: attempt.transactionHash,
+        nonce: attempt.nonce,
+      });
+    } catch (error) {
+      if (this.persistence.state === 'idle') {
+        this.pendingWrite = undefined;
+      }
+
+      throw error;
+    } finally {
+      this.busy = false;
+      this.refresh(cycle, 'broadcast-attempt');
     }
   }
 
@@ -342,6 +463,7 @@ export class SignerCoordinator {
 
     const current = this.persistence.current;
 
+    this.broadcastPermit = undefined;
     this.busy = true;
     this.recoveryComplete = false;
 
@@ -505,6 +627,19 @@ export class SignerCoordinator {
 
       this.recoveryComplete = true;
       this.finishWrite(cycle);
+
+      if (
+        result.status === 'unresolved' &&
+        attempt !== null &&
+        result.observation.nonce === attempt.nonce &&
+        this.blockers.size === 0 &&
+        (
+          result.receipt.status === 'receipt-not-found' ||
+          result.receipt.status === 'fork-served-receipt'
+        )
+      ) {
+        this.broadcastPermit = attempt.attemptId;
+      }
 
       return result;
     } catch (error) {
@@ -973,6 +1108,8 @@ export class SignerCoordinator {
 
     if (pending.kind === 'prepared') {
       operation = 'prepare-attempt';
+    } else if (pending.kind === 'broadcast') {
+      operation = 'broadcast-attempt';
     }
 
     this.refresh(cycle, operation);
