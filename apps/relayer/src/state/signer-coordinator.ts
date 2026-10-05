@@ -1,6 +1,16 @@
+import type {
+  PublicClient,
+} from 'viem';
+
 import {
   blockAnchorsMatch,
+  type BlockAnchor,
 } from '../chain/block-anchor.js';
+
+import {
+  inspectSignerRecovery,
+  type SignerRecoveryInspection,
+} from '../chain/inspect-signer-recovery.js';
 
 import type {
   ReplacementSearchResult,
@@ -59,6 +69,12 @@ export interface RecordSearchProgressOptions {
     ReplacementSearchResult,
     { status: 'not-found' }
   >;
+}
+
+export interface RecoverSignerOptions {
+  readonly publicClient: PublicClient;
+  readonly anchor: Readonly<BlockAnchor>;
+  readonly maxBlockRange: bigint;
 }
 
 type ResolutionEvent =
@@ -156,6 +172,179 @@ export class SignerCoordinator {
       persistenceState: this.persistence.state,
       blockedSince: this.blockedSince,
     });
+  }
+
+  /**
+   * Reconciles the signer against a durable block and saves the resulting
+   * observation, resolution, or search progress together. Keeps other
+   * coordinator operations out until inspection and persistence finish.
+   * A failed write must be retried before a fresh recovery pass can proceed.
+   */
+  async recover(
+    options: RecoverSignerOptions,
+    cycle?: number,
+  ): Promise<SignerRecoveryInspection> {
+    this.assertAvailable();
+
+    if (
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      throw new Error('A pending journal write must be retried first.');
+    }
+
+    const current = this.persistence.current;
+    if (current.kind !== 'present') {
+      throw new Error('Cannot recover without an initialized journal.');
+    }
+
+    this.busy = true;
+    this.recoveryComplete = false;
+
+    try {
+      const result = await inspectSignerRecovery({
+        publicClient: options.publicClient,
+        snapshot: current.snapshot,
+        anchor: options.anchor,
+        maxBlockRange: options.maxBlockRange,
+      });
+
+      if (
+        result.status === 'anchor-changed' ||
+        result.status === 'nonce-behind-journal' ||
+        result.status === 'inconsistent-observations'
+      ) {
+        return result;
+      }
+
+      if (
+        result.status === 'unresolved' &&
+        (
+          result.search?.status === 'boundary-changed' ||
+          result.search?.status === 'anchor-behind-search'
+        )
+      ) {
+        return result;
+      }
+
+      let lastObservation = result.observation;
+
+      if (
+        this.blockers.has('unattributed-signer-activity') &&
+        current.snapshot.lastObservation.nonce > lastObservation.nonce
+      ) {
+        // Resolving the attempt must not erase evidence of other activity.
+        // Search progress belongs to the newly inspected anchor though.
+        if (result.status !== 'resolution-available') {
+          return result;
+        }
+
+        lastObservation = current.snapshot.lastObservation;
+      }
+
+      let attempt = current.snapshot.attempt;
+      let nextNonce = current.snapshot.nextNonce;
+
+      let pending: PendingWrite = {
+        kind: 'observation',
+      };
+
+      if (result.status === 'resolution-available') {
+        if (attempt === null) {
+          throw new Error('No recorded attempt is available to resolve.');
+        }
+
+        const resolution = snapshotResolutionEvidence(result.evidence);
+
+        assertResolutionTransaction(attempt, resolution);
+
+        pending = {
+          kind: 'resolution',
+          event: Object.freeze({
+            signer: this.identity.signer,
+            attemptId: attempt.attemptId,
+            transactionHash: attempt.transactionHash,
+            nonce: attempt.nonce,
+            resolution,
+          }),
+        };
+
+        nextNonce = attempt.nonce + 1n;
+        attempt = null;
+      } else if (attempt !== null) {
+        let replacementSearch = attempt.replacementSearch;
+        if (replacementSearch === null) {
+          let lowerBound: AnchoredNonceObservation | undefined;
+
+          if (lastObservation.nonce <= attempt.nonce) {
+            lowerBound = lastObservation;
+          } else if (
+            current.snapshot.lastObservation.nonce <= attempt.nonce
+          ) {
+            lowerBound = current.snapshot.lastObservation;
+          }
+
+          if (lowerBound !== undefined) {
+            replacementSearch = {
+              lowerBound,
+              searchedThrough: null,
+            };
+          }
+        }
+
+        if (
+          result.status === 'unresolved' &&
+          result.search?.status === 'not-found' &&
+          result.search.scannedBlocks > 0n
+        ) {
+          if (replacementSearch === null) {
+            throw new Error('Search progress requires a recorded lower bound.');
+          }
+
+          replacementSearch = {
+            ...replacementSearch,
+            searchedThrough: result.search.searchedThrough,
+          };
+
+          pending = {
+            kind: 'search-progress',
+            exhausted: result.search.remainingBlocks === 0n,
+          };
+        }
+
+        attempt = {
+          ...attempt,
+          replacementSearch,
+        };
+      }
+
+      const next = validateJournalSnapshotStructure({
+        ...current.snapshot,
+        lastObservation,
+        nextNonce,
+        attempt,
+      }, this.identity);
+
+      this.pendingWrite = pending;
+
+      await this.persistence.save(next);
+
+      this.recoveryComplete = true;
+      this.finishWrite(cycle);
+
+      return result;
+    } catch (error) {
+      this.recoveryComplete = false;
+
+      if (this.persistence.state === 'idle') {
+        this.pendingWrite = undefined;
+      }
+
+      throw error;
+    } finally {
+      this.busy = false;
+      this.refresh(cycle);
+    }
   }
 
   completeRecovery(cycle?: number): void {
