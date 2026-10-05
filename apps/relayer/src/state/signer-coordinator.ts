@@ -1,4 +1,9 @@
+import {
+  randomUUID,
+} from 'node:crypto';
+
 import type {
+  LocalAccount,
   PublicClient,
 } from 'viem';
 
@@ -21,6 +26,11 @@ import {
 import type {
   ReplacementSearchResult,
 } from '../chain/search-attempt-replacement.js';
+
+import {
+  signPreparedTransaction,
+  type PreparedRelayerTransaction,
+} from '../chain/sign-prepared-transaction.js';
 
 import type {
   ErrorSummaryFactory,
@@ -52,6 +62,7 @@ import {
 
 import type {
   AnchoredNonceObservation,
+  JournalAttempt,
   JournalIdentity,
   TransactionJournalStore,
 } from './transaction-journal.js';
@@ -116,7 +127,24 @@ type PendingWrite =
   | {
       kind: 'search-progress';
       exhausted: boolean;
+    }
+  | {
+      kind: 'prepared';
     };
+
+export interface PrepareAttemptOptions {
+  readonly account: LocalAccount;
+  readonly transaction: PreparedRelayerTransaction;
+}
+
+export type PreparedAttempt = Readonly<Pick<
+  JournalAttempt,
+  'attemptId' | 'transactionHash' | 'nonce'
+>>;
+
+type SignerEventOperation =
+  | 'prepare-attempt'
+  | 'reconcile-attempt';
 
 /**
  * Coordinates durable nonce observations and attempt resolution so restart
@@ -140,6 +168,7 @@ export class SignerCoordinator {
     private readonly identity: JournalIdentity,
     private readonly log: ScopedRelayerLog,
     private readonly now: () => number,
+    private readonly createErrorSummary: ErrorSummaryFactory,
   ) {}
 
   static async create(
@@ -158,6 +187,7 @@ export class SignerCoordinator {
       identity,
       options.log.withContext({ signer: identity.signer }),
       options.now ?? Date.now,
+      options.createErrorSummary,
     );
 
     const current = persistence.current;
@@ -197,6 +227,98 @@ export class SignerCoordinator {
       persistenceState: this.persistence.state,
       blockedSince: this.blockedSince,
     });
+  }
+
+  /**
+   * Signs and durably record the next transaction so recovery can reuse
+   * the same bytes after a restart.
+   */
+  async prepareAttempt(
+    options: PrepareAttemptOptions,
+    cycle?: number,
+  ): Promise<PreparedAttempt> {
+    this.assertAvailable();
+
+    if (
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      throw new Error('A pending journal write must be retried first.');
+    }
+
+    const current = this.persistence.current;
+
+    if (
+      !this.status.open ||
+      current.kind !== 'present' ||
+      current.snapshot.attempt !== null
+    ) {
+      throw new Error(
+        'The signer gate must be open before preparing an attempt.'
+      )
+    }
+
+    this.busy = true;
+
+    try {
+      const attemptId = randomUUID();
+      const createdAt = this.timestamp();
+
+      const signed = await signPreparedTransaction({
+        identity: this.identity,
+        nonce: current.snapshot.nextNonce,
+        account: options.account,
+        transaction: options.transaction,
+      });
+
+      const next = validateJournalSnapshotStructure({
+        ...current.snapshot,
+        attempt: {
+          ...signed,
+          attemptId,
+          createdAt,
+          phase: 'signed',
+          replacementSearch: {
+            lowerBound: current.snapshot.lastObservation,
+            searchedThrough: null,
+          },
+        },
+      }, this.identity);
+
+      try {
+        this.attemptLog = this.log.withErrorSummary(
+          this.createErrorSummary([signed.signedTransaction]),
+        ).withContext({ attemptId });
+      } catch {
+        throw new Error('Could not configure signed attempt diagnostics.');
+      }
+
+      this.blockedSince = createdAt;
+      this.pendingWrite = { kind: 'prepared' };
+
+      await this.persistence.save(next);
+
+      this.finishWrite(cycle);
+
+      return Object.freeze({
+        attemptId,
+        transactionHash: signed.transactionHash,
+        nonce: signed.nonce,
+      });
+    } catch (error) {
+      if (this.persistence.state === 'idle') {
+        this.pendingWrite = undefined;
+        this.attemptLog = undefined;
+        this.blockedSince = null;
+      } else {
+        this.recoveryComplete = false;
+      }
+
+      throw error;
+    } finally {
+      this.busy = false;
+      this.refresh(cycle, 'prepare-attempt');
+    }
   }
 
   /**
@@ -846,7 +968,14 @@ export class SignerCoordinator {
 
     this.latchUnattributedActivity();
     this.latchExhaustedSearch();
-    this.refresh(cycle);
+
+    let operation: SignerEventOperation = 'reconcile-attempt';
+
+    if (pending.kind === 'prepared') {
+      operation = 'prepare-attempt';
+    }
+
+    this.refresh(cycle, operation);
   }
 
   private latchUnattributedActivity(): void {
@@ -919,7 +1048,10 @@ export class SignerCoordinator {
     this.finishWrite(cycle);
   }
 
-  private refresh(cycle?: number): void {
+  private refresh(
+    cycle?: number,
+    operation: SignerEventOperation = 'reconcile-attempt',
+  ): void {
     const status = this.status;
 
     if (status.blockers.length > 0) {
@@ -937,7 +1069,7 @@ export class SignerCoordinator {
           reason: status.primaryReason!,
           blockers: status.blockers,
           blockedSince: this.blockedSince!,
-        }), cycle);
+        }), cycle, operation);
       }
     }
 
@@ -954,7 +1086,7 @@ export class SignerCoordinator {
         signer: this.identity.signer,
         cleared,
         blockedSince,
-      }), cycle);
+      }), cycle, operation);
 
       this.blockedSince = null;
       this.episodeReasons.clear();
@@ -974,6 +1106,7 @@ export class SignerCoordinator {
   private emit(
     action: (log: ScopedRelayerLog) => void,
     cycle?: number,
+    operation: SignerEventOperation = 'reconcile-attempt',
   ): void {
     const log = this.attemptLog ?? this.log;
     this.emitting = true;
@@ -982,7 +1115,7 @@ export class SignerCoordinator {
 
     try {
       let scoped = log.withContext({
-        operation: { name: 'reconcile-attempt' },
+        operation: { name: operation },
       });
 
       if (cycle !== undefined) {
