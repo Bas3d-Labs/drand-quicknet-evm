@@ -163,6 +163,10 @@ export type BroadcastAttemptResult = PreparedAttempt & {
   readonly status: 'acknowledged';
 };
 
+export type AttemptSummary = PreparedAttempt & {
+  readonly phase: JournalAttempt['phase'];
+};
+
 /**
  * Coordinates durable nonce observations and attempt resolution so restart
  * recovery and signer availability follow the same journal state.
@@ -229,6 +233,54 @@ export class SignerCoordinator {
     coordinator.refresh();
 
     return coordinator;
+  }
+
+  get attempt(): AttemptSummary | null {
+    const current = this.persistence.current;
+
+    if (
+      current.kind !== 'present' ||
+      current.snapshot.attempt === null
+    ) {
+      return null;
+    }
+
+    const attempt = current.snapshot.attempt;
+
+    return Object.freeze({
+      attemptId: attempt.attemptId,
+      transactionHash: attempt.transactionHash,
+      nonce: attempt.nonce,
+      phase: attempt.phase,
+    });
+  }
+
+  /**
+   * Determine whether preparation or recovery has authorized 
+   * one broadcast now.
+   */
+  get canBroadcast(): boolean {
+    const current = this.persistence.current;
+
+    if (
+      this.busy ||
+      this.emitting ||
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle' ||
+      current.kind !== 'present' ||
+      current.snapshot.attempt === null
+    ) {
+      return false;
+    }
+
+    const attempt = current.snapshot.attempt;
+
+    return (
+      this.recoveryComplete &&
+      this.broadcastPermit === attempt.attemptId &&
+      this.blockers.size === 0 &&
+      current.snapshot.lastObservation.nonce <= attempt.nonce
+    );
   }
 
   get status() {
@@ -369,12 +421,7 @@ export class SignerCoordinator {
 
     const attempt = current.snapshot.attempt;
 
-    if (
-      !this.recoveryComplete ||
-      this.broadcastPermit !== attempt.attemptId ||
-      this.blockers.size !== 0 ||
-      current.snapshot.lastObservation.nonce > attempt.nonce
-    ) {
+    if (!this.canBroadcast) {
       throw new Error('Fresh reconciliation is required before broadcasting.');
     }
 
