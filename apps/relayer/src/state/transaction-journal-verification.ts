@@ -32,15 +32,18 @@ export async function verifyJournalSnapshot(
   );
 
   if (snapshot.attempt !== null) {
-    await verifyAttempt(snapshot.identity, snapshot.attempt);
+    await verifyJournalAttempt(snapshot.identity, snapshot.attempt);
   }
 
   return snapshot;
 }
 
-async function verifyAttempt(
+export async function verifyJournalAttempt(
   identity: JournalIdentity,
-  attempt: JournalAttempt,
+  attempt: Pick<
+    JournalAttempt,
+    'nonce' | 'transactionHash' | 'signedTransaction'
+  >,
 ): Promise<void> {
   try {
     const bytes = attempt.signedTransaction;
