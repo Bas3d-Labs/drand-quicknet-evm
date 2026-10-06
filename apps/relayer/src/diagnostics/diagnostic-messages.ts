@@ -56,5 +56,11 @@ export function configMessage(
 
     case 'INVALID_POLL_INTERVAL':
       return 'QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.';
+
+    case 'INVALID_BROADCAST_RETRY_DELAY':
+      return `${setting} must be a decimal integer between 1 and 2147483647 milliseconds.`;
+
+    case 'INVALID_BROADCAST_RETRY_RANGE':
+      return 'QUICKNET_BROADCAST_RETRY_MAX_MS must be greater than or equal to QUICKNET_BROADCAST_RETRY_INITIAL_MS.';
   }
 }

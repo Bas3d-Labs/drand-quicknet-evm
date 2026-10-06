@@ -156,6 +156,10 @@ const CONFIG: LoadedRelayerConfig = {
     verifierRuntimeCodehash: HASH,
   },
   finality: { type: 'safe' },
+  broadcastRetry: {
+    initialDelayMs: 5_000,
+    maxDelayMs: 60_000,
+  },
   errorSummary: ERROR_SUMMARY,
   createErrorSummary: () => ERROR_SUMMARY,
 };

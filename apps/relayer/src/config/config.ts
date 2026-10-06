@@ -61,6 +61,11 @@ import {
   UsageError,
 } from '../diagnostics/usage-error.js';
 
+import {
+  loadBroadcastRetryConfig,
+  type BroadcastRetryConfig,
+} from './signer-config.js';
+
 export {
   RELAYER_NETWORK_PRESETS,
   type RelayerNetworkPreset,
@@ -112,6 +117,7 @@ export type ErrorSummaryFactory = (
 
 export interface RelayerConfig extends ResolvedNetworkConfig {
   account: ReturnType<typeof privateKeyToAccount>;
+  broadcastRetry?: Readonly<BroadcastRetryConfig>;
 
   // Configs constructed by callers may omit configured diagnostics.
   errorSummary?: SummarizeErrorOptions;
@@ -119,6 +125,7 @@ export interface RelayerConfig extends ResolvedNetworkConfig {
 }
 
 export interface LoadedRelayerConfig extends RelayerConfig {
+  broadcastRetry: Readonly<BroadcastRetryConfig>;
   errorSummary: Readonly<SummarizeErrorOptions>;
   createErrorSummary: ErrorSummaryFactory;
 }
@@ -194,11 +201,13 @@ export async function loadRelayerConfig(
   // Install before file loading and deployment validation can fail.
   options.onDiagnostics?.(errorSummary);
 
+  const broadcastRetry = loadBroadcastRetryConfig(env);
   const network = await resolveNetworkConfig(source, rpcUrl);
 
   return {
     ...network,
     account,
+    broadcastRetry,
     errorSummary,
     createErrorSummary,
   };
