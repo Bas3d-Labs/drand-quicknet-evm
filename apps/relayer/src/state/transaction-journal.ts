@@ -29,7 +29,7 @@ export interface ReplacementSearch {
    * Preserved observation establishing that the recorded nonce had
    * not been consumed at this block.
    * 
-   * Its nonce bust be <= the attempt nonce. Newer observations must
+   * Its nonce must be <= the attempt nonce. Newer observations must
    * not overwrite this lower bound.
    */
   readonly lowerBound: AnchoredNonceObservation;
@@ -37,62 +37,108 @@ export interface ReplacementSearch {
   /**
    * Last fully searched block, inclusive.
    * 
-   * Null means no blocks after lowerBound have been searched. Result
-   * at lowerBound.blockNumber + 1 or searchedThrough + 1.
+   * Null means no blocks after lowerBound.anchor have been searched. 
+   * Resume at lowerBound.anchor.blockNumber + 1 or 
+   * searchedThrough + 1.
    * 
    * The reconciler must validate the saved boundary against the
-   * canonical chain before using it to skip previously searched blocks.
+   * canonical chain before skipping previously searched blocks.
    */
   readonly searchedThrough: Readonly<BlockAnchor> | null;
 }
 
-export interface JournalAttempt {
-  readonly attemptId: string;
-  readonly nonce: bigint;
+export interface JournalSignedTransaction {
   readonly transactionHash: Hash;
 
   /**
-   * Recovery material. Persist it, but never project it into events,
-   * heartbeat snapshots, metrics, or error fields.
+   * Signed bytes retained for recovery and rebroadcasting.
+   * Never include them in diagnostics.
    */
   readonly signedTransaction: Hex;
+}
 
-  /** ISO timestamp retained across restarts for unresolved age. */
+/**
+ * Records an inclusion checked against an observed chain head. Recovery
+ * rechecks it before allowing further preparation. Durable reconciliation
+ * determines when the record can be removed.
+ */
+export type JournalInclusionObservation = {
+  readonly inclusion: Readonly<BlockAnchor>;
+  readonly observedAt: Readonly<BlockAnchor>;
+} & (
+  | {
+      readonly outcome: 'success' | 'reverted';
+      readonly transactionHash: Hash;
+    }
+  | {
+      readonly outcome: 'replaced';
+
+      /** Identifies a transaction outside this attempt's signedTransactions. */
+      readonly replacementTransactionHash: Hash;
+
+      /** Signer nonce observed at observedAt. */
+      readonly nonceAtAnchor: bigint;
+    }
+);
+
+/** 
+ * Retains the signed transactions allocated to one nonce until its
+ * outcome is durably accounted for.
+ */
+export type JournalAttempt = {
+  readonly attemptId: string;
+  readonly nonce: bigint;
   readonly createdAt: string;
 
-  readonly phase:
-    | 'signed'
-    | 'broadcast-may-have-occurred';
-
   /**
-   * Null means no valid replacement-search lower bound is available.
-   * It does not authorize inventing a range or clearing the attempt.
+   * Original signed transaction and any subsequent fee replacements
+   * for this attempt's nonce.
    */
+  readonly signedTransactions: readonly [
+    JournalSignedTransaction,
+    ...JournalSignedTransaction[],
+  ];
+
   readonly replacementSearch: ReplacementSearch | null;
-}
+} & (
+  | {
+      readonly phase: 'signed';
+      readonly inclusion: null;
+    }
+  | {
+      readonly phase: 'broadcast-may-have-occurred';
+      readonly inclusion: null;
+    }
+  | {
+      readonly phase: 'included';
+      readonly inclusion: JournalInclusionObservation;
+    }
+);
 
 export interface TransactionJournalSnapshot {
   readonly version: 1;
   readonly identity: JournalIdentity;
 
-  /** Explicit initialization observation. Never silently reconstructed. */
+  /** Starting observation established when nonce state is initialized. */
   readonly baseline: AnchoredNonceObservation;
 
-  /** Latest validated observation, independent of the search lower bound. */
+  /** Most recently retained verified signer nonce observation. */
   readonly lastObservation: AnchoredNonceObservation;
 
   /**
-   * Next nonce accounted for by this journal.
-   * 
-   * Initially baseline.nonce. While an attempt exists, its nonce equals
-   * nextNonce. After evidence-backed resolution, advance to attempt.nonce + 1
-   * in the same durable snapshot that removes the attempt.
-   * 
-   * Never advance this value merely to match a higher RPC nonce count.
+   * Next nonce available for allocation.
+   * Advances when a new signed attempt is durably recorded.
    */
   readonly nextNonce: bigint;
 
-  readonly attempt: JournalAttempt | null;
+  /**
+   * First nonce not yet durably accounted for. Advances when the
+   * durably resolved prefix is removed.
+   */
+  readonly durableNextNonce: bigint;
+
+  /** Retained attempts ordered by increasing nonce. */
+  readonly attempts: readonly JournalAttempt[];
 }
 
 export type TransactionJournalRead =
@@ -123,9 +169,8 @@ export interface TransactionJournalStore {
    * Resolves only after the complete snapshot is durably committed.
    * 
    * A rejection does not establish whether the write committed. The
-   * coordinator must retain its previous unresolved attempt and
-   * persistence-failure latch until persistence is confirmed through
-   * a successful save.
+   * coordinator must retain its previous committed state and pending
+   * snapshot until persistence is confirmed through a successful save.
    * 
    * Retrying the same snapshot must be safe. Every successful save
    * must establish durability, even when the stored contents already

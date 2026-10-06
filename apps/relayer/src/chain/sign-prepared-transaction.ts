@@ -15,6 +15,7 @@ import {
 import type {
   JournalAttempt,
   JournalIdentity,
+  JournalSignedTransaction,
 } from '../state/transaction-journal.js';
 
 import {
@@ -51,10 +52,9 @@ export interface SignPreparedTransactionOptions {
   readonly transaction: PreparedRelayerTransaction;
 }
 
-export type SignedRelayerTransaction = Readonly<Pick<
-  JournalAttempt,
-  'nonce' | 'transactionHash' | 'signedTransaction'
->>;
+export type SignedRelayerTransaction = JournalSignedTransaction & {
+  readonly nonce: bigint;
+};
 
 /**
  * Signs a prepared transaction with the journal's chain and nonce, then
@@ -165,7 +165,13 @@ export async function signPreparedTransaction(
       signedTransaction,
     });
 
-    await verifyJournalAttempt(identity, signed);
+    await verifyJournalAttempt(identity, {
+      nonce: signed.nonce,
+      signedTransactions: [{
+        transactionHash: signed.transactionHash,
+        signedTransaction: signed.signedTransaction,
+      }],
+    });
 
     const parsed = parseTransaction(signedTransaction);
 

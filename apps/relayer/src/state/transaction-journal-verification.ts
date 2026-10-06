@@ -8,6 +8,7 @@ import {
 import type {
   JournalAttempt,
   JournalIdentity,
+  JournalSignedTransaction,
   TransactionJournalSnapshot,
 } from './transaction-journal.js';
 
@@ -31,90 +32,163 @@ export async function verifyJournalSnapshot(
     expectedIdentity,
   );
 
-  if (snapshot.attempt !== null) {
-    await verifyJournalAttempt(snapshot.identity, snapshot.attempt);
+  for (const attempt of snapshot.attempts) {
+    await verifyJournalAttempt(snapshot.identity, attempt);
   }
 
   return snapshot;
 }
 
+/**
+ * Verifies that each signed transaction belongs to the recorded signer,
+ * chain, and nonce, and that fee replacements preserve the original call.
+ */
 export async function verifyJournalAttempt(
   identity: JournalIdentity,
   attempt: Pick<
     JournalAttempt,
-    'nonce' | 'transactionHash' | 'signedTransaction'
+    'nonce' | 'signedTransactions'
   >,
 ): Promise<void> {
   try {
-    const bytes = attempt.signedTransaction;
-
-    requireValid(
-      keccak256(bytes).toLowerCase() === attempt.transactionHash.toLowerCase()
+    const expectedIdentity = {
+      chainId: identity.chainId,
+      signer: identity.signer,
+    };
+    const nonce = attempt.nonce;
+    const transactions = attempt.signedTransactions.map(
+      (transaction) => ({
+        transactionHash: transaction.transactionHash,
+        signedTransaction: transaction.signedTransaction,
+      }),
     );
 
-    const transaction = parseTransaction(bytes);
+    requireValid(transactions.length > 0);
 
-    requireValid(
-      transaction.type === 'legacy' ||
-      transaction.type === 'eip2930' ||
-      transaction.type === 'eip1559'
-    );
+    const hashes = new Set<string>();
+    let originalIntent: string | undefined;
 
-    // Reject unprotected legacy transactions without a chain id.
-    requireValid(transaction.chainId === identity.chainId);
+    for (const transaction of transactions) {
+      const hash = transaction.transactionHash.toLowerCase();
 
-    const nonce = transaction.nonce;
+      requireValid(!hashes.has(hash));
+      hashes.add(hash);
 
-    requireValid(
-      typeof nonce === 'number' &&
-      Number.isSafeInteger(nonce) &&
-      nonce >= 0
-    );
-    requireValid(BigInt(nonce) === attempt.nonce);
+      const intent = await verifySignedTransaction(
+        expectedIdentity,
+        nonce,
+        transaction,
+      );
 
-    requireValid(
-      transaction.r !== undefined &&
-      transaction.s !== undefined
-    );
-
-    const r = BigInt(transaction.r);
-    const s = BigInt(transaction.s);
-
-    requireValid(
-      r > 0n &&
-      r < SECP256K1_ORDER &&
-      s > 0n &&
-      s <= SECP256K1_ORDER / 2n
-    );
-
-    requireValid(
-      transaction.yParity === 0 ||
-      transaction.yParity === 1
-    );
-
-    const serialized = serializeTransaction(transaction, {
-      r: transaction.r,
-      s: transaction.s,
-      v: transaction.v,
-      yParity: transaction.yParity,
-    });
-
-    // Reject encodings that do not round-trip canonically.
-    requireValid(
-      serialized.toLowerCase() === bytes.toLowerCase()
-    );
-
-    const signer = await recoverTransactionAddress({
-      serializedTransaction: serialized,
-    });
-
-    requireValid(
-      signer.toLowerCase() === identity.signer.toLowerCase()
-    );
+      if (originalIntent === undefined) {
+        originalIntent = intent;
+      } else {
+        requireValid(intent === originalIntent);
+      }
+    }
   } catch {
-    // Parser and recovery errors can contain serialized transaction
-    // bytes. Do not retain their messages or attach them as causes.
     throw new TypeError('Invalid journal signed transaction.');
+  }
+}
+
+async function verifySignedTransaction(
+  identity: JournalIdentity,
+  nonce: bigint,
+  signed: JournalSignedTransaction,
+): Promise<string> {
+  const bytes = signed.signedTransaction;
+
+  requireValid(
+    keccak256(bytes).toLowerCase() ===
+    signed.transactionHash.toLowerCase()
+  );
+
+  const transaction = parseTransaction(bytes);
+
+  requireValid(
+    transaction.type === 'legacy' ||
+    transaction.type === 'eip2930' ||
+    transaction.type === 'eip1559'
+  );
+
+  // Reject unprotected legacy transactions without a chain id.
+  requireValid(transaction.chainId === identity.chainId);
+
+  const parsedNonce = transaction.nonce;
+
+  requireValid(
+      typeof parsedNonce === 'number' &&
+      Number.isSafeInteger(parsedNonce) &&
+      parsedNonce >= 0
+  );
+  requireValid(BigInt(parsedNonce) === nonce);
+
+  requireValid(
+    transaction.r !== undefined &&
+    transaction.s !== undefined
+  );
+
+  const r = BigInt(transaction.r);
+  const s = BigInt(transaction.s);
+
+  requireValid(
+    r > 0n &&
+    r < SECP256K1_ORDER &&
+    s > 0n &&
+    s <= SECP256K1_ORDER / 2n
+  );
+
+  requireValid(
+    transaction.yParity === 0 ||
+    transaction.yParity === 1
+  );
+
+  const serialized = serializeTransaction(transaction, {
+    r: transaction.r,
+    s: transaction.s,
+    v: transaction.v,
+    yParity: transaction.yParity,
+  });
+
+  requireValid(
+    serialized.toLowerCase() === bytes.toLowerCase()
+  );
+
+  const signer = await recoverTransactionAddress({
+    serializedTransaction: serialized,
+  });
+
+  requireValid(
+    signer.toLowerCase() === identity.signer.toLowerCase()
+  );
+
+  // Compare the complete supported transaction encoding with only
+  // signature and fee differences removed.
+  switch (transaction.type) {
+    case 'legacy':
+    case 'eip2930':
+      return serializeTransaction({
+        ...transaction,
+        gasPrice: 0n,
+        r: undefined,
+        s: undefined,
+        v: undefined,
+        yParity: undefined,
+      }).toLowerCase();
+
+    case 'eip1559':
+      return serializeTransaction({
+        ...transaction,
+        maxFeePerGas: 0n,
+        maxPriorityFeePerGas: 0n,
+        r: undefined,
+        s: undefined,
+        v: undefined,
+        yParity: undefined,
+      }).toLowerCase();
+
+    default:
+      throw new TypeError('Invalid journal signed transaction.');
   }
 }
 

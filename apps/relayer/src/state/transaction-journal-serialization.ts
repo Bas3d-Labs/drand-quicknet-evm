@@ -32,11 +32,16 @@ export async function encodeJournalSnapshot(
       expectedIdentity,
     );
 
-    if (
-      snapshot.attempt !== null &&
-      snapshot.attempt.signedTransaction.length > MAX_JOURNAL_BYTES
-    ) {
-      throw new TypeError(INVALID_ENCODING);
+    let signedBytesLength = 0;
+
+    for (const attempt of snapshot.attempts) {
+      for (const transaction of attempt.signedTransactions) {
+        signedBytesLength += transaction.signedTransaction.length;
+
+        if (signedBytesLength > MAX_JOURNAL_BYTES) {
+          throw new TypeError(INVALID_ENCODING);
+        }
+      }
     }
 
     const contents = JSON.stringify(
@@ -81,8 +86,9 @@ export async function decodeJournalSnapshot(
       identity: root.identity,
       baseline: decodeObservation(root.baseline),
       lastObservation: decodeObservation(root.lastObservation),
-      nextNonce: decimal(root.nextNonce),
-      attempt: decodeAttempt(root.attempt),
+      nextNonce: decimal(root.nextNonce), 
+      durableNextNonce: decimal(root.durableNextNonce),
+      attempts: decodeArray(root.attempts, decodeAttempt),
     };
 
     return await verifyJournalSnapshot(decoded, expectedIdentity);
@@ -110,21 +116,62 @@ function decodeAnchor(input: unknown) {
 }
 
 function decodeAttempt(input: unknown) {
-  if (input === null) {
-    return null;
-  }
-
   const value = object(input);
 
   return {
     attemptId: value.attemptId,
     nonce: decimal(value.nonce),
-    transactionHash: value.transactionHash,
-    signedTransaction: value.signedTransaction,
     createdAt: value.createdAt,
     phase: value.phase,
+    signedTransactions: decodeArray(
+      value.signedTransactions,
+      decodeSignedTransaction,
+    ),
     replacementSearch: decodeSearch(value.replacementSearch),
+    inclusion: decodeInclusion(value.inclusion),
   };
+}
+
+function decodeSignedTransaction(input: unknown) {
+  const value = object(input);
+
+  return {
+    transactionHash: value.transactionHash,
+    signedTransaction: value.signedTransaction,
+  };
+}
+
+function decodeInclusion(input: unknown) {
+  if (input === null) {
+    return null;
+  }
+
+  const value = object(input);
+  const inclusion = decodeAnchor(value.inclusion);
+  const observedAt = decodeAnchor(value.observedAt);
+
+  switch (value.outcome) {
+    case 'success':
+    case 'reverted':
+      return {
+        inclusion,
+        observedAt,
+        outcome: value.outcome,
+        transactionHash: value.transactionHash,
+      };
+
+    case 'replaced':
+      return {
+        inclusion,
+        observedAt,
+        outcome: value.outcome,
+        replacementTransactionHash: value.replacementTransactionHash,
+        nonceAtAnchor: decimal(value.nonceAtAnchor),
+      };
+
+    default:
+      throw new TypeError(INVALID_ENCODING);
+  }
 }
 
 function decodeSearch(input: unknown) {
@@ -144,6 +191,17 @@ function decodeSearch(input: unknown) {
     lowerBound: decodeObservation(value.lowerBound),
     searchedThrough,
   };
+}
+
+function decodeArray<T>(
+  input: unknown,
+  decodeItem: (value: unknown) => T,
+): T[] {
+  if (!Array.isArray(input)) {
+    throw new TypeError(INVALID_ENCODING);
+  }
+
+  return input.map((value: unknown) => decodeItem(value));
 }
 
 function decimal(input: unknown): bigint {

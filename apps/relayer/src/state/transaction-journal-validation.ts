@@ -16,10 +16,15 @@ import type {
   AnchoredNonceObservation,
   JournalAttempt,
   JournalIdentity,
+  JournalInclusionObservation,
+  JournalSignedTransaction,
   ReplacementSearch,
   TransactionJournalSnapshot,
 } from './transaction-journal.js';
-import { isUuidV4 } from '../shared/uuid.js';
+
+import {
+  isUuidV4
+} from '../shared/uuid.js';
 
 const MAX_UINT256 = (1n << 256n) - 1n;
 
@@ -45,15 +50,37 @@ export function validateJournalSnapshotStructure(
     field(input, 'lastObservation')
   );
   const nextNonce = readUint(field(input, 'nextNonce'));
+  const durableNextNonce = readUint(field(input, 'durableNextNonce'));
 
-  requireValid(nextNonce >= baseline.nonce);
+  requireValid(durableNextNonce >= baseline.nonce);
+  requireValid(nextNonce >= durableNextNonce);
 
-  const rawAttempt = field(input, 'attempt');
-  let attempt: JournalAttempt | null = null;
+  const attempts = readArray(field(input, 'attempts'), readAttempt);
 
-  if (rawAttempt !== null) {
-    attempt = readAttempt(rawAttempt);
-    requireValid(attempt.nonce === nextNonce);
+  requireValid(
+    BigInt(attempts.length) === nextNonce - durableNextNonce
+  );
+
+  const attemptIds = new Set<string>();
+  const transactionHashes = new Set<string>();
+
+  for (let index = 0; index < attempts.length; index += 1) {
+    const attempt = attempts[index]!;
+    const attemptId = attempt.attemptId.toLowerCase();
+
+    requireValid(
+      attempt.nonce === durableNextNonce + BigInt(index)
+    );
+    requireValid(!attemptIds.has(attemptId));
+    
+    attemptIds.add(attemptId);
+
+    for (const transaction of attempt.signedTransactions) {
+      const hash = transaction.transactionHash.toLowerCase();
+
+      requireValid(!transactionHashes.has(hash));
+      transactionHashes.add(hash);
+    }
   }
 
   return Object.freeze({
@@ -62,7 +89,8 @@ export function validateJournalSnapshotStructure(
     baseline,
     lastObservation,
     nextNonce,
-    attempt,
+    durableNextNonce,
+    attempts,
   });
 }
 
@@ -107,50 +135,69 @@ function readObservation(
 function readAttempt(input: unknown): JournalAttempt {
   const attemptId = field(input, 'attemptId');
   const nonce = readUint(field(input, 'nonce'));
-  const transactionHash = field(input, 'transactionHash');
-  const signedTransaction = field(input, 'signedTransaction');
   const createdAt = field(input, 'createdAt');
   const phase = field(input, 'phase');
 
   requireValid(isUuidV4(attemptId));
-  requireValid(isFixedHex(transactionHash, 32));
-
-  // Match the diagnostics factory's signed-byte representation.
-  // This checks encoding only, not whether the bytes form a transaction.
-  requireValid(
-    typeof signedTransaction === 'string' &&
-    signedTransaction.length >= 66 &&
-    signedTransaction.length % 2 === 0 &&
-    /^0x[0-9a-f]+$/.test(signedTransaction),
-  );
-
   requireValid(typeof createdAt === 'string');
 
   const timestamp = Date.parse(createdAt);
   requireValid(Number.isFinite(timestamp));
   requireValid(new Date(timestamp).toISOString() === createdAt);
 
-  requireValid(
-    phase === 'signed' ||
-    phase === 'broadcast-may-have-occurred',
+  const transactions = readArray(
+    field(input, 'signedTransactions'),
+    readSignedTransaction,
   );
 
+  requireValid(transactions.length > 0);
+
+  const signedTransactions = transactions as readonly [
+    JournalSignedTransaction,
+    ...JournalSignedTransaction[],
+  ];
+
   const rawSearch = field(input, 'replacementSearch');
-  let replacementSearch: ReplacementSearch | null = null;
+  const replacementSearch = rawSearch === null
+    ? null
+    : readReplacementSearch(rawSearch, nonce);
 
-  if (rawSearch !== null) {
-    replacementSearch = readReplacementSearch(rawSearch, nonce);
-  }
-
-  return Object.freeze({
+  const common = {
     attemptId,
     nonce,
-    transactionHash: transactionHash as Hash,
-    signedTransaction: signedTransaction as Hex,
     createdAt,
-    phase,
+    signedTransactions,
     replacementSearch,
-  });
+  };
+
+  const rawInclusion = field(input, 'inclusion');
+
+  switch (phase) {
+    case 'signed':
+    case 'broadcast-may-have-occurred': {
+      requireValid(rawInclusion === null);
+
+      return Object.freeze({
+        ...common,
+        phase,
+        inclusion: null
+      });
+    }
+
+    case 'included':
+      return Object.freeze({
+        ...common,
+        phase,
+        inclusion: readInclusion(
+          rawInclusion,
+          nonce,
+          signedTransactions,
+        ),
+      });
+    
+    default:
+      throw new TypeError('Invalid transaction journal snapshot.');
+  }
 }
 
 function readReplacementSearch(
@@ -180,6 +227,93 @@ function readReplacementSearch(
   });
 }
 
+function readSignedTransaction(
+  input: unknown,
+): JournalSignedTransaction {
+  const transactionHash = field(input, 'transactionHash');
+  const signedTransaction = field(input, 'signedTransaction');
+
+  requireValid(isFixedHex(transactionHash, 32));
+
+  requireValid(
+    typeof signedTransaction === 'string' &&
+    signedTransaction.length >= 66 &&
+    signedTransaction.length % 2 === 0 &&
+    /^0x[0-9a-f]+$/.test(signedTransaction),
+  );
+
+  return Object.freeze({
+    transactionHash: transactionHash as Hash,
+    signedTransaction: signedTransaction as Hex,
+  });
+}
+
+function readInclusion(
+  input: unknown,
+  attemptNonce: bigint,
+  signedTransactions: readonly JournalSignedTransaction[],
+): JournalInclusionObservation {
+  const inclusion = readAnchor(field(input, 'inclusion'));
+  const observedAt = readAnchor(field(input, 'observedAt'));
+  const outcome = field(input, 'outcome');
+
+  requireValid(inclusion.blockNumber <= observedAt.blockNumber);
+
+  if (inclusion.blockNumber === observedAt.blockNumber) {
+    requireValid(
+      inclusion.blockHash.toLowerCase() ===
+      observedAt.blockHash.toLowerCase()
+    );
+  }
+
+  const containsHash = (hash: Hash): boolean =>
+    signedTransactions.some((transaction) => 
+      transaction.transactionHash.toLowerCase() === hash.toLowerCase()
+    );
+
+  switch (outcome) {
+    case 'success':
+    case 'reverted': {
+      const transactionHash = field(input, 'transactionHash');
+
+      requireValid(isFixedHex(transactionHash, 32));
+      requireValid(containsHash(transactionHash as Hash));
+
+      return Object.freeze({
+        inclusion,
+        observedAt,
+        outcome,
+        transactionHash: transactionHash as Hash,
+      });
+    }
+
+    case 'replaced': {
+      const replacementTransactionHash = field(
+        input,
+        'replacementTransactionHash',
+      );
+      const nonceAtAnchor = readUint(field(input, 'nonceAtAnchor'));
+
+      requireValid(isFixedHex(replacementTransactionHash, 32));
+      requireValid(
+        !containsHash(replacementTransactionHash as Hash)
+      );
+      requireValid(nonceAtAnchor > attemptNonce);
+
+      return Object.freeze({
+        inclusion,
+        observedAt,
+        outcome,
+        replacementTransactionHash: replacementTransactionHash as Hash,
+        nonceAtAnchor,
+      });
+    }
+
+    default:
+      throw new TypeError('Invalid transaction journal snapshot.');
+  }
+}
+
 function readUint(input: unknown): bigint {
   requireValid(
     typeof input === 'bigint' &&
@@ -190,17 +324,50 @@ function readUint(input: unknown): bigint {
   return input;
 }
 
+function readArray<T>(
+  input: unknown,
+  readItem: (value: unknown) => T,
+): readonly T[] {
+  requireValid(Array.isArray(input));
+
+  const length = ownValue(input, 'length');
+
+  requireValid(
+    typeof length === 'number' &&
+    Number.isSafeInteger(length) &&
+    length >= 0
+  );
+
+  const result: T[] = [];
+
+  for (let index = 0; index < length; index += 1) {
+    result.push(readItem(ownValue(input, String(index))));
+  }
+
+  return Object.freeze(result);
+}
+
 /**
- * Read declared own properties without invoking getters.
- * Unexpected extra properties are never copied into the result.
+ * Reads a declared object field without invoking its getter.
+ * Extra fields are never copied into the snapshot.
  */
-function field(input: unknown, name: string): unknown {
+function field(
+  input: unknown,
+  name: string,
+): unknown {
   requireValid(
     typeof input === 'object' &&
     input !== null &&
     !Array.isArray(input),
   )
 
+  return ownValue(input, name);
+}
+
+function ownValue(
+  input: object,
+  name: string,
+): unknown {
   let descriptor: PropertyDescriptor | undefined;
 
   try {

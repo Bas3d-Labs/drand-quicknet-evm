@@ -16,10 +16,12 @@ import {
 } from 'viem/accounts';
 
 import type {
+  JournalSignedTransaction,
   TransactionJournalSnapshot,
 } from '../../src/state/transaction-journal.js';
 
 import {
+  verifyJournalAttempt,
   verifyJournalSnapshot,
 } from '../../src/state/transaction-journal-verification.js';
 
@@ -37,6 +39,16 @@ const ANCHOR = {
 };
 
 const FAILURE = 'Invalid journal signed transaction.';
+
+type TestSignedTransaction = {
+  -readonly [K in keyof JournalSignedTransaction]:
+    JournalSignedTransaction[K];
+};
+
+type TestSignedTransactions = [
+  TestSignedTransaction,
+  ...TestSignedTransaction[],
+];
 
 type FixtureType = 'legacy' | 'eip2930' | 'eip1559';
 
@@ -66,6 +78,11 @@ async function fixture(type: FixtureType = 'eip1559') {
     });
   }
 
+  const signedTransactions: TestSignedTransactions = [{
+    transactionHash: keccak256(signedTransaction),
+    signedTransaction,
+  }];
+
   return {
     version: 1 as const,
     identity: { ...IDENTITY },
@@ -77,17 +94,53 @@ async function fixture(type: FixtureType = 'eip1559') {
       anchor: { ...ANCHOR },
       nonce: 4n,
     },
-    nextNonce: 4n,
-    attempt: {
+    nextNonce: 5n,
+    durableNextNonce: 4n,
+    attempts: [{
       attemptId: '11111111-1111-4111-8111-111111111111',
       nonce: 4n,
-      transactionHash: keccak256(signedTransaction),
-      signedTransaction,
+      signedTransactions,
       createdAt: '2026-10-04T00:00:00.000Z',
       phase: 'signed' as const,
+      inclusion: null,
       replacementSearch: null,
-    },
+    }],
   } satisfies TransactionJournalSnapshot;
+}
+
+async function signTransaction(
+  changes: {
+    chainId?: number;
+    nonce?: number;
+    gas?: bigint;
+    to?: typeof ACCOUNT.address;
+    value?: bigint;
+    data?: Hex;
+    accessList?: {
+      address: typeof ACCOUNT.address;
+      storageKeys: Hex[];
+    }[];
+    maxFeePerGas?: bigint;
+    maxPriorityFeePerGas?: bigint;
+  } = {},
+  account = ACCOUNT,
+) {
+  const signedTransaction = await account.signTransaction({
+    type: 'eip1559',
+    chainId: IDENTITY.chainId,
+    nonce: 4,
+    gas: 21_000n,
+    to: ACCOUNT.address,
+    value: 0n,
+    maxFeePerGas: 2n,
+    maxPriorityFeePerGas: 1n,
+    ...changes,
+  });
+
+  return {
+    transactionHash: keccak256(signedTransaction),
+    signedTransaction,
+  };
 }
 
 describe('journal signed transaction verification', () => {
@@ -100,24 +153,27 @@ describe('journal signed transaction verification', () => {
       expect(snapshot).toEqual(input);
       expect(snapshot).not.toBe(input);
       expect(Object.isFrozen(snapshot)).toBe(true);
-      expect(Object.isFrozen(snapshot.attempt)).toBe(true);
+      expect(Object.isFrozen(snapshot.attempts[0])).toBe(true);
     },
   );
 
-  it('accepts a structurally valid snapshot without an attempt', async () => {
+  it('accepts a structurally valid snapshot without attempts', async () => {
     const input = {
       ...await fixture(),
-      attempt: null,
+      nextNonce: 4n,
+      durableNextNonce: 4n,
+      attempts: [],
     };
 
     expect(
-      (await verifyJournalSnapshot(input, IDENTITY)).attempt,
-    ).toBeNull();
+      (await verifyJournalSnapshot(input, IDENTITY)).attempts,
+    ).toEqual([]);
   });
 
   it('rejects a recorded hash that differs from the byte hash', async () => {
     const input = await fixture();
-    input.attempt.transactionHash = `0x${'00'.repeat(32)}`;
+    input.attempts[0]!.signedTransactions[0]!.transactionHash =
+      `0x${'00'.repeat(32)}`;
 
     await expect(verifyJournalSnapshot(input, IDENTITY))
       .rejects.toThrow(FAILURE);
@@ -145,8 +201,9 @@ describe('journal signed transaction verification', () => {
   it('rejects a transaction whose nonce differs from the journal', async () => {
     const input = await fixture();
 
-    input.nextNonce = 5n;
-    input.attempt.nonce = 5n;
+    input.durableNextNonce = 5n;
+    input.nextNonce = 6n;
+    input.attempts[0]!.nonce = 5n;
 
     await expect(verifyJournalSnapshot(input, IDENTITY))
       .rejects.toThrow(FAILURE);
@@ -166,8 +223,9 @@ describe('journal signed transaction verification', () => {
       maxPriorityFeePerGas: 1n,
     });
 
-    input.attempt.signedTransaction = bytes;
-    input.attempt.transactionHash = keccak256(bytes);
+    input.attempts[0]!.signedTransactions[0]!.signedTransaction = bytes;
+    input.attempts[0]!.signedTransactions[0]!.transactionHash =
+      keccak256(bytes);
 
     await expect(verifyJournalSnapshot(input, IDENTITY))
       .rejects.toThrow(FAILURE);
@@ -175,7 +233,9 @@ describe('journal signed transaction verification', () => {
 
   it('rejects a high-s signature even when its byte hash matches', async () => {
     const input = await fixture();
-    const parsed = parseTransaction(input.attempt.signedTransaction);
+    const parsed = parseTransaction(
+      input.attempts[0]!.signedTransactions[0]!.signedTransaction,
+    );
 
     const order =
       0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
@@ -193,8 +253,9 @@ describe('journal signed transaction verification', () => {
       yParity,
     });
 
-    input.attempt.signedTransaction = bytes;
-    input.attempt.transactionHash = keccak256(bytes);
+    input.attempts[0]!.signedTransactions[0]!.signedTransaction = bytes;
+    input.attempts[0]!.signedTransactions[0]!.transactionHash =
+      keccak256(bytes);
 
     await expect(verifyJournalSnapshot(input, IDENTITY))
       .rejects.toThrow(FAILURE);
@@ -204,8 +265,9 @@ describe('journal signed transaction verification', () => {
     const input = await fixture();
     const bytes = `0x${'ab'.repeat(64)}` as const;
 
-    input.attempt.signedTransaction = bytes;
-    input.attempt.transactionHash = keccak256(bytes);
+    input.attempts[0]!.signedTransactions[0]!.signedTransaction = bytes;
+    input.attempts[0]!.signedTransactions[0]!.transactionHash =
+      keccak256(bytes);
 
     let failure: unknown;
 
@@ -219,5 +281,209 @@ describe('journal signed transaction verification', () => {
     expect(failure).toHaveProperty('message', FAILURE);
     expect(failure).not.toHaveProperty('cause');
     expect(String(failure)).not.toContain(bytes);
+  });
+});
+
+describe('journal attempt signed transactions', () => {
+  it.each(['legacy', 'eip2930', 'eip1559'] as const)(
+    'accepts fee replacements for %s',
+    async (type) => {
+      const input = await fixture(type);
+      const attempt = input.attempts[0]!;
+      const original = attempt.signedTransactions[0]!;
+
+      const base = {
+        chainId: IDENTITY.chainId,
+        nonce: 4,
+        gas: 21_000n,
+        to: ACCOUNT.address,
+        value: 0n,
+      };
+
+      const signedTransaction = type === 'eip1559'
+        ? await ACCOUNT.signTransaction({
+            ...base,
+            type,
+            maxFeePerGas: 4n,
+            maxPriorityFeePerGas: 2n,
+          })
+        : await ACCOUNT.signTransaction({
+            ...base,
+            type,
+            gasPrice: 4n,
+          });
+
+      const replacement = {
+        transactionHash: keccak256(signedTransaction),
+        signedTransaction,
+      };
+
+      expect(replacement.transactionHash)
+        .not.toBe(original.transactionHash);
+
+      attempt.signedTransactions.push(replacement);
+
+      const snapshot = await verifyJournalSnapshot(input, IDENTITY);
+
+      expect(snapshot.attempts[0]!.signedTransactions).toEqual([
+        original,
+        replacement,
+      ]);
+    },
+  );
+
+  it('does not impose fee-bump policy during verification', async () => {
+    const input = await fixture();
+
+    input.attempts[0]!.signedTransactions.push(
+      await signTransaction({
+        maxFeePerGas: 1n,
+        maxPriorityFeePerGas: 1n,
+      }),
+    );
+
+    await expect(verifyJournalSnapshot(input, IDENTITY))
+      .resolves.toEqual(input);
+  });
+
+  const changedFields = [
+    { name: 'chain', changes: { chainId: 1 } },
+    { name: 'nonce', changes: { nonce: 5 } },
+    { name: 'gas limit', changes: { gas: 30_000n } },
+    {
+      name: 'destination',
+      changes: {
+        to: '0x2222222222222222222222222222222222222222' as const,
+      },
+    },
+    { name: 'value', changes: { value: 1n } },
+    { name: 'calldata', changes: { data: '0x1234' as const } },
+    {
+      name: 'access list',
+      changes: {
+        accessList: [{
+          address: ACCOUNT.address,
+          storageKeys: [`0x${'00'.repeat(32)}` as Hex],
+        }],
+      },
+    },
+  ];
+
+  it.each(changedFields)(
+    'rejects a later signed transaction with a different $name',
+    async ({ changes }) => {
+      const input = await fixture();
+
+      input.attempts[0]!.signedTransactions.push(
+        await signTransaction(changes),
+      );
+
+      await expect(verifyJournalSnapshot(input, IDENTITY))
+        .rejects.toThrow(FAILURE);
+    },
+  );
+
+  it('rejects a change between legacy and EIP-2930 transactions', async () => {
+    const input = await fixture('legacy');
+    const other = await fixture('eip2930');
+
+    input.attempts[0]!.signedTransactions.push(
+      other.attempts[0]!.signedTransactions[0]!,
+    );
+
+    await expect(verifyJournalSnapshot(input, IDENTITY))
+      .rejects.toThrow(FAILURE);
+  });
+
+  it('rejects a later transaction signed by another account', async () => {
+    const input = await fixture();
+    const otherAccount = privateKeyToAccount(`0x${'22'.repeat(32)}`);
+
+    input.attempts[0]!.signedTransactions.push(
+      await signTransaction(
+        { maxFeePerGas: 4n },
+        otherAccount,
+      ),
+    );
+
+    await expect(verifyJournalSnapshot(input, IDENTITY))
+      .rejects.toThrow(FAILURE);
+  });
+
+  it('checks the recorded hash of every signed transaction', async () => {
+    const input = await fixture();
+    const replacement = await signTransaction({
+      maxFeePerGas: 4n,
+    });
+
+    replacement.transactionHash = `0x${'00'.repeat(32)}`;
+    input.attempts[0]!.signedTransactions.push(replacement);
+
+    await expect(verifyJournalSnapshot(input, IDENTITY))
+      .rejects.toThrow(FAILURE);
+  });
+
+  it('verifies every retained attempt independently', async () => {
+    const input = await fixture();
+    const secondTransactions: TestSignedTransactions = [
+      await signTransaction({
+        nonce: 5,
+        data: '0x1234',
+        gas: 30_000n,
+      }),
+    ];
+
+    const second = {
+      ...input.attempts[0]!,
+      attemptId: '22222222-2222-4222-8222-222222222222',
+      nonce: 5n,
+      signedTransactions: secondTransactions,
+    };
+
+    input.attempts.push(second);
+    input.nextNonce = 6n;
+
+    await expect(verifyJournalSnapshot(input, IDENTITY))
+      .resolves.toEqual(input);
+
+    second.signedTransactions[0]!.transactionHash =
+      `0x${'00'.repeat(32)}`;
+
+    await expect(verifyJournalSnapshot(input, IDENTITY))
+      .rejects.toThrow(FAILURE);
+  });
+
+  it('rejects duplicate transactions through the direct attempt API', async () => {
+    const input = await fixture();
+    const attempt = input.attempts[0]!;
+
+    attempt.signedTransactions.push({
+      ...attempt.signedTransactions[0]!,
+    });
+
+    await expect(verifyJournalAttempt(IDENTITY, attempt))
+      .rejects.toThrow(FAILURE);
+  });
+
+  it('captures all signed transactions before awaiting recovery', async () => {
+    const input = await fixture();
+    const attempt = input.attempts[0]!;
+
+    attempt.signedTransactions.push(
+      await signTransaction({ maxFeePerGas: 4n }),
+    );
+
+    const identity = { ...IDENTITY };
+    const pending = verifyJournalAttempt(identity, attempt);
+
+    identity.chainId = 1;
+    attempt.nonce = 99n;
+
+    Object.assign(attempt.signedTransactions[1]!, {
+      transactionHash: `0x${'00'.repeat(32)}`,
+      signedTransaction: '0x',
+    });
+
+    await expect(pending).resolves.toBeUndefined();
   });
 });
