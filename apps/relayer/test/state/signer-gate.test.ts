@@ -54,7 +54,8 @@ function emptySnapshot(): TransactionJournalSnapshot {
     baseline: observation,
     lastObservation: observation,
     nextNonce: 4n,
-    attempt: null,
+    durableNextNonce: 4n,
+    attempts: [],
   };
 }
 
@@ -72,15 +73,48 @@ async function unresolvedSnapshot(): Promise<TransactionJournalSnapshot> {
 
   return {
     ...emptySnapshot(),
-    attempt: {
+    nextNonce: 5n,
+    attempts: [{
       attemptId: '11111111-1111-4111-8111-111111111111',
       nonce: 4n,
-      transactionHash: keccak256(signedTransaction),
-      signedTransaction,
+      signedTransactions: [{
+        transactionHash: keccak256(signedTransaction),
+        signedTransaction,
+      }],
       createdAt: '2026-10-04T00:00:00.000Z',
       phase: 'broadcast-may-have-occurred',
+      inclusion: null,
       replacementSearch: null,
+    }],
+  };
+}
+
+async function includedSnapshot(): Promise<TransactionJournalSnapshot> {
+  const snapshot = await unresolvedSnapshot();
+  const attempt = snapshot.attempts[0]!;
+
+  const anchor = {
+    blockNumber: 110n,
+    blockHash: HASH,
+  };
+
+  return {
+    ...snapshot,
+    lastObservation: {
+      anchor,
+      nonce: 5n,
     },
+    attempts: [{
+      ...attempt,
+      phase: 'included',
+      inclusion: {
+        outcome: 'success',
+        transactionHash:
+          attempt.signedTransactions[0].transactionHash,
+        inclusion: anchor,
+        observedAt: anchor,
+      },
+    }],
   };
 }
 
@@ -105,16 +139,20 @@ describe('signer gate', () => {
       persistence,
       recoveryComplete: false,
       blockers: new Set(),
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 2,
     })).toEqual({
       open: false,
-      blockers: [],
-      primaryReason: null,
+      blockers: ['recovery-incomplete'],
+      primaryReason: 'recovery-incomplete',
     });
 
     expect(evaluateSignerGate({
       persistence,
       recoveryComplete: true,
       blockers: new Set(),
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 2,
     })).toEqual({
       open: true,
       blockers: [],
@@ -127,6 +165,8 @@ describe('signer gate', () => {
       persistence: present(emptySnapshot(), 'writing'),
       recoveryComplete: true,
       blockers: new Set(),
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 2,
     })).toEqual({
       open: false,
       blockers: [],
@@ -144,10 +184,12 @@ describe('signer gate', () => {
       },
       recoveryComplete: true,
       blockers: new Set(),
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 2,
     })).toEqual({
       open: false,
-      blockers: ['unattributed-signer-activity'],
-      primaryReason: 'unattributed-signer-activity',
+      blockers: ['recovery-incomplete'],
+      primaryReason: 'recovery-incomplete',
     });
   });
 
@@ -156,6 +198,8 @@ describe('signer gate', () => {
       persistence: present(await unresolvedSnapshot()),
       recoveryComplete: true,
       blockers: new Set(),
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 2,
     })).toEqual({
       open: false,
       blockers: ['unresolved-attempt'],
@@ -171,6 +215,8 @@ describe('signer gate', () => {
       persistence: present(emptySnapshot()),
       recoveryComplete: true,
       blockers: new Set([reason]),
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 2,
     })).toEqual({
       open: false,
       blockers: [reason],
@@ -195,6 +241,8 @@ describe('signer gate', () => {
         persistence: present(snapshot, 'failed'),
         recoveryComplete: true,
         blockers: new Set<CoordinatorBlocker>(reasons),
+        inclusionChecksComplete: true,
+        maxRetainedAttempts: 2,
       })).toEqual({
         open: false,
         blockers: [
@@ -219,6 +267,8 @@ describe('signer gate', () => {
       persistence,
       recoveryComplete: true,
       blockers,
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 2,
     }).primaryReason).toBe('conflict-search-exhausted');
 
     blockers.delete('conflict-search-exhausted');
@@ -227,6 +277,8 @@ describe('signer gate', () => {
       persistence,
       recoveryComplete: true,
       blockers,
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 2,
     })).toEqual({
       open: false,
       blockers: ['unresolved-attempt'],
@@ -243,6 +295,8 @@ describe('signer gate', () => {
       persistence: present(emptySnapshot()),
       recoveryComplete: true,
       blockers,
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 2,
     });
 
     blockers.clear();
@@ -268,7 +322,8 @@ describe('signer gate', () => {
         nonce: 5n,
       },
       nextNonce: 5n,
-      attempt: null,
+      durableNextNonce: 5n,
+      attempts: [],
     };
 
     let visible: TransactionJournalRead = {
@@ -313,6 +368,8 @@ describe('signer gate', () => {
       persistence,
       recoveryComplete: true,
       blockers,
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 2,
     })).toEqual({
       open: false,
       blockers: [
@@ -329,6 +386,8 @@ describe('signer gate', () => {
       persistence,
       recoveryComplete: true,
       blockers,
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 2,
     })).toEqual({
       open: false,
       blockers: ['unattributed-signer-activity'],
@@ -337,4 +396,97 @@ describe('signer gate', () => {
 
     expect(load).not.toHaveBeenCalled();
   });
+
+  it('allows preparation with retained inclusion after a clean recheck', async () => {
+    expect(evaluateSignerGate({
+      persistence: present(await includedSnapshot()),
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 2,
+      blockers: new Set(),
+    })).toEqual({
+      open: true,
+      blockers: [],
+      primaryReason: null,
+    });
+  });
+
+  it('does not authorize preparation from persisted inclusion alone', async () => {
+    expect(evaluateSignerGate({
+      persistence: present(await includedSnapshot()),
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+      maxRetainedAttempts: 2,
+      blockers: new Set(),
+    })).toEqual({
+      open: false,
+      blockers: ['recovery-incomplete'],
+      primaryReason: 'recovery-incomplete',
+    });
+  });
+
+  it('blocks at capacity even when every retained attempt is included', async () => {
+    expect(evaluateSignerGate({
+      persistence: present(await includedSnapshot()),
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 1,
+      blockers: new Set(),
+    })).toEqual({
+      open: false,
+      blockers: ['journal-capacity-reached'],
+      primaryReason: 'journal-capacity-reached',
+    });
+  });
+
+  it('reports unresolved attempts before capacity', async () => {
+    expect(evaluateSignerGate({
+      persistence: present(await unresolvedSnapshot()),
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 1,
+      blockers: new Set(),
+    })).toEqual({
+      open: false,
+      blockers: [
+        'unresolved-attempt',
+        'journal-capacity-reached',
+      ],
+      primaryReason: 'unresolved-attempt',
+    });
+  });
+
+  it('blocks a signed attempt before any broadcast', async () => {
+    const snapshot = await unresolvedSnapshot();
+
+    const signed: TransactionJournalSnapshot = {
+      ...snapshot,
+      attempts: [{
+        ...snapshot.attempts[0]!,
+        phase: 'signed',
+        inclusion: null,
+      }],
+    };
+
+    expect(evaluateSignerGate({
+      persistence: present(signed),
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      maxRetainedAttempts: 2,
+      blockers: new Set(),
+    }).blockers).toEqual(['unresolved-attempt']);
+  });
+
+  it.each([0, -1, 1.5, NaN, Infinity])(
+    'rejects invalid retained capacity: %s',
+    (maxRetainedAttempts) => {
+      expect(() => evaluateSignerGate({
+        persistence: present(emptySnapshot()),
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+        maxRetainedAttempts,
+        blockers: new Set(),
+      })).toThrow('Invalid retained attempt capacity.');
+    },
+  );
 });

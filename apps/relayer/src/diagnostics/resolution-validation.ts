@@ -1,6 +1,10 @@
-import { transactionType, type Hash } from 'viem';
+import {
+  type Hash
+} from 'viem';
 
-import { isFixedHex } from '../shared/hex.js';
+import {
+  isFixedHex
+} from '../shared/hex.js';
 
 import type {
   AttemptResolutionEvidence,
@@ -55,22 +59,32 @@ type ResolutionTransaction =
       readonly nonceAtAnchor: bigint;
     };
 
+/**
+ * Matches resolution evidence against every signed transaction retained
+ * for this nonce. Any recorded fee replacement remains our transaction.
+ */
 export function assertResolutionTransaction(
   attempt: {
-    readonly transactionHash: Hash;
     readonly nonce: bigint;
+    readonly signedTransactions: readonly {
+      readonly transactionHash: Hash;
+    }[];
   },
   evidence: ResolutionTransaction,
 ): void {
-  const recorded = attempt.transactionHash.toLowerCase();
+  check(attempt.signedTransactions.length > 0);
+
+  const containsHash = (transactionHash: Hash): boolean =>
+    attempt.signedTransactions.some((transaction) =>
+      transaction.transactionHash.toLowerCase() ===
+      transactionHash.toLowerCase()
+    );
 
   if (evidence.outcome === 'replaced') {
-    check(
-      evidence.replacementTransactionHash.toLowerCase() !== recorded
-    );
+    check(!containsHash(evidence.replacementTransactionHash));
     check(evidence.nonceAtAnchor > attempt.nonce);
   } else {
-    check(evidence.transactionHash.toLowerCase() === recorded);
+    check(containsHash(evidence.transactionHash));
   }
 }
 

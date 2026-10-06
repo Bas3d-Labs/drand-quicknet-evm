@@ -7,6 +7,7 @@ import {
 
 import {
   TransactionReceiptNotFoundError,
+  type Hash,
   type PublicClient,
 } from 'viem';
 
@@ -16,6 +17,7 @@ import {
 
 const HASH = `0x${'11'.repeat(32)}` as const;
 const ANCHOR_HASH = `0x${'aa'.repeat(32)}` as const;
+const BUMP_HASH = `0x${'22'.repeat(32)}` as const;
 const BLOCK_HASH = `0x${'bb'.repeat(32)}` as const;
 const FORK_HASH = `0x${'cc'.repeat(32)}` as const;
 
@@ -28,7 +30,7 @@ function setup() {
   const calls: string[] = [];
 
   const receipt = {
-    transactionHash: HASH,
+    transactionHash: HASH as Hash,
     blockNumber: 109n,
     blockHash: BLOCK_HASH,
     status: 'success',
@@ -64,7 +66,7 @@ function setup() {
 
   const run = () => reconcileAttemptReceipt({
     publicClient,
-    transactionHash: HASH,
+    transactionHashes: [HASH],
     anchor,
   });
 
@@ -142,6 +144,8 @@ describe('attempt receipt reconciliation', () => {
 
     expect(await fixture.run()).toEqual({
       status: 'included-not-durable',
+      transactionHash: HASH,
+      outcome: 'success',
       inclusion: {
         blockNumber: 111n,
         blockHash: BLOCK_HASH,
@@ -274,4 +278,182 @@ describe('attempt receipt reconciliation', () => {
       );
     },
   );
+
+  it.each(['success', 'reverted'] as const)(
+    'finds a durable %s receipt for a later recorded hash',
+    async (status) => {
+      const fixture = setup();
+
+      fixture.getTransactionReceipt
+        .mockRejectedValueOnce(
+          new TransactionReceiptNotFoundError({ hash: HASH }),
+        )
+        .mockResolvedValueOnce({
+          ...fixture.receipt,
+          transactionHash: BUMP_HASH,
+          status,
+        });
+
+      const result = await reconcileAttemptReceipt({
+        publicClient: fixture.publicClient,
+        transactionHashes: [HASH, BUMP_HASH],
+        anchor,
+      });
+
+      expect(result).toMatchObject({
+        status: 'verified',
+        evidence: {
+          outcome: status,
+          transactionHash: BUMP_HASH,
+        },
+      });
+
+      expect(fixture.getTransactionReceipt)
+        .toHaveBeenNthCalledWith(1, { hash: HASH });
+      expect(fixture.getTransactionReceipt)
+        .toHaveBeenNthCalledWith(2, { hash: BUMP_HASH });
+
+      expect(fixture.getBlock.mock.calls.map(
+        ([options]) => options.blockNumber,
+      )).toEqual([110n, 109n, 110n]);
+    },
+  );
+
+  it('continues past a fork-served receipt to a canonical recorded transaction', async () => {
+    const fixture = setup();
+
+    fixture.getTransactionReceipt
+      .mockResolvedValueOnce({
+        ...fixture.receipt,
+        blockHash: FORK_HASH as typeof BLOCK_HASH,
+      })
+      .mockResolvedValueOnce({
+        ...fixture.receipt,
+        transactionHash: BUMP_HASH,
+      });
+
+    expect(await reconcileAttemptReceipt({
+      publicClient: fixture.publicClient,
+      transactionHashes: [HASH, BUMP_HASH],
+      anchor,
+    })).toMatchObject({
+      status: 'verified',
+      evidence: {
+        transactionHash: BUMP_HASH,
+      },
+    });
+
+    expect(fixture.getTransactionReceipt).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns receipt absence only after checking every recorded hash', async () => {
+    const fixture = setup();
+
+    fixture.getTransactionReceipt
+      .mockRejectedValueOnce(
+        new TransactionReceiptNotFoundError({ hash: HASH }),
+      )
+      .mockRejectedValueOnce(
+        new TransactionReceiptNotFoundError({ hash: BUMP_HASH }),
+      );
+
+    expect(await reconcileAttemptReceipt({
+      publicClient: fixture.publicClient,
+      transactionHashes: [HASH, BUMP_HASH],
+      anchor,
+    })).toEqual({
+      status: 'receipt-not-found',
+    });
+
+    expect(fixture.getTransactionReceipt).toHaveBeenCalledTimes(2);
+    expect(fixture.getBlock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects two canonically included recorded hashes', async () => {
+    const fixture = setup();
+
+    fixture.getTransactionReceipt
+      .mockResolvedValueOnce({ ...fixture.receipt })
+      .mockResolvedValueOnce({
+        ...fixture.receipt,
+        transactionHash: BUMP_HASH,
+      });
+
+    await expect(reconcileAttemptReceipt({
+      publicClient: fixture.publicClient,
+      transactionHashes: [HASH, BUMP_HASH],
+      anchor,
+    })).rejects.toThrow('Conflicting attempt receipt observations.');
+
+    expect(fixture.getBlock.mock.calls.map(
+      ([options]) => options.blockNumber,
+    )).toEqual([110n, 109n, 109n, 110n]);
+  });
+
+  it('propagates a later RPC failure even after finding a receipt', async () => {
+    const fixture = setup();
+    const failure = new Error('RPC unavailable');
+
+    fixture.getTransactionReceipt
+      .mockResolvedValueOnce({ ...fixture.receipt })
+      .mockRejectedValueOnce(failure);
+
+    await expect(reconcileAttemptReceipt({
+      publicClient: fixture.publicClient,
+      transactionHashes: [HASH, BUMP_HASH],
+      anchor,
+    })).rejects.toBe(failure);
+  });
+
+  it('captures all hashes before the first RPC completes', async () => {
+    const fixture = setup();
+    const transactionHashes: Hash[] = [HASH, BUMP_HASH];
+
+    fixture.getTransactionReceipt
+      .mockRejectedValueOnce(
+        new TransactionReceiptNotFoundError({ hash: HASH }),
+      )
+      .mockResolvedValueOnce({
+        ...fixture.receipt,
+        transactionHash: BUMP_HASH,
+      });
+
+    const pending = reconcileAttemptReceipt({
+      publicClient: fixture.publicClient,
+      transactionHashes,
+      anchor,
+    });
+
+    transactionHashes[1] = FORK_HASH;
+    transactionHashes.push(ANCHOR_HASH);
+
+    expect(await pending).toMatchObject({
+      status: 'verified',
+      evidence: {
+        transactionHash: BUMP_HASH,
+      },
+    });
+
+    expect(fixture.getTransactionReceipt).toHaveBeenCalledTimes(2);
+    expect(fixture.getTransactionReceipt)
+      .toHaveBeenNthCalledWith(2, { hash: BUMP_HASH });
+  });
+
+  it.each([
+    { hashes: [] },
+    { hashes: [HASH, HASH] },
+    { hashes: [ANCHOR_HASH, `0x${'AA'.repeat(32)}`] },
+    { hashes: ['invalid'] },
+  ])('rejects invalid hash collections before RPC calls: %#', async ({ hashes }) => {
+    const fixture = setup();
+
+    await expect(reconcileAttemptReceipt({
+      publicClient: fixture.publicClient,
+      transactionHashes: hashes as Hash[],
+      anchor,
+    })).rejects.toThrow('Invalid receipt reconciliation input.');
+
+    expect(fixture.getBlock).not.toHaveBeenCalled();
+    expect(fixture.getTransactionReceipt).not.toHaveBeenCalled();
+  });
 });

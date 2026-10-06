@@ -3,6 +3,7 @@ import {
 } from 'node:crypto';
 
 import type {
+  Hash,
   LocalAccount,
   PublicClient,
 } from 'viem';
@@ -14,14 +15,19 @@ import {
 } from '../chain/block-anchor.js';
 
 import {
-  readAnchoredNonce,
-  type AnchoredNonceResult,
-} from '../chain/read-anchored-nonce.js';
+  inspectSignerInclusions,
+  type SignerInclusionInspection,
+} from '../chain/inspect-signer-inclusions.js';
 
 import {
   inspectSignerRecovery,
   type SignerRecoveryInspection,
 } from '../chain/inspect-signer-recovery.js';
+
+import {
+  readAnchoredNonce,
+  type AnchoredNonceResult,
+} from '../chain/read-anchored-nonce.js';
 
 import type {
   ReplacementSearchResult,
@@ -78,6 +84,7 @@ import {
 export interface SignerCoordinatorOptions {
   readonly identity: JournalIdentity;
   readonly store: TransactionJournalStore;
+  readonly maxRetainedAttempts: number;
   readonly log: ScopedRelayerLog;
   readonly createErrorSummary: ErrorSummaryFactory;
   readonly now?: () => number;
@@ -144,10 +151,11 @@ export interface PrepareAttemptOptions {
   readonly transaction: PreparedRelayerTransaction;
 }
 
-export type PreparedAttempt = Readonly<Pick<
-  JournalAttempt,
-  'attemptId' | 'transactionHash' | 'nonce'
->>;
+export interface PreparedAttempt {
+  readonly attemptId: string;
+  readonly transactionHash: Hash;
+  readonly nonce: bigint;
+}
 
 type SignerEventOperation =
   | 'prepare-attempt'
@@ -163,9 +171,19 @@ export type BroadcastAttemptResult = PreparedAttempt & {
   readonly status: 'acknowledged';
 };
 
-export type AttemptSummary = PreparedAttempt & {
+export interface AttemptSummary {
+  readonly attemptId: string;
+  readonly nonce: bigint;
   readonly phase: JournalAttempt['phase'];
-};
+
+  /** Original transaction hash followed by any fee replacement hashes. */
+  readonly transactionHashes: readonly [Hash, ...Hash[]];
+}
+
+export interface CheckSignerInclusionOptions {
+  readonly publicClient: PublicClient;
+  readonly head: Readonly<BlockAnchor>;
+}
 
 /**
  * Coordinates durable nonce observations and attempt resolution so restart
@@ -173,6 +191,7 @@ export type AttemptSummary = PreparedAttempt & {
  */
 export class SignerCoordinator {
   private recoveryComplete = false;
+  private inclusionChecksComplete = false;
   private busy = false;
   private emitting = false;
   private broadcastPermit: string | undefined;
@@ -188,6 +207,7 @@ export class SignerCoordinator {
   private constructor(
     private readonly persistence: JournalPersistence,
     private readonly identity: JournalIdentity,
+    private readonly maxRetainedAttempts: number,
     private readonly log: ScopedRelayerLog,
     private readonly now: () => number,
     private readonly createErrorSummary: ErrorSummaryFactory,
@@ -196,6 +216,15 @@ export class SignerCoordinator {
   static async create(
     options: SignerCoordinatorOptions,
   ): Promise<SignerCoordinator> {
+    const maxRetainedAttempts = options.maxRetainedAttempts;
+
+    if (
+      !Number.isSafeInteger(maxRetainedAttempts) ||
+      maxRetainedAttempts <= 0
+    ) {
+      throw new TypeError('Invalid retained attempt capacity.');
+    }
+
     const identity = Object.freeze({ ...options.identity });
 
     const persistence = await JournalPersistence.create({
@@ -207,25 +236,34 @@ export class SignerCoordinator {
     const coordinator = new SignerCoordinator(
       persistence,
       identity,
+      maxRetainedAttempts,
       options.log.withContext({ signer: identity.signer }),
       options.now ?? Date.now,
       options.createErrorSummary,
     );
 
     const current = persistence.current;
-    if (
-      current.kind === 'present' &&
-      current.snapshot.attempt !== null
-    ) {
-      const attempt = current.snapshot.attempt;
+    if (current.kind === 'present') {
+      const attempts = current.snapshot.attempts;
+      const first = attempts[0];
 
-      coordinator.attemptLog = coordinator.log
-        .withErrorSummary(
-          options.createErrorSummary([attempt.signedTransaction]),
-        )
-        .withContext({ attemptId: attempt.attemptId });
+      if (first !== undefined) {
+        const signedTransactions = attempts.flatMap((attempt) => 
+          attempt.signedTransactions.map(
+            (transaction) => transaction.signedTransaction
+          ),
+        );
 
-      coordinator.blockedSince = attempt.createdAt;
+        try {
+          coordinator.attemptLog = coordinator.log.withErrorSummary(
+            options.createErrorSummary(signedTransactions),
+          );
+        } catch {
+          throw new Error('Could not configure signed attempt diagnostics.');
+        }
+
+        coordinator.blockedSince = first.createdAt;
+      }
     }
     
     coordinator.latchUnattributedActivity();
@@ -235,29 +273,33 @@ export class SignerCoordinator {
     return coordinator;
   }
 
-  get attempt(): AttemptSummary | null {
+  get attempts(): readonly AttemptSummary[] {
     const current = this.persistence.current;
 
-    if (
-      current.kind !== 'present' ||
-      current.snapshot.attempt === null
-    ) {
-      return null;
+    if (current.kind !== 'present') {
+      return Object.freeze([]);
     }
+    
+    return Object.freeze(current.snapshot.attempts.map((attempt) => {
+      const [first, ...remaining] = attempt.signedTransactions;
 
-    const attempt = current.snapshot.attempt;
+      const transactionHashes: readonly [Hash, ...Hash[]] = Object.freeze([
+        first.transactionHash,
+        ...remaining.map((transaction) => transaction.transactionHash),
+      ]);
 
-    return Object.freeze({
-      attemptId: attempt.attemptId,
-      transactionHash: attempt.transactionHash,
-      nonce: attempt.nonce,
-      phase: attempt.phase,
-    });
+      return Object.freeze({
+        attemptId: attempt.attemptId,
+        nonce: attempt.nonce,
+        phase: attempt.phase,
+        transactionHashes,
+      });
+    }));
   }
 
   /**
-   * Determine whether preparation or recovery has authorized 
-   * one broadcast now.
+   * Determine whether the oldest unresolved attempt was a one-use
+   * broadcast permit.
    */
   get canBroadcast(): boolean {
     const current = this.persistence.current;
@@ -267,19 +309,24 @@ export class SignerCoordinator {
       this.emitting ||
       this.pendingWrite !== undefined ||
       this.persistence.state !== 'idle' ||
-      current.kind !== 'present' ||
-      current.snapshot.attempt === null
+      current.kind !== 'present'
     ) {
       return false;
     }
 
-    const attempt = current.snapshot.attempt;
+    const attempt = current.snapshot.attempts.find(
+      (candidate) => candidate.phase !== 'included'
+    );
+
+    if (attempt === undefined) {
+      return false;
+    }
 
     return (
       this.recoveryComplete &&
       this.broadcastPermit === attempt.attemptId &&
       this.blockers.size === 0 &&
-      current.snapshot.lastObservation.nonce <= attempt.nonce
+      current.snapshot.lastObservation.nonce === attempt.nonce
     );
   }
 
@@ -287,6 +334,8 @@ export class SignerCoordinator {
     const gate = evaluateSignerGate({
       persistence: this.persistence,
       recoveryComplete: this.recoveryComplete,
+      inclusionChecksComplete: this.inclusionChecksComplete,
+      maxRetainedAttempts: this.maxRetainedAttempts,
       blockers: this.blockers,
     });
 
@@ -294,14 +343,15 @@ export class SignerCoordinator {
       ...gate,
       open: gate.open && !this.busy,
       recoveryComplete: this.recoveryComplete,
+      inclusionChecksComplete: this.inclusionChecksComplete,
       persistenceState: this.persistence.state,
       blockedSince: this.blockedSince,
     });
   }
 
   /**
-   * Signs and durably record the next transaction so recovery can reuse
-   * the same bytes after a restart.
+   * Signs and durably appends the next allocated transaction. Retained
+   * attempts remain available for recovery and diagnostics.
    */
   async prepareAttempt(
     options: PrepareAttemptOptions,
@@ -320,14 +370,18 @@ export class SignerCoordinator {
 
     if (
       !this.status.open ||
-      current.kind !== 'present' ||
-      current.snapshot.attempt !== null
+      current.kind !== 'present'
     ) {
       throw new Error(
         'The signer gate must be open before preparing an attempt.'
-      )
+      );
     }
 
+    const previousAttemptLog = this.attemptLog;
+    const previousBlockedSince = this.blockedSince;
+    const previousInclusionChecksComplete = this.inclusionChecksComplete;
+
+    this.broadcastPermit = undefined;
     this.busy = true;
 
     try {
@@ -341,29 +395,52 @@ export class SignerCoordinator {
         transaction: options.transaction,
       });
 
-      const next = validateJournalSnapshotStructure({
-        ...current.snapshot,
-        attempt: {
-          ...signed,
-          attemptId,
-          createdAt,
-          phase: 'signed',
-          replacementSearch: {
-            lowerBound: current.snapshot.lastObservation,
-            searchedThrough: null,
-          },
-        },
-      }, this.identity);
+      const signedTransactions = [
+        ...current.snapshot.attempts.flatMap((attempt) => 
+          attempt.signedTransactions.map(
+            (transaction) => transaction.signedTransaction,
+          ),
+        ),
+        signed.signedTransaction,
+      ];
 
+      // Install protection for both retained and newly signed bytes before
+      // persistence can fail. Queue-wide diagnostics have no one attemptId.
       try {
         this.attemptLog = this.log.withErrorSummary(
-          this.createErrorSummary([signed.signedTransaction]),
-        ).withContext({ attemptId });
+          this.createErrorSummary(signedTransactions)
+        );
       } catch {
         throw new Error('Could not configure signed attempt diagnostics.');
       }
 
-      this.blockedSince = createdAt;
+      const attempt: JournalAttempt = {
+        attemptId,
+        nonce: signed.nonce,
+        createdAt,
+        signedTransactions: [{
+          transactionHash: signed.transactionHash,
+          signedTransaction: signed.signedTransaction,
+        }],
+        phase: 'signed',
+        inclusion: null,
+        replacementSearch: {
+          lowerBound: current.snapshot.lastObservation,
+          searchedThrough: null,
+        },
+      };
+
+      const next = validateJournalSnapshotStructure({
+        ...current.snapshot,
+        nextNonce: current.snapshot.nextNonce + 1n,
+        attempts: [
+          ...current.snapshot.attempts,
+          attempt,
+        ],
+      }, this.identity);
+
+      this.blockedSince ??= createdAt;
+      this.inclusionChecksComplete = false;
       this.pendingWrite = { kind: 'prepared' };
 
       await this.persistence.save(next);
@@ -378,11 +455,16 @@ export class SignerCoordinator {
       });
     } catch (error) {
       if (this.persistence.state === 'idle') {
+        // No retained write: restore the previously committed queue's
+        // diagnostic policy and inclusion authorization.
         this.pendingWrite = undefined;
-        this.attemptLog = undefined;
-        this.blockedSince = null;
+        this.attemptLog = previousAttemptLog;
+        this.blockedSince = previousBlockedSince;
+        this.inclusionChecksComplete = previousInclusionChecksComplete;
       } else {
+        // Preserve the expanded diagnostic policy through every retry.
         this.recoveryComplete = false;
+        this.inclusionChecksComplete = false;
       }
 
       throw error;
@@ -393,8 +475,8 @@ export class SignerCoordinator {
   }
 
   /**
-   * Sends the recorded transaction after durably marking that broadcast
-   * may occur.
+   * Broadcasts the latest recorded signed transaction for the oldest
+   * unresolved attempt after durably marking that broadcast may occur.
    */
   async broadcastAttempt(
     options: BroadcastAttemptOptions,
@@ -411,24 +493,35 @@ export class SignerCoordinator {
 
     const current = this.persistence.current;
 
-    if (
-      current.kind !== 'present' ||
-      current.snapshot.attempt === null ||
-      options.attemptId !== current.snapshot.attempt.attemptId
-    ) {
+    if (current.kind !== 'present') {
       throw new Error('Broadcast does not match a recorded attempt.');
     }
 
-    const attempt = current.snapshot.attempt;
+    const attemptIndex = current.snapshot.attempts.findIndex(
+      (candidate) => candidate.phase !== 'included',
+    );
+
+    const attempt = current.snapshot.attempts[attemptIndex];
+
+    if (
+      attempt === undefined ||
+      options.attemptId !== attempt.attemptId
+    ) {
+      throw new Error('Broadcast does not match a recorded attempt.');
+    }
 
     if (!this.canBroadcast) {
       throw new Error('Fresh reconciliation is required before broadcasting.');
     }
 
+    const transaction =
+      attempt.signedTransactions[attempt.signedTransactions.length - 1]!;
+
     const publicClient = options.publicClient;
 
     this.broadcastPermit = undefined;
     this.recoveryComplete = false;
+    this.inclusionChecksComplete = false;
     this.busy = true;
 
     try {
@@ -437,13 +530,19 @@ export class SignerCoordinator {
 
         await this.persistence.save({
           ...current.snapshot,
-          attempt: {
-            ...attempt,
-            phase: 'broadcast-may-have-occurred',
-          },
+          attempts: current.snapshot.attempts.map((candidate, index) => 
+            index === attemptIndex
+              ? {
+                  ...candidate,
+                  phase: 'broadcast-may-have-occurred',
+                  inclusion: null,
+                }
+              : candidate,
+          ),
         });
 
-        // Retain exclusive ownership through the RPC call
+        // Keep exclusive ownership through the RPC call. finishWrite
+        // would release it before the broadcast outcome is known.
         this.pendingWrite = undefined;
       }
 
@@ -452,8 +551,8 @@ export class SignerCoordinator {
       try {
         returnedHash = await publicClient.request({
           method: 'eth_sendRawTransaction',
-          params: [attempt.signedTransaction],
-        }, { 
+          params: [transaction.signedTransaction],
+        }, {
           retryCount: 0,
         });
       } catch {
@@ -464,7 +563,7 @@ export class SignerCoordinator {
 
       if (
         !isFixedHex(returnedHash, 32) ||
-        returnedHash.toLowerCase() !== attempt.transactionHash.toLowerCase()
+        returnedHash.toLowerCase() !== transaction.transactionHash.toLowerCase()
       ) {
         throw new Error(
           'RPC returned an unexpected transaction hash. Reconciliation is required.'
@@ -474,7 +573,7 @@ export class SignerCoordinator {
       return Object.freeze({
         status: 'acknowledged',
         attemptId: attempt.attemptId,
-        transactionHash: attempt.transactionHash,
+        transactionHash: transaction.transactionHash,
         nonce: attempt.nonce,
       });
     } catch (error) {
@@ -513,6 +612,7 @@ export class SignerCoordinator {
     this.broadcastPermit = undefined;
     this.busy = true;
     this.recoveryComplete = false;
+    this.inclusionChecksComplete = false;
 
     try {
       if (current.kind === 'missing') {
@@ -533,7 +633,8 @@ export class SignerCoordinator {
           baseline: observation,
           lastObservation: observation,
           nextNonce: observation.nonce,
-          attempt: null,
+          durableNextNonce: observation.nonce,
+          attempts: [],
         });
 
         this.recoveryComplete = true;
@@ -585,44 +686,48 @@ export class SignerCoordinator {
         lastObservation = current.snapshot.lastObservation;
       }
 
-      let attempt = current.snapshot.attempt;
-      let nextNonce = current.snapshot.nextNonce;
+      const oldest = current.snapshot.attempts[0];
+
+      let attempts = current.snapshot.attempts;
+      let durableNextNonce = current.snapshot.durableNextNonce;
 
       let pending: PendingWrite = {
         kind: 'observation',
       };
 
       if (result.status === 'resolution-available') {
-        if (attempt === null) {
+        if (oldest === undefined) {
           throw new Error('No recorded attempt is available to resolve.');
         }
 
         const resolution = snapshotResolutionEvidence(result.evidence);
 
-        assertResolutionTransaction(attempt, resolution);
+        assertResolutionTransaction(oldest, resolution);
 
         pending = {
           kind: 'resolution',
           event: Object.freeze({
             signer: this.identity.signer,
-            attemptId: attempt.attemptId,
-            transactionHash: attempt.transactionHash,
-            nonce: attempt.nonce,
+            attemptId: oldest.attemptId,
+            transactionHash: resolution.outcome === 'replaced'
+              ? oldest.signedTransactions[0].transactionHash
+              : resolution.transactionHash,
+            nonce: oldest.nonce,
             resolution,
           }),
         };
 
-        nextNonce = attempt.nonce + 1n;
-        attempt = null;
-      } else if (attempt !== null) {
-        let replacementSearch = attempt.replacementSearch;
+        durableNextNonce = oldest.nonce + 1n;
+        attempts = attempts.slice(1);
+      } else if (oldest !== undefined) {
+        let replacementSearch = oldest.replacementSearch;
         if (replacementSearch === null) {
           let lowerBound: AnchoredNonceObservation | undefined;
 
-          if (lastObservation.nonce <= attempt.nonce) {
+          if (lastObservation.nonce <= oldest.nonce) {
             lowerBound = lastObservation;
           } else if (
-            current.snapshot.lastObservation.nonce <= attempt.nonce
+            current.snapshot.lastObservation.nonce <= oldest.nonce
           ) {
             lowerBound = current.snapshot.lastObservation;
           }
@@ -655,17 +760,20 @@ export class SignerCoordinator {
           };
         }
 
-        attempt = {
-          ...attempt,
-          replacementSearch,
-        };
+        attempts = [
+          {
+            ...oldest,
+            replacementSearch,
+          },
+          ...attempts.slice(1),
+        ];
       }
 
       const next = validateJournalSnapshotStructure({
         ...current.snapshot,
         lastObservation,
-        nextNonce,
-        attempt,
+        durableNextNonce,
+        attempts,
       }, this.identity);
 
       this.pendingWrite = pending;
@@ -674,19 +782,6 @@ export class SignerCoordinator {
 
       this.recoveryComplete = true;
       this.finishWrite(cycle);
-
-      if (
-        result.status === 'unresolved' &&
-        attempt !== null &&
-        result.observation.nonce === attempt.nonce &&
-        this.blockers.size === 0 &&
-        (
-          result.receipt.status === 'receipt-not-found' ||
-          result.receipt.status === 'fork-served-receipt'
-        )
-      ) {
-        this.broadcastPermit = attempt.attemptId;
-      }
 
       return result;
     } catch (error) {
@@ -733,6 +828,9 @@ export class SignerCoordinator {
     this.refresh(cycle);
   }
 
+  /**
+   * Durably accounts for the oldest retained attempt.
+   */
   async resolveAttempt(
     evidence: AttemptResolutionEvidence,
     cycle?: number,
@@ -748,35 +846,18 @@ export class SignerCoordinator {
 
     const current = this.persistence.current;
 
-    if (
-      current.kind !== 'present' ||
-      current.snapshot.attempt === null
-    ) {
+    if (current.kind !== 'present') {
       throw new Error('No recorded attempt is available to resolve.');
     }
 
-    const attempt = current.snapshot.attempt;
+    const attempt = current.snapshot.attempts[0];
+    if (attempt === undefined) {
+      throw new Error('No record attempt is available to resolve.');
+    }
+
     const resolution = snapshotResolutionEvidence(evidence);
 
     assertResolutionTransaction(attempt, resolution);
-
-    if (
-      resolution.outcome === 'replaced' &&
-      resolution.nonceAtAnchor > attempt.nonce + 1n
-    ) {
-      this.blockers.add('unattributed-signer-activity');
-    }
-
-    this.pendingWrite = {
-      kind: 'resolution',
-      event: Object.freeze({
-        signer: this.identity.signer,
-        attemptId: attempt.attemptId,
-        transactionHash: attempt.transactionHash,
-        nonce: attempt.nonce,
-        resolution,
-      }),
-    };
 
     let lastObservation = current.snapshot.lastObservation;
 
@@ -790,13 +871,28 @@ export class SignerCoordinator {
       });
     }
 
+    this.pendingWrite = {
+      kind: 'resolution',
+      event: Object.freeze({
+        signer: this.identity.signer,
+        attemptId: attempt.attemptId,
+        transactionHash: resolution.outcome === 'replaced'
+          ? attempt.signedTransactions[0].transactionHash
+          : resolution.transactionHash,
+        nonce: attempt.nonce,
+        resolution,
+      }),
+    };
+
+    this.broadcastPermit = undefined;
+    this.inclusionChecksComplete = false;
     this.busy = true;
 
     try {
       await this.persistence.save({
         ...current.snapshot,
-        nextNonce: attempt.nonce + 1n,
-        attempt: null,
+        durableNextNonce: attempt.nonce + 1n,
+        attempts: current.snapshot.attempts.slice(1),
         lastObservation,
       });
     } catch (error) {
@@ -814,8 +910,11 @@ export class SignerCoordinator {
   }
 
   /** 
-   * Saves a verified nonce observation for restart recovery and preserves a
-   * starting point for replacement search before the nonce is consumed.
+   * Saves a verified nonce observation without advancing either nonce
+   * counter or resolving retained attempts.
+   * 
+   * Missing replacement-search lower bounds are established independently
+   * for each attempt. Existing lower bounds are preserved.
    */
   async recordObservation(
     observation: AnchoredNonceObservation,
@@ -848,7 +947,11 @@ export class SignerCoordinator {
       lastObservation: observation,
     }, this.identity);
 
-    if (next.lastObservation.nonce < next.nextNonce) {
+    // A nonce observation alone cannot authorize preparation using
+    // previously recorded inclusion observations.
+    this.inclusionChecksComplete = false;
+
+    if (next.lastObservation.nonce < next.durableNextNonce) {
       this.recoveryComplete = false;
       this.refresh(cycle);
 
@@ -856,13 +959,12 @@ export class SignerCoordinator {
         'Observed nonce is behind the journal. Recovery is required.'
       );
     }
+    
+    const attempts = next.attempts.map((attempt): JournalAttempt => {
+      if (attempt.replacementSearch !== null) {
+        return attempt;
+      }
 
-    let attempt = next.attempt;
-
-    if (
-      attempt !== null &&
-      attempt.replacementSearch === null
-    ) {
       let lowerBound: AnchoredNonceObservation | undefined;
 
       if (next.lastObservation.nonce <= attempt.nonce) {
@@ -873,16 +975,18 @@ export class SignerCoordinator {
         lowerBound = current.snapshot.lastObservation;
       }
 
-      if (lowerBound !== undefined) {
-        attempt = Object.freeze({
-          ...attempt,
-          replacementSearch: Object.freeze({
-            lowerBound,
-            searchedThrough: null,
-          }),
-        });
+      if (lowerBound === undefined) {
+        return attempt;
       }
-    }
+
+      return Object.freeze({
+        ...attempt,
+        replacementSearch: Object.freeze({
+          lowerBound,
+          searchedThrough: null,
+        }),
+      });
+    });
 
     this.pendingWrite = {
       kind: 'observation',
@@ -893,7 +997,7 @@ export class SignerCoordinator {
     try {
       await this.persistence.save({
         ...next,
-        attempt,
+        attempts,
       });
     } catch (error) {
       if (this.persistence.state === 'idle') {
@@ -907,6 +1011,95 @@ export class SignerCoordinator {
     }
 
     this.finishWrite(cycle);
+  }
+
+  /**
+   * Persists a complete inclusion inspection without advancing either nonce
+   * counter or removing retained attempts.
+   * 
+   * Inclusion authorization becomes available only after persistence
+   * succeeds. Retrying a failed write requires another inspetion before
+   * preparation can resume.
+   */
+  async checkInclusions(
+    options: CheckSignerInclusionOptions,
+    cycle?: number,
+  ): Promise<SignerInclusionInspection> {
+    this.assertAvailable();
+
+    if (
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      throw new Error('A pending journal write must be retried first.');
+    }
+
+    const current = this.persistence.current;
+
+    if (current.kind !== 'present') {
+      throw new Error(
+        'Cannot check inclusions without an initialized journal.'
+      )
+    }
+
+    this.broadcastPermit = undefined;
+    this.inclusionChecksComplete = false;
+    this.busy = true;
+
+    try {
+      const result = await inspectSignerInclusions({
+        publicClient: options.publicClient,
+        snapshot: current.snapshot,
+        head: options.head,
+      });
+
+      if (result.status !== 'inspected') {
+        if (
+          result.status === 'nonce-behind-journal' ||
+          result.status === 'inconsistent-observations'
+        ) {
+          this.recoveryComplete = false;
+        }
+
+        return result;
+      }
+
+      // Preserve previously recorded evidence of unattributed activity.
+      // A lower observation cannot clear that condition.
+      const lastObservation =
+        this.blockers.has('unattributed-signer-activity') &&
+        current.snapshot.lastObservation.nonce > result.observation.nonce
+          ? current.snapshot.lastObservation
+          : result.observation;
+
+      const next = validateJournalSnapshotStructure({
+        ...current.snapshot,
+        lastObservation,
+        attempts: result.attempts,
+      }, this.identity);
+
+      this.pendingWrite = {
+        kind: 'observation',
+      };
+
+      await this.persistence.save(next);
+
+      this.inclusionChecksComplete = result.inclusionChecksComplete;
+      this.finishWrite(cycle);
+
+      return result;
+    } catch (error) {
+      this.inclusionChecksComplete = false;
+
+      if (this.persistence.state === 'idle') {
+        this.pendingWrite = undefined;
+      }
+
+      throw error;
+    } finally {
+      this.busy = false;
+      this.refresh(cycle);
+    }
   }
 
   /**
@@ -1026,14 +1219,19 @@ export class SignerCoordinator {
 
     const current = this.persistence.current;
 
-    if (
-      current.kind !== 'present' ||
-      current.snapshot.attempt === null
-    ) {
+    if (current.kind !== 'present') {
       throw new Error('No record attempt is available for search progress.');
     }
 
-    const attempt = current.snapshot.attempt;
+    const attemptIndex = current.snapshot.attempts.findIndex(
+      (attempt) => attempt.phase !== 'included'
+    );
+
+    if (attemptIndex === -1) {
+      throw new Error('No unresolved attempt is available for search progress.');
+    }
+
+    const attempt = current.snapshot.attempts[attemptIndex]!;
     const search = attempt.replacementSearch;
 
     if (
@@ -1055,17 +1253,22 @@ export class SignerCoordinator {
     const next = validateJournalSnapshotStructure({
       ...current.snapshot,
       lastObservation: observation,
-      attempt: {
-        ...attempt,
-        replacementSearch: {
-          lowerBound: search.lowerBound,
-          searchedThrough: result.searchedThrough,
-        },
-      },
+      attempts: current.snapshot.attempts.map((candidate, index) =>
+        index === attemptIndex
+          ? {
+              ...candidate,
+              replacementSearch: {
+                lowerBound: search.lowerBound,
+                searchedThrough: result.searchedThrough,
+              },
+            }
+          : candidate,
+      ),
     }, this.identity);
 
     const savedObservation = current.snapshot.lastObservation;
-    const through = next.attempt!.replacementSearch!.searchedThrough!;
+    const through =
+      next.attempts[attemptIndex]!.replacementSearch!.searchedThrough!;
     const previous = search.searchedThrough ?? search.lowerBound.anchor;
 
     const scanned = through.blockNumber - previous.blockNumber;
@@ -1169,13 +1372,10 @@ export class SignerCoordinator {
       return;
     }
 
-    let accountedNonce = current.snapshot.nextNonce;
-
-    if (current.snapshot.attempt !== null) {
-      accountedNonce += 1n;
-    }
-
-    if (current.snapshot.lastObservation.nonce > accountedNonce) {
+    if (
+      current.snapshot.lastObservation.nonce >
+      current.snapshot.nextNonce
+    ) {
       this.blockers.add('unattributed-signer-activity');
     }
   }
@@ -1187,11 +1387,17 @@ export class SignerCoordinator {
       return;
     }
 
-    const attempt = current.snapshot.attempt;
-    const through = attempt?.replacementSearch?.searchedThrough;
+    const attempt = current.snapshot.attempts.find(
+      (candidate) => candidate.phase !== 'included',
+    );
+
+    if (attempt === undefined) {
+      return;
+    }
+
+    const through = attempt.replacementSearch?.searchedThrough;
 
     if (
-      attempt !== null &&
       through !== null &&
       through !== undefined &&
       current.snapshot.lastObservation.nonce > attempt.nonce &&
@@ -1276,7 +1482,14 @@ export class SignerCoordinator {
       this.episodeReasons.clear();
     }
 
-    if (status.open && this.pendingWrite === undefined) {
+    const current = this.persistence.current;
+
+    if (
+      status.open &&
+      this.pendingWrite === undefined &&
+      current.kind === 'present' &&
+      current.snapshot.attempts.length === 0
+    ) {
       this.attemptLog = undefined;
     }
   }

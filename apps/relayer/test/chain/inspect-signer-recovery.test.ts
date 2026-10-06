@@ -36,6 +36,26 @@ const anchorAt = (number: bigint) => ({
   blockHash: hashAt(number),
 });
 
+async function signedTransaction(
+  nonce: number,
+  maxFeePerGas = 2n,
+) {
+  const signedTransaction = await ACCOUNT.signTransaction({
+    type: 'eip1559',
+    chainId: 4663,
+    nonce,
+    gas: 21_000n,
+    to: ACCOUNT.address,
+    maxFeePerGas,
+    maxPriorityFeePerGas: 1n,
+  });
+
+  return {
+    transactionHash: keccak256(signedTransaction),
+    signedTransaction,
+  };
+}
+
 async function setup() {
   const bytes = await ACCOUNT.signTransaction({
     type: 'eip1559',
@@ -62,16 +82,20 @@ async function setup() {
     },
     baseline: lowerBound,
     lastObservation: lowerBound,
-    nextNonce: 4n,
-    attempt: {
+    nextNonce: 5n,
+    durableNextNonce: 4n,
+    attempts: [{
       attemptId: '11111111-1111-4111-8111-111111111111',
       nonce: 4n,
-      transactionHash: hash,
-      signedTransaction: bytes,
+      signedTransactions: [{
+        transactionHash: hash,
+        signedTransaction: bytes,
+      }],
       createdAt: '2026-10-04T00:00:00.000Z',
       phase: 'broadcast-may-have-occurred',
+      inclusion: null,
       replacementSearch: null,
-    },
+    }],
   };
 
   const transactions = new Map<bigint, unknown[]>();
@@ -93,21 +117,23 @@ async function setup() {
     };
   });
 
-  const getTransactionReceipt = vi.fn(async () => ({
-    transactionHash: hash,
-    blockNumber: 102n,
-    blockHash: hashAt(102n),
-    status: 'success' as 'success' | 'reverted',
-  }));
+  const getTransactionReceipt = vi.fn(
+    async (_request: { hash: Hash }) => ({
+      transactionHash: hash,
+      blockNumber: 102n,
+      blockHash: hashAt(102n),
+      status: 'success' as 'success' | 'reverted',
+    }),
+  );
 
   const getTransactionCount = vi.fn(async () => 5);
 
   const options: InspectSignerRecoveryOptions = {
     publicClient: {
       getBlock,
-      getTransactionReceipt: () => {
+      getTransactionReceipt: (request: { hash: Hash }) => {
         order.push('receipt');
-        return getTransactionReceipt();
+        return getTransactionReceipt(request);
       },
       getTransactionCount: () => {
         order.push('nonce');
@@ -199,7 +225,9 @@ describe('signer recovery inspection', () => {
     expect(await t.run({
       snapshot: {
         ...t.snapshot,
-        attempt: null,
+        nextNonce: 4n,
+        durableNextNonce: 4n,
+        attempts: [],
       },
     })).toMatchObject({
       status: 'no-attempt',
@@ -282,7 +310,7 @@ describe('signer recovery inspection', () => {
       },
     });
 
-    expect(t.snapshot.attempt!.replacementSearch).toBeNull();
+    expect(t.snapshot.attempts[0]!.replacementSearch).toBeNull();
 
     expect(t.order).toEqual([
       'receipt',
@@ -454,7 +482,7 @@ describe('signer recovery inspection', () => {
 
     t.missing();
 
-    const attempt = t.snapshot.attempt!;
+    const attempt = t.snapshot.attempts[0]!;
 
     expect(await t.run({
       snapshot: {
@@ -463,13 +491,13 @@ describe('signer recovery inspection', () => {
           anchor: anchorAt(104n),
           nonce: 5n,
         },
-        attempt: {
+        attempts: [{
           ...attempt,
           replacementSearch: {
             lowerBound: t.snapshot.baseline,
             searchedThrough: anchorAt(102n),
           },
-        },
+        }],
       },
     })).toMatchObject({
       status: 'unresolved',
@@ -531,7 +559,7 @@ describe('signer recovery inspection', () => {
         nonce: 8n,
       });
 
-      Object.assign(t.snapshot.attempt!, {
+      Object.assign(t.snapshot.attempts[0]!, {
         nonce: 8n,
       });
 
@@ -561,5 +589,178 @@ describe('signer recovery inspection', () => {
     })).rejects.toThrow(TypeError);
 
     expect(t.getBlock).not.toHaveBeenCalled();
+  });
+
+  it('offers resolution below allocation progress and inspects only the oldest record', async () => {
+    const t = await setup();
+    const first = t.snapshot.attempts[0]!;
+    const secondTransaction = await signedTransaction(5);
+
+    const snapshot: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      nextNonce: 6n,
+      attempts: [
+        {
+          ...first,
+          phase: 'included',
+          inclusion: {
+            outcome: 'success',
+            transactionHash: t.hash,
+            inclusion: anchorAt(102n),
+            observedAt: anchorAt(105n),
+          },
+        },
+        {
+          ...first,
+          attemptId: '22222222-2222-4222-8222-222222222222',
+          nonce: 5n,
+          signedTransactions: [secondTransaction],
+        },
+      ],
+    };
+
+    const result = await t.run({ snapshot });
+
+    expect(result).toMatchObject({
+      status: 'resolution-available',
+      observation: {
+        nonce: 5n,
+      },
+      evidence: {
+        outcome: 'success',
+        transactionHash: t.hash,
+      },
+    });
+
+    expect(t.getTransactionReceipt)
+      .toHaveBeenCalledExactlyOnceWith({ hash: t.hash });
+
+    expect(snapshot.nextNonce).toBe(6n);
+    expect(snapshot.durableNextNonce).toBe(4n);
+    expect(snapshot.attempts).toHaveLength(2);
+  });
+
+  it('rejects a nonce below advanced durable progress', async () => {
+    const t = await setup();
+    const signed = await signedTransaction(5);
+
+    const snapshot: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      nextNonce: 6n,
+      durableNextNonce: 5n,
+      attempts: [{
+        ...t.snapshot.attempts[0]!,
+        nonce: 5n,
+        signedTransactions: [signed],
+      }],
+    };
+
+    t.getTransactionReceipt.mockResolvedValue({
+      transactionHash: signed.transactionHash,
+      blockNumber: 102n,
+      blockHash: hashAt(102n),
+      status: 'success',
+    });
+
+    t.getTransactionCount.mockResolvedValue(4);
+
+    expect(await t.run({ snapshot })).toMatchObject({
+      status: 'nonce-behind-journal',
+      observation: {
+        nonce: 4n,
+      },
+    });
+
+    expect(t.order).toEqual(['receipt', 'nonce']);
+  });
+
+  it.each(['success', 'reverted'] as const)(
+    'accepts durable %s evidence for a recorded fee replacement',
+    async (status) => {
+      const t = await setup();
+      const first = t.snapshot.attempts[0]!;
+      const bump = await signedTransaction(4, 4n);
+
+      const snapshot: TransactionJournalSnapshot = {
+        ...t.snapshot,
+        attempts: [{
+          ...first,
+          signedTransactions: [
+            first.signedTransactions[0],
+            bump,
+          ],
+        }],
+      };
+
+      t.getTransactionReceipt
+        .mockRejectedValueOnce(
+          new TransactionReceiptNotFoundError({ hash: t.hash }),
+        )
+        .mockResolvedValueOnce({
+          transactionHash: bump.transactionHash,
+          blockNumber: 102n,
+          blockHash: hashAt(102n),
+          status,
+        });
+
+      expect(await t.run({ snapshot })).toMatchObject({
+        status: 'resolution-available',
+        evidence: {
+          outcome: status,
+          transactionHash: bump.transactionHash,
+        },
+      });
+
+      expect(t.getTransactionReceipt)
+        .toHaveBeenNthCalledWith(1, { hash: t.hash });
+      expect(t.getTransactionReceipt)
+        .toHaveBeenNthCalledWith(2, { hash: bump.transactionHash });
+
+      expect(t.order).toEqual(['receipt', 'receipt', 'nonce']);
+    },
+  );
+
+  it('keeps a scanned recorded fee replacement unresolved without a receipt', async () => {
+    const t = await setup();
+    const first = t.snapshot.attempts[0]!;
+    const bump = await signedTransaction(4, 4n);
+
+    const snapshot: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: [{
+        ...first,
+        signedTransactions: [
+          first.signedTransactions[0],
+          bump,
+        ],
+      }],
+    };
+
+    t.missing();
+
+    t.transactions.set(101n, [{
+      hash: bump.transactionHash,
+      from: ACCOUNT.address,
+      nonce: 4,
+    }]);
+
+    expect(await t.run({ snapshot })).toMatchObject({
+      status: 'unresolved',
+      receipt: {
+        status: 'receipt-not-found',
+      },
+      search: {
+        status: 'recorded-transaction-found',
+        transactionHash: bump.transactionHash,
+      },
+    });
+
+    expect(t.getTransactionReceipt).toHaveBeenCalledTimes(2);
+    expect(t.order).toEqual([
+      'receipt',
+      'receipt',
+      'nonce',
+      'scan',
+    ]);
   });
 });

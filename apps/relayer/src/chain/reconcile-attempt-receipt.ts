@@ -41,6 +41,8 @@ export type AttemptReceiptResult =
     }
   | {
       status: 'included-not-durable';
+      transactionHash: Hash;
+      outcome: 'success' | 'reverted';
       inclusion: Readonly<BlockAnchor>;
     }
   | {
@@ -51,30 +53,42 @@ export type AttemptReceiptResult =
 
 export interface ReconcileAttemptReceiptOptions {
   publicClient: PublicClient;
-  transactionHash: Hash;
+  transactionHashes: readonly Hash[];
   anchor: Readonly<BlockAnchor>;
 }
 
 /**
- * Reads receipt evidence under the caller's selected durable anchor.
+ * Checks every recorded transaction hash under one durable anchor bracket.
+ * Missing or fork-served receipts do not prevent checking later hashes.
  */
 export async function reconcileAttemptReceipt(
   options: ReconcileAttemptReceiptOptions,
 ): Promise<AttemptReceiptResult> {
-  const {
-    publicClient,
-    transactionHash,
-  } = options;
-
+  const publicClient = options.publicClient;
   const anchor = Object.freeze({ ...options.anchor });
 
   if (
-    !isFixedHex(transactionHash, 32) ||
+    !Array.isArray(options.transactionHashes) ||
+    options.transactionHashes.length === 0 ||
     typeof anchor.blockNumber !== 'bigint' ||
     anchor.blockNumber < 0n ||
     !isFixedHex(anchor.blockHash, 32)
   ) {
     throw new TypeError('Invalid receipt reconciliation input.');
+  }
+
+  const transactionHashes = [...options.transactionHashes];
+  const uniqueHashes = new Set<string>();
+
+  for (const hash of transactionHashes) {
+    if (
+      !isFixedHex(hash, 32) ||
+      uniqueHashes.has(hash.toLowerCase())
+    ) {
+      throw new TypeError('Invalid receipt reconciliation input.');
+    }
+
+    uniqueHashes.add(hash.toLowerCase());
   }
 
   const before = await getBlockAnchor(
@@ -89,11 +103,35 @@ export async function reconcileAttemptReceipt(
     };
   }
 
-  const result = await readReceipt(
-    publicClient,
-    transactionHash,
-    anchor,
-  );
+  let included: AttemptReceiptResult | undefined;
+  let fork: AttemptReceiptResult | undefined;
+  let conflictingInclusions = false;
+
+  for (const transactionHash of transactionHashes) {
+    const result = await readReceipt(
+      publicClient,
+      transactionHash,
+      anchor,
+    );
+
+    switch (result.status) {
+      case 'verified':
+      case 'included-not-durable':
+        if (included !== undefined) {
+          conflictingInclusions = true;
+        } else {
+          included = result;
+        }
+        break;
+
+      case 'fork-served-receipt':
+        fork ??= result;
+        break;
+
+      case 'receipt-not-found':
+        break;
+    }
+  }
 
   const after = await getBlockAnchor(
     publicClient,
@@ -107,7 +145,13 @@ export async function reconcileAttemptReceipt(
     };
   }
 
-  return result;
+  if (conflictingInclusions) {
+    throw new TypeError('Conflicting attempt receipt observations.');
+  }
+
+  return included ?? fork ?? {
+    status: 'receipt-not-found',
+  };
 }
 
 async function readReceipt(
@@ -168,6 +212,8 @@ async function readReceipt(
   if (inclusion.blockNumber > anchor.blockNumber) {
     return {
       status: 'included-not-durable',
+      transactionHash,
+      outcome,
       inclusion,
     };
   }

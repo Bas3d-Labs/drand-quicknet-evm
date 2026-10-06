@@ -83,9 +83,10 @@ export type SignerRecoveryInspection =
     };
 
 /**
- * Checks the recorded attempt and signer nonce at a durable block to decide
- * what recovery can do next. IF the nonce was consumed but no durable receipt
- * is available, searches a bounded range for the transaction that used it.
+ * Checks the oldest retained attempt and signer nonce at a durable block 
+ * to decide what recovery can do next. If the nonce was consumed but 
+ * no durable receipt is available, searches a bounded range for the 
+ * transaction that used it.
  * 
  * Returns observations for the coordinator to apply.
  */
@@ -118,13 +119,15 @@ export async function inspectSignerRecovery(
     throw new TypeError('Invalid signer recovery input.');
   }
 
-  const attempt = snapshot.attempt;
+  const attempt = snapshot.attempts[0];
   let receipt: AttemptReceiptResult | null = null;
 
-  if (attempt !== null) {
+  if (attempt !== undefined) {
     receipt = await reconcileAttemptReceipt({
       publicClient,
-      transactionHash: attempt.transactionHash,
+      transactionHashes: attempt.signedTransactions.map(
+        (transaction) => transaction.transactionHash,
+      ),
       anchor,
     });
 
@@ -145,14 +148,14 @@ export async function inspectSignerRecovery(
 
   const { observation } = nonce;
 
-  if (observation.nonce < snapshot.nextNonce) {
+  if (observation.nonce < snapshot.durableNextNonce) {
     return {
       status: 'nonce-behind-journal',
       observation,
     };
   }
 
-  if (attempt === null || receipt === null) {
+  if (attempt === undefined || receipt === null) {
     return {
       status: 'no-attempt',
       observation,
