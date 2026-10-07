@@ -2126,4 +2126,241 @@ describe('signer coordinator startup', () => {
       }
     },
   );
+
+  it('authorizes one rebroadcast of the oldest unresolved attempt after recovery', async () => {
+    const t = await searchSetup();
+    const first = t.snapshot.attempts[0]!;
+    const transaction =
+      first.signedTransactions[first.signedTransactions.length - 1]!;
+
+    const inspect = vi.spyOn(
+      recoveryInspection,
+      'inspectSignerRecovery',
+    ).mockResolvedValueOnce({
+      status: 'unresolved',
+      observation: {
+        anchor: OBSERVED_AT,
+        nonce: first.nonce,
+      },
+      receipt: {
+        status: 'receipt-not-found',
+      },
+      search: null,
+    });
+
+    const request = vi.fn(async () => transaction.transactionHash);
+    const publicClient = { request } as unknown as PublicClient;
+
+    try {
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      await t.coordinator.recover({
+        publicClient,
+        anchor: OBSERVED_AT,
+        maxBlockRange: 5n,
+      });
+
+      expect(t.coordinator.canBroadcast).toBe(true);
+      expect(t.coordinator.status.open).toBe(false);
+
+      // A later unresolved record cannot use the first record's permit.
+      await expect(t.coordinator.broadcastAttempt({
+        publicClient,
+        attemptId: t.snapshot.attempts[1]!.attemptId,
+      })).rejects.toThrow('Broadcast does not match a recorded attempt');
+
+      expect(t.coordinator.canBroadcast).toBe(true);
+      expect(request).not.toHaveBeenCalled();
+
+      const recoveredSnapshot = t.save.mock.calls[0]![0];
+
+      const result = await t.coordinator.broadcastAttempt({
+        publicClient,
+        attemptId: first.attemptId,
+      });
+
+      expect(result).toEqual({
+        status: 'acknowledged',
+        attemptId: first.attemptId,
+        transactionHash: transaction.transactionHash,
+        nonce: first.nonce,
+      });
+
+      expect(request).toHaveBeenCalledExactlyOnceWith({
+        method: 'eth_sendRawTransaction',
+        params: [transaction.signedTransaction],
+      }, {
+        retryCount: 0,
+      });
+
+      // The record already had a durable broadcast marker.
+      expect(t.save).toHaveBeenCalledTimes(1);
+      expect(recoveredSnapshot.nextNonce).toBe(6n);
+      expect(recoveredSnapshot.durableNextNonce).toBe(4n);
+      expect(recoveredSnapshot.attempts).toHaveLength(2);
+
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      await expect(t.coordinator.broadcastAttempt({
+        publicClient,
+        attemptId: first.attemptId,
+      })).rejects.toThrow('Fresh reconciliation is required');
+
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      inspect.mockRestore();
+    }
+  });
+
+  it('does not authorize rebroadcast when recovery observes the nonce consumed', async () => {
+    const t = await searchSetup();
+
+    const inspect = vi.spyOn(
+      recoveryInspection,
+      'inspectSignerRecovery',
+    ).mockResolvedValueOnce({
+      status: 'unresolved',
+      observation: t.snapshot.lastObservation,
+      receipt: {
+        status: 'receipt-not-found',
+      },
+      search: t.progress.result,
+    });
+
+    try {
+      await t.coordinator.recover({
+        publicClient: {} as PublicClient,
+        anchor: OBSERVED_AT,
+        maxBlockRange: 5n,
+      });
+
+      expect(t.coordinator.canBroadcast).toBe(false);
+      expect(t.coordinator.status.open).toBe(false);
+      expect(t.save).toHaveBeenCalledTimes(1);
+    } finally {
+      inspect.mockRestore();
+    }
+  });
+
+  it('does not use an included oldest record to authorize a later unresolved record', async () => {
+    const t = await searchSetup(true);
+
+    const inspect = vi.spyOn(
+      recoveryInspection,
+      'inspectSignerRecovery',
+    ).mockResolvedValueOnce({
+      status: 'unresolved',
+      observation: {
+        anchor: OBSERVED_AT,
+        nonce: t.snapshot.attempts[0]!.nonce,
+      },
+      receipt: {
+        status: 'receipt-not-found',
+      },
+      search: null,
+    });
+
+    try {
+      await t.coordinator.recover({
+        publicClient: {} as PublicClient,
+        anchor: OBSERVED_AT,
+        maxBlockRange: 5n,
+      });
+
+      expect(t.coordinator.canBroadcast).toBe(false);
+      expect(t.coordinator.attempts.map((attempt) => attempt.phase))
+        .toEqual([
+          'included',
+          'broadcast-may-have-occurred',
+        ]);
+    } finally {
+      inspect.mockRestore();
+    }
+  });
+
+  it('requires fresh recovery after retrying a failed rebroadcast observation', async () => {
+    const t = await searchSetup();
+    const first = t.snapshot.attempts[0]!;
+
+    const inspect = vi.spyOn(
+      recoveryInspection,
+      'inspectSignerRecovery',
+    ).mockResolvedValue({
+      status: 'unresolved',
+      observation: {
+        anchor: OBSERVED_AT,
+        nonce: first.nonce,
+      },
+      receipt: {
+        status: 'receipt-not-found',
+      },
+      search: null,
+    });
+
+    const options = {
+      publicClient: {} as PublicClient,
+      anchor: OBSERVED_AT,
+      maxBlockRange: 5n,
+    };
+
+    t.save.mockRejectedValueOnce(new Error('Injected recovery write failure'));
+
+    try {
+      await expect(t.coordinator.recover(options))
+        .rejects.toThrow('Journal persistence');
+
+      const pending = t.save.mock.calls[0]![0];
+
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      await t.coordinator.retryPersistence();
+
+      expect(t.save.mock.calls[1]![0]).toBe(pending);
+      expect(inspect).toHaveBeenCalledTimes(1);
+      expect(t.coordinator.canBroadcast).toBe(false);
+      expect(t.coordinator.status.recoveryComplete).toBe(false);
+
+      await t.coordinator.recover(options);
+
+      expect(inspect).toHaveBeenCalledTimes(2);
+      expect(t.coordinator.canBroadcast).toBe(true);
+    } finally {
+      inspect.mockRestore();
+    }
+  });
+
+  it('does not authorize rebroadcast while a coordinator blocker remains', async () => {
+    const t = await searchSetup();
+
+    t.coordinator.block('conflict-search-exhausted');
+
+    const inspect = vi.spyOn(
+      recoveryInspection,
+      'inspectSignerRecovery',
+    ).mockResolvedValueOnce({
+      status: 'unresolved',
+      observation: {
+        anchor: OBSERVED_AT,
+        nonce: t.snapshot.attempts[0]!.nonce,
+      },
+      receipt: {
+        status: 'receipt-not-found',
+      },
+      search: null,
+    });
+
+    try {
+      await t.coordinator.recover({
+        publicClient: {} as PublicClient,
+        anchor: OBSERVED_AT,
+        maxBlockRange: 5n,
+      });
+
+      expect(t.coordinator.status.blockers)
+        .toContain('conflict-search-exhausted');
+      expect(t.coordinator.canBroadcast).toBe(false);
+    } finally {
+      inspect.mockRestore();
+    }
+  });
 });

@@ -783,6 +783,23 @@ export class SignerCoordinator {
       this.recoveryComplete = true;
       this.finishWrite(cycle);
 
+      const inspectedAttempt = current.snapshot.attempts[0];
+
+      if (
+        result.status === 'unresolved' &&
+        inspectedAttempt !== undefined &&
+        inspectedAttempt.phase !== 'included' &&
+        result.observation.nonce === inspectedAttempt.nonce &&
+        result.search === null &&
+        this.blockers.size === 0 &&
+        (
+          result.receipt.status === 'receipt-not-found' ||
+          result.receipt.status === 'fork-served-receipt'
+        )
+      ) {
+        this.broadcastPermit = inspectedAttempt.attemptId;
+      }
+
       return result;
     } catch (error) {
       this.recoveryComplete = false;
