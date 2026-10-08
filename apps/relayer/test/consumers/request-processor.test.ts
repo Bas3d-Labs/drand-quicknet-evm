@@ -5,6 +5,7 @@ import {
   it,
   vi,
 } from 'vitest';
+
 import type {
   Account,
   Address,
@@ -16,6 +17,10 @@ import type {
 import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
+
+import type {
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
 
 vi.mock(
   '../../src/rounds/import-round-when-available.js',
@@ -130,10 +135,15 @@ function alreadyStoredResult(
 }
 
 describe('processQuicknetRequests', () => {
+  let submitter: BeaconSubmitter;
+
   beforeEach(() => {
-    vi.mocked(
-      importQuicknetRoundWhenAvailable,
-    ).mockReset();
+    vi.mocked(importQuicknetRoundWhenAvailable).mockReset();
+
+    submitter = {
+      recover: vi.fn<BeaconSubmitter['recover']>(),
+      submit: vi.fn<BeaconSubmitter['submit']>(),
+    };
   });
 
   it('returns no processed rounds for an empty request list', async () => {
@@ -141,6 +151,7 @@ describe('processQuicknetRequests', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       requests: [],
     });
@@ -169,6 +180,7 @@ describe('processQuicknetRequests', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       requests: [
         createRequest(100n),
@@ -194,6 +206,7 @@ describe('processQuicknetRequests', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       round: 100n,
     });
@@ -214,6 +227,7 @@ describe('processQuicknetRequests', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       requests: [
         createRequest(200n, CONSUMER_A, 1_000n, 0),
@@ -251,6 +265,7 @@ describe('processQuicknetRequests', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       requests: [
         createRequest(300n, CONSUMER_A, 1_000n, 0),
@@ -268,6 +283,7 @@ describe('processQuicknetRequests', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       round: 300n,
     });
@@ -302,6 +318,7 @@ describe('processQuicknetRequests', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       requests: [
         createRequest(500n, CONSUMER_A, 1_000n, 0),
@@ -336,6 +353,7 @@ describe('processQuicknetRequests', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         round: 500n,
       },
@@ -349,6 +367,7 @@ describe('processQuicknetRequests', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         round: 502n,
       },
@@ -362,10 +381,19 @@ describe('processQuicknetRequests', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         round: 501n,
       },
     );
+
+    const calls = vi.mocked(importQuicknetRoundWhenAvailable).mock.calls;
+
+    expect(calls).toHaveLength(3);
+
+    for (const [options] of calls) {
+      expect(options.submitter).toBe(submitter);
+    }
   });
 
   it('treats an already-stored round as successful', async () => {
@@ -382,6 +410,7 @@ describe('processQuicknetRequests', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       requests: [
         createRequest(600n),
@@ -430,6 +459,7 @@ describe('processQuicknetRequests', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       requests: [
         createRequest(700n),
@@ -481,6 +511,7 @@ describe('processQuicknetRequests', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         requests: [
           createRequest(800n),
@@ -509,6 +540,7 @@ describe('processQuicknetRequests', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         requests: [
           createRequest(900n),
@@ -530,6 +562,7 @@ describe('processQuicknetRequests', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         round: 900n,
       },
@@ -543,6 +576,7 @@ describe('processQuicknetRequests', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         round: 901n,
       },
@@ -554,6 +588,7 @@ describe('processQuicknetRequests', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       round: 902n,
     });

@@ -18,6 +18,10 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+import type {
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
+
 const registryMocks = vi.hoisted(() => ({
   isStored: vi.fn<
     (round: bigint, blockNumber?: bigint) => Promise<unknown>
@@ -113,6 +117,8 @@ const PUBLIC_CLIENT = {
 const WALLET_CLIENT = {} as WalletClient;
 const ACCOUNT = {} as Account;
 
+let submitter: BeaconSubmitter;
+
 function options(
   overrides: Partial<ReconcileDurableRequestsOptions> = {},
 ): ReconcileDurableRequestsOptions {
@@ -120,6 +126,7 @@ function options(
     publicClient: PUBLIC_CLIENT,
     walletClient: WALLET_CLIENT,
     account: ACCOUNT,
+    submitter,
     deployment: DEPLOYMENT,
     consumer: CONSUMER,
     nextBlock: FROM_BLOCK,
@@ -169,6 +176,11 @@ function setScan(
 
 describe('reconcileDurableRequests', () => {
   beforeEach(() => {
+    submitter = {
+      recover: vi.fn<BeaconSubmitter['recover']>(),
+      submit: vi.fn<BeaconSubmitter['submit']>(),
+    };
+
     getBlock.mockReset().mockResolvedValue({
       number: DURABLE_BLOCK,
       hash: HASH_A,
@@ -330,6 +342,20 @@ describe('reconcileDurableRequests', () => {
     ]);
 
     const result = await reconcileDurableRequests(options());
+
+    const importCalls =
+      vi.mocked(importQuicknetRoundWhenAvailable).mock.calls;
+
+    expect(importCalls).toHaveLength(2);
+
+    expect(importCalls.map(([call]) => call.round)).toEqual([
+      ROUND_A,
+      ROUND_B,
+    ]);
+
+    for (const [call] of importCalls) {
+      expect(call.submitter).toBe(submitter);
+    }
 
     expect(createRegistryReader).toHaveBeenCalledExactlyOnceWith({
       client: PUBLIC_CLIENT,

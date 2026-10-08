@@ -213,6 +213,7 @@ async function preparationSetup(maxRetainedAttempts = 3) {
     'inspectSignerInclusions',
   ).mockResolvedValueOnce({
     status: 'inspected',
+    broadcastAttemptId: null,
     observation: snapshot.lastObservation,
     attempts: snapshot.attempts,
     inclusionChecksComplete: true,
@@ -1402,6 +1403,7 @@ describe('signer coordinator startup', () => {
       'inspectSignerInclusions',
     ).mockResolvedValueOnce({
       status: 'inspected',
+      broadcastAttemptId: null,
       observation: snapshot.lastObservation,
       attempts: snapshot.attempts,
       inclusionChecksComplete: true,
@@ -1457,6 +1459,7 @@ describe('signer coordinator startup', () => {
       'inspectSignerInclusions',
     ).mockResolvedValueOnce({
       status: 'inspected',
+      broadcastAttemptId: null,
       observation: snapshot.lastObservation,
       attempts: snapshot.attempts,
       inclusionChecksComplete: true,
@@ -1491,6 +1494,7 @@ describe('signer coordinator startup', () => {
       'inspectSignerInclusions',
     ).mockResolvedValueOnce({
       status: 'inspected',
+      broadcastAttemptId: null,
       observation: snapshot.lastObservation,
       attempts: snapshot.attempts,
       inclusionChecksComplete: false,
@@ -1530,6 +1534,7 @@ describe('signer coordinator startup', () => {
       'inspectSignerInclusions',
     ).mockResolvedValueOnce({
       status: 'inspected',
+      broadcastAttemptId: null,
       observation: snapshot.lastObservation,
       attempts: [invalidated, snapshot.attempts[1]!],
       inclusionChecksComplete: false,
@@ -1570,6 +1575,7 @@ describe('signer coordinator startup', () => {
       'inspectSignerInclusions',
     ).mockResolvedValue({
       status: 'inspected',
+      broadcastAttemptId: null,
       observation: snapshot.lastObservation,
       attempts: snapshot.attempts,
       inclusionChecksComplete: true,
@@ -1639,6 +1645,7 @@ describe('signer coordinator startup', () => {
         },
         nonce: 6n,
       },
+      broadcastAttemptId: null,
       attempts: snapshot.attempts,
       inclusionChecksComplete: true,
     });
@@ -1684,6 +1691,7 @@ describe('signer coordinator startup', () => {
       'inspectSignerInclusions',
     ).mockResolvedValueOnce({
       status: 'inspected',
+      broadcastAttemptId: null,
       observation: snapshot.lastObservation,
       attempts: snapshot.attempts,
       inclusionChecksComplete: true,
