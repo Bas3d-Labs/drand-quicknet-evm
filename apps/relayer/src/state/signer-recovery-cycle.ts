@@ -86,12 +86,12 @@ export class SignerRecoveryCycle {
 
       signal?.throwIfAborted();
 
-      this.schedule.track(this.coordinator.attempt);
+      this.schedule.track(this.retryAttempt);
 
       if (this.coordinator.status.persistenceState === 'failed') {
         await this.coordinator.retryPersistence(cycle);
 
-        this.schedule.track(this.coordinator.attempt);
+        this.schedule.track(this.retryAttempt);
       }
 
       signal?.throwIfAborted();
@@ -101,11 +101,23 @@ export class SignerRecoveryCycle {
         cycle,
       );
 
-      const attempt = this.coordinator.attempt;
+      const attempt = this.retryAttempt;
 
       this.schedule.track(attempt);
 
       signal?.throwIfAborted();
+
+      if (
+        this.coordinator.status.recoveryComplete &&
+        this.coordinator.attempts.length === 0
+      ) {
+        await this.coordinator.checkInclusions({
+          publicClient: recovery.publicClient,
+          head: recovery.anchor,
+        }, cycle);
+
+        signal?.throwIfAborted();
+      }
 
       let broadcast: BroadcastAttemptResult | null = null;
 
@@ -128,5 +140,15 @@ export class SignerRecoveryCycle {
     } finally {
       this.busy = false;
     }
+  }
+
+  /**
+   * Included records remain retained for durable resolution but are not
+   * broadcast retry candidates.
+   */
+  private get retryAttempt() {
+    return this.coordinator.attempts.find(
+      (attempt) => attempt.phase !== 'included'
+    ) ?? null;
   }
 }

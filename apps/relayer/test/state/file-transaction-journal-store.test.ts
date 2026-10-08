@@ -15,6 +15,14 @@ import {
 } from 'node:path';
 
 import {
+  keccak256,
+} from 'viem';
+
+import {
+  privateKeyToAccount,
+} from 'viem/accounts';
+
+import {
   afterEach,
   beforeEach,
   describe,
@@ -73,7 +81,8 @@ function fixture(): TransactionJournalSnapshot {
     baseline: observation,
     lastObservation: observation,
     nextNonce: 4n,
-    attempt: null,
+    durableNextNonce: 4n,
+    attempts: [],
   };
 }
 
@@ -274,5 +283,98 @@ describe('file transaction journal store', () => {
     }
 
     expect(loaded.snapshot.nextNonce).toBe(4n);
+  });
+
+  it('preserves the retained queue and signed transactions across reopen', async () => {
+    // Public test fixture only.
+    const account = privateKeyToAccount(`0x${'11'.repeat(32)}`);
+
+    const identity = {
+      chainId: IDENTITY.chainId,
+      signer: account.address,
+    };
+
+    async function sign(nonce: number, maxFeePerGas = 2n) {
+      const signedTransaction = await account.signTransaction({
+        type: 'eip1559',
+        chainId: identity.chainId,
+        nonce,
+        gas: 21_000n,
+        to: account.address,
+        value: 0n,
+        maxFeePerGas,
+        maxPriorityFeePerGas: 1n,
+      });
+
+      return {
+        transactionHash: keccak256(signedTransaction),
+        signedTransaction,
+      };
+    }
+
+    const original = await sign(4);
+    const replacement = await sign(4, 4n);
+    const next = await sign(5);
+
+    const observedAt = {
+      blockNumber: 120n,
+      blockHash: HASH,
+    };
+
+    const snapshot: TransactionJournalSnapshot = {
+      ...fixture(),
+      identity,
+      nextNonce: 6n,
+      durableNextNonce: 4n,
+      lastObservation: {
+        anchor: observedAt,
+        nonce: 5n,
+      },
+      attempts: [
+        {
+          attemptId: '11111111-1111-4111-8111-111111111111',
+          nonce: 4n,
+          createdAt: '2026-10-04T00:00:00.000Z',
+          signedTransactions: [original, replacement],
+          replacementSearch: null,
+          phase: 'included',
+          inclusion: {
+            outcome: 'success',
+            transactionHash: replacement.transactionHash,
+            inclusion: {
+              blockNumber: 110n,
+              blockHash: HASH,
+            },
+            observedAt,
+          },
+        },
+        {
+          attemptId: '22222222-2222-4222-8222-222222222222',
+          nonce: 5n,
+          createdAt: '2026-10-04T00:01:00.000Z',
+          signedTransactions: [next],
+          replacementSearch: null,
+          phase: 'broadcast-may-have-occurred',
+          inclusion: null,
+        },
+      ],
+    };
+
+    const store = await FileTransactionJournalStore.open({
+      filePath,
+      identity,
+    });
+
+    await store.save(snapshot);
+
+    const reopened = await FileTransactionJournalStore.open({
+      filePath,
+      identity,
+    });
+
+    expect(await reopened.load()).toEqual({
+      kind: 'present',
+      snapshot,
+    });
   });
 });

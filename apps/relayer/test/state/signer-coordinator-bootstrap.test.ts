@@ -49,6 +49,7 @@ async function setup(nonce = 7) {
   const create = () => SignerCoordinator.create({
     identity: IDENTITY,
     store: { load, save },
+    maxRetainedAttempts: 3,
     log: createRelayerLog({
       chainId: IDENTITY.chainId,
       destination: {
@@ -152,7 +153,8 @@ describe('signer bootstrap during recovery', () => {
           nonce: BigInt(nonce),
         },
         nextNonce: BigInt(nonce),
-        attempt: null,
+        durableNextNonce: BigInt(nonce),
+        attempts: [],
       });
 
       expect(t.getTransactionCount.mock.calls).toEqual([
@@ -162,15 +164,36 @@ describe('signer bootstrap during recovery', () => {
       ]);
 
       expect(t.coordinator.status).toMatchObject({
-        open: true,
+        open: false,
         recoveryComplete: true,
+        inclusionChecksComplete: false,
       });
 
-      expect(t.events()).toEqual(['signer_gate_released']);
+      expect(t.coordinator.attempts).toEqual([]);
+      expect(t.events()).toEqual([]);
 
+      // Another durable recovery does not perform the inclusion pass.
       await t.recover();
 
-      expect(t.coordinator.status.open).toBe(true);
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: true,
+        inclusionChecksComplete: false,
+      });
+
+      expect(t.events()).toEqual([]);
+
+      await t.coordinator.checkInclusions({
+        publicClient: t.options.publicClient,
+        head: ANCHOR,
+      });
+
+      expect(t.coordinator.status).toMatchObject({
+        open: true,
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+      });
+
       expect(t.events()).toEqual(['signer_gate_released']);
     },
   );
@@ -390,7 +413,21 @@ describe('signer bootstrap during recovery', () => {
       await pending;
     }
 
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
+    expect(t.events()).toEqual([]);
+
+    await t.coordinator.checkInclusions({
+      publicClient: t.options.publicClient,
+      head: ANCHOR,
+    });
+
     expect(t.coordinator.status.open).toBe(true);
+    expect(t.events()).toEqual(['signer_gate_released']);
   });
 
   it('retries the same failed baseline without rereading RPC or opening the gate', async () => {
@@ -471,6 +508,20 @@ describe('signer bootstrap during recovery', () => {
     expect(t.save.mock.calls[1]![0].baseline).toEqual(baseline);
     expect(t.save.mock.calls[1]![0].nextNonce).toBe(7n);
     expect(t.getTransactionCount).toHaveBeenCalledTimes(4);
+    expect(t.save.mock.calls[1]![0].durableNextNonce).toBe(7n);
+    expect(t.save.mock.calls[1]![0].attempts).toEqual([]);
+
+    expect(restarted.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
+    await restarted.checkInclusions({
+      publicClient: t.options.publicClient,
+      head: ANCHOR,
+    });
+
     expect(restarted.status.open).toBe(true);
   });
 

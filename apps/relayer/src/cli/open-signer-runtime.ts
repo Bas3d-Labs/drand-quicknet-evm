@@ -37,6 +37,10 @@ import type {
   JournalIdentity,
 } from '../state/transaction-journal.js';
 
+// Preserve one-at-a-time inclusion allocation until command-level queue
+// configuration and head inclusion orchestration are wired.
+const MAX_RETAINED_ATTEMPTS = 1;
+
 export interface OpenSignerRuntimeOptions {
   readonly identity: JournalIdentity;
   readonly log: ScopedRelayerLog;
@@ -98,11 +102,16 @@ export async function openSignerRuntime(
   const coordinator = await SignerCoordinator.create({
     identity,
     store,
+    maxRetainedAttempts: MAX_RETAINED_ATTEMPTS,
     log,
     createErrorSummary,
   });
 
-  schedule.track(coordinator.attempt);
+  const unresolved = coordinator.attempts.find(
+    (attempt) => attempt.phase !== 'included',
+  );
+
+  schedule.track(unresolved ?? null);
 
   return Object.freeze({
     coordinator,

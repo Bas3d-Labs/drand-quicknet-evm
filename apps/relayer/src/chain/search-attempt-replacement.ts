@@ -29,8 +29,12 @@ export interface SearchAttemptReplacementOptions {
 
   attempt: Pick<
     JournalAttempt,
-    'nonce' | 'transactionHash' | 'replacementSearch'
-  >;
+    'nonce' | 'replacementSearch'
+  > & {
+    readonly signedTransactions: readonly {
+      readonly transactionHash: Hash;
+    }[]
+  };
 
   /** Verified nonce observation for this signer at the selected durable anchor. */
   observation: AnchoredNonceObservation;
@@ -69,9 +73,9 @@ export type ReplacementSearchResult =
       observedAnchor: Readonly<BlockAnchor>;
     }
   | {
-      /** 
-       * Our hash consumed the nonce. Return to receipt reconciliation 
-       * to determine success or revert. 
+      /**
+       * A recorded signed transaction consumed the nonce. Return to receipt
+       * reconciliation to determine success or revert.
        */
       status: 'recorded-transaction-found';
       transactionHash: Hash;
@@ -118,16 +122,37 @@ export async function searchAttemptReplacement(
 
   const {
     nonce,
-    transactionHash,
+    signedTransactions,
     replacementSearch,
   } = options.attempt;
+
+  if (
+    !Array.isArray(signedTransactions) ||
+    signedTransactions.length === 0
+  ) {
+    throw new TypeError('Invalid replacement search input.');
+  }
+
+  const recordedHashes = new Map<string, Hash>();
+
+  for (const transaction of signedTransactions) {
+    const hash = transaction.transactionHash;
+
+    if (
+      !isFixedHex(hash, 32) ||
+      recordedHashes.has(hash.toLowerCase())
+    ) {
+      throw new TypeError('Invalid replacement search input.');
+    }
+
+    recordedHashes.set(hash.toLowerCase(), hash);
+  }
 
   const anchor = copyAnchor(options.observation.anchor);
   const nonceAtAnchor = options.observation.nonce;
 
   if (
     !isFixedHex(signer, 20) ||
-    !isFixedHex(transactionHash, 32) ||
     !isUint(nonce) ||
     !isUint(nonceAtAnchor) ||
     nonceAtAnchor <= nonce ||
@@ -308,12 +333,11 @@ export async function searchAttemptReplacement(
   }
 
   if (match !== undefined) {
-    if (
-      match.hash.toLowerCase() === transactionHash.toLowerCase()
-    ) {
+    const recordedHash = recordedHashes.get(match.hash.toLowerCase());
+    if (recordedHash !== undefined) {
       return {
         status: 'recorded-transaction-found',
-        transactionHash,
+        transactionHash: recordedHash,
         anchor,
         inclusion: match.inclusion,
       };

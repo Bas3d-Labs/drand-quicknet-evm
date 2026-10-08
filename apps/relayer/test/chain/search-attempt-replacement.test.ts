@@ -20,6 +20,7 @@ const OTHER_SIGNER = `0x${'bb'.repeat(20)}` as const;
 const HASH = `0x${'aa'.repeat(32)}` as const;
 const REPLACEMENT = `0x${'bb'.repeat(32)}` as const;
 const FORK = `0x${'ff'.repeat(32)}` as const;
+const BUMP = `0x${'cc'.repeat(32)}` as const;
 
 function blockHash(number: bigint): Hash {
   return `0x${number.toString(16).padStart(64, '0')}`;
@@ -60,7 +61,9 @@ function setup() {
     signer: SIGNER,
     attempt: {
       nonce: 4n,
-      transactionHash: HASH,
+      signedTransactions: [{
+        transactionHash: HASH,
+      }],
       replacementSearch: {
         lowerBound: {
           anchor: anchorAt(100n),
@@ -508,7 +511,9 @@ describe('bounded replacement search', () => {
 
     Object.assign(fixture.options.attempt, {
       nonce: 99n,
-      transactionHash: FORK,
+      signedTransactions: [{
+        transactionHash: REPLACEMENT,
+      }],
     });
 
     Object.assign(
@@ -568,4 +573,109 @@ describe('bounded replacement search', () => {
       },
     });
   });
+
+  it.each([HASH, BUMP])(
+    'recognizes recorded transaction %s without producing replacement evidence',
+    async (hash) => {
+      const fixture = setup();
+
+      fixture.options.attempt = {
+        ...fixture.options.attempt,
+        signedTransactions: [
+          { transactionHash: HASH },
+          { transactionHash: BUMP },
+        ],
+      };
+
+      fixture.transactions.set(101n, [
+        transaction(`0x${hash.slice(2).toUpperCase()}`),
+      ]);
+
+      expect(await fixture.run()).toEqual({
+        status: 'recorded-transaction-found',
+        transactionHash: hash,
+        anchor: anchorAt(105n),
+        inclusion: anchorAt(101n),
+      });
+
+      expect(fixture.scanned()).toEqual([101n]);
+      expect(fixture.getBlock.mock.calls.at(-1)).toEqual([
+        { blockNumber: 105n },
+      ]);
+    },
+  );
+
+  it('still identifies an external replacement when multiple hashes are recorded', async () => {
+    const fixture = setup();
+
+    fixture.options.attempt = {
+      ...fixture.options.attempt,
+      signedTransactions: [
+        { transactionHash: HASH },
+        { transactionHash: BUMP },
+      ],
+    };
+
+    fixture.transactions.set(102n, [transaction(REPLACEMENT)]);
+
+    expect(await fixture.run()).toMatchObject({
+      status: 'replacement-found',
+      evidence: {
+        replacementTransactionHash: REPLACEMENT,
+        nonceAtAnchor: 5n,
+      },
+    });
+  });
+
+  it('captures every recorded hash before awaiting', async () => {
+    const fixture = setup();
+
+    const signedTransactions: { transactionHash: Hash }[] = [
+      { transactionHash: HASH },
+      { transactionHash: BUMP },
+    ];
+
+    fixture.options.attempt = {
+      ...fixture.options.attempt,
+      signedTransactions,
+    };
+
+    fixture.transactions.set(101n, [transaction(BUMP)]);
+
+    const pending = fixture.run();
+
+    signedTransactions[1]!.transactionHash = FORK;
+    signedTransactions.length = 0;
+
+    expect(await pending).toEqual({
+      status: 'recorded-transaction-found',
+      transactionHash: BUMP,
+      anchor: anchorAt(105n),
+      inclusion: anchorAt(101n),
+    });
+  });
+
+  it.each([
+    { hashes: [] },
+    { hashes: [HASH, HASH] },
+    { hashes: [HASH, `0x${'AA'.repeat(32)}`] },
+    { hashes: ['invalid'] },
+  ])(
+    'rejects invalid recorded hash collections before RPC calls: %#',
+    async ({ hashes }) => {
+      const fixture = setup();
+
+      fixture.options.attempt = {
+        ...fixture.options.attempt,
+        signedTransactions: hashes.map((hash) => ({
+          transactionHash: hash as Hash,
+        })),
+      };
+
+      await expect(fixture.run())
+        .rejects.toThrow('Invalid replacement search input.');
+
+      expect(fixture.getBlock).not.toHaveBeenCalled();
+    },
+  );
 });

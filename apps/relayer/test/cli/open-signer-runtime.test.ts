@@ -112,7 +112,7 @@ describe('command signer runtime', () => {
     const runtime = await openSignerRuntime(options());
 
     expect(Object.isFrozen(runtime)).toBe(true);
-    expect(runtime.coordinator.attempt).toBeNull();
+    expect(runtime.coordinator.attempts).toEqual([]);
     expect(runtime.coordinator.status.open).toBe(false);
 
     await expect(
@@ -133,7 +133,11 @@ describe('command signer runtime', () => {
       },
     });
 
-    expect(first.coordinator.status.open).toBe(true);
+    expect(first.coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
 
     expect(await readdir(directory)).toEqual([
       `transaction-journal-4663-${IDENTITY.signer}.json`,
@@ -145,11 +149,20 @@ describe('command signer runtime', () => {
 
     const reopened = await openSignerRuntime(next);
 
-    expect(reopened.coordinator.status.open).toBe(false);
+    expect(reopened.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
 
     await reopened.recovery.run(recovery());
 
-    expect(reopened.coordinator.status.open).toBe(true);
+    expect(reopened.coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
+
     expect(await readdir(directory)).toHaveLength(1);
   });
 

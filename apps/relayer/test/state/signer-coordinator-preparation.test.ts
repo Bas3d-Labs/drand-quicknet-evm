@@ -8,6 +8,7 @@ import {
 import {
   parseTransaction,
   type LocalAccount,
+  type PublicClient,
 } from 'viem';
 
 import {
@@ -75,7 +76,8 @@ async function setup(options: {
     baseline: OBSERVATION,
     lastObservation: OBSERVATION,
     nextNonce: 4n,
-    attempt: null,
+    durableNextNonce: 4n,
+    attempts: [],
   };
 
   let visible: TransactionJournalRead = {
@@ -131,7 +133,11 @@ async function setup(options: {
         let bytes = '';
 
         if (visible.kind === 'present') {
-          bytes = visible.snapshot.attempt?.signedTransaction ?? '';
+          bytes = visible.snapshot.attempts.flatMap((attempt) =>
+            attempt.signedTransactions.map(
+              (transaction) => transaction.signedTransaction,
+            ),
+          ).join(' ');
         }
 
         throw new Error(`failed ${bytes} ${KEY}`);
@@ -146,6 +152,7 @@ async function setup(options: {
   const create = () => SignerCoordinator.create({
     identity: IDENTITY,
     store: { load, save },
+    maxRetainedAttempts: 3,
     log,
     createErrorSummary: factory,
     now: () => Date.parse(CREATED),
@@ -155,8 +162,22 @@ async function setup(options: {
 
   if (!options.missing && !options.unrecovered) {
     coordinator.completeRecovery();
+
+    await coordinator.checkInclusions({
+      publicClient: {
+        getBlock: async () => ({
+          number: OBSERVATION.anchor.blockNumber,
+          hash: OBSERVATION.anchor.blockHash,
+        }),
+        getTransactionCount: async () => Number(OBSERVATION.nonce),
+      } as unknown as PublicClient,
+      head: OBSERVATION.anchor,
+    });
   }
 
+  // Assertions below measure preparation, excluding fixture initialization.
+  save.mockClear();
+  factory.mockClear();
   lines.length = 0;
 
   const signTransaction = vi.fn(ACCOUNT.signTransaction);
@@ -199,27 +220,38 @@ function deferred() {
 }
 
 describe('durable attempt preparation', () => {
-  it('records signed bytes and a search lower bound without advancing the nonce', async () => {
+  it('records signed bytes and advances allocation without advancing durable progress', async () => {
     const t = await setup();
     const result = await t.prepare();
     const saved = t.save.mock.calls[0]![0];
+    const attempt = saved.attempts[0]!;
+    const signed = attempt.signedTransactions[0];
 
     expect(saved).toMatchObject({
-      nextNonce: 4n,
+      nextNonce: 5n,
+      durableNextNonce: 4n,
       lastObservation: OBSERVATION,
-      attempt: {
-        ...result,
+      attempts: [{
+        attemptId: result.attemptId,
+        nonce: result.nonce,
         phase: 'signed',
+        inclusion: null,
         createdAt: CREATED,
+        signedTransactions: [{
+          transactionHash: result.transactionHash,
+        }],
         replacementSearch: {
           lowerBound: OBSERVATION,
           searchedThrough: null,
         },
-      },
+      }],
     });
 
+    expect(saved.attempts).toHaveLength(1);
+    expect(attempt.signedTransactions).toHaveLength(1);
+
     expect(
-      parseTransaction(saved.attempt!.signedTransaction),
+      parseTransaction(signed.signedTransaction),
     ).toMatchObject({
       chainId: 4663,
       nonce: 4,
@@ -236,11 +268,12 @@ describe('durable attempt preparation', () => {
     expect(Object.isFrozen(result)).toBe(true);
 
     expect(t.factory).toHaveBeenCalledExactlyOnceWith([
-      saved.attempt!.signedTransaction,
+      signed.signedTransaction,
     ]);
 
     expect(t.coordinator.status).toMatchObject({
       open: false,
+      inclusionChecksComplete: false,
       primaryReason: 'unresolved-attempt',
       blockedSince: CREATED,
     });
@@ -249,13 +282,15 @@ describe('durable attempt preparation', () => {
 
     expect(t.records()[0]).toMatchObject({
       event: 'signer_blocked',
-      attemptId: result.attemptId,
       cycle: 7,
       operation: { name: 'prepare-attempt' },
     });
 
+    // Signer gate events describe the queue, not an individual attempt.
+    expect(t.records()[0]).not.toHaveProperty('attemptId');
+
     expect(t.lines.join(''))
-      .not.toContain(saved.attempt!.signedTransaction);
+      .not.toContain(signed.signedTransaction);
 
     expect(t.signTransaction).toHaveBeenCalledTimes(1);
   });
@@ -426,7 +461,9 @@ describe('durable attempt preparation', () => {
     )).toBe(false);
 
     expect(t.lines.join(''))
-      .not.toContain(first.attempt!.signedTransaction);
+      .not.toContain(
+        first.attempts[0]!.signedTransactions[0].signedTransaction,
+      );
   });
 
   it('restores an unresolved signed attempt after restart', async () => {
@@ -448,7 +485,7 @@ describe('durable attempt preparation', () => {
 
     expect(t.signTransaction).toHaveBeenCalledTimes(1);
 
-    expect(t.save.mock.calls[0]![0].attempt!.attemptId)
+    expect(t.save.mock.calls[0]![0].attempts[0]!.attemptId)
       .toBe(prepared.attemptId);
   });
 
@@ -467,7 +504,8 @@ describe('durable attempt preparation', () => {
     expect(t.lines.join('')).not.toContain(KEY);
 
     expect(t.lines.join('')).not.toContain(
-      t.save.mock.calls[0]![0].attempt!.signedTransaction,
+      t.save.mock.calls[0]![0]
+        .attempts[0]!.signedTransactions[0].signedTransaction,
     );
   });
 
