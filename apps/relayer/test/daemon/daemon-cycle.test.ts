@@ -18,6 +18,10 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+import type {
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
+
 vi.mock(
   '../../src/daemon/daemon-iteration.js',
   () => ({
@@ -143,10 +147,15 @@ function processedResult(
 }
 
 describe('runDaemonCycle', () => {
+  let submitter: BeaconSubmitter;
+
   beforeEach(() => {
-    vi.mocked(
-      runDaemonIteration,
-    ).mockReset();
+    vi.mocked(runDaemonIteration).mockReset();
+
+    submitter = {
+      recover: vi.fn<BeaconSubmitter['recover']>(),
+      submit: vi.fn<BeaconSubmitter['submit']>(),
+    };
   });
 
   it('returns an empty result for an empty consumer list', async () => {
@@ -158,6 +167,7 @@ describe('runDaemonCycle', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [],
@@ -203,6 +213,7 @@ describe('runDaemonCycle', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [
@@ -224,6 +235,7 @@ describe('runDaemonCycle', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumer: CONSUMER_A,
@@ -275,6 +287,7 @@ describe('runDaemonCycle', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [
@@ -292,6 +305,7 @@ describe('runDaemonCycle', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumer: CONSUMER_A,
@@ -325,6 +339,7 @@ describe('runDaemonCycle', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [
@@ -369,6 +384,7 @@ describe('runDaemonCycle', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [
@@ -413,6 +429,7 @@ describe('runDaemonCycle', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [
@@ -433,6 +450,7 @@ describe('runDaemonCycle', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumer: CONSUMER_A,
@@ -453,6 +471,7 @@ describe('runDaemonCycle', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumer: CONSUMER_B,
@@ -464,6 +483,8 @@ describe('runDaemonCycle', () => {
         onReconciliation: expect.any(Function),
       },
     );
+
+    expect(submitter.recover).toHaveBeenCalledExactlyOnceWith();
   });
 
   it('passes the correct soft cursor to each consumer', async () => {
@@ -507,6 +528,7 @@ describe('runDaemonCycle', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [
@@ -571,6 +593,7 @@ describe('runDaemonCycle', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [
@@ -612,6 +635,7 @@ describe('runDaemonCycle', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [
@@ -653,6 +677,7 @@ describe('runDaemonCycle', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [
@@ -693,6 +718,7 @@ describe('runDaemonCycle', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [
@@ -733,6 +759,7 @@ describe('runDaemonCycle', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [
@@ -784,6 +811,7 @@ describe('runDaemonCycle', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [
@@ -829,6 +857,7 @@ describe('runDaemonCycle', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [
@@ -888,6 +917,7 @@ describe('runDaemonCycle', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [
@@ -990,6 +1020,7 @@ describe('runDaemonCycle', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [
@@ -1068,6 +1099,7 @@ describe('runDaemonCycle', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [
@@ -1081,13 +1113,9 @@ describe('runDaemonCycle', () => {
           new Map<Address, SoftScanCursor>(),
       });
 
-    await Promise.resolve();
-
-    expect(
-      runDaemonIteration,
-    ).toHaveBeenCalledTimes(
-      1
-    );
+    await vi.waitFor(() => {
+      expect(runDaemonIteration).toHaveBeenCalledTimes(1);
+    });
 
     if (resolveFirst === undefined) {
       throw new Error(
@@ -1163,6 +1191,7 @@ describe('runDaemonCycle', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [
@@ -1176,13 +1205,9 @@ describe('runDaemonCycle', () => {
           new Map<Address, SoftScanCursor>(),
       });
 
-    await Promise.resolve();
-
-    expect(
-      runDaemonIteration,
-    ).toHaveBeenCalledTimes(
-      1
-    );
+    await vi.waitFor(() => {
+      expect(runDaemonIteration).toHaveBeenCalledTimes(1);
+    });
 
     if (rejectFirst === undefined) {
       throw new Error(
@@ -1217,5 +1242,58 @@ describe('runDaemonCycle', () => {
         },
       ],
     });
+  });
+
+  it('preserves cursors and skips consumers when signer recovery fails', async () => {
+    const failure = new Error('Signer recovery failed.');
+
+    vi.mocked(submitter.recover).mockRejectedValueOnce(failure);
+
+    const existingCursor: SoftScanCursor = {
+      nextBlock: 1_400n,
+    };
+
+    const softCursors = new Map<Address, SoftScanCursor>([
+      [CONSUMER_A, existingCursor],
+    ]);
+
+    const result = await runDaemonCycle({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      checkpointStore: CHECKPOINT_STORE,
+      consumers: [
+        VALIDATED_CONSUMER_A,
+        VALIDATED_CONSUMER_B,
+      ],
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursors,
+    });
+
+    expect(submitter.recover).toHaveBeenCalledExactlyOnceWith();
+    expect(runDaemonIteration).not.toHaveBeenCalled();
+    expect(submitter.submit).not.toHaveBeenCalled();
+
+    expect(result).toEqual({
+      consumers: [
+        {
+          status: 'failed',
+          consumer: VALIDATED_CONSUMER_A,
+          error: failure,
+        },
+        {
+          status: 'failed',
+          consumer: VALIDATED_CONSUMER_B,
+          error: failure,
+        },
+      ],
+    });
+
+    expect(softCursors.size).toBe(1);
+    expect(softCursors.get(CONSUMER_A)).toBe(existingCursor);
   });
 });

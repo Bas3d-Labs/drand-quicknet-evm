@@ -18,6 +18,11 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+import type {
+  BeaconSubmissionRequest,
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
+
 vi.mock(
   '../../src/daemon/daemon-cycle.js',
   () => ({
@@ -163,19 +168,25 @@ function failedCycle(
   };
 }
 
-describe('runDaemon', () => {
-  beforeEach(() => {
-    vi.mocked(
-      runDaemonCycle,
-    ).mockReset();
-  });
+let submitter: BeaconSubmitter;
 
+beforeEach(() => {
+  vi.mocked(runDaemonCycle).mockReset();
+
+  submitter = {
+    recover: vi.fn<BeaconSubmitter['recover']>(),
+    submit: vi.fn<BeaconSubmitter['submit']>(),
+  };
+});
+
+describe('runDaemon', () => {
   it('rejects a zero pollIntervalMs', async () => {
     await expect(
       runDaemon({
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [VALIDATED_CONSUMER_A],
@@ -199,6 +210,7 @@ describe('runDaemon', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [VALIDATED_CONSUMER_A],
@@ -218,6 +230,7 @@ describe('runDaemon', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [VALIDATED_CONSUMER_A],
@@ -237,6 +250,7 @@ describe('runDaemon', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [VALIDATED_CONSUMER_A],
@@ -263,6 +277,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [VALIDATED_CONSUMER_A],
@@ -297,6 +312,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [
@@ -323,6 +339,10 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter: {
+        recover: expect.any(Function),
+        submit: expect.any(Function),
+      },
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [
@@ -360,6 +380,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [VALIDATED_CONSUMER_A],
@@ -405,6 +426,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [VALIDATED_CONSUMER_A],
@@ -504,6 +526,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [VALIDATED_CONSUMER_A],
@@ -551,6 +574,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [VALIDATED_CONSUMER_A],
@@ -598,6 +622,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [VALIDATED_CONSUMER_A],
@@ -684,6 +709,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [VALIDATED_CONSUMER_A],
@@ -734,6 +760,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [VALIDATED_CONSUMER_A],
@@ -780,6 +807,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [VALIDATED_CONSUMER_A],
@@ -854,6 +882,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [
@@ -893,6 +922,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [VALIDATED_CONSUMER_A],
@@ -937,6 +967,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
       consumers: [VALIDATED_CONSUMER_A],
@@ -989,6 +1020,7 @@ describe('runDaemon', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [VALIDATED_CONSUMER_A],
@@ -1032,6 +1064,7 @@ describe('runDaemon', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [VALIDATED_CONSUMER_A],
@@ -1070,6 +1103,7 @@ describe('runDaemon', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [VALIDATED_CONSUMER_A],
@@ -1112,6 +1146,7 @@ describe('daemon cycle correlation', () => {
         publicClient: PUBLIC_CLIENT,
         walletClient: WALLET_CLIENT,
         account: ACCOUNT,
+        submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
         consumers: [VALIDATED_CONSUMER_A],
@@ -1133,6 +1168,76 @@ describe('daemon cycle correlation', () => {
       });
 
       expect(observed).toEqual([1, 2, 3]);
+    }
+  });
+
+  it('binds recovery and submission to each cycle number', async () => {
+    const controller = new AbortController();
+
+    vi.mocked(runDaemonCycle)
+      .mockResolvedValueOnce(caughtUpCycle())
+      .mockResolvedValueOnce(caughtUpCycle());
+
+    await runDaemon({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      checkpointStore: CHECKPOINT_STORE,
+      consumers: [VALIDATED_CONSUMER_A],
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      pollIntervalMs: 1_000,
+      signal: controller.signal,
+      sleep: async () => {},
+      onCycle(_result, context) {
+        if (context.cycle === 2) {
+          controller.abort();
+        }
+      },
+    });
+
+    const first = vi.mocked(runDaemonCycle).mock.calls[0]?.[0];
+    const second = vi.mocked(runDaemonCycle).mock.calls[1]?.[0];
+
+    if (first === undefined || second === undefined) {
+      throw new Error('Expected two daemon cycle calls.');
+    }
+
+    // Opaque request: this test only checks forwarding, not encoding.
+    const request = Object.freeze({}) as BeaconSubmissionRequest;
+
+    expect(first.submitter).not.toBe(submitter);
+    expect(second.submitter).not.toBe(first.submitter);
+    expect(Object.isFrozen(first.submitter)).toBe(true);
+    expect(Object.isFrozen(second.submitter)).toBe(true);
+
+    await first.submitter.recover();
+    await first.submitter.submit(request);
+
+    await second.submitter.recover();
+    await second.submitter.submit(request);
+
+    // A retained wrapper must still use its original cycle number.
+    await first.submitter.recover();
+    await first.submitter.submit(request);
+
+    expect(vi.mocked(submitter.recover).mock.calls).toEqual([
+      [1],
+      [2],
+      [1],
+    ]);
+
+    expect(vi.mocked(submitter.submit).mock.calls).toEqual([
+      [request, 1],
+      [request, 2],
+      [request, 1],
+    ]);
+
+    for (const call of vi.mocked(submitter.submit).mock.calls) {
+      expect(call[0]).toBe(request);
     }
   });
 });

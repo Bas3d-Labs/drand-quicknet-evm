@@ -190,6 +190,19 @@ function writePreload(
     }
   `);
 
+  replace('cli/open-beacon-submitter.js', `
+    export async function openBeaconSubmitter() {
+      return Object.freeze({
+        async recover() {
+          throw new Error('Unexpected signer recovery in lifecycle test.');
+        },
+        async submit() {
+          throw new Error('Unexpected beacon submission in lifecycle test.');
+        },
+      });
+    }
+  `);
+
   replace('chain/chain-heads-reader.js', `
     export function createChainHeadsReader() {
       return async function readChainHeads() {

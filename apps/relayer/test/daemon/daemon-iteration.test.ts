@@ -18,6 +18,10 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+import type {
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
+
 vi.mock('../../src/chain/chain-heads.js', () => ({
   getChainHeads: vi.fn(),
 }));
@@ -248,6 +252,8 @@ describe('runDaemonIteration', () => {
     save,
   };
 
+  let submitter: BeaconSubmitter;
+
   function run(
     overrides: Partial<RunDaemonIterationOptions> = {},
   ) {
@@ -255,6 +261,7 @@ describe('runDaemonIteration', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       checkpointStore,
       consumer: CONSUMER,
@@ -288,6 +295,11 @@ describe('runDaemonIteration', () => {
   }
 
   beforeEach(() => {
+    submitter = {
+      recover: vi.fn<BeaconSubmitter['recover']>(),
+      submit: vi.fn<BeaconSubmitter['submit']>(),
+    };
+
     load.mockReset().mockResolvedValue(1_000n);
     save.mockReset().mockResolvedValue(undefined);
 
@@ -461,6 +473,7 @@ describe('runDaemonIteration', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       consumer: CONSUMER,
       nextBlock: expected,
@@ -1002,6 +1015,7 @@ describe('runDaemonIteration', () => {
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
       deployment: DEPLOYMENT,
       requests: [SOFT_REQUEST],
       onProgress: expect.any(Function),

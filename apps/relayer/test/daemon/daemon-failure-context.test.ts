@@ -38,6 +38,10 @@ import {
   createScrubber,
 } from '../../src/diagnostics/text-scrubber.js';
 
+import type {
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
+
 const CONSUMER_A: Address =
   '0x1111111111111111111111111111111111111111';
 
@@ -79,6 +83,11 @@ function fixture() {
   const load = vi.fn().mockResolvedValue(undefined);
   const save = vi.fn().mockResolvedValue(undefined);
 
+  const submitter: BeaconSubmitter = {
+    recover: vi.fn<BeaconSubmitter['recover']>(),
+    submit: vi.fn<BeaconSubmitter['submit']>(),
+  };
+
   const options = {
     publicClient: {
       getBlock,
@@ -87,6 +96,7 @@ function fixture() {
     } as unknown as PublicClient,
     walletClient: {} as WalletClient,
     account: {} as Account,
+    submitter,
     deployment: {
       address: REGISTRY,
     } as RegistryDeployment,
