@@ -121,6 +121,11 @@ export interface RecoverSignerOptions {
   readonly bootstrap?: SignerBootstrapAuthorization;
 }
 
+export interface BootstrapSignerOptions
+  extends RecoverSignerOptions {
+  readonly bootstrap: SignerBootstrapAuthorization;
+}
+
 type ResolutionEvent =
   Parameters<ScopedRelayerLog['attemptResolved']>[0];
 
@@ -589,6 +594,29 @@ export class SignerCoordinator {
       this.busy = false;
       this.refresh(cycle, 'broadcast-attempt');
     }
+  }
+
+  /**
+   * Initializes a missing journal using explicit operator authorization.
+   * Existing journals must use ordinary recovery.
+   */
+  async bootstrap(
+    options: BootstrapSignerOptions,
+  ): Promise<SignerRecoveryInspection> {
+    this.assertAvailable();
+
+    if (
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      throw new Error('A pending journal write must be retried first.');
+    }
+
+    if (this.persistence.current.kind !== 'missing') {
+      throw new Error('Cannot bootstrap an existing signer journal.');
+    }
+
+    return this.recover(options);
   }
 
   /**
