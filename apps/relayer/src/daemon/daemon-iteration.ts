@@ -41,6 +41,10 @@ import type {
   OperationContext,
 } from '../diagnostics/operation-context.js';
 
+import type {
+  BeaconSubmitter,
+} from '../rounds/create-beacon-submitter.js';
+
 export interface SoftScanCursor {
   nextBlock: bigint;
 }
@@ -57,6 +61,7 @@ export interface RunDaemonIterationOptions {
   publicClient: PublicClient;
   walletClient: WalletClient;
   account: Account;
+  submitter: BeaconSubmitter;
   deployment: RegistryDeployment;
   checkpointStore: CheckpointStore;
   consumer: Address;
@@ -154,6 +159,7 @@ export async function runDaemonIteration(
       publicClient: options.publicClient,
       walletClient: options.walletClient,
       account: options.account,
+      submitter: options.submitter,
       deployment: options.deployment,
       consumer: options.consumer,
       nextBlock: durableNextBlock,
@@ -292,6 +298,7 @@ export async function runDaemonIteration(
       publicClient: options.publicClient,
       walletClient: options.walletClient,
       account: options.account,
+      submitter: options.submitter,
       deployment: options.deployment,
       requests: softResult.requests,
       onProgress(progress) {

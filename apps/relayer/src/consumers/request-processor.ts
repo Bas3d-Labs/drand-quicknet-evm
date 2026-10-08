@@ -9,6 +9,14 @@ import type {
 } from '@based-labs/drand-quicknet-registry';
 
 import type {
+  RoundImportProgress,
+} from '../diagnostics/operation-context.js';
+
+import type {
+  BeaconSubmitter,
+} from '../rounds/create-beacon-submitter.js';
+
+import type {
   ImportQuicknetRoundResult,
 } from '../rounds/import-round.js';
 
@@ -20,14 +28,11 @@ import type {
   QuicknetRandomnessRequest,
 } from './request-events.js';
 
-import type {
-  RoundImportProgress,
-} from '../diagnostics/operation-context.js';
-
 export interface ProcessQuicknetRequestsOptions {
   publicClient: PublicClient;
   walletClient: WalletClient;
   account: Account;
+  submitter: BeaconSubmitter;
   deployment: RegistryDeployment;
   requests: readonly QuicknetRandomnessRequest[];
   onProgress?: ((progress: RoundImportProgress) => void) | undefined;
@@ -99,6 +104,7 @@ export async function processQuicknetRequestsWithOutcomes(
         publicClient: options.publicClient,
         walletClient: options.walletClient,
         account: options.account,
+        submitter: options.submitter,
         deployment: options.deployment,
         round,
         onProgress: options.onProgress,

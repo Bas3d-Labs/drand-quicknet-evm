@@ -19,6 +19,23 @@ import type {
 import { privateKeyToAccount } from 'viem/accounts';
 import { robinhoodTestnet } from 'viem/chains';
 
+import type {
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
+
+const signerRuntimeMocks = vi.hoisted(() => ({
+  openBeaconSubmitter: vi.fn(),
+}));
+
+const importLogMocks = vi.hoisted(() => ({
+  createRelayerLog: vi.fn(),
+}));
+
+vi.mock(
+  '../../src/diagnostics/relayer-log.js',
+  () => importLogMocks,
+);
+
 vi.mock('../../src/config/config.js', async (importOriginal) => {
   const actual = await importOriginal<
     typeof import('../../src/config/config.js')
@@ -37,6 +54,11 @@ vi.mock('../../src/chain/clients.js', () => ({
 vi.mock('../../src/cli/daemon-command.js', () => ({
   runDaemonCommand: vi.fn(),
 }));
+
+vi.mock(
+  '../../src/cli/open-beacon-submitter.js',
+  () => signerRuntimeMocks,
+);
 
 vi.mock('../../src/rounds/import-round.js', () => ({
   importQuicknetRound: vi.fn(),
@@ -305,6 +327,8 @@ const ROUND_COMMANDS = [
 
 const SIGNALS = ['SIGINT', 'SIGTERM'] as const;
 
+let submitter: BeaconSubmitter;
+
 beforeEach(() => {
   vi.mocked(loadRelayerConfig)
     .mockReset()
@@ -333,6 +357,19 @@ beforeEach(() => {
   vi.mocked(assertServiceLockHeld)
     .mockReset()
     .mockReturnValue('/verified-state');
+
+  submitter = {
+    recover: vi.fn<BeaconSubmitter['recover']>(),
+    submit: vi.fn<BeaconSubmitter['submit']>(),
+  };
+
+  signerRuntimeMocks.openBeaconSubmitter
+    .mockReset()
+    .mockResolvedValue(submitter);
+
+  importLogMocks.createRelayerLog
+    .mockReset()
+    .mockReturnValue({});
 });
 
 afterEach(() => {
@@ -591,10 +628,18 @@ describe('main', () => {
           publicClient: PUBLIC_CLIENT,
           walletClient: WALLET_CLIENT,
           account: ACCOUNT,
+          submitter,
           deployment: CONFIG.deployment,
           round: ROUND,
           onProgress: expect.any(Function),
         });
+
+        expect(signerRuntimeMocks.openBeaconSubmitter)
+          .toHaveBeenCalledOnce();
+
+        expect(
+          operation().mock.calls[0]![0].submitter,
+        ).toBe(submitter);
 
         expect(output).toHaveBeenCalledExactlyOnceWith({
           type: 'import-result',

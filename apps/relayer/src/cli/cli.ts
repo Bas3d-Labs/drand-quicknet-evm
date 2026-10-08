@@ -6,6 +6,10 @@ import {
 } from '../chain/clients.js';
 
 import {
+  getChainHeads,
+} from '../chain/chain-heads.js';
+
+import {
   type CliOutput,
 } from './cli-output.js';
 
@@ -28,6 +32,10 @@ import type {
 } from '../diagnostics/operation-context.js';
 
 import {
+  createRelayerLog,
+} from '../diagnostics/relayer-log.js';
+
+import {
   UsageError,
 } from '../diagnostics/usage-error.js';
 
@@ -47,6 +55,13 @@ import {
 import {
   importQuicknetRoundWhenAvailable,
 } from '../rounds/import-round-when-available.js';
+
+import {
+  openBeaconSubmitter,
+} from './open-beacon-submitter.js';
+
+// Maximum replacement-search blocks per retained attempt in one pass.
+const IMPORT_REPLACEMENT_BLOCK_RANGE = 1_000n;
 
 const MAX_UINT64 = (1n << 64n) - 1n;
 
@@ -141,6 +156,25 @@ async function runImportCommand(
 
   const clients = createRelayerClients(config);
 
+  const logger = createRelayerLog({
+    chainId: config.chain.id,
+    level: process.env.QUICKNET_LOG_LEVEL ?? 'info',
+    errorSummary: config.errorSummary,
+    destination: process.stderr,
+  });
+
+  const submitter = await openBeaconSubmitter({
+    config,
+    publicClient: clients.publicClient,
+    walletClient: clients.walletClient,
+    log: logger,
+    readChainHeads: () => getChainHeads({
+      publicClient: clients.publicClient,
+      finality: config.finality,
+    }),
+    maxBlockRange: IMPORT_REPLACEMENT_BLOCK_RANGE,
+  });
+
   let progress: RoundImportProgress | undefined;
   let result: ImportQuicknetRoundResult;
 
@@ -149,6 +183,7 @@ async function runImportCommand(
       publicClient: clients.publicClient,
       walletClient: clients.walletClient,
       account: config.account,
+      submitter,
       deployment: config.deployment,
       round: command.round,
       onProgress(current) {
@@ -181,6 +216,25 @@ async function runImportWhenAvailableCommand(
 
   const clients = createRelayerClients(config);
 
+  const logger = createRelayerLog({
+    chainId: config.chain.id,
+    level: process.env.QUICKNET_LOG_LEVEL ?? 'info',
+    errorSummary: config.errorSummary,
+    destination: process.stderr,
+  });
+
+  const submitter = await openBeaconSubmitter({
+    config,
+    publicClient: clients.publicClient,
+    walletClient: clients.walletClient,
+    log: logger,
+    readChainHeads: () => getChainHeads({
+      publicClient: clients.publicClient,
+      finality: config.finality,
+    }),
+    maxBlockRange: IMPORT_REPLACEMENT_BLOCK_RANGE,
+  });
+
   let progress: RoundImportProgress | undefined;
   let result: ImportQuicknetRoundResult;
 
@@ -189,6 +243,7 @@ async function runImportWhenAvailableCommand(
       publicClient: clients.publicClient,
       walletClient: clients.walletClient,
       account: config.account,
+      submitter,
       deployment: config.deployment,
       round: command.round,
       onProgress(current) {

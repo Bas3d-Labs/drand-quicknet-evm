@@ -12,6 +12,14 @@ import type {
   ScopedRelayerLog
 } from '../../src/diagnostics/relayer-log.js';
 
+import type {
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
+
+const signerRuntimeMocks = vi.hoisted(() => ({
+  openBeaconSubmitter: vi.fn(),
+}));
+
 const checkpointStoreMocks = vi.hoisted(() => ({
   load: vi.fn(),
   save: vi.fn(),
@@ -50,6 +58,11 @@ vi.mock('@based-labs/drand-quicknet-registry', () => ({
 vi.mock('../../src/chain/clients.js', () => ({
   createRelayerClients: vi.fn(),
 }));
+
+vi.mock(
+  '../../src/cli/open-beacon-submitter.js',
+  () => signerRuntimeMocks,
+);
 
 vi.mock('../../src/config/daemon-config.js', () => ({
   loadDaemonConfig: vi.fn(),
@@ -267,6 +280,8 @@ function expectNotCalled(...mocks: RecordedCalls[]): void {
 }
 
 describe('runDaemonCommand', () => {
+  let submitter: BeaconSubmitter;
+
   beforeEach(() => {
     vi.stubEnv('QUICKNET_LOG_LEVEL', undefined);
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -332,6 +347,15 @@ describe('runDaemonCommand', () => {
 
     relayerLogMocks.withContext
       .mockReturnValue(relayerLogMocks);
+
+    submitter = {
+      recover: vi.fn<BeaconSubmitter['recover']>(),
+      submit: vi.fn<BeaconSubmitter['submit']>(),
+    };
+
+    signerRuntimeMocks.openBeaconSubmitter
+      .mockReset()
+      .mockResolvedValue(submitter);
   });
 
   afterEach(() => {
@@ -511,10 +535,27 @@ describe('runDaemonCommand', () => {
   it('starts the daemon with the validated consumers and configured settings', async () => {
     await runDaemonCommand({ source: SOURCE });
 
+    expect(signerRuntimeMocks.openBeaconSubmitter)
+      .toHaveBeenCalledExactlyOnceWith({
+        config: VERIFIED_DAEMON_CONFIG,
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        log: relayerLogMocks,
+        readChainHeads: expect.any(Function),
+        maxBlockRange: 2_000n,
+        signal: undefined,
+        env: process.env,
+      });
+
+    const openedWith =
+      signerRuntimeMocks.openBeaconSubmitter.mock.calls[0]![0];
+
     expect(runDaemon).toHaveBeenCalledExactlyOnceWith({
       publicClient: PUBLIC_CLIENT,
       walletClient: WALLET_CLIENT,
       account: ACCOUNT,
+      submitter,
+      readChainHeads: openedWith.readChainHeads,
       deployment: DEPLOYMENT,
       checkpointStore: checkpointStoreMocks,
       consumers: VALIDATED_CONSUMERS,
@@ -524,6 +565,12 @@ describe('runDaemonCommand', () => {
       pollIntervalMs: 1_000,
       onCycle: expect.any(Function),
     });
+
+    const daemonOptions = vi.mocked(runDaemon).mock.calls[0]![0];
+
+    expect(daemonOptions.submitter).toBe(submitter);
+    expect(daemonOptions.readChainHeads)
+      .toBe(openedWith.readChainHeads);
   });
 
   it('passes a custom network source to daemon configuration', async () => {
@@ -553,6 +600,13 @@ describe('runDaemonCommand', () => {
         signal: controller.signal,
       }),
     );
+
+    expect(signerRuntimeMocks.openBeaconSubmitter)
+      .toHaveBeenCalledWith(
+        expect.objectContaining({
+          signal: controller.signal,
+        }),
+      );
   });
 
   it('does not start later components when configuration loading fails', async () => {
@@ -1080,5 +1134,32 @@ describe('runDaemonCommand', () => {
 
     expect(daemonLoggerMocks.onCycle)
       .toHaveBeenCalledExactlyOnceWith(result, child);
+  });
+
+  it('stops startup when opening the signer runtime fails', async () => {
+    const failure = new Error('Signer runtime opening failed.');
+
+    signerRuntimeMocks.openBeaconSubmitter
+      .mockRejectedValueOnce(failure);
+
+    const onStartup = vi.fn();
+
+    await expect(
+      runDaemonCommand({
+        source: SOURCE,
+        onStartup,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(signerRuntimeMocks.openBeaconSubmitter)
+      .toHaveBeenCalledOnce();
+
+    expectNotCalled(
+      vi.mocked(FileCheckpointStore.open),
+      checkpointStoreMocks.load,
+      vi.mocked(collectDaemonStartupSummary),
+      onStartup,
+      vi.mocked(runDaemon),
+    );
   });
 });

@@ -24,7 +24,7 @@ export interface SubmitBeaconTransactionOptions {
   readonly account: LocalAccount;
   readonly coordinator: SignerCoordinator;
   readonly request: BeaconSubmissionRequest & {
-    readonly gas?: bigint;
+    readonly gas?: bigint | undefined;
   };
   readonly signal?: AbortSignal | undefined;
 }
