@@ -9,17 +9,29 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+import type {
+  ChainHeads,
+} from '../chain/chain-heads.js';
+
 import {
   createChainHeadsReader,
 } from '../chain/chain-heads-reader.js';
 
 import type {
-  CheckpointStore,
-} from '../state/checkpoint.js';
+  FinalityPolicy,
+} from '../chain/finality-policy.js';
 
 import type {
   ValidatedQuicknetConsumer,
 } from '../consumers/consumer.js';
+
+import type {
+  BeaconSubmitter,
+} from '../rounds/create-beacon-submitter.js';
+
+import type {
+  CheckpointStore,
+} from '../state/checkpoint.js';
 
 import {
   runDaemonCycle,
@@ -29,10 +41,6 @@ import {
 import type {
   SoftScanCursor,
 } from './daemon-iteration.js';
-
-import type {
-  FinalityPolicy,
-} from '../chain/finality-policy.js';
 
 const DURABLE_HEAD_POLL_INTERVAL_MS = 30_000;
 
@@ -44,6 +52,7 @@ export interface RunDaemonOptions {
   publicClient: PublicClient;
   walletClient: WalletClient;
   account: Account;
+  submitter: BeaconSubmitter;
   deployment: RegistryDeployment;
   checkpointStore: CheckpointStore;
   consumers: readonly ValidatedQuicknetConsumer[];
@@ -52,6 +61,7 @@ export interface RunDaemonOptions {
   finality: FinalityPolicy;
   pollIntervalMs: number;
   signal?: AbortSignal;
+  readChainHeads?: () => Promise<ChainHeads>;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   onCycle?: (
     result: RunDaemonCycleResult,
@@ -72,11 +82,13 @@ export async function runDaemon(
   const sleep = options.sleep ?? sleepUntilTimeoutOrAbort;
   const softCursors = new Map<Address, SoftScanCursor>();
 
-  const readChainHeads = createChainHeadsReader({
-    publicClient: options.publicClient,
-    finality: options.finality,
-    durableHeadPollIntervalMs: DURABLE_HEAD_POLL_INTERVAL_MS,
-  });
+  const readChainHeads =
+    options.readChainHeads ??
+    createChainHeadsReader({
+      publicClient: options.publicClient,
+      finality: options.finality,
+      durableHeadPollIntervalMs: DURABLE_HEAD_POLL_INTERVAL_MS,
+    });
 
   let cycle = 0;
 
@@ -91,10 +103,20 @@ export async function runDaemon(
       cycle,
     });
 
+    const submitter = Object.freeze<BeaconSubmitter>({
+      recover: () => options.submitter.recover(context.cycle),
+
+      submit: (request) => options.submitter.submit(
+        request,
+        context.cycle,
+      ),
+    });
+
     const result = await runDaemonCycle({
       publicClient: options.publicClient,
       walletClient: options.walletClient,
       account: options.account,
+      submitter,
       deployment: options.deployment,
       checkpointStore: options.checkpointStore,
       consumers: options.consumers,

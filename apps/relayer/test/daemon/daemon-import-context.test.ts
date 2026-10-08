@@ -22,6 +22,10 @@ import type {
   CompressedSignature,
 } from '@based-labs/drand-quicknet';
 
+import type {
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
+
 const mocks = vi.hoisted(() => ({
   createRegistryReader: vi.fn(),
   fetchBeacon: vi.fn(),
@@ -120,6 +124,19 @@ function fixture() {
 
   const writeContract = vi.fn().mockResolvedValue(HASH);
 
+  const submitTransaction = vi.fn<BeaconSubmitter['submit']>()
+    .mockResolvedValue({
+      status: 'acknowledged',
+      attemptId: '11111111-1111-4111-8111-111111111111',
+      transactionHash: HASH,
+      nonce: 4n,
+    });
+
+  const submitter: BeaconSubmitter = {
+    recover: vi.fn<BeaconSubmitter['recover']>(),
+    submit: submitTransaction,
+  };
+
   const waitForTransactionReceipt = vi.fn().mockResolvedValue({
     status: 'success',
     transactionHash: HASH,
@@ -172,6 +189,7 @@ function fixture() {
       writeContract,
     } as unknown as WalletClient,
     account: {} as Account,
+    submitter,
     deployment: {
       address: REGISTRY,
     } as RegistryDeployment,
@@ -193,6 +211,7 @@ function fixture() {
     getBlock,
     getLogs,
     writeContract,
+    submitTransaction,
     waitForTransactionReceipt,
     verifyDeployment,
     isStored,
@@ -226,7 +245,7 @@ describe('round import diagnostic context', () => {
         'wait-for-beacon': mocks.waitForQuicknetRound,
         'fetch-beacon': mocks.fetchQuicknetBeaconWithRetry,
         'prepare-submission': mocks.simulateBeaconSubmission,
-        'submit-transaction': fixtureState.writeContract,
+        'submit-transaction': fixtureState.submitTransaction,
         'wait-for-receipt': fixtureState.waitForTransactionReceipt,
       };
 
@@ -302,10 +321,12 @@ describe('round import diagnostic context', () => {
         phase === 'submit-transaction' ||
         phase === 'wait-for-receipt'
       ) {
-        expect(fixtureState.writeContract).toHaveBeenCalledTimes(1);
+        expect(fixtureState.submitTransaction).toHaveBeenCalledOnce();
       } else {
-        expect(fixtureState.writeContract).not.toHaveBeenCalled();
+        expect(fixtureState.submitTransaction).not.toHaveBeenCalled();
       }
+
+      expect(fixtureState.writeContract).not.toHaveBeenCalled();
 
       const lines: string[] = [];
 
@@ -379,7 +400,8 @@ describe('round import diagnostic context', () => {
     });
 
     expect(fixtureState.save).not.toHaveBeenCalled();
-    expect(fixtureState.writeContract).toHaveBeenCalledTimes(1);
+  expect(fixtureState.submitTransaction).toHaveBeenCalledOnce();
+  expect(fixtureState.writeContract).not.toHaveBeenCalled();
   });
 
   it('reports direct-import phases and preserves successful behavior', async () => {
@@ -408,7 +430,8 @@ describe('round import diagnostic context', () => {
 
     expect(progress.every((entry) => entry.round === ROUND))
       .toBe(true);
-    expect(fixtureState.writeContract).toHaveBeenCalledTimes(1);
+    expect(fixtureState.submitTransaction).toHaveBeenCalledOnce();
+    expect(fixtureState.writeContract).not.toHaveBeenCalled();
   });
 
   it('does not let a throwing observer interrupt the transaction flow', async () => {
@@ -426,7 +449,8 @@ describe('round import diagnostic context', () => {
 
     expect(result.status).toBe('imported');
     expect(onProgress).toHaveBeenCalled();
-    expect(fixtureState.writeContract).toHaveBeenCalledTimes(1);
+    expect(fixtureState.submitTransaction).toHaveBeenCalledOnce();
+    expect(fixtureState.writeContract).not.toHaveBeenCalled();
     expect(fixtureState.waitForTransactionReceipt)
       .toHaveBeenCalledTimes(1);
   });

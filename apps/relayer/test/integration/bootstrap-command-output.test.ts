@@ -42,14 +42,15 @@ const MODULE_PATHS = {
   'cli-output': 'cli/cli-output.js',
   config: 'config/config.js',
   clients: 'chain/clients.js',
+  daemon: 'daemon/daemon.js',
+  'daemon-config': 'config/daemon-config.js',
+  'daemon-startup': 'daemon/daemon-startup.js',
   'import-round': 'rounds/import-round.js',
   'import-round-when-available':
     'rounds/import-round-when-available.js',
-  'daemon-config': 'config/daemon-config.js',
+  'open-beacon-submitter': 'cli/open-beacon-submitter.js',
   'service-lock': 'state/service-lock.js',
   'validate-consumers': 'consumers/validate-consumers.js',
-  daemon: 'daemon/daemon.js',
-  'daemon-startup': 'daemon/daemon-startup.js',
 } as const;
 
 type ModuleName = keyof typeof MODULE_PATHS;
@@ -137,9 +138,10 @@ it.skipIf(process.platform !== 'linux').each([
       transactionHash: '0x' + '44'.repeat(32),
     }`;
 
-    // Stub configuration and network work. Bootstrap, CLI dispatch,
-    // runDaemonCommand, output rendering, and service-lock verification
-    // execute their actual compiled implementations.
+    // Stub configuration, network work, and signer-runtime opening.
+    // Bootstrap, CLI dispatch, runDaemonCommand, output rendering,
+    // and service-lock verification execute their actual compiled
+    // implementations.
     const replacements = new Map<ModuleName, string>([
       [
         'config',
@@ -158,6 +160,21 @@ it.skipIf(process.platform !== 'linux').each([
         `
           export function createRelayerClients() {
             return {};
+          }
+        `,
+      ],
+      [
+        'open-beacon-submitter',
+        `
+          export async function openBeaconSubmitter() {
+            return Object.freeze({
+              async recover() {
+                throw new Error('Unexpected signer recovery in output test.');
+              },
+              async submit() {
+                throw new Error('Unexpected beacon submission in output test.');
+              },
+            });
           }
         `,
       ],

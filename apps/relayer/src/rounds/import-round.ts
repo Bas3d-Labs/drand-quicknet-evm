@@ -16,14 +16,18 @@ import {
 } from '@based-labs/drand-quicknet';
 
 import {
+  reportImportProgress,
+  type RoundImportProgress,
+} from '../diagnostics/operation-context.js';
+
+import {
   simulateBeaconSubmission,
   type BeaconSubmissionDetails,
 } from './simulate-beacon-submission.js';
 
-import {
-  reportImportProgress,
-  type RoundImportProgress,
-} from '../diagnostics/operation-context.js';
+import type {
+  BeaconSubmitter,
+} from './create-beacon-submitter.js';
 
 export interface ImportQuicknetRoundOptions {
   publicClient: PublicClient;
@@ -31,6 +35,7 @@ export interface ImportQuicknetRoundOptions {
   account: Account;
   deployment: RegistryDeployment;
   round: bigint;
+  submitter: BeaconSubmitter;
   beacon?: QuicknetBeacon;
   onProgress?: ((progress: RoundImportProgress) => void) | undefined;
 }
@@ -135,14 +140,9 @@ export async function importQuicknetRound(
     phase: 'submit-transaction',
   });
   
-  let hash: Hex;
-
-  // Narrow by function name so viem retains each request's ABI/args types.
-  if (request.functionName === 'submitBeaconWithWitness') {
-    hash = await walletClient.writeContract(request);
-  } else {
-    hash = await walletClient.writeContract(request);
-  }
+  const {
+    transactionHash: hash,
+  } = await options.submitter.submit(request);
 
   reportImportProgress(options.onProgress, {
     round,

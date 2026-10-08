@@ -23,6 +23,10 @@ import {
   type RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+import type {
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
+
 const registryMocks = vi.hoisted(() => ({
   createRegistryReader: vi.fn(),
 }));
@@ -107,12 +111,13 @@ const BEACON: QuicknetBeacon = {
 describe(
   'importQuicknetRoundWhenAvailable',
   () => {
-    let verifyDeployment:ReturnType<typeof vi.fn>;
-    let isStored:ReturnType<typeof vi.fn>;
-    let getBeacon:ReturnType<typeof vi.fn>;
-    let publicClient:PublicClient;
-    let walletClient:WalletClient;
-    let account:Account;
+    let verifyDeployment: ReturnType<typeof vi.fn>;
+    let isStored: ReturnType<typeof vi.fn>;
+    let getBeacon: ReturnType<typeof vi.fn>;
+    let publicClient: PublicClient;
+    let walletClient: WalletClient;
+    let account: Account;
+    let submitter: BeaconSubmitter;
 
     beforeEach(() => {
       vi.clearAllMocks();
@@ -156,6 +161,7 @@ describe(
         .importQuicknetRound
         .mockResolvedValue({
           status: 'imported',
+          submission: 'witness',
           round: ROUND,
           randomness: RANDOMNESS,
           transactionHash:
@@ -171,6 +177,11 @@ describe(
       account = {
         address: ACCOUNT_ADDRESS,
       } as unknown as Account;
+
+      submitter = {
+        recover: vi.fn<BeaconSubmitter['recover']>(),
+        submit: vi.fn<BeaconSubmitter['submit']>(),
+      };
     });
 
     function importRound(
@@ -188,8 +199,8 @@ describe(
         publicClient,
         walletClient,
         account,
-        deployment:
-          DEPLOYMENT,
+        submitter,
+        deployment: DEPLOYMENT,
         round,
       };
 
@@ -579,27 +590,26 @@ describe(
       ).not.toHaveBeenCalled();
     });
 
-    it('passes the fetched beacon into importQuicknetRound', async () => {
+    it('passes the fetched beacon and shared submitter into importQuicknetRound', async () => {
       await importRound();
 
-      expect(
-        importMocks
-          .importQuicknetRound,
-      ).toHaveBeenCalledOnce();
+      expect(importMocks.importQuicknetRound)
+        .toHaveBeenCalledExactlyOnceWith({
+          publicClient,
+          walletClient,
+          account,
+          submitter,
+          deployment: DEPLOYMENT,
+          round: ROUND,
+          beacon: BEACON,
+        });
 
       expect(
-        importMocks
-          .importQuicknetRound,
-      ).toHaveBeenCalledWith({
-        publicClient,
-        walletClient,
-        account,
-        deployment:
-          DEPLOYMENT,
-        round: ROUND,
-        beacon:
-          BEACON,
-      });
+        importMocks.importQuicknetRound.mock.calls[0]?.[0].submitter,
+      ).toBe(submitter);
+
+      expect(submitter.recover).not.toHaveBeenCalled();
+      expect(submitter.submit).not.toHaveBeenCalled();
     });
 
     it('does not fetch the beacon a second time itself', async () => {
@@ -622,6 +632,7 @@ describe(
 
       expect(result).toEqual({
         status: 'imported',
+        submission: 'witness',
         round: ROUND,
         randomness:
           RANDOMNESS,

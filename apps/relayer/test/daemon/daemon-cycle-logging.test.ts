@@ -18,6 +18,10 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+import type {
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
+
 vi.mock('../../src/daemon/daemon-iteration.js', () => ({
   runDaemonIteration: vi.fn(),
 }));
@@ -236,6 +240,8 @@ function processed(
   };
 }
 
+let submitter: BeaconSubmitter;
+
 function cycle(
   softCursors = new Map<Address, SoftScanCursor>(),
 ) {
@@ -243,6 +249,7 @@ function cycle(
     publicClient: PUBLIC_CLIENT,
     walletClient: WALLET_CLIENT,
     account: ACCOUNT,
+    submitter,
     deployment: DEPLOYMENT,
     checkpointStore: CHECKPOINT_STORE,
     consumers: CONSUMERS,
@@ -269,6 +276,11 @@ describe('daemon cycle diagnostic reporting', () => {
       .mockImplementation(async ({ consumer }) => {
         return caughtUp(consumer);
       });
+
+    submitter = {
+      recover: vi.fn<BeaconSubmitter['recover']>(),
+      submit: vi.fn<BeaconSubmitter['submit']>(),
+    };
 
     for (const mock of Object.values(loggerMocks)) {
       mock.mockReset();

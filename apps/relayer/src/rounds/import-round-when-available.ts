@@ -10,6 +10,11 @@ import {
 } from '@based-labs/drand-quicknet-registry';
 
 import {
+  reportImportProgress,
+  type RoundImportProgress,
+} from '../diagnostics/operation-context.js';
+
+import {
   fetchQuicknetBeaconWithRetry,
   type FetchQuicknetBeaconWithRetryOptions,
 } from './fetch-beacon-with-retry.js';
@@ -19,19 +24,19 @@ import {
   type ImportQuicknetRoundResult,
 } from './import-round.js';
 
+import type {
+  BeaconSubmitter,
+} from './create-beacon-submitter.js';
+
 import {
   waitForQuicknetRound
 } from './wait-for-round.js';
-
-import {
-  reportImportProgress,
-  type RoundImportProgress,
-} from '../diagnostics/operation-context.js';
 
 export interface ImportQuicknetRoundWhenAvailableOptions {
   publicClient: PublicClient;
   walletClient: WalletClient;
   account: Account;
+  submitter: BeaconSubmitter;
   deployment: RegistryDeployment;
   round: bigint;
   maxFetchAttempts?: number;
@@ -111,6 +116,7 @@ export async function importQuicknetRoundWhenAvailable(
     publicClient,
     walletClient,
     account,
+    submitter: options.submitter,
     deployment,
     round,
     beacon,

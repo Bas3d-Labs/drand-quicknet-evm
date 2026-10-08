@@ -103,11 +103,18 @@ async function setup() {
     attempts: [first, second],
   };
 
+  const transactions = new Map<bigint, unknown[]>();
+
   const getBlock = vi.fn(async (
-    request: { blockNumber: bigint },
+    request: {
+      blockNumber: bigint;
+      includeTransactions?: boolean;
+    },
   ) => ({
     number: request.blockNumber,
     hash: hashAt(request.blockNumber),
+    parentHash: hashAt(request.blockNumber - 1n),
+    transactions: transactions.get(request.blockNumber) ?? [],
   }));
 
   const getTransactionReceipt = vi.fn(async (
@@ -145,13 +152,20 @@ async function setup() {
 
   return {
     snapshot,
+    transactions,
     getBlock,
     getTransactionReceipt,
     getTransactionCount,
-    run: (input = snapshot) => inspectSignerInclusions({
+    run: (
+      input = snapshot,
+      maxReplacementBlockRange?: bigint,
+    ) => inspectSignerInclusions({
       publicClient,
       snapshot: input,
       head: anchorAt(130n),
+      ...(maxReplacementBlockRange === undefined
+        ? {}
+        : { maxReplacementBlockRange }),
     }),
   };
 }
@@ -219,6 +233,7 @@ describe('signer inclusion inspection', () => {
     expect(await t.run()).toMatchObject({
       status: 'inspected',
       inclusionChecksComplete: false,
+      broadcastAttemptId: null,
       attempts: [
         {
           nonce: 4n,
@@ -291,6 +306,8 @@ describe('signer inclusion inspection', () => {
       t.getBlock.mockResolvedValueOnce({
         number: 130n,
         hash: FORK,
+        parentHash: hashAt(129n),
+        transactions: [],
       });
 
       return 6;
@@ -318,10 +335,327 @@ describe('signer inclusion inspection', () => {
     })).toMatchObject({
       status: 'inspected',
       inclusionChecksComplete: true,
+      broadcastAttemptId: null,
       attempts: [],
       observation: { nonce: 4n },
     });
 
     expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it('discovers an external replacement without advancing durable search progress', async () => {
+    const t = await setup();
+    const first = t.snapshot.attempts[0]!;
+    const ownHash = first.signedTransactions[0].transactionHash;
+
+    t.getTransactionReceipt.mockRejectedValueOnce(
+      new TransactionReceiptNotFoundError({ hash: ownHash }),
+    );
+
+    t.transactions.set(101n, [{
+      hash: FORK,
+      from: ACCOUNT.address,
+      nonce: 4,
+    }]);
+
+    const input: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: [{
+        ...first,
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+        replacementSearch: {
+          lowerBound: t.snapshot.baseline,
+          searchedThrough: null,
+        },
+      }, t.snapshot.attempts[1]!],
+    };
+
+    const result = await t.run(input, 2n);
+
+    expect(result).toMatchObject({
+      status: 'inspected',
+      inclusionChecksComplete: true,
+      broadcastAttemptId: null,
+      attempts: [{
+        nonce: 4n,
+        phase: 'included',
+        inclusion: {
+          outcome: 'replaced',
+          replacementTransactionHash: FORK,
+          nonceAtAnchor: 6n,
+          inclusion: anchorAt(101n),
+          observedAt: anchorAt(130n),
+        },
+        replacementSearch: {
+          lowerBound: t.snapshot.baseline,
+          searchedThrough: null,
+        },
+      }, {
+        nonce: 5n,
+        phase: 'included',
+      }],
+    });
+
+    expect(input.attempts[0]!.phase)
+      .toBe('broadcast-may-have-occurred');
+    expect(input.nextNonce).toBe(6n);
+    expect(input.durableNextNonce).toBe(4n);
+  });
+
+  it('keeps a scanned recorded transaction unresolved without its receipt', async () => {
+    const t = await setup();
+    const first = t.snapshot.attempts[0]!;
+    const ownHash = first.signedTransactions[0].transactionHash;
+
+    t.getTransactionReceipt.mockRejectedValueOnce(
+      new TransactionReceiptNotFoundError({ hash: ownHash }),
+    );
+
+    t.transactions.set(101n, [{
+      hash: ownHash,
+      from: ACCOUNT.address,
+      nonce: 4,
+    }]);
+
+    expect(await t.run({
+      ...t.snapshot,
+      attempts: [{
+        ...first,
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+        replacementSearch: {
+          lowerBound: t.snapshot.baseline,
+          searchedThrough: null,
+        },
+      }, t.snapshot.attempts[1]!],
+    }, 2n)).toMatchObject({
+      status: 'inspected',
+      inclusionChecksComplete: false,
+      broadcastAttemptId: null,
+      attempts: [{
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+      }, {
+        phase: 'included',
+      }],
+    });
+  });
+
+  it('rejects an invalid replacement budget before RPC', async () => {
+    const t = await setup();
+
+    await expect(t.run(t.snapshot, 0n)).rejects.toThrow(
+      'Invalid signer inclusion input',
+    );
+
+    expect(t.getBlock).not.toHaveBeenCalled();
+    expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+    expect(t.getTransactionCount).not.toHaveBeenCalled();
+  });
+
+  it('bounds head searches without advancing the durable cursor', async () => {
+    const t = await setup();
+    const first = t.snapshot.attempts[0]!;
+    const ownHash = first.signedTransactions[0].transactionHash;
+
+    t.getTransactionReceipt.mockRejectedValueOnce(
+      new TransactionReceiptNotFoundError({ hash: ownHash }),
+    );
+
+    const replacementSearch = {
+      lowerBound: t.snapshot.baseline,
+      searchedThrough: anchorAt(105n),
+    };
+
+    const result = await t.run({
+      ...t.snapshot,
+      attempts: [{
+        ...first,
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+        replacementSearch,
+      }, t.snapshot.attempts[1]!],
+    }, 2n);
+
+    expect(result).toMatchObject({
+      status: 'inspected',
+      inclusionChecksComplete: false,
+      attempts: [{
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+        replacementSearch,
+      }, {
+        phase: 'included',
+      }],
+    });
+
+    expect(
+      t.getBlock.mock.calls
+        .filter(([request]) => request.includeTransactions)
+        .map(([request]) => request.blockNumber),
+    ).toEqual([106n, 107n]);
+
+    expect(replacementSearch.searchedThrough).toEqual(anchorAt(105n));
+  });
+
+  it('discards replacement discovery when the final pass head check changes', async () => {
+    const t = await setup();
+    const first = t.snapshot.attempts[0]!;
+    const ownHash = first.signedTransactions[0].transactionHash;
+
+    t.getTransactionReceipt.mockRejectedValueOnce(
+      new TransactionReceiptNotFoundError({ hash: ownHash }),
+    );
+
+    t.transactions.set(101n, [{
+      hash: FORK,
+      from: ACCOUNT.address,
+      nonce: 4,
+    }]);
+
+    const read = t.getBlock.getMockImplementation()!;
+    let scanned = false;
+    let headChecksAfterScan = 0;
+
+    t.getBlock.mockImplementation(async (request) => {
+      const block = await read(request);
+
+      if (request.includeTransactions) {
+        scanned = true;
+      } else if (scanned && request.blockNumber === 130n) {
+        headChecksAfterScan += 1;
+
+        // The search's own closing check succeeds. The enclosing
+        // inclusion pass must still perform its final head check.
+        if (headChecksAfterScan === 2) {
+          return {
+            ...block,
+            hash: FORK,
+          };
+        }
+      }
+
+      return block;
+    });
+
+    const input: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: [{
+        ...first,
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+        replacementSearch: {
+          lowerBound: t.snapshot.baseline,
+          searchedThrough: null,
+        },
+      }, t.snapshot.attempts[1]!],
+    };
+
+    expect(await t.run(input, 2n)).toEqual({
+      status: 'anchor-changed',
+      observedAnchor: {
+        blockNumber: 130n,
+        blockHash: FORK,
+      },
+    });
+
+    expect(headChecksAfterScan).toBe(2);
+    expect(input.attempts[0]!.phase)
+      .toBe('broadcast-may-have-occurred');
+    expect(input.attempts[0]!.inclusion).toBeNull();
+  });
+
+  it('identifies only the oldest unresolved attempt for rebroadcast at an unconsumed nonce', async () => {
+    const t = await setup();
+
+    t.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+      throw new TransactionReceiptNotFoundError({ hash });
+    });
+
+    t.getTransactionCount.mockResolvedValue(4);
+
+    const input: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: t.snapshot.attempts.map((attempt) => ({
+        ...attempt,
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+      })),
+    };
+
+    expect(await t.run(input, 2n)).toMatchObject({
+      status: 'inspected',
+      inclusionChecksComplete: false,
+      broadcastAttemptId: input.attempts[0]!.attemptId,
+    });
+
+    expect(
+      t.getBlock.mock.calls.filter(
+        ([request]) => request.includeTransactions,
+      ),
+    ).toEqual([]);
+  });
+
+  it('identifies a later unresolved attempt only after verifying earlier inclusions', async () => {
+    const t = await setup();
+    const second = t.snapshot.attempts[1]!;
+    const secondHash = second.signedTransactions[0].transactionHash;
+    const readReceipt = t.getTransactionReceipt.getMockImplementation()!;
+
+    t.getTransactionReceipt.mockImplementation(async (request) => {
+      if (request.hash === secondHash) {
+        throw new TransactionReceiptNotFoundError({
+          hash: request.hash,
+        });
+      }
+
+      return readReceipt(request);
+    });
+
+    t.getTransactionCount.mockResolvedValue(5);
+
+    expect(await t.run({
+      ...t.snapshot,
+      attempts: [
+        t.snapshot.attempts[0]!,
+        {
+          ...second,
+          phase: 'broadcast-may-have-occurred',
+          inclusion: null,
+        },
+      ],
+    })).toMatchObject({
+      status: 'inspected',
+      inclusionChecksComplete: false,
+      broadcastAttemptId: second.attemptId,
+    });
+  });
+
+  it('withholds rebroadcast eligibility when an earlier saved inclusion is uncertain', async () => {
+    const t = await setup();
+    const second = t.snapshot.attempts[1]!;
+
+    t.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+      throw new TransactionReceiptNotFoundError({ hash });
+    });
+
+    t.getTransactionCount.mockResolvedValue(5);
+
+    expect(await t.run({
+      ...t.snapshot,
+      attempts: [
+        t.snapshot.attempts[0]!,
+        {
+          ...second,
+          phase: 'broadcast-may-have-occurred',
+          inclusion: null,
+        },
+      ],
+    })).toMatchObject({
+      status: 'inspected',
+      inclusionChecksComplete: false,
+      broadcastAttemptId: null,
+    });
   });
 });

@@ -17,6 +17,10 @@ import type {
 } from '../config/config.js';
 
 import {
+  createChainHeadsReader,
+} from '../chain/chain-heads-reader.js';
+
+import {
   createRelayerClients,
 } from '../chain/clients.js';
 
@@ -56,6 +60,10 @@ import {
 import {
   assertServiceLockHeld,
 } from '../state/service-lock.js';
+
+import {
+  openBeaconSubmitter,
+} from './open-beacon-submitter.js';
 
 export interface RunDaemonCommandOptions {
   source: NetworkSource;
@@ -124,6 +132,23 @@ export async function runDaemonCommand(
     consumers: config.consumers,
   });
 
+  const readChainHeads = createChainHeadsReader({
+    publicClient: clients.publicClient,
+    finality: config.finality,
+    durableHeadPollIntervalMs: 30_000,
+  });
+
+  const submitter = await openBeaconSubmitter({
+    config,
+    publicClient: clients.publicClient,
+    walletClient: clients.walletClient,
+    log: logger,
+    readChainHeads,
+    maxBlockRange: config.maxBlockRange,
+    signal: options.signal,
+    env,
+  });
+
   const checkpointStore = await FileCheckpointStore.open({
     filePath: config.checkpointFile,
     deployment: config.deployment,
@@ -148,6 +173,7 @@ export async function runDaemonCommand(
     publicClient: clients.publicClient,
     walletClient: clients.walletClient,
     account: config.account,
+    submitter,
     deployment: config.deployment,
     checkpointStore,
     consumers: validatedConsumers,
@@ -155,6 +181,7 @@ export async function runDaemonCommand(
     maxBlockRange: config.maxBlockRange,
     finality: config.finality,
     pollIntervalMs: config.pollIntervalMs,
+    readChainHeads,
     onCycle(result, context) {
       const cycleLogger = logger.withContext({
         cycle: context.cycle,

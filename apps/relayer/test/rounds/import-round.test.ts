@@ -1,4 +1,5 @@
 import {
+  afterEach,
   beforeEach,
   describe,
   expect,
@@ -52,6 +53,10 @@ vi.mock(
 import {
   importQuicknetRound,
 } from '../../src/rounds/import-round.js';
+
+import type {
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
 
 const CHAIN_ID = 46630;
 
@@ -113,6 +118,10 @@ describe('importQuicknetRound', () => {
   let publicClient: PublicClient;
   let walletClient: WalletClient;
   let account: Account;
+  let submitter: BeaconSubmitter;
+  let submitTransaction: ReturnType<
+    typeof vi.fn<BeaconSubmitter['submit']>
+  >;
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -157,9 +166,26 @@ describe('importQuicknetRound', () => {
       writeContract,
     } as unknown as WalletClient;
 
+    submitTransaction = vi.fn<BeaconSubmitter['submit']>()
+      .mockResolvedValue({
+        status: 'acknowledged',
+        attemptId: '11111111-1111-4111-8111-111111111111',
+        transactionHash: SUBMITTED_TRANSACTION_HASH,
+        nonce: 4n,
+      });
+
+    submitter = {
+      submit: submitTransaction,
+      recover: vi.fn<BeaconSubmitter['recover']>(),
+    };
+
     account = {
       address: ACCOUNT_ADDRESS,
     } as unknown as Account;
+  });
+
+  afterEach(() => {
+    expect(writeContract).not.toHaveBeenCalled();
   });
 
   function importRound(
@@ -169,6 +195,7 @@ describe('importQuicknetRound', () => {
       publicClient,
       walletClient,
       account,
+      submitter,
       deployment: DEPLOYMENT,
       round,
     });
@@ -249,6 +276,7 @@ describe('importQuicknetRound', () => {
     ).not.toHaveBeenCalled();
 
     expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
   });
 
   it('fetches exactly the requested Quicknet round', async () => {
@@ -309,6 +337,7 @@ describe('importQuicknetRound', () => {
     await expect(importRound()).rejects.toBe(error);
 
     expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -331,8 +360,8 @@ describe('importQuicknetRound', () => {
 
       const result = await importRound();
 
-      expect(writeContract).toHaveBeenCalledOnce();
-      expect(writeContract.mock.calls[0]?.[0]).toBe(request);
+      expect(submitTransaction).toHaveBeenCalledOnce();
+      expect(submitTransaction.mock.calls[0]?.[0]).toBe(request);
 
       expect(result).toMatchObject({
         status: 'imported',
@@ -343,13 +372,13 @@ describe('importQuicknetRound', () => {
     },
   );
 
-  it('broadcasts the exact simulated request once', async () => {
+  it('submits the exact simulated request once', async () => {
     await importRound();
 
-    expect(writeContract).toHaveBeenCalledOnce();
+    expect(submitTransaction).toHaveBeenCalledOnce();
 
     expect(
-      writeContract.mock.calls[0]?.[0],
+      submitTransaction.mock.calls[0]?.[0],
     ).toBe(SIMULATED_REQUEST);
   });
 
@@ -362,13 +391,13 @@ describe('importQuicknetRound', () => {
 
     await expect(importRound()).rejects.toBe(error);
 
-    expect(writeContract).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
   });
 
-  it('does not resimulate or retry an uncertain wallet submission', async () => {
+  it('does not resimulate or retry an uncertain submission', async () => {
     const error = new Error('Transaction submission uncertain');
 
-    writeContract.mockRejectedValue(error);
+    submitTransaction.mockRejectedValue(error);
 
     await expect(importRound()).rejects.toBe(error);
 
@@ -376,7 +405,7 @@ describe('importQuicknetRound', () => {
       submissionMocks.simulateBeaconSubmission,
     ).toHaveBeenCalledOnce();
 
-    expect(writeContract).toHaveBeenCalledOnce();
+    expect(submitTransaction).toHaveBeenCalledOnce();
     expect(waitForTransactionReceipt).not.toHaveBeenCalled();
   });
 
@@ -391,7 +420,7 @@ describe('importQuicknetRound', () => {
       submissionMocks.simulateBeaconSubmission,
     ).toHaveBeenCalledOnce();
 
-    expect(writeContract).toHaveBeenCalledOnce();
+    expect(submitTransaction).toHaveBeenCalledOnce();
     expect(getBeacon).not.toHaveBeenCalled();
   });
 
@@ -563,6 +592,7 @@ describe('importQuicknetRound', () => {
       publicClient,
       walletClient,
       account,
+      submitter,
       deployment: DEPLOYMENT,
       round: ROUND,
       beacon,
@@ -592,6 +622,7 @@ describe('importQuicknetRound', () => {
         publicClient,
         walletClient,
         account,
+        submitter,
         deployment: DEPLOYMENT,
         round: ROUND,
         beacon,
@@ -622,7 +653,7 @@ describe('importQuicknetRound', () => {
       submissionMocks.simulateBeaconSubmission,
     );
 
-    const writeOrder = firstInvocationOrder(writeContract);
+    const submissionOrder = firstInvocationOrder(submitTransaction);
 
     const receiptOrder = firstInvocationOrder(
       waitForTransactionReceipt,
@@ -633,8 +664,8 @@ describe('importQuicknetRound', () => {
     expect(verifyOrder).toBeLessThan(storedOrder);
     expect(storedOrder).toBeLessThan(fetchOrder);
     expect(fetchOrder).toBeLessThan(submitOrder);
-    expect(submitOrder).toBeLessThan(writeOrder);
-    expect(writeOrder).toBeLessThan(receiptOrder);
+    expect(submitOrder).toBeLessThan(submissionOrder);
+    expect(submissionOrder).toBeLessThan(receiptOrder);
     expect(receiptOrder).toBeLessThan(readOrder);
   });
 });

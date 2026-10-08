@@ -36,7 +36,7 @@ export interface SearchAttemptReplacementOptions {
     }[]
   };
 
-  /** Verified nonce observation for this signer at the selected durable anchor. */
+  /** Verified nonce observation for this signer at the selected anchor. */
   observation: AnchoredNonceObservation;
 
   /** Maximum full blocks scanned per call, excluding anchor checks. */

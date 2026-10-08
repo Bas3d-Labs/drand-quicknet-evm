@@ -28,6 +28,10 @@ import type {
 } from '../../src/daemon/daemon-cycle.js';
 
 import type {
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
+
+import type {
   CheckpointStore,
 } from '../../src/state/checkpoint.js';
 
@@ -125,10 +129,16 @@ describe('daemon chain-head polling', () => {
       }
     });
 
+    const submitter: BeaconSubmitter = {
+      recover: vi.fn<BeaconSubmitter['recover']>(),
+      submit: vi.fn<BeaconSubmitter['submit']>(),
+    };
+
     await runDaemon({
       publicClient,
       walletClient: {} as WalletClient,
       account: {} as Account,
+      submitter,
       deployment: {} as RegistryDeployment,
       checkpointStore,
       consumers: [
@@ -149,6 +159,14 @@ describe('daemon chain-head polling', () => {
         }
       },
     });
+
+    expect(vi.mocked(submitter.recover).mock.calls).toEqual([
+      [1],
+      [2],
+      [3],
+    ]);
+
+    expect(submitter.submit).not.toHaveBeenCalled();
 
     const safeReads = getBlock.mock.calls.filter(
       ([request]) => request.blockTag === 'safe',
