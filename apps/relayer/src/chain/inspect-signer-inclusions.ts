@@ -34,10 +34,20 @@ import {
   validateJournalSnapshotStructure,
 } from '../state/transaction-journal-validation.js';
 
+import {
+  searchAttemptReplacement,
+} from './search-attempt-replacement.js';
+
 export interface InspectSignerInclusionsOptions {
   readonly publicClient: PublicClient;
   readonly snapshot: TransactionJournalSnapshot;
   readonly head: Readonly<BlockAnchor>;
+  
+  /**
+   * Maximum full blocks searched per unresolved attempt. Omit to
+   * perform receipt and saved-inclusion checks only.
+   */
+  readonly maxReplacementBlockRange?: bigint;
 }
 
 export type SignerInclusionInspection =
@@ -56,6 +66,13 @@ export type SignerInclusionInspection =
       readonly observation: AnchoredNonceObservation;
       readonly attempts: readonly JournalAttempt[];
       readonly inclusionChecksComplete: boolean;
+      
+      /**
+       * Oldest unresolved attempt whose recorded receipts are absent or
+       * fork-served and whose nonce remains unconsumed at this head.
+       * Earlier retained attempts must have verified inclusions.
+       */
+      readonly broadcastAttemptId: string | null;
     };
 
 /**
@@ -80,11 +97,21 @@ export async function inspectSignerInclusions(
     blockHash: options.head.blockHash,
   });
 
+  const maxReplacementBlockRange = options.maxReplacementBlockRange;
+
   if (
     typeof head.blockNumber !== 'bigint' ||
     head.blockNumber < 0n ||
     head.blockNumber >= (1n << 256n) ||
-    !isFixedHex(head.blockHash, 32)
+    !isFixedHex(head.blockHash, 32) ||
+    (
+      maxReplacementBlockRange !== undefined &&
+      (
+        typeof maxReplacementBlockRange !== 'bigint' ||
+        maxReplacementBlockRange <= 0n ||
+        maxReplacementBlockRange >= (1n << 256n)
+      )
+    )
   ) {
     throw new TypeError('Invalid signer inclusion input.');
   }
@@ -103,7 +130,8 @@ export async function inspectSignerInclusions(
 
   const attempts: JournalAttempt[] = [];
   const verifiedNonces: bigint[] = [];
-  let inclusionChecksComplete = true;
+  const verifiedIndices = new Set<number>();
+  const replacementCandidates: number[] = [];
 
   for (const attempt of snapshot.attempts) {
     if (attempt.phase === 'included') {
@@ -126,11 +154,10 @@ export async function inspectSignerInclusions(
           },
         });
 
+        verifiedIndices.add(attempts.length - 1);
         verifiedNonces.push(attempt.nonce);
         continue;
       }
-
-      inclusionChecksComplete = false;
 
       if (result.status === 'inclusion-block-changed') {
         attempts.push({
@@ -168,8 +195,14 @@ export async function inspectSignerInclusions(
     }
 
     if (receipt.status !== 'verified') {
+      if (
+        receipt.status === 'receipt-not-found' ||
+        receipt.status === 'fork-served-receipt'
+      ) {
+        replacementCandidates.push(attempts.length);
+      }
+
       attempts.push(attempt);
-      inclusionChecksComplete = false;
       continue;
     }
 
@@ -186,10 +219,11 @@ export async function inspectSignerInclusions(
       },
     });
 
+    verifiedIndices.add(attempts.length - 1);
     verifiedNonces.push(attempt.nonce);
   }
 
-  // This read also closes the inspection against the selected head.
+  // Establish the anchored nonce before searching the consuming transactions.
   const nonce = await readAnchoredNonce({
     publicClient,
     signer: snapshot.identity.signer,
@@ -218,6 +252,106 @@ export async function inspectSignerInclusions(
     };
   }
 
+  let searched = false;
+
+  if (maxReplacementBlockRange !== undefined) {
+    for (const index of replacementCandidates) {
+      const attempt = attempts[index]!;
+
+      if (observation.nonce <= attempt.nonce) {
+        continue;
+      }
+
+      let replacementSearch = attempt.replacementSearch;
+
+      if (
+        replacementSearch === null &&
+        snapshot.lastObservation.nonce <= attempt.nonce
+      ) {
+        replacementSearch = {
+          lowerBound: snapshot.lastObservation,
+          searchedThrough: null,
+        };
+      }
+
+      const search = await searchAttemptReplacement({
+        publicClient,
+        signer: snapshot.identity.signer,
+        attempt: {
+          ...attempt,
+          replacementSearch,
+        },
+        observation,
+        maxBlockRange: maxReplacementBlockRange,
+      });
+
+      searched = true;
+
+      if (search.status === 'anchor-changed') {
+        return search;
+      }
+
+      if (search.status !== 'replacement-found') {
+        continue;
+      }
+
+      const evidence = search.evidence;
+
+      attempts[index] = {
+        ...attempt,
+        phase: 'included',
+        inclusion: {
+          outcome: 'replaced',
+          replacementTransactionHash: evidence.replacementTransactionHash,
+          nonceAtAnchor: evidence.nonceAtAnchor,
+          inclusion: evidence.inclusion,
+          observedAt: head,
+        },
+      };
+      verifiedIndices.add(index);
+    }
+  }
+
+  if (searched) {
+    // Close the entire pass after all additional searches.
+    const closingHead = await getBlockAnchor(
+      publicClient,
+      head.blockNumber,
+    );
+
+    if (!blockAnchorsMatch(head, closingHead)) {
+      return {
+        status: 'anchor-changed',
+        observedAnchor: Object.freeze(closingHead),
+      };
+    }
+  }
+
+  const inclusionChecksComplete =
+    verifiedIndices.size === attempts.length;
+
+  const unresolvedIndex = attempts.findIndex(
+    (attempt) => attempt.phase !== 'included',
+  );
+
+  let broadcastAttemptId: string | null = null;
+  
+  if (unresolvedIndex !== -1) {
+    const attempt = attempts[unresolvedIndex]!;
+
+    const earlierInclusionsVerified = attempts
+      .slice(0, unresolvedIndex)
+      .every((_earlier, index) => verifiedIndices.has(index));
+
+    if (
+      replacementCandidates.includes(unresolvedIndex) &&
+      observation.nonce === attempt.nonce &&
+      earlierInclusionsVerified
+    ) {
+      broadcastAttemptId = attempt.attemptId;
+    }
+  }
+
   const inspected = validateJournalSnapshotStructure({
     ...snapshot,
     lastObservation: observation,
@@ -229,5 +363,6 @@ export async function inspectSignerInclusions(
     observation: inspected.lastObservation,
     attempts: inspected.attempts,
     inclusionChecksComplete,
+    broadcastAttemptId,
   });
 }

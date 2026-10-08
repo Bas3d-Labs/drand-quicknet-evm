@@ -660,4 +660,128 @@ describe('journaled transaction broadcast', () => {
 
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
+
+  it('authorizes broadcasting from a head inspection only after persistence finishes', async () => {
+    const t = await setup();
+    const entered = deferred();
+    const finish = deferred();
+    const save = t.save.getMockImplementation()!;
+
+    t.save.mockImplementationOnce(async (snapshot) => {
+      entered.resolve();
+      await finish.promise;
+      await save(snapshot);
+    });
+
+    const pending = t.coordinator.checkInclusions({
+      publicClient: t.publicClient,
+      head: ANCHOR,
+    });
+
+    try {
+      await Promise.race([entered.promise, pending]);
+
+      expect(t.coordinator.canBroadcast).toBe(false);
+      expect(t.request).not.toHaveBeenCalled();
+
+      await expect(t.broadcast())
+        .rejects.toThrow('already in progress');
+    } finally {
+      finish.resolve();
+      await pending;
+    }
+
+    expect(t.coordinator.canBroadcast).toBe(true);
+
+    await t.broadcast();
+
+    expect(t.request).toHaveBeenCalledTimes(1);
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    await expect(t.broadcast())
+      .rejects.toThrow('Fresh reconciliation');
+  });
+
+  it('requires a fresh head inspection after retrying its failed persistence', async () => {
+    const t = await setup();
+
+    t.save.mockRejectedValueOnce(new Error('Inspection write failed'));
+
+    await expect(t.coordinator.checkInclusions({
+      publicClient: t.publicClient,
+      head: ANCHOR,
+    })).rejects.toThrow('Journal persistence');
+
+    const failed = t.save.mock.calls[0]![0];
+
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.request).not.toHaveBeenCalled();
+
+    await t.coordinator.retryPersistence();
+
+    expect(t.save.mock.calls[1]![0]).toBe(failed);
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    await expect(t.broadcast())
+      .rejects.toThrow('Fresh reconciliation');
+
+    await t.coordinator.checkInclusions({
+      publicClient: t.publicClient,
+      head: ANCHOR,
+    });
+
+    expect(t.coordinator.canBroadcast).toBe(true);
+
+    await t.broadcast();
+
+    expect(t.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let head inspection alone complete recovery after a broadcast', async () => {
+    const t = await setup();
+
+    await t.broadcast();
+
+    const result = await t.coordinator.checkInclusions({
+      publicClient: t.publicClient,
+      head: ANCHOR,
+    });
+
+    expect(result).toMatchObject({
+      status: 'inspected',
+      broadcastAttemptId: t.prepared.attemptId,
+    });
+
+    expect(t.coordinator.status.recoveryComplete).toBe(false);
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    await expect(t.broadcast())
+      .rejects.toThrow('Fresh reconciliation');
+
+    expect(t.request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    'unattributed-signer-activity',
+    'conflict-search-exhausted',
+  ] as const)(
+    'does not authorize broadcasting from head inspection while blocked by %s',
+    async (reason) => {
+      const t = await setup();
+
+      t.coordinator.block(reason);
+
+      await t.coordinator.checkInclusions({
+        publicClient: t.publicClient,
+        head: ANCHOR,
+      });
+
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      await expect(t.broadcast())
+        .rejects.toThrow('Fresh reconciliation');
+
+      expect(t.request).not.toHaveBeenCalled();
+    },
+  );
 });

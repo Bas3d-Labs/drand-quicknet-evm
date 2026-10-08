@@ -180,9 +180,12 @@ export interface AttemptSummary {
   readonly transactionHashes: readonly [Hash, ...Hash[]];
 }
 
-export interface CheckSignerInclusionOptions {
+export interface CheckSignerInclusionsOptions {
   readonly publicClient: PublicClient;
   readonly head: Readonly<BlockAnchor>;
+
+  /** Maximum full blocks searched per unresolved attempt, when enabled. */
+  readonly maxReplacementBlockRange?: bigint;
 }
 
 /**
@@ -1039,7 +1042,7 @@ export class SignerCoordinator {
    * preparation can resume.
    */
   async checkInclusions(
-    options: CheckSignerInclusionOptions,
+    options: CheckSignerInclusionsOptions,
     cycle?: number,
   ): Promise<SignerInclusionInspection> {
     this.assertAvailable();
@@ -1064,10 +1067,15 @@ export class SignerCoordinator {
     this.busy = true;
 
     try {
+      const maxReplacementBlockRange = options.maxReplacementBlockRange;
+
       const result = await inspectSignerInclusions({
         publicClient: options.publicClient,
         snapshot: current.snapshot,
         head: options.head,
+        ...(maxReplacementBlockRange === undefined
+          ? {}
+          : { maxReplacementBlockRange }),
       });
 
       if (result.status !== 'inspected') {
@@ -1103,6 +1111,20 @@ export class SignerCoordinator {
 
       this.inclusionChecksComplete = result.inclusionChecksComplete;
       this.finishWrite(cycle);
+
+      const attempt = next.attempts.find(
+        (candidate) => candidate.phase !== 'included',
+      );
+
+      if (
+        this.recoveryComplete &&
+        this.blockers.size === 0 &&
+        attempt !== undefined &&
+        result.broadcastAttemptId === attempt.attemptId &&
+        next.lastObservation.nonce === attempt.nonce
+      ) {
+        this.broadcastPermit = attempt.attemptId;
+      }
 
       return result;
     } catch (error) {

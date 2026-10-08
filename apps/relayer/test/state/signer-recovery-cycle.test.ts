@@ -231,6 +231,52 @@ async function setup(options: {
   };
 }
 
+async function setupTwoAttempts() {
+  const t = await setup();
+  const first = t.coordinator.attempts[0]!;
+
+  t.getTransactionReceipt.mockResolvedValueOnce({
+    transactionHash: first.transactionHashes[0],
+    blockNumber: 100n,
+    blockHash: HASH,
+    status: 'success',
+  } as never);
+
+  t.getTransactionCount.mockResolvedValueOnce(5);
+
+  await t.coordinator.checkInclusions({
+    publicClient: t.recovery.publicClient,
+    head: ANCHOR,
+  });
+
+  const second = await t.coordinator.prepareAttempt({
+    account: {
+      ...ACCOUNT,
+      signTransaction: t.signTransaction,
+    },
+    transaction: {
+      type: 'eip1559',
+      to: ACCOUNT.address,
+      data: '0x1234',
+      value: 0n,
+      gas: 100_000n,
+      maxFeePerGas: 2n,
+      maxPriorityFeePerGas: 1n,
+    },
+  });
+
+  t.save.mockClear();
+  t.getTransactionReceipt.mockClear();
+  t.getTransactionCount.mockClear();
+  t.events.length = 0;
+
+  return {
+    ...t,
+    first,
+    second,
+  };
+}
+
 function deferred() {
   let resolve!: () => void;
 
@@ -708,6 +754,247 @@ describe('signer recovery cycle', () => {
     await t.cycle.run(t.recovery);
 
     expect(t.coordinator.status.open).toBe(true);
+    expect(t.request).not.toHaveBeenCalled();
+  });
+
+  it('checks the head before broadcasting an attempt unresolved at the durable anchor', async () => {
+    const t = await setup();
+
+    const result = await t.cycle.run({
+      ...t.recovery,
+      head: {
+        blockNumber: 110n,
+        blockHash: HASH,
+      },
+    });
+
+    expect(t.events).toEqual([
+      'receipt',
+      'nonce',
+      'save',
+      'receipt',
+      'nonce',
+      'save',
+      'save',
+      'send',
+    ]);
+
+    expect(result).toMatchObject({
+      inspection: { status: 'unresolved' },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: false,
+      },
+      broadcast: { status: 'acknowledged' },
+    });
+
+    expect(t.getTransactionReceipt).toHaveBeenCalledTimes(2);
+    expect(t.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains an inclusion above the durable anchor and does not rebroadcast it', async () => {
+    const t = await setup();
+    const transactionHash =
+      t.coordinator.attempts[0]!.transactionHashes[0];
+
+    t.getTransactionReceipt.mockResolvedValue({
+      transactionHash,
+      blockNumber: 105n,
+      blockHash: HASH,
+      status: 'success',
+    } as never);
+
+    t.getTransactionCount
+      .mockResolvedValueOnce(4)
+      .mockResolvedValueOnce(5);
+
+    const result = await t.cycle.run({
+      ...t.recovery,
+      head: {
+        blockNumber: 110n,
+        blockHash: HASH,
+      },
+    });
+
+    expect(result).toMatchObject({
+      inspection: {
+        status: 'unresolved',
+        receipt: { status: 'included-not-durable' },
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+        broadcastAttemptId: null,
+      },
+      broadcast: null,
+      retryDelayMs: null,
+    });
+
+    expect(t.visible()).toMatchObject({
+      snapshot: {
+        nextNonce: 5n,
+        durableNextNonce: 4n,
+        attempts: [{
+          nonce: 4n,
+          phase: 'included',
+          inclusion: {
+            outcome: 'success',
+            transactionHash,
+            inclusion: {
+              blockNumber: 105n,
+              blockHash: HASH,
+            },
+            observedAt: {
+              blockNumber: 110n,
+              blockHash: HASH,
+            },
+          },
+        }],
+      },
+    });
+
+    expect(t.coordinator.status.open).toBe(true);
+    expect(t.request).not.toHaveBeenCalled();
+    expect(t.signTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not broadcast when head inspection fails after durable recovery', async () => {
+    const t = await setup();
+    const failure = new Error('Head receipt lookup failed');
+
+    t.getTransactionReceipt
+      .mockRejectedValueOnce(t.absent)
+      .mockRejectedValueOnce(failure);
+
+    await expect(t.cycle.run({
+      ...t.recovery,
+      head: {
+        blockNumber: 110n,
+        blockHash: HASH,
+      },
+    })).rejects.toBe(failure);
+
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.coordinator.status.open).toBe(false);
+    expect(t.schedule.delayMs).toBe(0);
+    expect(t.request).not.toHaveBeenCalled();
+  });
+
+  it('rejects a head behind the durable anchor before RPC or persistence', async () => {
+    const t = await setup();
+
+    await expect(t.cycle.run({
+      ...t.recovery,
+      head: {
+        blockNumber: 99n,
+        blockHash: HASH,
+      },
+    })).rejects.toThrow('Invalid signer recovery head');
+
+    expect(t.getBlock).not.toHaveBeenCalled();
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.request).not.toHaveBeenCalled();
+  });
+
+  it('durably resolves consecutive attempts before checking the empty queue', async () => {
+    const t = await setupTwoAttempts();
+
+    t.getTransactionReceipt.mockImplementation(async ({ hash }) => ({
+      transactionHash: hash,
+      blockNumber: 100n,
+      blockHash: HASH,
+      status: 'success',
+    }) as never);
+
+    t.getTransactionCount.mockResolvedValue(6);
+
+    const result = await t.cycle.run({
+      ...t.recovery,
+      head: ANCHOR,
+    });
+
+    expect(result).toMatchObject({
+      inspection: {
+        status: 'resolution-available',
+        evidence: {
+          transactionHash: t.second.transactionHash,
+        },
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+        attempts: [],
+      },
+      broadcast: null,
+      retryDelayMs: null,
+    });
+
+    expect(t.getTransactionReceipt)
+      .toHaveBeenNthCalledWith(1, {
+        hash: t.first.transactionHashes[0],
+      });
+
+    expect(t.getTransactionReceipt)
+      .toHaveBeenNthCalledWith(2, {
+        hash: t.second.transactionHash,
+      });
+
+    expect(t.getTransactionReceipt).toHaveBeenCalledTimes(2);
+
+    expect(t.save.mock.calls[0]![0]).toMatchObject({
+      nextNonce: 6n,
+      durableNextNonce: 5n,
+      attempts: [{ attemptId: t.second.attemptId }],
+    });
+
+    expect(t.save.mock.calls[1]![0]).toMatchObject({
+      nextNonce: 6n,
+      durableNextNonce: 6n,
+      attempts: [],
+    });
+
+    expect(t.save).toHaveBeenCalledTimes(3);
+    expect(t.coordinator.status.open).toBe(true);
+    expect(t.request).not.toHaveBeenCalled();
+  });
+
+  it('preserves a committed prefix when inspection of the next attempt fails', async () => {
+    const t = await setupTwoAttempts();
+    const failure = new Error('Second receipt lookup failed');
+
+    t.getTransactionReceipt
+      .mockResolvedValueOnce({
+        transactionHash: t.first.transactionHashes[0],
+        blockNumber: 100n,
+        blockHash: HASH,
+        status: 'success',
+      } as never)
+      .mockRejectedValueOnce(failure);
+
+    t.getTransactionCount.mockResolvedValue(6);
+
+    await expect(t.cycle.run({
+      ...t.recovery,
+      head: ANCHOR,
+    })).rejects.toBe(failure);
+
+    expect(t.save).toHaveBeenCalledTimes(1);
+
+    expect(t.visible()).toMatchObject({
+      snapshot: {
+        nextNonce: 6n,
+        durableNextNonce: 5n,
+        attempts: [{ attemptId: t.second.attemptId }],
+      },
+    });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
+
+    expect(t.coordinator.canBroadcast).toBe(false);
     expect(t.request).not.toHaveBeenCalled();
   });
 });

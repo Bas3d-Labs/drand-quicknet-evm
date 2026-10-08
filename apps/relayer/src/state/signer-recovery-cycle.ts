@@ -1,4 +1,16 @@
 import type {
+  BlockAnchor,
+} from '../chain/block-anchor.js';
+
+import type {
+  SignerInclusionInspection,
+} from '../chain/inspect-signer-inclusions.js';
+
+import {
+  isFixedHex,
+} from '../shared/hex.js';
+
+import type {
   SignerRecoveryInspection,
 } from '../chain/inspect-signer-recovery.js';
 
@@ -19,12 +31,19 @@ export interface SignerRecoveryCycleOptions {
 
 export interface RunSignerRecoveryCycleOptions
   extends RecoverSignerOptions {
+  /**
+   * Current head for retained-attempt inclusion checks.
+   * anchor remains the durable recovery anchor.
+   */
+  readonly head?: Readonly<BlockAnchor>;
   readonly signal?: AbortSignal;
 }
 
 export interface SignerRecoveryCycleResult {
+  /** Final durable recovery inspection performed during this cycle. */
   readonly inspection: SignerRecoveryInspection;
   readonly broadcast: BroadcastAttemptResult | null;
+  readonly inclusions: SignerInclusionInspection | null;
 
   /** Timing only. A due retry still requires coordinator authorization */
   readonly retryDelayMs: number | null;
@@ -64,6 +83,13 @@ export class SignerRecoveryCycle {
     try {
       const signal = options.signal;
 
+      const head = options.head === undefined
+        ? undefined
+        : Object.freeze({
+          blockNumber: options.head.blockNumber,
+          blockHash: options.head.blockHash,
+        });
+
       let recovery: RecoverSignerOptions = {
         publicClient: options.publicClient,
         anchor: {
@@ -84,6 +110,24 @@ export class SignerRecoveryCycle {
         };
       }
 
+      if (
+        head !== undefined &&
+        (
+          typeof head.blockNumber !== 'bigint' ||
+          head.blockNumber < 0n ||
+          head.blockNumber >= (1n << 256n) ||
+          !isFixedHex(head.blockHash, 32) ||
+          head.blockNumber < recovery.anchor.blockNumber ||
+          (
+            head.blockNumber === recovery.anchor.blockNumber &&
+            head.blockHash.toLowerCase() !==
+              recovery.anchor.blockHash.toLowerCase()
+          )
+        )
+      ) {
+        throw new TypeError('Invalid signer recovery head.');
+      }
+
       signal?.throwIfAborted();
 
       this.schedule.track(this.retryAttempt);
@@ -96,28 +140,59 @@ export class SignerRecoveryCycle {
 
       signal?.throwIfAborted();
 
-      const inspection = await this.coordinator.recover(
+      // Bound recovery work by the queue captured after any persistence retry.
+      // A missing or empty journal still needs one recovery pass.
+      const maxRecoveryPasses = Math.max(
+        1,
+        this.coordinator.attempts.length,
+      );
+
+      let inspection = await this.coordinator.recover(
         recovery,
         cycle,
       );
 
+      for (
+        let pass = 1;
+        pass < maxRecoveryPasses &&
+        inspection.status === 'resolution-available' &&
+        this.coordinator.attempts.length > 0;
+        pass += 1
+      ) {
+        signal?.throwIfAborted();
+
+        inspection = await this.coordinator.recover(
+          recovery,
+          cycle,
+        );
+      }
+
+      signal?.throwIfAborted();
+
+      let inclusions: SignerInclusionInspection | null = null;
+
+      if (
+        this.coordinator.status.recoveryComplete &&
+        (
+          head !== undefined ||
+          this.coordinator.attempts.length === 0
+        )
+      ) {
+        inclusions = await this.coordinator.checkInclusions({
+          publicClient: recovery.publicClient,
+          head: head ?? recovery.anchor,
+          ...(head === undefined
+            ? {}
+            : { maxReplacementBlockRange: recovery.maxBlockRange }),
+        }, cycle);
+      }
+
+      // Inclusion inspection may change which attempt needs a retry.
       const attempt = this.retryAttempt;
 
       this.schedule.track(attempt);
 
       signal?.throwIfAborted();
-
-      if (
-        this.coordinator.status.recoveryComplete &&
-        this.coordinator.attempts.length === 0
-      ) {
-        await this.coordinator.checkInclusions({
-          publicClient: recovery.publicClient,
-          head: recovery.anchor,
-        }, cycle);
-
-        signal?.throwIfAborted();
-      }
 
       let broadcast: BroadcastAttemptResult | null = null;
 
@@ -134,6 +209,7 @@ export class SignerRecoveryCycle {
 
       return Object.freeze({
         inspection,
+        inclusions,
         broadcast,
         retryDelayMs: this.schedule.delayMs,
       });
