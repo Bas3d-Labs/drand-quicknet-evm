@@ -221,4 +221,62 @@ describe('beacon transaction submission', () => {
     expect(t.prepareAttempt).toHaveBeenCalledOnce();
     expect(t.broadcastAttempt).toHaveBeenCalledOnce();
   });
+
+  it('does no preparation when already cancelled', async () => {
+    const t = setup();
+    const controller = new AbortController();
+    const reason = new Error('Stop');
+
+    controller.abort(reason);
+
+    await expect(submitBeaconTransaction({
+      ...t.options,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(preparationMocks.prepareRelayerTransaction)
+      .not.toHaveBeenCalled();
+
+    expect(t.prepareAttempt).not.toHaveBeenCalled();
+    expect(t.broadcastAttempt).not.toHaveBeenCalled();
+  });
+
+  it('does not sign when cancellation arrives during gas preparation', async () => {
+    const t = setup();
+    const controller = new AbortController();
+    const reason = new Error('Stop');
+
+    preparationMocks.prepareRelayerTransaction
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        return t.transaction;
+      });
+
+    await expect(submitBeaconTransaction({
+      ...t.options,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(t.prepareAttempt).not.toHaveBeenCalled();
+    expect(t.broadcastAttempt).not.toHaveBeenCalled();
+  });
+
+  it('does not start broadcasting when cancellation arrives during persistence', async () => {
+    const t = setup();
+    const controller = new AbortController();
+    const reason = new Error('Stop');
+
+    t.prepareAttempt.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      return t.attempt;
+    });
+
+    await expect(submitBeaconTransaction({
+      ...t.options,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(t.prepareAttempt).toHaveBeenCalledOnce();
+    expect(t.broadcastAttempt).not.toHaveBeenCalled();
+  });
 });

@@ -26,12 +26,15 @@ export interface SubmitBeaconTransactionOptions {
   readonly request: BeaconSubmissionRequest & {
     readonly gas?: bigint;
   };
+  readonly signal?: AbortSignal | undefined;
 }
 
 /**
- * Prepares fees, durably record the signed transaction, then broadcasts
- * through the coordinator. Failed persistence or uncertain broadcast
- * must be handled by signer recovery.
+ * Prepare fees, durably records the signed transaction, then broadcasts
+ * through the coordinator.
+ * 
+ * Cancellation is checked between operations. A recorded attempt remains
+ * in the journal if cancellation prevents starting the broadcast.
  */
 export async function submitBeaconTransaction(
   options: SubmitBeaconTransactionOptions,
@@ -43,10 +46,13 @@ export async function submitBeaconTransaction(
     account,
     coordinator,
     request,
+    signal,
   } = options;
 
+  signal?.throwIfAborted();
+
   if (!coordinator.status.open) {
-    throw new Error('The signer gate must be open before submitting a beacon');
+    throw new Error('The signer gate must be open before submitting a beacon.');
   }
 
   const call = encodeBeaconSubmission(request);
@@ -58,10 +64,15 @@ export async function submitBeaconTransaction(
     gas: request.gas,
   });
 
+  signal?.throwIfAborted();
+
+  // Rechecks the gate after asynchronous gas and fee preparation.
   const attempt = await coordinator.prepareAttempt({
     account,
-    transaction
+    transaction,
   }, cycle);
+
+  signal?.throwIfAborted();
 
   return coordinator.broadcastAttempt({
     publicClient,
