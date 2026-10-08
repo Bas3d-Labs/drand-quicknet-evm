@@ -70,16 +70,20 @@ async function setup(empty = false) {
     identity: IDENTITY,
     baseline: observation,
     lastObservation: observation,
-    nextNonce: 4n,
-    attempt: empty ? null : {
+    nextNonce: empty ? 4n : 5n,
+    durableNextNonce: 4n,
+    attempts: empty ? [] : [{
       attemptId: '11111111-1111-4111-8111-111111111111',
       nonce: 4n,
-      transactionHash: hash,
-      signedTransaction: bytes,
+      signedTransactions: [{
+        transactionHash: hash,
+        signedTransaction: bytes,
+      }],
       createdAt: '2026-10-04T00:00:00.000Z',
       phase: 'broadcast-may-have-occurred',
+      inclusion: null,
       replacementSearch: null,
-    },
+    }],
   };
 
   let visible: TransactionJournalRead = {
@@ -101,6 +105,7 @@ async function setup(empty = false) {
 
   const create = () => SignerCoordinator.create({
     identity: IDENTITY,
+    maxRetainedAttempts: 3,
     store: {
       load,
       save,
@@ -178,6 +183,10 @@ async function setup(empty = false) {
       visible = next;
     },
     events: () => lines.map((line) => JSON.parse(line).event),
+    checkInclusions: (cycle?: number) => coordinator.checkInclusions({
+      publicClient: options.publicClient,
+      head: options.anchor,
+    }, cycle),
   };
 }
 
@@ -195,7 +204,7 @@ function deferred() {
 }
 
 describe('coordinator recovery', () => {
-  it('saves the nonce and resolution together before releasing the signer', async () => {
+  it('saves resolution before a fresh inclusion pass releases the signer', async () => {
     const t = await setup();
 
     expect(
@@ -207,8 +216,9 @@ describe('coordinator recovery', () => {
     expect(t.save).toHaveBeenCalledTimes(1);
 
     expect(t.save.mock.calls[0]![0]).toMatchObject({
-      attempt: null,
+      attempts: [],
       nextNonce: 5n,
+      durableNextNonce: 5n,
       lastObservation: {
         anchor: anchorAt(105n),
         nonce: 5n,
@@ -216,24 +226,48 @@ describe('coordinator recovery', () => {
     });
 
     expect(t.coordinator.status).toMatchObject({
-      open: true,
+      open: false,
       recoveryComplete: true,
+      inclusionChecksComplete: false,
+      primaryReason: 'recovery-incomplete',
     });
 
     expect(t.events()).toEqual([
       'attempt_resolved',
+      'signer_blocked',
+    ]);
+
+    expect(JSON.parse(t.lines[1]!)).toMatchObject({
+      reason: 'recovery-incomplete',
+      cycle: 7,
+    });
+
+    await t.checkInclusions(8);
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    expect(t.events()).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
       'signer_gate_released',
     ]);
 
     expect(
       t.lines.map((line) => JSON.parse(line).cycle),
-    ).toEqual([7, 7]);
+    ).toEqual([7, 7, 8]);
   });
 
   it('excludes other coordinator operations during RPC inspection', async () => {
     const t = await setup(true);
 
+    t.getTransactionCount.mockResolvedValue(4);
     t.coordinator.completeRecovery();
+    await t.checkInclusions();
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    t.save.mockClear();
+    t.lines.length = 0;
 
     const entered = deferred();
     const finish = deferred();
@@ -274,6 +308,14 @@ describe('coordinator recovery', () => {
       await pending;
     }
 
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
+    await t.checkInclusions();
+
     expect(t.coordinator.status.open).toBe(true);
   });
 
@@ -305,8 +347,24 @@ describe('coordinator recovery', () => {
 
     expect(t.events()).toEqual([
       'attempt_resolved',
+      'signer_blocked',
+    ]);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
+    await t.checkInclusions();
+
+    expect(t.events()).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
       'signer_gate_released',
     ]);
+
+    expect(t.coordinator.status.open).toBe(true);
   });
 
   it('persists excess activity with a receipt clear and retains it across restart', async () => {
@@ -317,8 +375,9 @@ describe('coordinator recovery', () => {
     await t.coordinator.recover(t.options);
 
     expect(t.save.mock.calls[0]![0]).toMatchObject({
-      attempt: null,
+      attempts: [],
       nextNonce: 5n,
+      durableNextNonce: 5n,
       lastObservation: {
         nonce: 8n,
       },
@@ -392,6 +451,11 @@ describe('coordinator recovery', () => {
 
     expect(t.getTransactionReceipt).toHaveBeenCalledTimes(1);
     expect(t.getTransactionCount).toHaveBeenCalledTimes(2);
+    expect(t.coordinator.status.open).toBe(false);
+
+    await t.checkInclusions();
+
+    expect(t.getTransactionCount).toHaveBeenCalledTimes(3);
     expect(t.coordinator.status.open).toBe(true);
 
     expect(
@@ -411,26 +475,44 @@ describe('coordinator recovery', () => {
     expect(t.save).toHaveBeenCalledTimes(1);
 
     expect(t.save.mock.calls[0]![0]).toMatchObject({
-      nextNonce: 4n,
+      nextNonce: 5n,
+      durableNextNonce: 4n,
       lastObservation: {
         anchor: anchorAt(105n),
         nonce: 5n,
       },
-      attempt: {
+      attempts: [{
         replacementSearch: {
           lowerBound: t.snapshot.lastObservation,
           searchedThrough: anchorAt(102n),
         },
-      },
+      }],
     });
 
     const restarted = await t.create();
 
     await restarted.recover(t.options);
 
+    expect(t.save.mock.calls[0]![0]).toMatchObject({
+      nextNonce: 5n,
+      durableNextNonce: 4n,
+      lastObservation: {
+        anchor: anchorAt(105n),
+        nonce: 5n,
+      },
+      attempts: [{
+        replacementSearch: {
+          lowerBound: t.snapshot.lastObservation,
+          searchedThrough: anchorAt(102n),
+        },
+      }],
+    });
+
+    expect(t.save).toHaveBeenCalledTimes(2);
+
     expect(
       t.save.mock.calls[1]![0]
-        .attempt?.replacementSearch?.searchedThrough,
+        .attempts[0]?.replacementSearch?.searchedThrough,
     ).toEqual(anchorAt(104n));
 
     expect(restarted.status.open).toBe(false);
@@ -462,7 +544,7 @@ describe('coordinator recovery', () => {
 
     expect(
       t.save.mock.calls[2]![0]
-        .attempt?.replacementSearch?.searchedThrough,
+        .attempts[0]?.replacementSearch?.searchedThrough,
     ).toEqual(anchorAt(104n));
   });
 
@@ -510,8 +592,9 @@ describe('coordinator recovery', () => {
     });
 
     expect(t.save.mock.calls[0]![0]).toMatchObject({
-      attempt: null,
+      attempts: [],
       nextNonce: 5n,
+      durableNextNonce: 5n,
     });
   });
 
@@ -608,7 +691,7 @@ describe('coordinator recovery', () => {
     });
   });
 
-  it('opens a clean existing journal only after saving its observation', async () => {
+  it('opens a clean existing journal only after recovery and inclusion checking', async () => {
     const t = await setup(true);
 
     t.getTransactionCount.mockResolvedValue(4);
@@ -619,9 +702,20 @@ describe('coordinator recovery', () => {
       status: 'no-attempt',
     });
 
-    expect(t.coordinator.status.open).toBe(true);
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
     expect(t.events()).toEqual([]);
     expect(t.save).toHaveBeenCalledTimes(1);
+
+    await t.checkInclusions();
+
+    expect(t.coordinator.status.open).toBe(true);
+    expect(t.events()).toEqual(['signer_gate_released']);
+    expect(t.save).toHaveBeenCalledTimes(2);
   });
 
   it('persists unexpected activity on a journal without an attempt', async () => {
@@ -664,8 +758,9 @@ describe('coordinator recovery', () => {
     await coordinator.recover(t.options);
 
     expect(t.save.mock.calls[0]![0]).toMatchObject({
-      attempt: null,
+      attempts: [],
       nextNonce: 5n,
+      durableNextNonce: 5n,
       lastObservation: {
         anchor: anchorAt(104n),
         nonce: 8n,
@@ -690,10 +785,15 @@ describe('coordinator recovery', () => {
     await t.coordinator.recover(t.options);
 
     expect(t.save.mock.calls[0]![0]).toMatchObject({
-      nextNonce: 4n,
-      attempt: {
-        transactionHash: t.hash,
-      },
+      nextNonce: 5n,
+      durableNextNonce: 4n,
+      attempts: [{
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+        signedTransactions: [{
+          transactionHash: t.hash,
+        }],
+      }],
     });
 
     expect(t.coordinator.status.open).toBe(false);
@@ -703,7 +803,14 @@ describe('coordinator recovery', () => {
   it('keeps a previously open signer closed after an RPC failure', async () => {
     const t = await setup(true);
 
+    t.getTransactionCount.mockResolvedValue(4);
     t.coordinator.completeRecovery();
+    await t.checkInclusions();
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    t.save.mockClear();
+    t.lines.length = 0;
 
     t.getTransactionCount.mockRejectedValueOnce(
       new Error('Unavailable'),
@@ -716,13 +823,20 @@ describe('coordinator recovery', () => {
     expect(t.coordinator.status).toMatchObject({
       open: false,
       recoveryComplete: false,
+      inclusionChecksComplete: false,
     });
 
     expect(t.save).not.toHaveBeenCalled();
 
-    t.getTransactionCount.mockResolvedValue(4);
-
     await t.coordinator.recover(t.options);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
+    await t.checkInclusions();
 
     expect(t.coordinator.status.open).toBe(true);
   });

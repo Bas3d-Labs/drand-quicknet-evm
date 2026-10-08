@@ -1,6 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
-import { keccak256 } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import {
+  describe,
+  expect,
+  it,
+  vi
+} from 'vitest';
+
+import {
+  keccak256,
+  type PublicClient,
+} from 'viem';
+
+import {
+  privateKeyToAccount
+} from 'viem/accounts';
 
 import {
   createRelayerLog,
@@ -55,10 +67,13 @@ async function setup(options: {
   const attempt = {
     attemptId: '11111111-1111-4111-8111-111111111111',
     nonce: 4n,
-    transactionHash: keccak256(bytes),
-    signedTransaction: bytes,
+    signedTransactions: [{
+      transactionHash: keccak256(bytes),
+      signedTransaction: bytes,
+    }] as const,
     createdAt: CREATED,
     phase: 'broadcast-may-have-occurred' as const,
+    inclusion: null,
     replacementSearch: null,
   };
 
@@ -70,8 +85,9 @@ async function setup(options: {
       ...observation,
       nonce: options.extraNonce ? 8n : 4n,
     },
-    nextNonce: 4n,
-    attempt: options.empty ? null : attempt,
+    nextNonce: options.empty ? 4n : 5n,
+    durableNextNonce: 4n,
+    attempts: options.empty ? [] : [attempt],
   };
 
   const save = vi.fn<TransactionJournalStore['save']>()
@@ -126,6 +142,7 @@ async function setup(options: {
 
   const coordinator = await SignerCoordinator.create({
     identity: IDENTITY,
+    maxRetainedAttempts: 3,
     store: { load, save },
     log,
     createErrorSummary: factory,
@@ -134,7 +151,7 @@ async function setup(options: {
 
   const evidence = {
     outcome: 'success' as const,
-    transactionHash: attempt.transactionHash,
+    transactionHash: attempt.signedTransactions[0].transactionHash,
     anchor: { blockNumber: 110n, blockHash: HASH },
     inclusion: { blockNumber: 109n, blockHash: OTHER },
   };
@@ -151,6 +168,28 @@ async function setup(options: {
     attempt,
     records: () => lines.map((line) => JSON.parse(line)),
   };
+}
+
+async function checkEmptyInclusions(
+  coordinator: SignerCoordinator,
+  nonce: number,
+  cycle?: number,
+) {
+  const head = {
+    blockNumber: 110n,
+    blockHash: HASH,
+  };
+
+  return coordinator.checkInclusions({
+    publicClient: {
+      getBlock: vi.fn().mockResolvedValue({
+        number: head.blockNumber,
+        hash: head.blockHash,
+      }),
+      getTransactionCount: vi.fn().mockResolvedValue(nonce),
+    } as unknown as PublicClient,
+    head,
+  }, cycle);
 }
 
 describe('signer coordinator transitions', () => {
@@ -191,24 +230,50 @@ describe('signer coordinator transitions', () => {
 
     expect(t.records().map((record) => record.event)).toEqual([
       'attempt_resolved',
+      'signer_blocked',
+    ]);
+
+    expect(t.records()[0]).toMatchObject({
+      cycle: 2,
+      attemptId: t.attempt.attemptId,
+      signer: ACCOUNT.address,
+    });
+
+    expect(t.records()[1]).toMatchObject({
+      cycle: 2,
+      reason: 'recovery-incomplete',
+      blockedSince: CREATED,
+    });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+      blockedSince: CREATED,
+    });
+
+    expect(t.save.mock.calls[0]![0]).toMatchObject({
+      attempts: [],
+      nextNonce: 5n,
+      durableNextNonce: 5n,
+    });
+
+    await checkEmptyInclusions(t.coordinator, 5, 3);
+
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
       'signer_gate_released',
     ]);
 
-    for (const record of t.records()) {
-      expect(record).toMatchObject({
-        cycle: 2,
-        attemptId: t.attempt.attemptId,
-        signer: ACCOUNT.address,
-      });
-    }
+    expect(t.records()[2]).toMatchObject({
+      cycle: 3,
+      signer: ACCOUNT.address,
+      blockedSince: CREATED,
+    });
 
     expect(t.coordinator.status.open).toBe(true);
     expect(t.coordinator.status.blockedSince).toBeNull();
-
-    expect(t.save.mock.calls[0]![0]).toMatchObject({
-      attempt: null,
-      nextNonce: 5n,
-    });
 
     expect(t.factory).toHaveBeenCalledExactlyOnceWith([t.bytes]);
     expect(t.lines.join('')).not.toContain(t.bytes);
@@ -235,7 +300,11 @@ describe('signer coordinator transitions', () => {
       .rejects.toThrow();
 
     expect(visible).toMatchObject({
-      snapshot: { attempt: null },
+      snapshot: {
+        attempts: [],
+        nextNonce: 5n,
+        durableNextNonce: 5n,
+      },
     });
 
     t.evidence.anchor.blockNumber = 999n;
@@ -256,21 +325,54 @@ describe('signer coordinator transitions', () => {
     expect(t.records().map((record) => record.event)).toEqual([
       'signer_blocked',
       'attempt_resolved',
-      'signer_gate_released',
+      'signer_blocked',
     ]);
 
     expect(t.records()[1].resolution.anchor.blockNumber).toBe('110');
 
-    expect(t.records()[2].cleared).toEqual([
-      'persistence-failure',
-      'unresolved-attempt',
-    ]);
+    expect(t.records()[2]).toMatchObject({
+      reason: 'recovery-incomplete',
+      cycle: 3,
+      blockedSince: CREATED,
+    });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
 
     expect(t.save.mock.calls[2]![0]).toBe(t.save.mock.calls[0]![0]);
     expect(t.load).toHaveBeenCalledTimes(1);
 
     await expect(t.coordinator.retryPersistence())
       .rejects.toThrow('No failed journal');
+
+    await checkEmptyInclusions(t.coordinator, 5, 4);
+
+    expect(t.records().map((record) => record.event)).toEqual([
+      'signer_blocked',
+      'attempt_resolved',
+      'signer_blocked',
+      'signer_gate_released',
+    ]);
+
+    expect(t.records()[3]).toMatchObject({
+      cycle: 4,
+      blockedSince: CREATED,
+    });
+
+    expect(t.records()[3].cleared).toEqual(
+      expect.arrayContaining([
+        'persistence-failure',
+        'unresolved-attempt',
+        'recovery-incomplete',
+      ]),
+    );
+
+    expect(t.coordinator.status.open).toBe(true);
+    expect(t.lines.join('')).not.toContain(t.bytes);
+    expect(t.lines.join('')).not.toContain(KEY);
   });
 
   it('resolves without releasing while another blocker remains', async () => {
@@ -294,35 +396,52 @@ describe('signer coordinator transitions', () => {
     expect(t.coordinator.status.open).toBe(false);
   });
 
-  it('defers release until recovery completes and preserves the episode', async () => {
+  it('defers release until recovery and inclusion checks complete and preserves the episode', async () => {
     const t = await setup();
     t.lines.length = 0;
 
     await t.coordinator.resolveAttempt(t.evidence);
 
-    expect(t.records().map((record) => record.event))
-      .toEqual(['attempt_resolved']);
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
+    ]);
 
     expect(t.coordinator.status).toMatchObject({
       open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
       blockedSince: CREATED,
     });
 
     t.coordinator.completeRecovery(7);
 
-    expect(t.records().map((record) => record.event)).toEqual([
-      'attempt_resolved',
-      'signer_gate_released',
-    ]);
-
-    expect(t.records()[1]).toMatchObject({
-      attemptId: t.attempt.attemptId,
-      cycle: 7,
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
       blockedSince: CREATED,
     });
 
-    t.coordinator.completeRecovery();
     expect(t.records()).toHaveLength(2);
+
+    await checkEmptyInclusions(t.coordinator, 5, 8);
+
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
+      'signer_gate_released',
+    ]);
+
+    expect(t.records()[2]).toMatchObject({
+      cycle: 8,
+      blockedSince: CREATED,
+    });
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    t.coordinator.completeRecovery();
+    expect(t.records()).toHaveLength(3);
   });
 
   it('preserves blockedSince and emits only primary-reason changes', async () => {
@@ -417,6 +536,21 @@ describe('signer coordinator transitions', () => {
       await t.coordinator.resolveAttempt(evidence);
 
       expect(t.records()[0].resolution.outcome).toBe(outcome);
+
+      expect(t.save.mock.calls[0]![0]).toMatchObject({
+        attempts: [],
+        nextNonce: 5n,
+        durableNextNonce: 5n,
+      });
+
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: true,
+        inclusionChecksComplete: false,
+      });
+
+      await checkEmptyInclusions(t.coordinator, 5);
+
       expect(t.coordinator.status.open).toBe(true);
     },
   );
@@ -450,10 +584,20 @@ describe('signer coordinator transitions', () => {
 
     await t.coordinator.resolveAttempt(t.evidence, 9);
 
+    expect(t.coordinator.status.open).toBe(false);
+
+    expect(t.records().map((record) => record.event)).toEqual([
+      'logging_failed',
+      'signer_blocked',
+    ]);
+
+    await checkEmptyInclusions(t.coordinator, 5, 9);
+
     expect(t.coordinator.status.open).toBe(true);
 
     expect(t.records().map((record) => record.event)).toEqual([
       'logging_failed',
+      'signer_blocked',
       'logging_failed',
     ]);
 
@@ -462,15 +606,46 @@ describe('signer coordinator transitions', () => {
     expect(t.lines.join('')).not.toContain(KEY);
   });
 
-  it('does not fabricate a release event on clean startup', async () => {
+  it('does not emit a release event before clean startup inclusion checks complete', async () => {
     const t = await setup({ empty: true });
 
     expect(t.coordinator.status.open).toBe(false);
 
+    expect(t.records().map((record) => record.event)).toEqual([
+      'signer_blocked',
+    ]);
+
+    expect(t.records()[0]).toMatchObject({
+      reason: 'recovery-incomplete',
+      blockedSince: '2026-10-04T01:00:00.000Z',
+    });
+
     t.coordinator.completeRecovery();
 
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
+    expect(t.records()).toHaveLength(1);
+
+    await checkEmptyInclusions(t.coordinator, 4);
+
     expect(t.coordinator.status.open).toBe(true);
-    expect(t.records()).toEqual([]);
+
+    expect(t.records().map((record) => record.event)).toEqual([
+      'signer_blocked',
+      'signer_gate_released',
+    ]);
+
+    expect(t.records()[1]).toMatchObject({
+      blockedSince: '2026-10-04T01:00:00.000Z',
+      cleared: ['recovery-incomplete'],
+    });
+
+    t.coordinator.completeRecovery();
+    expect(t.records()).toHaveLength(2);
   });
 
   it('latches already recorded unattributed activity during recovery', async () => {
@@ -495,18 +670,42 @@ describe('signer coordinator transitions', () => {
 
     expect(t.records().map((record) => record.event)).toEqual([
       'attempt_resolved',
+      'signer_blocked',
+    ]);
+
+    expect(t.coordinator.status.blockers)
+      .not.toContain('conflict-search-exhausted');
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+      primaryReason: 'recovery-incomplete',
+      blockedSince: CREATED,
+    });
+
+    await checkEmptyInclusions(t.coordinator, 5, 3);
+
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
       'signer_gate_released',
     ]);
 
-    expect(t.records()[1]).toMatchObject({
-      attemptId: t.attempt.attemptId,
-      cycle: 2,
-      cleared: [
-        'conflict-search-exhausted',
-        'unresolved-attempt',
-      ],
+    expect(t.records()[2]).toMatchObject({
+      cycle: 3,
       blockedSince: CREATED,
     });
+
+    expect(t.records()[2].cleared).toEqual(
+      expect.arrayContaining([
+        'conflict-search-exhausted',
+        'unresolved-attempt',
+        'recovery-incomplete',
+      ]),
+    );
+
+    expect(t.coordinator.status.open).toBe(true);
   });
 
   it('does not initialize missing journals or complete their recovery', async () => {
@@ -519,6 +718,7 @@ describe('signer coordinator transitions', () => {
 
     const coordinator = await SignerCoordinator.create({
       identity: IDENTITY,
+      maxRetainedAttempts: 3,
       store: { save, load },
       log,
       createErrorSummary: () => ({
@@ -531,7 +731,9 @@ describe('signer coordinator transitions', () => {
 
     expect(coordinator.status).toMatchObject({
       open: false,
-      primaryReason: 'unattributed-signer-activity',
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+      primaryReason: 'recovery-incomplete',
     });
 
     expect(save).not.toHaveBeenCalled();
@@ -559,15 +761,16 @@ describe('durable signer observations', () => {
     const saved = t.save.mock.calls[0]![0];
 
     expect(saved).toMatchObject({
-      nextNonce: 4n,
+      nextNonce: 5n,
+      durableNextNonce: 4n,
       lastObservation: observation(4n),
-      attempt: {
+      attempts: [{
         attemptId: t.attempt.attemptId,
         replacementSearch: {
           lowerBound: observation(4n),
           searchedThrough: null,
         },
-      },
+      }],
     });
 
     expect(t.records()).toEqual([]);
@@ -580,7 +783,7 @@ describe('durable signer observations', () => {
     await t.coordinator.recordObservation(observation(5n));
 
     expect(
-      t.save.mock.calls[0]![0].attempt?.replacementSearch,
+      t.save.mock.calls[0]![0].attempts[0]?.replacementSearch
     ).toEqual({
       lowerBound: t.snapshot.lastObservation,
       searchedThrough: null,
@@ -594,7 +797,7 @@ describe('durable signer observations', () => {
     await t.coordinator.recordObservation(observation(5n, 120n));
 
     expect(
-      t.save.mock.calls[1]![0].attempt?.replacementSearch,
+      t.save.mock.calls[1]![0].attempts[0]?.replacementSearch,
     ).toEqual({
       lowerBound: observation(4n),
       searchedThrough: null,
@@ -604,6 +807,12 @@ describe('durable signer observations', () => {
   it('closes an otherwise open gate while saving and rejects overlapping operations', async () => {
     const t = await setup({ empty: true });
     t.coordinator.completeRecovery();
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    t.save.mockClear();
+    t.lines.length = 0;
 
     let finish!: () => void;
     let entered!: () => void;
@@ -641,13 +850,34 @@ describe('durable signer observations', () => {
       await pending;
     }
 
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
+    expect(t.records().some(
+      (record) => record.event === 'signer_gate_released',
+    )).toBe(false);
+
+    await checkEmptyInclusions(t.coordinator, 4);
+
     expect(t.coordinator.status.open).toBe(true);
-    expect(t.records()).toEqual([]);
+
+    expect(t.records().filter(
+      (record) => record.event === 'signer_gate_released',
+    )).toHaveLength(1);
   });
 
   it('retries the exact failed observation and preserves unexpected activity across restart', async () => {
     const t = await setup({ empty: true });
     t.coordinator.completeRecovery();
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    t.save.mockClear();
+    t.lines.length = 0;
 
     let visible = t.snapshot;
 
@@ -704,6 +934,7 @@ describe('durable signer observations', () => {
 
     const restarted = await SignerCoordinator.create({
       identity: IDENTITY,
+      maxRetainedAttempts: 3,
       store: {
         load: async () => ({
           kind: 'present',
@@ -734,6 +965,12 @@ describe('durable signer observations', () => {
   it('retries an ordinary observation without emitting an attempt resolution', async () => {
     const t = await setup({ empty: true });
     t.coordinator.completeRecovery();
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    t.save.mockClear();
+    t.lines.length = 0;
 
     t.save.mockRejectedValueOnce(new Error('Failed'));
 
@@ -743,12 +980,28 @@ describe('durable signer observations', () => {
 
     await t.coordinator.retryPersistence();
 
-    expect(t.records().map((record) => record.event)).toEqual([
-      'signer_blocked',
-      'signer_gate_released',
-    ]);
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+      primaryReason: 'recovery-incomplete',
+    });
+
+    expect(t.records().some(
+      (record) => record.event === 'signer_gate_released',
+    )).toBe(false);
+
+    await checkEmptyInclusions(t.coordinator, 4);
 
     expect(t.coordinator.status.open).toBe(true);
+
+    expect(t.records().filter(
+      (record) => record.event === 'signer_gate_released',
+    )).toHaveLength(1);
+
+    expect(t.records().some(
+      (record) => record.event === 'attempt_resolved',
+    )).toBe(false);
   });
 
   it('does not complete startup recovery merely by saving an observation', async () => {
@@ -765,6 +1018,12 @@ describe('durable signer observations', () => {
   it('requires fresh recovery when the observed nonce is behind the journal', async () => {
     const t = await setup({ empty: true });
     t.coordinator.completeRecovery();
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    t.save.mockClear();
+    t.lines.length = 0;
 
     await expect(
       t.coordinator.recordObservation(observation(3n)),
@@ -814,13 +1073,15 @@ describe('durable signer observations', () => {
     const saved = t.save.mock.calls[0]![0];
 
     expect(saved).toMatchObject({
-      attempt: null,
+      attempts: [],
       nextNonce: 5n,
+      durableNextNonce: 5n,
       lastObservation: observation(8n),
     });
 
     const restarted = await SignerCoordinator.create({
       identity: IDENTITY,
+      maxRetainedAttempts: 3,
       store: {
         load: async () => ({
           kind: 'present',
@@ -864,6 +1125,7 @@ describe('durable signer observations', () => {
 
     const coordinator = await SignerCoordinator.create({
       identity: IDENTITY,
+      maxRetainedAttempts: 3,
       store: {
         load: async () => ({
           kind: 'missing',
@@ -967,14 +1229,15 @@ describe('durable replacement search progress', () => {
     }
 
     expect(t.save.mock.calls[0]![0]).toMatchObject({
-      nextNonce: 4n,
-      attempt: {
+      nextNonce: 5n,
+      durableNextNonce: 4n,
+      attempts: [{
         attemptId: t.attempt.attemptId,
         replacementSearch: {
           lowerBound: t.snapshot.lastObservation,
           searchedThrough: t.progress.result.searchedThrough,
         },
-      },
+      }],
     });
 
     expect(t.coordinator.status).toMatchObject({
@@ -1008,7 +1271,7 @@ describe('durable replacement search progress', () => {
     ).rejects.toThrow('Journal persistence');
 
     expect(
-      visible.attempt?.replacementSearch?.searchedThrough?.blockNumber,
+      visible.attempts[0]?.replacementSearch?.searchedThrough?.blockNumber,
     ).toBe(105n);
 
     expect(t.coordinator.status.blockers)
@@ -1070,6 +1333,7 @@ describe('durable replacement search progress', () => {
 
     const restarted = await SignerCoordinator.create({
       identity: IDENTITY,
+      maxRetainedAttempts: 3,
       store: {
         load: async () => ({
           kind: 'present',
@@ -1110,6 +1374,7 @@ describe('durable replacement search progress', () => {
 
     const restarted = await SignerCoordinator.create({
       identity: IDENTITY,
+      maxRetainedAttempts: 3,
       store: {
         load: async () => ({
           kind: 'present',
@@ -1142,7 +1407,7 @@ describe('durable replacement search progress', () => {
 
     expect(
       t.save.mock.calls[1]![0]
-        .attempt?.replacementSearch?.searchedThrough?.blockNumber,
+        .attempts[0]?.replacementSearch?.searchedThrough?.blockNumber,
     ).toBe(106n);
   });
 
@@ -1299,12 +1564,29 @@ describe('durable replacement search progress', () => {
 
     await t.coordinator.retryPersistence();
 
-    expect(t.coordinator.status.open).toBe(true);
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+      primaryReason: 'recovery-incomplete',
+    });
+
+    expect(t.coordinator.status.blockers)
+      .not.toContain('conflict-search-exhausted');
 
     expect(t.records().map((record) => record.event)).toEqual([
       'signer_blocked',
       'attempt_resolved',
-      'signer_gate_released',
+      'signer_blocked',
     ]);
+
+    expect(t.records()[2]).toMatchObject({
+      reason: 'recovery-incomplete',
+      blockedSince: CREATED,
+    });
+
+    expect(t.records().some(
+      (record) => record.event === 'signer_gate_released',
+    )).toBe(false);
   });
 });

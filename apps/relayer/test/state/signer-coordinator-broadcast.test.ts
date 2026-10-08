@@ -63,7 +63,8 @@ async function setup() {
       baseline: OBSERVATION,
       lastObservation: OBSERVATION,
       nextNonce: 4n,
-      attempt: null,
+      durableNextNonce: 4n,
+      attempts: [],
     },
   };
 
@@ -83,6 +84,7 @@ async function setup() {
   const create = () => SignerCoordinator.create({
     identity: IDENTITY,
     store: { load, save },
+    maxRetainedAttempts: 3,
     log: createRelayerLog({
       chainId: 4663,
       destination: {
@@ -103,6 +105,20 @@ async function setup() {
   const coordinator = await create();
   coordinator.completeRecovery();
 
+  await coordinator.checkInclusions({
+    publicClient: {
+      getBlock: async () => ({
+        number: ANCHOR.blockNumber,
+        hash: ANCHOR.blockHash,
+      }),
+      getTransactionCount: async () => Number(OBSERVATION.nonce),
+    } as unknown as PublicClient,
+    head: ANCHOR,
+  });
+
+  // Keep saved-call indexing focused on preparation and broadcasting.
+  save.mockClear();
+
   const signTransaction = vi.fn(ACCOUNT.signTransaction);
 
   const prepared = await coordinator.prepareAttempt({
@@ -122,6 +138,8 @@ async function setup() {
   });
 
   const signed = save.mock.calls[0]![0];
+  const signedTransaction =
+    signed.attempts[0]!.signedTransactions[0].signedTransaction;
 
   save.mockClear();
   lines.length = 0;
@@ -174,6 +192,7 @@ async function setup() {
     lines,
     prepared,
     signed,
+    signedTransaction,
     signTransaction,
     request,
     getBlock,
@@ -205,10 +224,12 @@ describe('journaled transaction broadcast', () => {
     t.request.mockImplementationOnce(async () => {
       expect(t.visible()).toMatchObject({
         snapshot: {
-          nextNonce: 4n,
-          attempt: {
+          nextNonce: 5n,
+          durableNextNonce: 4n,
+          attempts: [{
             phase: 'broadcast-may-have-occurred',
-          },
+            inclusion: null,
+          }],
         },
       });
 
@@ -224,14 +245,18 @@ describe('journaled transaction broadcast', () => {
 
     expect(Object.isFrozen(result)).toBe(true);
 
-    expect(t.save.mock.calls[0]![0].attempt).toEqual({
-      ...t.signed.attempt!,
-      phase: 'broadcast-may-have-occurred',
+    expect(t.save.mock.calls[0]![0]).toEqual({
+      ...t.signed,
+      attempts: [{
+        ...t.signed.attempts[0]!,
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+      }],
     });
 
     expect(t.request).toHaveBeenCalledExactlyOnceWith({
       method: 'eth_sendRawTransaction',
-      params: [t.signed.attempt!.signedTransaction],
+      params: [t.signedTransaction],
     }, {
       retryCount: 0,
     });
@@ -239,6 +264,7 @@ describe('journaled transaction broadcast', () => {
     expect(t.coordinator.status).toMatchObject({
       open: false,
       recoveryComplete: false,
+      inclusionChecksComplete: false,
       primaryReason: 'unresolved-attempt',
     });
 
@@ -357,11 +383,17 @@ describe('journaled transaction broadcast', () => {
 
     expect(t.visible()).toMatchObject({
       snapshot: {
-        attempt: {
+        nextNonce: 5n,
+        durableNextNonce: 4n,
+        attempts: [{
           phase: 'broadcast-may-have-occurred',
-        },
+          inclusion: null,
+        }],
       },
     });
+
+    // Storage visibility does not publish an unconfirmed durable write.
+    expect(t.coordinator.attempts[0]!.phase).toBe('signed');
 
     expect(t.request).not.toHaveBeenCalled();
 
@@ -378,6 +410,9 @@ describe('journaled transaction broadcast', () => {
     expect(t.save.mock.calls[1]![0]).toBe(pending);
     expect(t.save.mock.calls[2]![0]).toBe(pending);
     expect(t.request).not.toHaveBeenCalled();
+
+    expect(t.coordinator.attempts[0]!.phase)
+      .toBe('broadcast-may-have-occurred');
 
     await expect(t.broadcast())
       .rejects.toThrow('Fresh reconciliation');
@@ -406,7 +441,7 @@ describe('journaled transaction broadcast', () => {
       const t = await setup();
 
       t.request.mockRejectedValueOnce(new Error(
-        `${message} ${KEY} ${t.signed.attempt!.signedTransaction}`,
+        `${message} ${KEY} ${t.signedTransaction}`,
       ));
 
       const failure = await t.broadcast()
@@ -421,10 +456,12 @@ describe('journaled transaction broadcast', () => {
 
       expect(t.visible()).toMatchObject({
         snapshot: {
-          nextNonce: 4n,
-          attempt: {
+          nextNonce: 5n,
+          durableNextNonce: 4n,
+          attempts: [{
             phase: 'broadcast-may-have-occurred',
-          },
+            inclusion: null,
+          }],
         },
       });
 
@@ -594,9 +631,12 @@ describe('journaled transaction broadcast', () => {
     expect(t.visible()).toMatchObject({
       snapshot: {
         nextNonce: 5n,
-        attempt: null,
+        durableNextNonce: 5n,
+        attempts: [],
       },
     });
+
+    expect(t.coordinator.attempts).toEqual([]);
   });
 
   it('disables viem retries for the send request', async () => {

@@ -72,7 +72,8 @@ async function setup(options: {
       baseline: OBSERVATION,
       lastObservation: OBSERVATION,
       nextNonce: 4n,
-      attempt: null,
+      durableNextNonce: 4n,
+      attempts: [],
     },
   };
 
@@ -95,6 +96,7 @@ async function setup(options: {
 
   const create = () => SignerCoordinator.create({
     identity: IDENTITY,
+    maxRetainedAttempts: 3,
     store: { load, save },
     log: createRelayerLog({
       chainId: 4663,
@@ -116,6 +118,17 @@ async function setup(options: {
 
   if (!options.missing) {
     coordinator.completeRecovery();
+
+    await coordinator.checkInclusions({
+      publicClient: {
+        getBlock: vi.fn().mockResolvedValue({
+          number: ANCHOR.blockNumber,
+          hash: ANCHOR.blockHash,
+        }),
+        getTransactionCount: vi.fn().mockResolvedValue(4),
+      } as unknown as PublicClient,
+      head: ANCHOR,
+    });
 
     if (!options.empty) {
       await coordinator.prepareAttempt({
@@ -139,7 +152,8 @@ async function setup(options: {
   save.mockClear();
   events.length = 0;
 
-  const hash = coordinator.attempt?.transactionHash ?? HASH;
+  const hash =
+    coordinator.attempts[0]?.transactionHashes[0] ?? HASH;
 
   const request = vi.fn<PublicClient['request']>()
     .mockImplementation(async () => {
@@ -285,7 +299,7 @@ describe('signer recovery cycle', () => {
 
     await t.coordinator.broadcastAttempt({
       publicClient: t.recovery.publicClient,
-      attemptId: t.coordinator.attempt!.attemptId,
+      attemptId: t.coordinator.attempts[0]!.attemptId,
     });
 
     const restarted = await t.create();
@@ -346,7 +360,7 @@ describe('signer recovery cycle', () => {
 
     const failed = t.save.mock.calls[1]![0];
 
-    expect(t.coordinator.attempt?.phase).toBe('signed');
+    expect(t.coordinator.attempts[0]?.phase).toBe('signed');
     expect(t.coordinator.canBroadcast).toBe(false);
 
     t.events.length = 0;
@@ -390,7 +404,7 @@ describe('signer recovery cycle', () => {
     const t = await setup();
 
     t.getTransactionReceipt.mockResolvedValueOnce({
-      transactionHash: t.coordinator.attempt!.transactionHash,
+      transactionHash: t.coordinator.attempts[0]!.transactionHashes[0],
       blockNumber: 100n,
       blockHash: HASH,
       status: 'success',
@@ -402,7 +416,7 @@ describe('signer recovery cycle', () => {
     await expect(t.cycle.run(t.recovery))
       .rejects.toThrow('Journal persistence');
 
-    expect(t.coordinator.attempt).not.toBeNull();
+    expect(t.coordinator.attempts).toHaveLength(1);
 
     const result = await t.cycle.run(t.recovery);
 
@@ -412,8 +426,12 @@ describe('signer recovery cycle', () => {
       retryDelayMs: null,
     });
 
-    expect(t.coordinator.attempt).toBeNull();
-    expect(t.coordinator.status.open).toBe(true);
+    expect(t.coordinator.attempts).toEqual([]);
+    expect(t.coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
     expect(t.getTransactionReceipt).toHaveBeenCalledTimes(1);
     expect(t.request).not.toHaveBeenCalled();
   });
@@ -443,7 +461,7 @@ describe('signer recovery cycle', () => {
     const t = await setup();
 
     t.getTransactionReceipt.mockResolvedValueOnce({
-      transactionHash: t.coordinator.attempt!.transactionHash,
+      transactionHash: t.coordinator.attempts[0]!.transactionHashes[0],
       blockNumber: 101n,
       blockHash: HASH,
       status: 'success',
@@ -587,6 +605,19 @@ describe('signer recovery cycle', () => {
       retryDelayMs: null,
     });
 
+    expect(t.coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
+
+    expect(t.events).toEqual([
+      'nonce',
+      'save',
+      'nonce',
+      'save',
+    ]);
+
     expect(t.signTransaction).not.toHaveBeenCalled();
     expect(t.request).not.toHaveBeenCalled();
   });
@@ -616,32 +647,67 @@ describe('signer recovery cycle', () => {
       retryDelayMs: null,
     });
 
-    expect(t.coordinator.status.open).toBe(true);
+    expect(t.coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
     expect(t.signTransaction).not.toHaveBeenCalled();
     expect(t.request).not.toHaveBeenCalled();
   });
 
-  it('exposes a frozen attempt summary without signed bytes', async () => {
+  it('exposes frozen attempt summaries without signed bytes', async () => {
     const t = await setup();
-    const before = t.coordinator.attempt!;
+    const attempts = t.coordinator.attempts;
+    const before = attempts[0]!;
 
     expect(Object.keys(before).sort()).toEqual([
       'attemptId',
       'nonce',
       'phase',
-      'transactionHash',
+      'transactionHashes',
     ]);
 
+    expect(Object.isFrozen(attempts)).toBe(true);
     expect(Object.isFrozen(before)).toBe(true);
+    expect(Object.isFrozen(before.transactionHashes)).toBe(true);
+    expect(before.transactionHashes).toHaveLength(1);
     expect(t.coordinator.canBroadcast).toBe(true);
 
     await t.cycle.run(t.recovery);
 
     expect(before.phase).toBe('signed');
 
-    expect(t.coordinator.attempt?.phase)
+    expect(t.coordinator.attempts[0]?.phase)
       .toBe('broadcast-may-have-occurred');
 
     expect(t.coordinator.canBroadcast).toBe(false);
+  });
+
+  it('keeps the empty signer closed when the inclusion pass fails', async () => {
+    const t = await setup({ empty: true });
+    const failure = new Error('Inclusion nonce lookup failed');
+
+    t.getTransactionCount
+      .mockResolvedValueOnce(4)
+      .mockRejectedValueOnce(failure);
+
+    await expect(t.cycle.run(t.recovery)).rejects.toBe(failure);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
+    expect(t.save).toHaveBeenCalledTimes(1);
+    expect(t.request).not.toHaveBeenCalled();
+    expect(t.signTransaction).not.toHaveBeenCalled();
+
+    // A failed cycle must release ownership so recovery can run again.
+    await t.cycle.run(t.recovery);
+
+    expect(t.coordinator.status.open).toBe(true);
+    expect(t.request).not.toHaveBeenCalled();
   });
 });
