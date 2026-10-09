@@ -17,12 +17,17 @@ import type {
 } from '../rounds/create-beacon-submitter.js';
 
 import type {
-  ImportQuicknetRoundResult,
+  CompletedImportResult,
+  PendingImportResult,
 } from '../rounds/import-round.js';
 
 import {
   importQuicknetRoundWhenAvailable,
 } from '../rounds/import-round-when-available.js';
+
+import type {
+  SignerBlocker,
+} from '../state/signer-gate.js';
 
 import type {
   QuicknetRandomnessRequest,
@@ -43,7 +48,7 @@ export interface ProcessQuicknetRequestsOptions {
 
 export interface ProcessedQuicknetRound {
   round: bigint;
-  result: ImportQuicknetRoundResult;
+  result: CompletedImportResult;
 }
 
 export interface ProcessQuicknetRequestsResult {
@@ -56,7 +61,11 @@ export type QuicknetRoundOutcome = {
 } & (
   | {
       status: 'completed';
-      result: ImportQuicknetRoundResult;
+      result: CompletedImportResult;
+    }
+  | {
+      status: 'pending';
+      result: PendingImportResult;
     }
   | {
       status: 'failed';
@@ -65,6 +74,11 @@ export type QuicknetRoundOutcome = {
   | {
       status: 'deferred';
       reason: 'earlier-import-failed';
+    }
+  | {
+      status: 'deferred';
+      reason: 'signer-unavailable';
+      blocker: SignerBlocker;
     }
 );
 

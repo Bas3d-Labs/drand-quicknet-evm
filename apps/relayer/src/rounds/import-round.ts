@@ -1,5 +1,6 @@
 import type {
   Account,
+  Hash,
   Hex,
   PublicClient,
   WalletClient,
@@ -19,6 +20,10 @@ import {
   reportImportProgress,
   type RoundImportProgress,
 } from '../diagnostics/operation-context.js';
+
+import type {
+  SignerBlocker,
+} from '../state/signer-gate.js';
 
 import {
   simulateBeaconSubmission,
@@ -52,6 +57,28 @@ export type ImportQuicknetRoundResult =
       randomness: Hex;
       transactionHash: Hex;
     } & BeaconSubmissionDetails);
+
+export interface PendingImportResult {
+  readonly status: 'pending';
+  readonly round: bigint;
+  readonly attemptId: string;
+  readonly transactionHash: Hash;
+  readonly reason:
+    | 'broadcast-not-acknowledged'
+    | 'receipt-timeout';
+}
+
+export interface DeferredImportResult {
+  readonly status: 'deferred';
+  readonly round: bigint;
+  readonly reason: 'signer-unavailable';
+  readonly blocker: SignerBlocker;
+}
+
+export type CompletedImportResult = Extract<
+  ImportQuicknetRoundResult,
+  { status: 'imported' | 'already-stored' }
+>;
 
 export async function importQuicknetRound(
   options: ImportQuicknetRoundOptions,

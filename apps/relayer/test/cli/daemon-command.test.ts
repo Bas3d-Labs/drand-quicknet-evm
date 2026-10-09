@@ -41,6 +41,8 @@ const relayerLogMocks = vi.hoisted(() => ({
   durableFulfillmentUnavailable: vi.fn(),
   durableAnchorChanged: vi.fn(),
   durableAnchorUnavailable: vi.fn(),
+  attemptBroadcastAccepted: vi.fn(),
+  attemptBroadcastNotAcknowledged: vi.fn(),
   attemptResolved: vi.fn(),
   signerBlocked: vi.fn(),
   signerGateReleased: vi.fn(),

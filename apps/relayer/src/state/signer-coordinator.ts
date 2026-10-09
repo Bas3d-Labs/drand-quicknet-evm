@@ -172,9 +172,23 @@ export interface BroadcastAttemptOptions {
   readonly attemptId: string;
 }
 
-export type BroadcastAttemptResult = PreparedAttempt & {
-  readonly status: 'acknowledged';
-};
+/**
+ * Reports whether the RPC returned the locally computed transaction hash.
+ * 
+ * The broadcast permit is consumed before the request is sent.
+ * Neither outcome establishes inclusion or execution, advances nonce
+ * allocation, resolves an attempt, or rolls allocation back.
+ * 
+ * Another broadcast requires fresh reconiliation.
+ */
+export type BroadcastAttemptResult = PreparedAttempt & (
+  | {
+      readonly status: 'acknowledged';
+    }
+  | {
+      readonly status: 'not-acknowledged';
+    }
+);
 
 export interface AttemptSummary {
   readonly attemptId: string;
