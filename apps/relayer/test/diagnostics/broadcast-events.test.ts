@@ -1,7 +1,13 @@
 import {
+  writeSync,
+} from 'node:fs';
+
+import {
+  beforeEach,
   describe,
   expect,
   it,
+  vi,
 } from 'vitest';
 
 import {
@@ -12,7 +18,36 @@ import {
   createRelayerLog,
 } from '../../src/diagnostics/relayer-log.js';
 
+vi.mock('node:fs', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs')>(),
+  writeSync: vi.fn(),
+}));
+
 describe('broadcast events', () => {
+  beforeEach(() => {
+    vi.mocked(writeSync).mockReset();
+  });
+
+  function expectRejectedBroadcast(): void {
+    expect(writeSync).toHaveBeenCalledOnce();
+
+    const call = vi.mocked(writeSync).mock.calls[0]!;
+
+    expect(call[0]).toBe(2);
+
+    const line = call[1];
+
+    if (typeof line !== 'string') {
+      throw new Error('Expected a stderr log line.');
+    }
+
+    expect(JSON.parse(line)).toMatchObject({
+      event: 'logging_failed',
+      code: 'LOG_RECORD_REJECTED',
+      rejected: 'attempt_broadcast_not_acknowledged',
+    });
+  }
+
   function captureBroadcastLog() {
     const lines: string[] = [];
 
@@ -61,6 +96,7 @@ describe('broadcast events', () => {
     });
 
     expect(lines).toHaveLength(1);
+    expect(writeSync).not.toHaveBeenCalled();
 
     const record = JSON.parse(lines[0]!);
 
@@ -102,6 +138,7 @@ describe('broadcast events', () => {
     });
 
     expect(lines).toHaveLength(1);
+    expect(writeSync).not.toHaveBeenCalled();
 
     const record = JSON.parse(lines[0]!);
 
@@ -143,6 +180,7 @@ describe('broadcast events', () => {
     });
 
     expect(lines).toHaveLength(1);
+    expect(writeSync).not.toHaveBeenCalled();
 
     const record = JSON.parse(lines[0]!);
 
@@ -181,6 +219,7 @@ describe('broadcast events', () => {
     });
 
     expect(lines).toHaveLength(0);
+    expectRejectedBroadcast();
   });
 
   it('emits an accepted broadcast without claiming inclusion', () => {
@@ -189,6 +228,7 @@ describe('broadcast events', () => {
     log.attemptBroadcastAccepted(identity);
 
     expect(lines).toHaveLength(1);
+    expect(writeSync).not.toHaveBeenCalled();
 
     const record = JSON.parse(lines[0]!);
 
@@ -240,6 +280,7 @@ describe('broadcast events', () => {
     });
 
     expect(lines).toHaveLength(1);
+    expect(writeSync).not.toHaveBeenCalled();
 
     const record = JSON.parse(lines[0]!);
 
@@ -336,6 +377,7 @@ describe('broadcast events', () => {
     log.attemptBroadcastNotAcknowledged(input);
 
     expect(lines).toHaveLength(0);
+    expectRejectedBroadcast();
   });
 
   it('rejects an error accessor without invoking it', () => {
@@ -362,6 +404,7 @@ describe('broadcast events', () => {
 
     expect(getterCalls).toBe(0);
     expect(lines).toHaveLength(0);
+    expectRejectedBroadcast();
   });
 
   it('ignores unrelated input fields without invoking their accessors', () => {
@@ -384,6 +427,7 @@ describe('broadcast events', () => {
 
     expect(getterCalls).toBe(0);
     expect(lines).toHaveLength(1);
+    expect(writeSync).not.toHaveBeenCalled();
 
     const record = JSON.parse(lines[0]!);
 
