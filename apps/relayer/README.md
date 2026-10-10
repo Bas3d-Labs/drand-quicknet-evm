@@ -245,8 +245,9 @@ configure:
 
 Preserve the checkpoint across normal restarts and deployments.
 
-The checkpoint records request-scanning progress. It does not record
-pending transactions or provide recovery after an uncertain broadcast.
+The checkpoint records request-scanning progress. Pending transactions
+and signer recovery state are stored separately in the signer journal.
+Preserve both files across restarts and deployments.
 
 ### Optional daemon settings
 
@@ -307,9 +308,10 @@ Accepts a positive decimal integer.
 Both accept decimal integers from `1` through `2147483647`. The maximum
 must be at least the initial delay. Equal values select a fixed interval.
 
-These settings configure the journal-backed broadcast retry schedule.
-They are parsed by the config loader; live command submission wiring is
-still pending. They do not affect the existing wallet submission path yet.
+These settings configure the journal-backed broadcast retry schedule used
+by daemon recovery and recovery before one-shot submissions. A retry
+requires both an elapsed delay and fresh coordinator authorization;
+elapsed time alone never permits broadcasting.
 
 The schedule doubles the delay between send attempts up to the maximum,
 without delaying receipt reconciliation. A restored attempt that may have
@@ -466,10 +468,14 @@ Normally spawned children do not retain the lock. Application code must
 not explicitly forward the inherited lock descriptor through child
 stdio or close it while protected work remains active.
 
-Lock recovery is not transaction recovery. After a crash, forced stop,
-or uncertain submission, inspect pending transactions, signer nonce
-state, receipts, and registry state before retrying. A released lock
-does not prove that the previous process's transaction was rejected.
+Lock recovery is not transaction recovery. After a crash or forced stop,
+the next process uses the retained signer journal to reconcile recorded
+attempts before authorizing further submissions. A released lock does
+not prove that the previous process's transaction was rejected.
+
+Unattributed signer activity or an exhausted replacement search keeps
+the signer blocked and requires investigation. Do not delete the journal
+to bypass a blocker.
 
 ### Exit status and diagnostics
 
@@ -481,8 +487,27 @@ Package managers and supervisors may additionally report wrapper errors.
 | `0` | Successful command completion or graceful daemon shutdown. |
 | `1` | Application failure or an explicit launcher validation failure. |
 | `2` | CLI output failure; the operation may already have succeeded. |
+| `3` | One-shot import remains pending or was deferred; completion was not confirmed. |
 | `9` | Node startup failure observed when a configured env file is missing. |
 | `75` | Another process holds the service lock; this may have no diagnostic output. |
+
+For `import` and `import-when-available`, status `0` means the round was
+imported or was already stored. Status `3` means the command reported
+incomplete work:
+
+- `pending`: a journaled transaction was not acknowledged by the RPC,
+  or receipt waiting timed out. Output includes the attempt ID,
+  locally computed transaction hash, and pending reason.
+- `deferred`: fresh signer recovery left the gate closed, so this
+  submission prepared no new attempt. Output includes the signer blocker.
+
+Neither outcome proves that the beacon is absent on-chain. Pending
+transactions remain available for journal recovery. The one-shot command
+exits rather than continuing recovery in the background.
+
+If rendering or writing the result fails, status `2` takes precedence
+over status `3`. Service ownership is released when the process exits;
+the journal is retained.
 
 Other startup failures can retain the exit status of the failing tool.
 Do not interpret every nonzero status as contention.
@@ -634,34 +659,56 @@ the round invalid.
 
 ### Broadcasting and confirmation
 
-After successful simulation, the relayer makes one wallet submission call
-with the simulated request, then waits for a receipt and verifies stored
-randomness at the receipt's block.
+After successful simulation, the submitter performs fresh signer recovery
+and checks the signer gate. If the gate remains closed, the import returns
+`deferred` with the observed blocker and prepares no new attempt.
 
-Broadcasting is outside the simulation fallback boundary. Wallet errors,
-uncertain submission responses, transaction reverts, and receipt timeouts
-do not trigger compressed fallback or another broadcast within that
-import attempt.
+When authorized, the coordinator signs and persists an attempt before
+broadcasting its recorded bytes. Before the RPC send, it persists that
+broadcast may occur. The send request disables automatic RPC retries.
 
-A successful simulation does not guarantee that a later transaction will
-succeed.
+An acknowledgement means the RPC returned the locally computed transaction
+hash; it does not establish inclusion or execution. The importer then
+waits for a receipt and verifies stored randomness at the receipt's block.
+
+An RPC request error, malformed response, or mismatched hash returns
+`pending` with reason `broadcast-not-acknowledged`. A receipt-wait timeout
+returns `pending` with reason `receipt-timeout`. Both retain the attempt ID
+and locally computed transaction hash.
+
+Journal persistence failures and other operational errors still propagate
+as failures. Reverted receipts and stored-randomness mismatches also fail
+the import.
+
+Broadcast and receipt outcomes do not trigger compressed-signature
+fallback. That fallback remains confined to simulation.
 
 ### Recovery after an uncertain transaction
 
-Durable pending-transaction tracking and reconciliation across attempts,
-daemon cycles, and process restarts are not implemented by this submission
-flow. A later daemon cycle or command invocation may revisit the round.
+The signer journal retains attempts across daemon cycles and process
+restarts. Recovery inspects chain evidence and persists reconciliation
+results before allowing further signer work.
 
-Before retrying an uncertain submission, reconcile the signer's pending
-transactions and nonce state, and check whether the registry already
-stores the round. Another relayer may have imported it in the meantime.
+Every broadcast consumes its authorization. Another send requires fresh
+reconciliation and retry-schedule eligibility. Retries send recorded
+transaction bytes; an uncertain response does not allocate a new nonce
+or discard the attempt.
 
-An unstored round alone does not prove that the earlier transaction was
-never accepted.
+The command runtime currently retains at most one attempt. Included
+attempts remain journaled until durable resolution, so observing inclusion
+alone does not free journal capacity.
 
-Registry idempotence prevents overwriting stored randomness. Duplicate
-broadcasts can still consume gas, conflict on nonces, or stall the
-signer's transaction queue.
+Preserve the signer journal alongside the checkpoint. Commands sharing a
+chain and signer must use the same state directory. Releasing the service
+lock does not prove that a transaction was rejected, and an unstored round
+does not prove that an earlier broadcast was never accepted.
+
+A missing journal requires explicit bootstrap authorization. Ordinary
+command recovery does not automatically adopt a nonce or initialize it.
+
+One-shot commands exit after reporting pending or deferred work; they do
+not keep recovery running in the background. The daemon continues recovery
+on subsequent cycles.
 
 ## Demand-driven daemon
 
@@ -928,11 +975,15 @@ CLI failures are emitted as structured `cli_failed` records.
 Uncaught exceptions and unhandled rejections use the same configured
 scrubbing and summary limits when initialization has reached that point.
 
-If rendering or writing successful command output fails, the CLI
-attempts to emit `output_failed` and exits with status `2`.
-That diagnostic preserves validated import outcome fields when
-available, including the transaction hash. An output failure does not
-mean that an already-completed import failed.
+If rendering or writing command output fails, the CLI attempts to emit
+`output_failed` and exits with status `2`.
+
+That diagnostic preserves validated import outcome fields when available:
+completed results include randomness and, for imported results, the
+transaction hash; pending results include the attempt ID, transaction
+hash, and reason; deferred results include the reason and signer blocker.
+
+An output failure does not change the underlying import outcome.
 
 ### Submission reporting
 
