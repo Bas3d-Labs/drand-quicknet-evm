@@ -83,12 +83,16 @@ interface Values {
   scanType: ScanType;
   error: unknown;
   consumers: readonly ConsumerHealth[];
+  deferralReason: 'signer-unavailable';
   submission: 'witness' | 'compressed';
   fallbackReason:
     | 'witness-rejected'
     | 'witness-decode-failed'
     | undefined;
   operation: OperationContext | undefined;
+  pendingReason:
+    | 'broadcast-not-acknowledged'
+    | 'receipt-timeout';
   broadcastObservation:
     | 'request-error'
     | 'invalid-response'
@@ -177,6 +181,16 @@ const EVENTS = {
       nextBlock: 'uint',
     },
   ],
+  roundAlreadyStored: [
+    'debug',
+    'round_already_stored',
+    'Quicknet round already stored',
+    {
+      consumer: 'address',
+      scanType: 'scanType',
+      round: 'uint',
+    },
+  ],
   roundImported: [
     'info',
     'round_imported',
@@ -190,14 +204,29 @@ const EVENTS = {
       fallbackReason: 'fallbackReason',
     },
   ],
-  roundAlreadyStored: [
-    'debug',
-    'round_already_stored',
-    'Quicknet round already stored',
+  roundDeferred: [
+    'info',
+    'round_deferred',
+    'Quicknet round import deferred because the signer is unavailable',
     {
       consumer: 'address',
       scanType: 'scanType',
       round: 'uint',
+      reason: 'deferralReason',
+      blocker: 'blocker',
+    },
+  ],
+  roundPending: [
+    'info',
+    'round_pending',
+    'Quicknet round import is pending',
+    {
+      consumer: 'address',
+      scanType: 'scanType',
+      round: 'uint',
+      attemptId: 'id',
+      transactionHash: 'hash',
+      reason: 'pendingReason',
     },
   ],
   heartbeat: [
@@ -885,6 +914,23 @@ function scalar(
     )
   ) {
       return value;
+  }
+
+  if (
+    kind === 'pendingReason' &&
+    (
+      value === 'broadcast-not-acknowledged' ||
+      value === 'receipt-timeout'
+    )
+  ) {
+    return value;
+  }
+
+  if (
+    kind === 'deferralReason' &&
+    value === 'signer-unavailable'
+  ) {
+    return value;
   }
 
   throw new TypeError('Invalid logging field.');

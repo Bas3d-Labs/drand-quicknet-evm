@@ -56,7 +56,9 @@ export type ImportQuicknetRoundResult =
       round: bigint;
       randomness: Hex;
       transactionHash: Hex;
-    } & BeaconSubmissionDetails);
+    } & BeaconSubmissionDetails)
+  | PendingImportResult
+  | DeferredImportResult;
 
 export interface PendingImportResult {
   readonly status: 'pending';

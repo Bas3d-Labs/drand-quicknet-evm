@@ -18,6 +18,10 @@ import type {
 } from '../state/signer-coordinator.js';
 
 import type {
+  SignerBlocker,
+} from '../state/signer-gate.js';
+
+import type {
   SignerRecoveryCycle,
   SignerRecoveryCycleResult,
 } from '../state/signer-recovery-cycle.js';
@@ -29,6 +33,17 @@ import {
 
 export type BeaconSubmissionRequest =
   SubmitBeaconTransactionOptions['request'];
+
+export type BeaconSubmissionResult =
+  | BroadcastAttemptResult
+  | {
+      /**
+       * Fresh recovery completed, but the signer gate remained closed.
+       * No new attempt was prepared for this submission.
+       */
+      readonly status: 'signer-unavilable';
+      readonly blocker: SignerBlocker;
+    };
 
 export interface BeaconSubmitter {
   recover(cycle?: number): Promise<SignerRecoveryCycleResult>;

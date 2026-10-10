@@ -100,6 +100,7 @@ export async function processQuicknetRequestsWithOutcomes(
 
   const outcomes: QuicknetRoundOutcome[] = [];
   let failed = false;
+  let signerUnavailable: SignerBlocker | undefined;
 
   for (const [round, firstRequestBlock] of firstBlocks) {
     if (failed) {
@@ -108,6 +109,18 @@ export async function processQuicknetRequestsWithOutcomes(
         firstRequestBlock,
         status: 'deferred',
         reason: 'earlier-import-failed',
+      });
+
+      continue;
+    }
+
+    if (signerUnavailable !== undefined) {
+      outcomes.push({
+        round,
+        firstRequestBlock,
+        status: 'deferred',
+        reason: 'signer-unavailable',
+        blocker: signerUnavailable,
       });
 
       continue;
@@ -123,6 +136,31 @@ export async function processQuicknetRequestsWithOutcomes(
         round,
         onProgress: options.onProgress,
       });
+
+      if (result.status === 'pending') {
+        outcomes.push({
+          round,
+          firstRequestBlock,
+          status: 'pending',
+          result,
+        });
+
+        continue;
+      }
+
+      if (result.status === 'deferred') {
+        signerUnavailable = result.blocker;
+
+        outcomes.push({
+          round,
+          firstRequestBlock,
+          status: 'deferred',
+          reason: result.reason,
+          blocker: result.blocker,
+        });
+
+        continue;
+      }
 
       outcomes.push({
         round,

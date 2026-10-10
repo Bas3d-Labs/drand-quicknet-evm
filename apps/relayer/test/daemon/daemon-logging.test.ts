@@ -70,6 +70,8 @@ const loggerMocks = {
   checkpointAdvanced: vi.fn<RelayerLog['checkpointAdvanced']>(),
   roundImported: vi.fn<RelayerLog['roundImported']>(),
   roundAlreadyStored: vi.fn<RelayerLog['roundAlreadyStored']>(),
+  roundDeferred: vi.fn<RelayerLog['roundDeferred']>(),
+  roundPending: vi.fn<RelayerLog['roundPending']>(),
   heartbeat: vi.fn<RelayerLog['heartbeat']>(),
   loggingFailed: vi.fn<RelayerLog['loggingFailed']>(),
   durableFulfillmentPending:
