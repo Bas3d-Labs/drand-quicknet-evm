@@ -382,6 +382,55 @@ describe('importQuicknetRound', () => {
     ).toBe(SIMULATED_REQUEST);
   });
 
+  it('returns deferred when the signer is unavailable without waiting for a receipt', async () => {
+    submitTransaction.mockResolvedValueOnce({
+      status: 'signer-unavailable',
+      blocker: 'unresolved-attempt',
+    });
+
+    await expect(importRound()).resolves.toEqual({
+      status: 'deferred',
+      round: ROUND,
+      reason: 'signer-unavailable',
+      blocker: 'unresolved-attempt',
+    });
+
+    expect(submissionMocks.simulateBeaconSubmission)
+      .toHaveBeenCalledOnce();
+    expect(submitTransaction).toHaveBeenCalledExactlyOnceWith(
+      SIMULATED_REQUEST,
+    );
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+    expect(getBeacon).not.toHaveBeenCalled();
+  });
+
+  it('returns pending for an unacknowledged broadcast without retrying or waiting for a receipt', async () => {
+    const attemptId = '11111111-1111-4111-8111-111111111111';
+
+    submitTransaction.mockResolvedValueOnce({
+      status: 'not-acknowledged',
+      attemptId,
+      transactionHash: SUBMITTED_TRANSACTION_HASH,
+      nonce: 4n,
+    });
+
+    await expect(importRound()).resolves.toEqual({
+      status: 'pending',
+      round: ROUND,
+      attemptId,
+      transactionHash: SUBMITTED_TRANSACTION_HASH,
+      reason: 'broadcast-not-acknowledged',
+    });
+
+    expect(submissionMocks.simulateBeaconSubmission)
+      .toHaveBeenCalledOnce();
+    expect(submitTransaction).toHaveBeenCalledExactlyOnceWith(
+      SIMULATED_REQUEST,
+    );
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+    expect(getBeacon).not.toHaveBeenCalled();
+  });
+
   it('does not broadcast if simulation fails', async () => {
     const error = new Error('Simulation failed');
 

@@ -97,8 +97,18 @@ function setup() {
     return submissionResult;
   });
 
-  // These dependencies are forwarded to the mocked helpers.
-  const coordinator = {} as SignerCoordinator;
+  const readStatus = vi.fn<
+    () => Pick<SignerCoordinator['status'], 'open' | 'primaryReason'>
+  >().mockReturnValue({
+    open: true,
+    primaryReason: null,
+  });
+
+  const coordinator = {
+    get status() {
+      return readStatus();
+    },
+  } as unknown as SignerCoordinator;
   const recovery = {} as SignerRecoveryCycle;
 
   const options = {
@@ -128,6 +138,7 @@ function setup() {
     request,
     controller,
     events,
+    readStatus,
     recoveryResult,
     submissionResult,
     submitter: createBeaconSubmitter(options),
@@ -179,11 +190,13 @@ describe('beacon submitter', () => {
     try {
       expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
       expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
+      expect(t.readStatus).not.toHaveBeenCalled();
     } finally {
       finishRecovery();
     }
 
     expect(await pending).toBe(t.submissionResult);
+    expect(t.readStatus).toHaveBeenCalledOnce();
     expect(t.events).toEqual(['recover', 'submit']);
 
     expect(mocks.recoverSignerAtHeads).toHaveBeenCalledWith(
@@ -218,6 +231,7 @@ describe('beacon submitter', () => {
     ).rejects.toBe(error);
 
     expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
+    expect(t.readStatus).not.toHaveBeenCalled();
   });
 
   it('does not submit when cancellation arrives during recovery', async () => {
@@ -234,6 +248,7 @@ describe('beacon submitter', () => {
     ).rejects.toBe(reason);
 
     expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
+    expect(t.readStatus).not.toHaveBeenCalled();
   });
 
   it('propagates submission failure without retrying', async () => {
@@ -248,5 +263,66 @@ describe('beacon submitter', () => {
 
     expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
     expect(mocks.submitBeaconTransaction).toHaveBeenCalledOnce();
+  });
+
+  it('defers when fresh recovery leaves the signer blocked', async () => {
+    const t = setup();
+
+    mocks.recoverSignerAtHeads.mockImplementationOnce(async () => {
+      t.readStatus.mockReturnValue({
+        open: false,
+        primaryReason: 'unresolved-attempt',
+      });
+
+      return t.recoveryResult;
+    });
+
+    await expect(t.submitter.submit(t.request, 9)).resolves.toEqual({
+      status: 'signer-unavailable',
+      blocker: 'unresolved-attempt',
+    });
+
+    expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
+    expect(t.readStatus).toHaveBeenCalledOnce();
+    expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
+  });
+
+  it('submits when fresh recovery releases a previously blocked gate', async () => {
+    const t = setup();
+
+    t.readStatus.mockReturnValue({
+      open: false,
+      primaryReason: 'unresolved-attempt',
+    });
+
+    mocks.recoverSignerAtHeads.mockImplementationOnce(async () => {
+      t.readStatus.mockReturnValue({
+        open: true,
+        primaryReason: null,
+      });
+
+      return t.recoveryResult;
+    });
+
+    await expect(t.submitter.submit(t.request))
+      .resolves.toBe(t.submissionResult);
+
+    expect(t.readStatus).toHaveBeenCalledOnce();
+    expect(mocks.submitBeaconTransaction).toHaveBeenCalledOnce();
+  });
+
+  it('throws when the gate is closed without a classified blocker', async () => {
+    const t = setup();
+
+    t.readStatus.mockReturnValue({
+      open: false,
+      primaryReason: null,
+    });
+
+    await expect(t.submitter.submit(t.request)).rejects.toThrow(
+      'Signer gate is closed without a reported blocker.',
+    );
+
+    expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
   });
 });

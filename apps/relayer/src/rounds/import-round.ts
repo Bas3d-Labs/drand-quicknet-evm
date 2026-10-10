@@ -87,7 +87,6 @@ export async function importQuicknetRound(
 ): Promise<ImportQuicknetRoundResult> {
   const {
     publicClient,
-    walletClient,
     account,
     deployment,
     round,
@@ -169,9 +168,28 @@ export async function importQuicknetRound(
     phase: 'submit-transaction',
   });
   
-  const {
-    transactionHash: hash,
-  } = await options.submitter.submit(request);
+  const submitted = await options.submitter.submit(request);
+
+  if (submitted.status === 'signer-unavailable') {
+    return {
+      status: 'deferred',
+      round,
+      reason: 'signer-unavailable',
+      blocker: submitted.blocker,
+    };
+  }
+
+  if (submitted.status === 'not-acknowledged') {
+    return {
+      status: 'pending',
+      round,
+      attemptId: submitted.attemptId,
+      transactionHash: submitted.transactionHash,
+      reason: 'broadcast-not-acknowledged',
+    };
+  }
+
+  const hash = submitted.transactionHash;
 
   reportImportProgress(options.onProgress, {
     round,

@@ -374,8 +374,14 @@ describe('signer recovery cycle', () => {
 
     t.request.mockRejectedValueOnce(new Error(KEY));
 
-    await expect(t.cycle.run(t.recovery))
-      .rejects.toThrow('outcome is uncertain');
+    const result = await t.cycle.run(t.recovery);
+
+    expect(result.broadcast).toMatchObject({
+      status: 'not-acknowledged',
+      nonce: 4n,
+    });
+    expect(result.retryDelayMs).toBe(100);
+    expect(t.coordinator.canBroadcast).toBe(false);
 
     expect(await t.cycle.run(t.recovery)).toMatchObject({
       broadcast: null,

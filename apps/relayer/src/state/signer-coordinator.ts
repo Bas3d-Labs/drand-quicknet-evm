@@ -568,6 +568,20 @@ export class SignerCoordinator {
         this.pendingWrite = undefined;
       }
 
+      const identity = {
+        signer: this.identity.signer,
+        attemptId: attempt.attemptId,
+        transactionHash: transaction.transactionHash,
+        nonce: attempt.nonce,
+      };
+
+      const notAcknowledged = Object.freeze({
+        status: 'not-acknowledged',
+        attemptId: attempt.attemptId,
+        transactionHash: transaction.transactionHash,
+        nonce: attempt.nonce,
+      } as const);
+
       let returnedHash: unknown;
 
       try {
@@ -577,20 +591,55 @@ export class SignerCoordinator {
         }, {
           retryCount: 0,
         });
-      } catch {
-        throw new Error(
-          'Transaction broadcast outcome is uncertain. Reconciliation is required.'
+      } catch (error) {
+        this.emit(
+          (log) => log.attemptBroadcastNotAcknowledged({
+            ...identity,
+            observation: 'request-error',
+            error,
+          }),
+          cycle,
+          'broadcast-attempt',
         );
+
+        return notAcknowledged;
+      }
+
+      if (!isFixedHex(returnedHash, 32)) {
+        this.emit(
+          (log) => log.attemptBroadcastNotAcknowledged({
+            ...identity,
+            observation: 'invalid-response',
+          }),
+          cycle,
+          'broadcast-attempt',
+        );
+
+        return notAcknowledged;
       }
 
       if (
-        !isFixedHex(returnedHash, 32) ||
-        returnedHash.toLowerCase() !== transaction.transactionHash.toLowerCase()
+        returnedHash.toLowerCase() !==
+        transaction.transactionHash.toLowerCase()
       ) {
-        throw new Error(
-          'RPC returned an unexpected transaction hash. Reconciliation is required.'
+        this.emit(
+          (log) => log.attemptBroadcastNotAcknowledged({
+            ...identity,
+            observation: 'hash-mismatch',
+            returnedTransactionHash: returnedHash,
+          }),
+          cycle,
+          'broadcast-attempt',
         );
+
+        return notAcknowledged;
       }
+
+      this.emit(
+        (log) => log.attemptBroadcastAccepted(identity),
+        cycle,
+        'broadcast-attempt',
+      );
 
       return Object.freeze({
         status: 'acknowledged',

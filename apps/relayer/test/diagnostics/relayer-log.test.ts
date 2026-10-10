@@ -159,6 +159,8 @@ describe('createRelayerLog', () => {
     expect(Object.isFrozen(log)).toBe(true);
 
     expect(Object.keys(log).sort()).toEqual([
+      'attemptBroadcastAccepted',
+      'attemptBroadcastNotAcknowledged',
       'attemptResolved',
       'checkpointAdvanced',
       'consumerFailed',
@@ -170,7 +172,9 @@ describe('createRelayerLog', () => {
       'heartbeat',
       'loggingFailed',
       'roundAlreadyStored',
+      'roundDeferred',
       'roundImported',
+      'roundPending',
       'signerBlocked',
       'signerGateReleased',
       'withContext',
