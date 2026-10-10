@@ -1,8 +1,13 @@
+import {
+  WaitForTransactionReceiptTimeoutError,
+} from 'viem';
+
 import type {
   Account,
   Hash,
   Hex,
   PublicClient,
+  TransactionReceipt,
   WalletClient,
 } from 'viem';
 
@@ -197,7 +202,23 @@ export async function importQuicknetRound(
     transactionHash: hash,
   });
 
-  const receipt = await publicClient.waitForTransactionReceipt({hash});
+  let receipt: TransactionReceipt;
+
+  try {
+    receipt = await publicClient.waitForTransactionReceipt({ hash });
+  } catch (error) {
+    if (!(error instanceof WaitForTransactionReceiptTimeoutError)) {
+      throw error;
+    }
+
+    return {
+      status: 'pending',
+      round,
+      attemptId: submitted.attemptId,
+      transactionHash: submitted.transactionHash,
+      reason: 'receipt-timeout',
+    };
+  }
   if (receipt.status !== 'success') {
     throw new Error(`Registry submission reverted: ${receipt.transactionHash}`);
   }
