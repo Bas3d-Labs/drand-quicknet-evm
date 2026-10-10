@@ -14,6 +14,7 @@ import type {
 } from '../state/checkpoint.js';
 
 import type {
+  IncompleteQuicknetRoundOutcome,
   ProcessedQuicknetRound,
 } from '../consumers/request-processor.js';
 
@@ -62,11 +63,17 @@ export interface RunDaemonCycleOptions {
   readChainHeads?: () => Promise<ChainHeads>;
 }
 
+export interface DaemonIncompleteRound {
+  scanType: 'durable' | 'soft';
+  outcome: IncompleteQuicknetRoundOutcome;
+}
+
 export type DaemonConsumerCycleResult =
   | {
       status: 'success';
       consumer: ValidatedQuicknetConsumer;
       iteration: RunDaemonIterationResult;
+      incomplete?: readonly DaemonIncompleteRound[];
       reconciliation?: DurableRequestResult;
     }
   | {
@@ -78,6 +85,7 @@ export type DaemonConsumerCycleResult =
         scanType: 'durable' | 'soft';
         result: ProcessedQuicknetRound;
       }[];
+      incomplete?: readonly DaemonIncompleteRound[];
       reconciliation?: DurableRequestResult;
     };
 
@@ -110,6 +118,7 @@ export async function runDaemonCycle(
       scanType: 'durable' | 'soft';
       result: ProcessedQuicknetRound;
     }[] = [];
+    const incomplete: DaemonIncompleteRound[] = [];
 
     let reconciliation: DurableRequestResult | undefined;
 
@@ -131,6 +140,9 @@ export async function runDaemonCycle(
         },
         onCompleted(scanType, result) {
           completed.push({ scanType, result });
+        },
+        onIncomplete(scanType, outcome) {
+          incomplete.push({ scanType, outcome });
         },
         onReconciliation(result) {
           reconciliation = result;
@@ -160,6 +172,10 @@ export async function runDaemonCycle(
         successful.reconciliation = reconciliation;
       }
 
+      if (incomplete.length > 0) {
+        successful.incomplete = incomplete;
+      }
+
       consumers.push(successful);
     } catch (error) {
       const failed: Extract<
@@ -181,6 +197,10 @@ export async function runDaemonCycle(
 
       if (reconciliation !== undefined) {
         failed.reconciliation = reconciliation;
+      }
+
+      if (incomplete.length > 0) {
+        failed.incomplete = incomplete;
       }
 
       consumers.push(failed);

@@ -53,6 +53,7 @@ import {
 } from '../../src/consumers/durable-requests.js';
 
 import {
+  type IncompleteQuicknetRoundOutcome,
   processQuicknetRequests,
   type ProcessedQuicknetRound,
   type QuicknetRoundOutcome,
@@ -360,6 +361,174 @@ describe('runDaemonIteration', () => {
       .mockResolvedValue({ rounds: [] });
   });
 
+  it.each([false, true])(
+    'forwards incomplete outcomes from both scans (observer throws: %s)',
+    async (observerThrows) => {
+      const pending: IncompleteQuicknetRoundOutcome = {
+        status: 'pending',
+        round: COMPLETED.round,
+        firstRequestBlock: 1_010n,
+        result: {
+          status: 'pending',
+          round: COMPLETED.round,
+          attemptId: '11111111-1111-4111-8111-111111111111',
+          transactionHash: HASH_B,
+          reason: 'receipt-timeout',
+        },
+      };
+
+      const deferred: IncompleteQuicknetRoundOutcome = {
+        status: 'deferred',
+        round: FAILED_ROUND,
+        firstRequestBlock: 1_250n,
+        reason: 'signer-unavailable',
+        blocker: 'unresolved-attempt',
+      };
+
+      const reconciliation = scannedResult({
+        imports: [pending],
+        fulfillment: [{
+          round: pending.round,
+          firstRequestBlock: pending.firstRequestBlock,
+          fulfillment: { status: 'not-stored' },
+        }],
+        checkpoint: {
+          status: 'verified',
+          nextBlock: 1_010n,
+        },
+      });
+
+      vi.mocked(reconcileDurableRequests).mockImplementationOnce(
+        async ({ onIncomplete }) => {
+          onIncomplete?.(pending);
+          return reconciliation;
+        },
+      );
+
+      vi.mocked(processQuicknetRequests).mockImplementationOnce(
+        async ({ onIncomplete }) => {
+          onIncomplete?.(deferred);
+          return { rounds: [] };
+        },
+      );
+
+      const onIncomplete = vi.fn(() => {
+        if (observerThrows) {
+          throw new Error('Reporting failed.');
+        }
+      });
+      const onCompleted = vi.fn();
+
+      const result = await run({ onIncomplete, onCompleted });
+
+      expect(onIncomplete.mock.calls).toEqual([
+        ['durable', pending],
+        ['soft', deferred],
+      ]);
+      expect(onCompleted).not.toHaveBeenCalled();
+
+      expect(result.status).toBe('processed');
+      expect(result.durableScan?.processing.rounds).toEqual([]);
+      expect(result.softScan?.processing.rounds).toEqual([]);
+      expect(result.durableNextBlock).toBe(1_010n);
+      expect(result.softCursor.nextBlock).toBe(1_301n);
+      expect(save).toHaveBeenCalledExactlyOnceWith(CONSUMER, 1_010n);
+    },
+  );
+
+  it.each(['durable', 'soft'] as const)(
+    'preserves %s incomplete reporting and the later failure when the observer throws',
+    async (scanType) => {
+      const failure = new Error('Later import failed.');
+
+      const pending: IncompleteQuicknetRoundOutcome = {
+        status: 'pending',
+        round: COMPLETED.round,
+        firstRequestBlock: scanType === 'durable'
+          ? 1_010n
+          : 1_250n,
+        result: {
+          status: 'pending',
+          round: COMPLETED.round,
+          attemptId: '11111111-1111-4111-8111-111111111111',
+          transactionHash: HASH_B,
+          reason: 'broadcast-not-acknowledged',
+        },
+      };
+
+      if (scanType === 'durable') {
+        const reconciliation = scannedResult({
+          imports: [
+            pending,
+            {
+              status: 'failed',
+              round: FAILED_ROUND,
+              firstRequestBlock: 1_050n,
+              error: failure,
+            },
+          ],
+          fulfillment: [
+            {
+              round: pending.round,
+              firstRequestBlock: pending.firstRequestBlock,
+              fulfillment: { status: 'not-stored' },
+            },
+            {
+              round: FAILED_ROUND,
+              firstRequestBlock: 1_050n,
+              fulfillment: { status: 'not-stored' },
+            },
+          ],
+          checkpoint: {
+            status: 'verified',
+            nextBlock: 1_010n,
+          },
+        });
+
+        vi.mocked(reconcileDurableRequests).mockImplementationOnce(
+          async ({ onIncomplete }) => {
+            onIncomplete?.(pending);
+            return reconciliation;
+          },
+        );
+      } else {
+        load.mockResolvedValue(1_201n);
+
+        vi.mocked(processQuicknetRequests).mockImplementationOnce(
+          async ({ onIncomplete }) => {
+            onIncomplete?.(pending);
+            throw failure;
+          },
+        );
+      }
+
+      const onIncomplete = vi.fn(() => {
+        throw new Error('Reporting failed.');
+      });
+      const onCompleted = vi.fn();
+
+      await expect(run({
+        onIncomplete,
+        onCompleted,
+      })).rejects.toBe(failure);
+
+      expect(onIncomplete).toHaveBeenCalledExactlyOnceWith(
+        scanType,
+        pending,
+      );
+      expect(onCompleted).not.toHaveBeenCalled();
+
+      if (scanType === 'durable') {
+        expect(save).toHaveBeenCalledExactlyOnceWith(CONSUMER, 1_010n);
+        expect(scanQuicknetRequests).not.toHaveBeenCalled();
+        expect(processQuicknetRequests).not.toHaveBeenCalled();
+      } else {
+        expect(reconcileDurableRequests).not.toHaveBeenCalled();
+        expect(save).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each([
     {
       name: 'negative start block',
@@ -480,6 +649,7 @@ describe('runDaemonIteration', () => {
       durableBlock: 1_200n,
       maxBlockRange: 100n,
       onCompleted: expect.any(Function),
+      onIncomplete: expect.any(Function),
       onProgress: expect.any(Function),
     });
   });
@@ -1020,6 +1190,7 @@ describe('runDaemonIteration', () => {
       requests: [SOFT_REQUEST],
       onProgress: expect.any(Function),
       onCompleted: expect.any(Function),
+      onIncomplete: expect.any(Function),
     });
 
     expect(onOperation).toHaveBeenCalledWith({

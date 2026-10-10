@@ -35,6 +35,7 @@ import type {
 } from '../../src/consumers/durable-requests.js';
 
 import type {
+  IncompleteQuicknetRoundOutcome,
   ProcessedQuicknetRound,
 } from '../../src/consumers/request-processor.js';
 
@@ -770,4 +771,118 @@ describe('daemon cycle diagnostic reporting', () => {
         error: loggingError,
       });
   });
+
+  it.each(['success', 'failed'] as const)(
+    'retains and logs incomplete notifications on a %s cycle without leaking them',
+    async (status) => {
+      const error = new Error('Later soft import failed.');
+      const attemptId = '11111111-1111-4111-8111-111111111111';
+
+      const pending: IncompleteQuicknetRoundOutcome = {
+        status: 'pending',
+        round: ROUND,
+        firstRequestBlock: 850n,
+        result: {
+          status: 'pending',
+          round: ROUND,
+          attemptId,
+          transactionHash: HASH_B,
+          reason: 'receipt-timeout',
+        },
+      };
+
+      const deferred: IncompleteQuicknetRoundOutcome = {
+        status: 'deferred',
+        round: ROUND + 1n,
+        firstRequestBlock: 950n,
+        reason: 'signer-unavailable',
+        blocker: 'unresolved-attempt',
+      };
+
+      vi.mocked(runDaemonIteration).mockImplementationOnce(
+        async ({ onIncomplete, onOperation }) => {
+          onIncomplete?.('durable', pending);
+          onIncomplete?.('soft', deferred);
+
+          if (status === 'failed') {
+            onOperation?.(OPERATION);
+            throw error;
+          }
+
+          return caughtUp(CONSUMER_A);
+        },
+      );
+
+      const result = await cycle();
+      const first = result.consumers[0];
+      const second = result.consumers[1];
+
+      expect(first?.status).toBe(status);
+      expect(first?.incomplete).toEqual([
+        { scanType: 'durable', outcome: pending },
+        { scanType: 'soft', outcome: deferred },
+      ]);
+
+      expect(second?.status).toBe('success');
+      expect(second).not.toHaveProperty('incomplete');
+
+      if (status === 'failed') {
+        if (first?.status !== 'failed') {
+          throw new Error('Expected failed first consumer.');
+        }
+
+        expect(first.error).toBe(error);
+        expect(first.operation).toBe(OPERATION);
+      }
+
+      logCycle(result);
+
+      expect(loggerMocks.roundPending)
+        .toHaveBeenCalledExactlyOnceWith({
+          consumer: CONSUMER_A,
+          scanType: 'durable',
+          round: ROUND,
+          attemptId,
+          transactionHash: HASH_B,
+          reason: 'receipt-timeout',
+        });
+
+      expect(loggerMocks.roundDeferred)
+        .toHaveBeenCalledExactlyOnceWith({
+          consumer: CONSUMER_A,
+          scanType: 'soft',
+          round: ROUND + 1n,
+          reason: 'signer-unavailable',
+          blocker: 'unresolved-attempt',
+        });
+
+      expect(
+        loggerMocks.roundPending.mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        loggerMocks.roundDeferred.mock.invocationCallOrder[0]!,
+      );
+
+      if (status === 'failed') {
+        expect(loggerMocks.consumerFailed)
+          .toHaveBeenCalledExactlyOnceWith({
+            consumer: CONSUMER_A,
+            error,
+            operation: OPERATION,
+          });
+
+        expect(
+          loggerMocks.roundDeferred.mock.invocationCallOrder[0],
+        ).toBeLessThan(
+          loggerMocks.consumerFailed.mock.invocationCallOrder[0]!,
+        );
+      } else {
+        expect(loggerMocks.consumerFailed).not.toHaveBeenCalled();
+      }
+
+      expect(loggerMocks.roundImported).not.toHaveBeenCalled();
+      expect(loggerMocks.roundAlreadyStored).not.toHaveBeenCalled();
+      expect(loggerMocks.checkpointAdvanced).not.toHaveBeenCalled();
+      expect(loggerMocks.loggingFailed).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -44,6 +44,9 @@ export interface ProcessQuicknetRequestsOptions {
   onCompleted?:
     | ((result: ProcessedQuicknetRound) => void)
     | undefined;
+  onIncomplete?:
+    | ((outcome: IncompleteQuicknetRoundOutcome) => void)
+    | undefined;
 }
 
 export interface ProcessedQuicknetRound {
@@ -82,6 +85,17 @@ export type QuicknetRoundOutcome = {
     }
 );
 
+export type IncompleteQuicknetRoundOutcome = Extract<
+  QuicknetRoundOutcome,
+  | { 
+      status: 'pending';
+    }
+  | { 
+      status: 'deferred';
+      reason: 'signer-unavailable';
+    }
+>;
+
 export async function processQuicknetRequestsWithOutcomes(
   options: ProcessQuicknetRequestsOptions,
 ): Promise<readonly QuicknetRoundOutcome[]> {
@@ -99,6 +113,17 @@ export async function processQuicknetRequestsWithOutcomes(
   }
 
   const outcomes: QuicknetRoundOutcome[] = [];
+
+  function recordIncomplete(outcome: IncompleteQuicknetRoundOutcome): void {
+    outcomes.push(outcome);
+
+    try {
+      options.onIncomplete?.(outcome);
+    } catch {
+      // Reporting must not interrupt request processing.
+    }
+  }
+
   let failed = false;
   let signerUnavailable: SignerBlocker | undefined;
 
@@ -115,7 +140,7 @@ export async function processQuicknetRequestsWithOutcomes(
     }
 
     if (signerUnavailable !== undefined) {
-      outcomes.push({
+      recordIncomplete({
         round,
         firstRequestBlock,
         status: 'deferred',
@@ -138,7 +163,7 @@ export async function processQuicknetRequestsWithOutcomes(
       });
 
       if (result.status === 'pending') {
-        outcomes.push({
+        recordIncomplete({
           round,
           firstRequestBlock,
           status: 'pending',
@@ -151,7 +176,7 @@ export async function processQuicknetRequestsWithOutcomes(
       if (result.status === 'deferred') {
         signerUnavailable = result.blocker;
 
-        outcomes.push({
+        recordIncomplete({
           round,
           firstRequestBlock,
           status: 'deferred',
