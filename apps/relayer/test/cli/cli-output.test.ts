@@ -6,6 +6,7 @@ import {
 
 import {
   renderCliOutput,
+  renderOutputFailure,
   type CliOutput,
 } from '../../src/cli/cli-output.js';
 
@@ -92,6 +93,130 @@ describe('submission output', () => {
       } as unknown as CliOutput;
 
       expect(() => renderCliOutput(output)).toThrow(TypeError);
+    },
+  );
+});
+
+describe('incomplete import output', () => {
+  const ATTEMPT_ID = '11111111-1111-4111-8111-111111111111';
+
+  function pending(
+    reason: 'broadcast-not-acknowledged' | 'receipt-timeout',
+  ) {
+    return {
+      status: 'pending',
+      round: ROUND,
+      attemptId: ATTEMPT_ID,
+      transactionHash: HASH,
+      reason,
+    } as const;
+  }
+
+  const deferred = {
+    status: 'deferred',
+    round: ROUND,
+    reason: 'signer-unavailable',
+    blocker: 'unresolved-attempt',
+  } as const;
+
+  it.each([
+    'broadcast-not-acknowledged',
+    'receipt-timeout',
+  ] as const)('renders pending %s and preserves output-failure context', (reason) => {
+    const output: CliOutput = {
+      type: 'import-result',
+      round: ROUND,
+      result: pending(reason),
+    };
+
+    expect(renderCliOutput(output)).toBe([
+      'Quicknet round 1000 import is pending.',
+      'Reason: ' + reason,
+      'Attempt: ' + ATTEMPT_ID,
+      'Transaction: ' + HASH,
+    ].join('\n'));
+
+    expect(JSON.parse(renderOutputFailure(
+      output,
+      new Error('Writer failed.'),
+    ))).toEqual({
+      event: 'output_failed',
+      code: 'CLI_OUTPUT_FAILED',
+      output: 'import-result',
+      round: '1000',
+      status: 'pending',
+      attemptId: ATTEMPT_ID,
+      transactionHash: HASH,
+      reason,
+      err: expect.any(Object),
+    });
+  });
+
+  it('renders deferral and preserves its blocker without attempt identity', () => {
+    const output: CliOutput = {
+      type: 'import-result',
+      round: ROUND,
+      result: deferred,
+    };
+
+    expect(renderCliOutput(output)).toBe([
+      'Quicknet round 1000 import is deferred.',
+      'Reason: signer-unavailable',
+      'Signer blocker: unresolved-attempt',
+    ].join('\n'));
+
+    expect(JSON.parse(renderOutputFailure(
+      output,
+      new Error('Writer failed.'),
+    ))).toEqual({
+      event: 'output_failed',
+      code: 'CLI_OUTPUT_FAILED',
+      output: 'import-result',
+      round: '1000',
+      status: 'deferred',
+      reason: 'signer-unavailable',
+      blocker: 'unresolved-attempt',
+      err: expect.any(Object),
+    });
+  });
+
+  it.each([
+    { status: 'pending', field: 'attemptId' },
+    { status: 'pending', field: 'transactionHash' },
+    { status: 'pending', field: 'reason' },
+    { status: 'deferred', field: 'reason' },
+    { status: 'deferred', field: 'blocker' },
+  ] as const)(
+    'rejects invalid $status $field without retaining partial context',
+    ({ status, field }) => {
+      const secret = 'cli-output-credential-canary';
+
+      const output = {
+        type: 'import-result',
+        round: ROUND,
+        result: {
+          ...(status === 'pending'
+            ? pending('receipt-timeout')
+            : deferred),
+          [field]: secret,
+        },
+      } as unknown as CliOutput;
+
+      expect(() => renderCliOutput(output)).toThrow(TypeError);
+
+      const diagnostic = renderOutputFailure(
+        output,
+        new Error('Writer failed.'),
+      );
+
+      expect(JSON.parse(diagnostic)).toEqual({
+        event: 'output_failed',
+        code: 'CLI_OUTPUT_FAILED',
+        output: 'unknown',
+        err: expect.any(Object),
+      });
+
+      expect(diagnostic).not.toContain(secret);
     },
   );
 });
