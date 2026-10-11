@@ -129,6 +129,7 @@ function writePreload(
   signal: NodeJS.Signals,
   runtimeDirectory: string = directory,
   applicationDirectory: string = compiledApplication,
+  startupRecovery = false,
 ): string {
   const preload = join(directory, 'preload.mjs');
 
@@ -430,6 +431,104 @@ function writePreload(
       return { consumers: [] };
     }
   `);
+
+  if (startupRecovery) {
+    replace('cli/open-beacon-submitter.js', `
+      import {
+        existsSync,
+        writeFileSync,
+      } from 'node:fs';
+
+      import { join } from 'node:path';
+      import { setTimeout as delay } from 'node:timers/promises';
+
+      import {
+        waitForSignerJournal,
+      } from ${JSON.stringify(
+        compiledModuleUrl(
+          'cli/wait-for-signer-journal.js',
+          applicationDirectory,
+        ),
+      )};
+
+      import {
+        assertServiceLockHeld,
+      } from ${JSON.stringify(
+        compiledModuleUrl(
+          'state/service-lock.js',
+          applicationDirectory,
+        ),
+      )};
+
+      const directory = ${JSON.stringify(runtimeDirectory)};
+      const shutdownSignal = ${JSON.stringify(signal)};
+
+      export async function openBeaconSubmitter(options) {
+        const submitter = {
+          async recover() {
+            assertServiceLockHeld();
+
+            if (process.listenerCount(shutdownSignal) !== 1) {
+              throw new Error('Expected the CLI shutdown handler.');
+            }
+
+            process.once(shutdownSignal, () => {
+              writeFileSync(join(directory, 'signal-observed'), '');
+            });
+
+            writeFileSync(join(directory, 'recovery-entered'), '');
+
+            const deadline = Date.now() + 15_000;
+
+            while (!existsSync(join(directory, 'finish-recovery'))) {
+              if (Date.now() >= deadline) {
+                throw new Error('Pending recovery was not released.');
+              }
+
+              await delay(10);
+            }
+
+            assertServiceLockHeld();
+
+            writeFileSync(join(directory, 'recovery-completed'), '');
+
+            return {
+              inspection: {
+                status: 'bootstrap-deferred',
+                reason: 'nonce-count-mismatch',
+                observation: {
+                  anchor: {
+                    blockNumber: 100n,
+                    blockHash: '0x' + 'aa'.repeat(32),
+                  },
+                  nonce: 4n,
+                },
+                latestNonce: 4n,
+                pendingNonce: 5n,
+              },
+              inclusions: null,
+              broadcast: null,
+              retryDelayMs: null,
+            };
+          },
+
+          async submit() {
+            throw new Error('Unexpected beacon submission.');
+          },
+        };
+
+        await waitForSignerJournal({
+          coordinator: { journalInitialized: false },
+          submitter,
+          pollIntervalMs: options.startupPollIntervalMs,
+          signal: options.signal,
+        });
+
+        writeFileSync(join(directory, 'unexpected-startup-return'), '');
+        return submitter;
+      }
+    `);
+  }
 
   writeFileSync(preload, `
     import { registerHooks } from 'node:module';
@@ -763,6 +862,183 @@ it.skipIf(process.platform !== 'linux').each([
         'inherited output streams to close',
         detail,
       );
+    }
+  },
+  20_000,
+);
+
+it.skipIf(process.platform !== 'linux').each([
+  'SIGINT',
+  'SIGTERM',
+] as const)(
+  '%s waits for startup recovery before releasing ownership',
+  async (signal) => {
+    const directory = mkdtempSync(
+      join(fixture, `startup-${signal}-`),
+    );
+
+    const preload = writePreload(
+      directory,
+      signal,
+      directory,
+      compiledApplication,
+      true,
+    );
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: fixture + delimiter + (process.env.PATH ?? ''),
+      NODE_ENV: 'production',
+      NODE_OPTIONS: '--import=' + pathToFileURL(preload).href,
+      QUICKNET_STATE_DIR: directory,
+      QUICKNET_LOG_LEVEL: 'info',
+      PRIVATE_KEY: '',
+      QUICKNET_RPC_URL: '',
+      ROBINHOOD_TESTNET_RPC_URL: '',
+    };
+
+    delete env.QUICKNET_ENV_FILE;
+
+    const args = [
+      launcher,
+      'daemon',
+      '--network',
+      'robinhood-testnet',
+    ];
+
+    const owner = spawn('sh', args, {
+      cwd: APP,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let spawnError: Error | undefined;
+    let outcome: ExitResult | undefined;
+    let closed = false;
+
+    owner.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    owner.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    owner.once('error', (error) => {
+      spawnError = error;
+    });
+
+    owner.once('exit', (code, exitSignal) => {
+      outcome = { code, signal: exitSignal };
+    });
+
+    owner.once('close', () => {
+      closed = true;
+    });
+
+    const detail = () => JSON.stringify({
+      stdout,
+      stderr,
+      outcome,
+      spawnError: spawnError?.message,
+    });
+
+    async function waitForMarker(name: string): Promise<void> {
+      await waitUntil(() => {
+        if (spawnError !== undefined) {
+          throw spawnError;
+        }
+
+        if (outcome !== undefined) {
+          throw new Error(
+            `Relayer exited before ${name}. ${detail()}`,
+          );
+        }
+
+        return existsSync(join(directory, name));
+      }, name, detail);
+    }
+
+    function expectContention(): void {
+      const contender = spawnSync('sh', args, {
+        cwd: APP,
+        env,
+        encoding: 'utf8',
+        timeout: WAIT_TIMEOUT_MS,
+      });
+
+      expect(contender.error).toBeUndefined();
+      expect(contender.signal).toBeNull();
+      expect(contender.status, contender.stderr).toBe(75);
+    }
+
+    try {
+      await waitForMarker('recovery-entered');
+
+      expect(existsSync(join(directory, 'checkpoint.json'))).toBe(false);
+      expectContention();
+
+      expect(owner.kill(signal)).toBe(true);
+      await waitForMarker('signal-observed');
+
+      expect(outcome).toBeUndefined();
+      expect(existsSync(join(directory, 'recovery-completed'))).toBe(false);
+      expectContention();
+
+      // A repeated signal must not bypass the active recovery.
+      expect(owner.kill(signal)).toBe(true);
+      expectContention();
+
+      writeFileSync(join(directory, 'finish-recovery'), '');
+
+      await waitUntil(() => closed, 'startup shutdown', detail);
+
+      expect(spawnError).toBeUndefined();
+      expect(outcome, detail()).toEqual({
+        code: 0,
+        signal: null,
+      });
+
+      expect(existsSync(join(directory, 'recovery-completed'))).toBe(true);
+      expect(existsSync(join(directory, 'checkpoint.json'))).toBe(false);
+      expect(existsSync(join(directory, 'unexpected-startup-return'))).toBe(false);
+      expect(existsSync(join(directory, 'cycle-entered'))).toBe(false);
+      expect(stdout).toBe('');
+      expect(stderr).toBe('');
+
+      const probeEnv = { ...env };
+      delete probeEnv.NODE_OPTIONS;
+
+      const reacquired = spawnSync('flock', [
+        '--exclusive',
+        '--nonblock',
+        '--no-fork',
+        '--conflict-exit-code',
+        '75',
+        join(directory, 'relayer.flock'),
+        process.execPath,
+        '-e',
+        '',
+      ], {
+        cwd: APP,
+        env: probeEnv,
+        encoding: 'utf8',
+        timeout: WAIT_TIMEOUT_MS,
+      });
+
+      expect(reacquired.error).toBeUndefined();
+      expect(reacquired.signal).toBeNull();
+      expect(reacquired.status, reacquired.stderr).toBe(0);
+    } finally {
+      writeFileSync(join(directory, 'finish-recovery'), '');
+
+      if (outcome === undefined && spawnError === undefined) {
+        owner.kill('SIGKILL');
+      }
+
+      await waitUntil(() => closed, 'startup fixture cleanup', detail);
     }
   },
   20_000,
