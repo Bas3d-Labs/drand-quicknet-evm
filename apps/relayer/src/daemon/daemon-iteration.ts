@@ -331,6 +331,8 @@ export async function runDaemonIteration(
     maxBlockRange: options.maxBlockRange,
   });
 
+  options.signal?.throwIfAborted();
+
   if (softResult.status === 'scanned') {
     reportOperation({
       name: 'process-requests',

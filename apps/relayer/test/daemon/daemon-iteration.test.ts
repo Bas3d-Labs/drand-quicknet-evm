@@ -1669,4 +1669,54 @@ describe('runDaemonIteration', () => {
       expect(softCursor).toEqual({ nextBlock: 1_201n });
     },
   );
+
+  it.each(['scanned', 'caught-up'] as const)(
+    'propagates cancellation after the soft scan returns %s',
+    async (status) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const softCursor = {
+        nextBlock: status === 'caught-up' ? 1_501n : 1_201n,
+      };
+
+      // Durable processing is already caught up.
+      load.mockResolvedValue(1_201n);
+
+      vi.mocked(scanQuicknetRequests).mockImplementationOnce(
+        async () => {
+          controller.abort(reason);
+
+          if (status === 'caught-up') {
+            return {
+              status: 'caught-up',
+              throughBlock: 1_500n,
+              nextBlock: 1_501n,
+            };
+          }
+
+          return {
+            status: 'scanned',
+            throughBlock: 1_500n,
+            fromBlock: 1_201n,
+            toBlock: 1_300n,
+            nextBlock: 1_301n,
+            requests: [SOFT_REQUEST],
+          };
+        },
+      );
+
+      await expect(run({
+        signal: controller.signal,
+        softCursor,
+      })).rejects.toBe(reason);
+
+      expect(scanQuicknetRequests).toHaveBeenCalledOnce();
+      expect(processQuicknetRequests).not.toHaveBeenCalled();
+      expect(reconcileDurableRequests).not.toHaveBeenCalled();
+      expect(save).not.toHaveBeenCalled();
+      expect(softCursor.nextBlock).toBe(
+        status === 'caught-up' ? 1_501n : 1_201n,
+      );
+    },
+  );
 });
