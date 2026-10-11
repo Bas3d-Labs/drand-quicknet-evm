@@ -3,6 +3,10 @@ import {
   type QuicknetBeacon,
 } from '@based-labs/drand-quicknet';
 
+import {
+  setTimeout as delay,
+} from 'node:timers/promises';
+
 const DEFAULT_MAX_ATTEMPTS = 8;
 const DEFAULT_RETRY_DELAY_MS = 250;
 
@@ -10,7 +14,10 @@ export interface FetchQuicknetBeaconWithRetryOptions {
   round: bigint;
   maxAttempts?: number;
   retryDelayMs?: number;
-  sleep?: (milliseconds: number) => Promise<void>,
+  sleep?: (
+    milliseconds: number,
+    signal?: AbortSignal,
+  ) => Promise<void>,
   signal?: AbortSignal;
 }
 
@@ -65,7 +72,11 @@ export async function fetchQuicknetBeaconWithRetry(
         break;
       }
 
-      await sleep(retryDelayMs);
+      if (options.signal === undefined) {
+        await sleep(retryDelayMs);
+      } else {
+        await sleep(retryDelayMs, options.signal);
+      }
     }
   }
 
@@ -89,10 +100,14 @@ function validateRetryDelay(value: number): void {
   }
 }
 
-function sleepFor(milliseconds: number): Promise<void> {
-  return new Promise(
-    (resolve) => {
-      setTimeout(resolve, milliseconds);
-    }
-  );
+async function sleepFor(
+  milliseconds: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    await delay(milliseconds, undefined, { signal });
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw error;
+  }
 }

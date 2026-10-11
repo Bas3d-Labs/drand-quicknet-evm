@@ -1,4 +1,6 @@
-// apps/relayer/test/fetch-beacon-with-retry.test.ts
+import {
+  setImmediate as nextTurn,
+} from 'node:timers/promises';
 
 import {
   beforeEach,
@@ -756,5 +758,32 @@ describe('fetchQuicknetBeaconWithRetry', () => {
     );
 
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('interrupts the retry delay without another fetch attempt', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    quicknetMocks.fetchBeacon.mockRejectedValueOnce(
+      new Error('Beacon unavailable.'),
+    );
+
+    const fetching = fetchQuicknetBeaconWithRetry({
+      round: ROUND,
+      maxAttempts: 2,
+      retryDelayMs: 60_000,
+      signal: controller.signal,
+    });
+
+    const assertion = expect(fetching).rejects.toBe(reason);
+
+    // Let the rejected fetch enter the real retry timer.
+    await nextTurn();
+
+    controller.abort(reason);
+
+    await assertion;
+
+    expect(quicknetMocks.fetchBeacon).toHaveBeenCalledOnce();
   });
 });
