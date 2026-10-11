@@ -926,4 +926,110 @@ describe('processQuicknetRequests', () => {
     expect(onCompleted).not.toHaveBeenCalled();
     expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
   });
+
+  it('rejects cancellation before processing requests', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    controller.abort(reason);
+
+    await expect(processQuicknetRequestsWithOutcomes({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      requests: [createRequest(100n)],
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+  });
+
+  it('propagates cancellation without processing another round', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    vi.mocked(importQuicknetRoundWhenAvailable)
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        throw reason;
+      });
+
+    await expect(processQuicknetRequestsWithOutcomes({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      requests: [
+        createRequest(100n),
+        createRequest(101n),
+      ],
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledOnce();
+  });
+
+  it('preserves an unrelated import failure after cancellation', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const failure = new Error('RPC failed.');
+
+    vi.mocked(importQuicknetRoundWhenAvailable)
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        throw failure;
+      });
+
+    const outcomes = await processQuicknetRequestsWithOutcomes({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      requests: [createRequest(100n)],
+      signal: controller.signal,
+    });
+
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({
+      round: 100n,
+      status: 'failed',
+    });
+    expect(outcomes[0]).toHaveProperty('error', failure);
+  });
+
+  it('forwards the same abort signal to the import wrapper', async () => {
+    const controller = new AbortController();
+
+    vi.mocked(importQuicknetRoundWhenAvailable).mockResolvedValueOnce(
+      alreadyStoredResult(100n, RANDOMNESS_A),
+    );
+
+    await processQuicknetRequests({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      requests: [createRequest(100n)],
+      receiptTimeoutMs: 45_000,
+      signal: controller.signal,
+    });
+
+    expect(importQuicknetRoundWhenAvailable)
+      .toHaveBeenCalledExactlyOnceWith({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: 100n,
+        onProgress: undefined,
+        receiptTimeoutMs: 45_000,
+        signal: controller.signal,
+      });
+  });
 });

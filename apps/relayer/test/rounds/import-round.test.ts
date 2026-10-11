@@ -783,6 +783,233 @@ describe('importQuicknetRound', () => {
     expect(submitTransaction).not.toHaveBeenCalled();
     expect(waitForTransactionReceipt).not.toHaveBeenCalled();
   });
+
+  it('rejects an already-aborted signal before doing work', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    controller.abort(reason);
+
+    await expect(importQuicknetRound({
+      publicClient,
+      walletClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(registryMocks.createRegistryReader).not.toHaveBeenCalled();
+    expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
+    expect(submissionMocks.simulateBeaconSubmission).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it('does not enter the signer when cancelled at the submission boundary', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    await expect(importQuicknetRound({
+      publicClient,
+      walletClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      signal: controller.signal,
+      onProgress(progress) {
+        if (progress.phase === 'submit-transaction') {
+          controller.abort(reason);
+        }
+      },
+    })).rejects.toBe(reason);
+
+    expect(submissionMocks.simulateBeaconSubmission).toHaveBeenCalledOnce();
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it('forwards cancellation to direct beacon fetching without submitting', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    quicknetMocks.fetchBeacon.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      throw reason;
+    });
+
+    await expect(importQuicknetRound({
+      publicClient,
+      walletClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(quicknetMocks.fetchBeacon).toHaveBeenCalledExactlyOnceWith(
+      ROUND,
+      undefined,
+      { signal: controller.signal },
+    );
+
+    expect(submissionMocks.simulateBeaconSubmission).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it('does not simulate when cancellation accompanies a fetched beacon', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    quicknetMocks.fetchBeacon.mockImplementationOnce(async () => {
+      controller.abort(reason);
+
+      return {
+        round: ROUND,
+        signature: COMPRESSED_SIGNATURE,
+      };
+    });
+
+    await expect(importQuicknetRound({
+      publicClient,
+      walletClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(submissionMocks.simulateBeaconSubmission).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it.each(['deployment', 'storage'] as const)(
+    'stops after cancellation during the %s read',
+    async (stage) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+
+      if (stage === 'deployment') {
+        verifyDeployment.mockImplementationOnce(async () => {
+          controller.abort(reason);
+        });
+      } else {
+        isStored.mockImplementationOnce(async () => {
+          controller.abort(reason);
+          return true;
+        });
+      }
+
+      await expect(importQuicknetRound({
+        publicClient,
+        walletClient,
+        account,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        signal: controller.signal,
+      })).rejects.toBe(reason);
+
+      expect(verifyDeployment).toHaveBeenCalledOnce();
+
+      if (stage === 'deployment') {
+        expect(isStored).not.toHaveBeenCalled();
+      } else {
+        expect(isStored).toHaveBeenCalledOnce();
+      }
+
+      expect(getBeacon).not.toHaveBeenCalled();
+      expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
+      expect(submissionMocks.simulateBeaconSubmission).not.toHaveBeenCalled();
+      expect(submitTransaction).not.toHaveBeenCalled();
+      expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+    },
+  );
+  
+  it.each(['success', 'timeout', 'failure'] as const)(
+    'preserves receipt %s when shutdown occurs during receipt waiting',
+    async (outcome) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const failure = new Error('Receipt RPC failed.');
+
+      waitForTransactionReceipt.mockImplementationOnce(async () => {
+        controller.abort(reason);
+
+        if (outcome === 'timeout') {
+          throw new WaitForTransactionReceiptTimeoutError({
+            hash: SUBMITTED_TRANSACTION_HASH,
+          });
+        }
+
+        if (outcome === 'failure') {
+          throw failure;
+        }
+
+        return {
+          status: 'success',
+          transactionHash: RECEIPT_TRANSACTION_HASH,
+          blockNumber: RECEIPT_BLOCK_NUMBER,
+        };
+      });
+
+      const pending = importQuicknetRound({
+        publicClient,
+        walletClient,
+        account,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        signal: controller.signal,
+      });
+
+      if (outcome === 'failure') {
+        await expect(pending).rejects.toBe(failure);
+      } else if (outcome === 'timeout') {
+        await expect(pending).resolves.toEqual({
+          status: 'pending',
+          round: ROUND,
+          attemptId: '11111111-1111-4111-8111-111111111111',
+          transactionHash: SUBMITTED_TRANSACTION_HASH,
+          reason: 'receipt-timeout',
+        });
+      } else {
+        await expect(pending).resolves.toEqual({
+          status: 'imported',
+          submission: 'witness',
+          round: ROUND,
+          randomness: RANDOMNESS,
+          transactionHash: RECEIPT_TRANSACTION_HASH,
+        });
+      }
+
+      expect(controller.signal.aborted).toBe(true);
+      expect(submissionMocks.simulateBeaconSubmission)
+        .toHaveBeenCalledOnce();
+      expect(submitTransaction).toHaveBeenCalledExactlyOnceWith(
+        SIMULATED_REQUEST,
+      );
+      expect(waitForTransactionReceipt).toHaveBeenCalledExactlyOnceWith({
+        hash: SUBMITTED_TRANSACTION_HASH,
+        timeout: 30_000,
+      });
+
+      if (outcome === 'success') {
+        expect(getBeacon).toHaveBeenCalledExactlyOnceWith(
+          ROUND,
+          RECEIPT_BLOCK_NUMBER,
+        );
+      } else {
+        expect(getBeacon).not.toHaveBeenCalled();
+      }
+    },
+  );
 });
 
 function firstInvocationOrder(

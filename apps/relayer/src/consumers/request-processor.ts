@@ -23,6 +23,7 @@ import type {
 
 import {
   importQuicknetRoundWhenAvailable,
+  type ImportQuicknetRoundWhenAvailableOptions,
 } from '../rounds/import-round-when-available.js';
 
 import type {
@@ -48,6 +49,7 @@ export interface ProcessQuicknetRequestsOptions {
   onIncomplete?:
     | ((outcome: IncompleteQuicknetRoundOutcome) => void)
     | undefined;
+  signal?: AbortSignal;
 }
 
 export interface ProcessedQuicknetRound {
@@ -100,6 +102,8 @@ export type IncompleteQuicknetRoundOutcome = Extract<
 export async function processQuicknetRequestsWithOutcomes(
   options: ProcessQuicknetRequestsOptions,
 ): Promise<readonly QuicknetRoundOutcome[]> {
+  options.signal?.throwIfAborted();
+
   const firstBlocks = new Map<bigint, bigint>();
 
   for (const request of options.requests) {
@@ -153,18 +157,25 @@ export async function processQuicknetRequestsWithOutcomes(
     }
 
     try {
-      const result = await importQuicknetRoundWhenAvailable({
+      const importOptions: ImportQuicknetRoundWhenAvailableOptions = {
         publicClient: options.publicClient,
         walletClient: options.walletClient,
         account: options.account,
         submitter: options.submitter,
         deployment: options.deployment,
         round,
-        ...(options.receiptTimeoutMs !== undefined
-          ? { receiptTimeoutMs: options.receiptTimeoutMs }
-          : {}),
         onProgress: options.onProgress,
-      });
+      };
+
+      if (options.receiptTimeoutMs !== undefined) {
+        importOptions.receiptTimeoutMs = options.receiptTimeoutMs;
+      }
+
+      if (options.signal !== undefined) {
+        importOptions.signal = options.signal;
+      }
+
+      const result = await importQuicknetRoundWhenAvailable(importOptions);
 
       if (result.status === 'pending') {
         recordIncomplete({
@@ -204,6 +215,13 @@ export async function processQuicknetRequestsWithOutcomes(
         // Reporting must not replace a successful import.
       }
     } catch (error) {
+      if (
+        options.signal?.aborted &&
+        error === options.signal.reason
+      ) {
+        throw error;
+      }
+
       outcomes.push({
         round,
         firstRequestBlock,

@@ -54,6 +54,7 @@ export interface ImportQuicknetRoundOptions {
   beacon?: QuicknetBeacon;
   receiptTimeoutMs?: number;
   onProgress?: ((progress: RoundImportProgress) => void) | undefined;
+  signal?: AbortSignal;
 }
 
 export type ImportQuicknetRoundResult =
@@ -112,6 +113,8 @@ export async function importQuicknetRound(
     options.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS,
   );
 
+  options.signal?.throwIfAborted();
+
   reportImportProgress(options.onProgress, {
     round,
     phase: 'verify-deployment',
@@ -128,7 +131,13 @@ export async function importQuicknetRound(
     phase: 'check-stored',
   });
 
-  if (await registry.isStored(round)) {
+  options.signal?.throwIfAborted();
+
+  const stored = await registry.isStored(round);
+
+  options.signal?.throwIfAborted();
+
+  if (stored) {
     const randomness = await registry.getBeacon(round);
 
     return {
@@ -145,8 +154,18 @@ export async function importQuicknetRound(
       phase: 'fetch-beacon',
     });
 
-    beacon = await fetchBeacon(round);
+    options.signal?.throwIfAborted();
+
+    if (options.signal === undefined) {
+      beacon = await fetchBeacon(round);
+    } else {
+      beacon = await fetchBeacon(round, undefined, {
+        signal: options.signal,
+      });
+    }
   }
+
+  options.signal?.throwIfAborted();
 
   reportImportProgress(options.onProgress, {
     round,
@@ -182,6 +201,8 @@ export async function importQuicknetRound(
     round,
     phase: 'submit-transaction',
   });
+
+  options.signal?.throwIfAborted();
   
   const submitted = await options.submitter.submit(request);
 

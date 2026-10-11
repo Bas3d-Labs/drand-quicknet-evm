@@ -299,8 +299,7 @@ describe('runDaemon', () => {
   });
 
   it('forwards daemon options to each cycle', async () => {
-    const controller =
-      new AbortController();
+    const controller = new AbortController();
 
     vi.mocked(
       runDaemonCycle,
@@ -354,6 +353,7 @@ describe('runDaemon', () => {
       finality: FINALITY,
       softCursors: expect.any(Map),
       readChainHeads: expect.any(Function),
+      signal: controller.signal,
     });
   });
 
@@ -1142,6 +1142,41 @@ describe('runDaemon', () => {
     expect(readChainHeads).not.toHaveBeenCalled();
     expect(runDaemonCycle).not.toHaveBeenCalled();
     expect(submitter.recover).not.toHaveBeenCalled();
+  });
+
+  it('propagates cycle cancellation without sleeping or starting another cycle', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const sleep = vi.fn();
+    const onCycle = vi.fn();
+
+    vi.mocked(runDaemonCycle).mockImplementationOnce(async (options) => {
+      expect(options.signal).toBe(controller.signal);
+
+      controller.abort(reason);
+      throw reason;
+    });
+
+    await expect(runDaemon({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      checkpointStore: CHECKPOINT_STORE,
+      consumers: [VALIDATED_CONSUMER_A],
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      pollIntervalMs: 1_000,
+      signal: controller.signal,
+      sleep,
+      onCycle,
+    })).rejects.toBe(reason);
+
+    expect(runDaemonCycle).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+    expect(onCycle).not.toHaveBeenCalled();
   });
 });
 

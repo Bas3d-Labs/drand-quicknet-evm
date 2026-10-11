@@ -928,4 +928,182 @@ describe('reconcileDurableRequests', () => {
       nextBlock: TO_BLOCK + 1n,
     });
   });
+
+  it('rejects cancellation before reading the durable anchor', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    controller.abort(reason);
+
+    await expect(reconcileDurableRequests(options({
+      signal: controller.signal,
+    }))).rejects.toBe(reason);
+
+    expect(getBlock).not.toHaveBeenCalled();
+    expect(scanQuicknetRequests).not.toHaveBeenCalled();
+    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(createRegistryReader).not.toHaveBeenCalled();
+  });
+
+  it('does not scan after cancellation during the durable anchor read', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    getBlock.mockImplementationOnce(async () => {
+      controller.abort(reason);
+
+      return {
+        number: DURABLE_BLOCK,
+        hash: HASH_A,
+      };
+    });
+
+    await expect(reconcileDurableRequests(options({
+      signal: controller.signal,
+    }))).rejects.toBe(reason);
+
+    expect(getBlock).toHaveBeenCalledOnce();
+    expect(scanQuicknetRequests).not.toHaveBeenCalled();
+    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(createRegistryReader).not.toHaveBeenCalled();
+  });
+
+  it('stops before fulfillment reads when the final import completion requests shutdown', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    setScan([request(ROUND_A, 1_010n)]);
+
+    const onCompleted = vi.fn(() => {
+      controller.abort(reason);
+    });
+
+    await expect(reconcileDurableRequests(options({
+      signal: controller.signal,
+      onCompleted,
+    }))).rejects.toBe(reason);
+
+    expect(scanQuicknetRequests).toHaveBeenCalledOnce();
+    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledOnce();
+
+    expect(onCompleted).toHaveBeenCalledExactlyOnceWith({
+      round: ROUND_A,
+      result: imported(ROUND_A),
+    });
+
+    expect(createRegistryReader).not.toHaveBeenCalled();
+    expect(registryMocks.isStored).not.toHaveBeenCalled();
+    expect(getBlock).toHaveBeenCalledOnce();
+  });
+
+  it.each(['success', 'failure'] as const)(
+    'stops after cancellation during a fulfillment read ending in %s',
+    async (result) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const readFailure = new Error('Historical state unavailable.');
+
+      setScan([
+        request(ROUND_A, 1_010n),
+        request(ROUND_B, 1_020n),
+      ]);
+
+      registryMocks.isStored.mockImplementationOnce(async () => {
+        controller.abort(reason);
+
+        if (result === 'failure') {
+          throw readFailure;
+        }
+
+        return true;
+      });
+
+      const onCompleted = vi.fn();
+
+      await expect(reconcileDurableRequests(options({
+        signal: controller.signal,
+        onCompleted,
+      }))).rejects.toBe(reason);
+
+      expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
+      expect(onCompleted).toHaveBeenCalledTimes(2);
+
+      expect(registryMocks.isStored).toHaveBeenCalledExactlyOnceWith(
+        ROUND_A,
+        DURABLE_BLOCK,
+      );
+
+      expect(getBlock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(['success', 'failure'] as const)(
+    'rejects cancellation during the final anchor read ending in %s',
+    async (result) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const readFailure = new Error('Final anchor unavailable.');
+
+      setScan([request(ROUND_A, 1_010n)]);
+
+      getBlock
+        .mockResolvedValueOnce({
+          number: DURABLE_BLOCK,
+          hash: HASH_A,
+        })
+        .mockImplementationOnce(async () => {
+          controller.abort(reason);
+
+          if (result === 'failure') {
+            throw readFailure;
+          }
+
+          return {
+            number: DURABLE_BLOCK,
+            hash: HASH_A,
+          };
+        });
+
+      const onCompleted = vi.fn();
+
+      await expect(reconcileDurableRequests(options({
+        signal: controller.signal,
+        onCompleted,
+      }))).rejects.toBe(reason);
+
+      expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledOnce();
+      expect(onCompleted).toHaveBeenCalledExactlyOnceWith({
+        round: ROUND_A,
+        result: imported(ROUND_A),
+      });
+
+      expect(registryMocks.isStored).toHaveBeenCalledExactlyOnceWith(
+        ROUND_A,
+        DURABLE_BLOCK,
+      );
+
+      expect(getBlock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('propagates cancellation when the initial anchor read fails during shutdown', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const readFailure = new Error('Initial anchor unavailable.');
+
+    getBlock.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      throw readFailure;
+    });
+
+    await expect(reconcileDurableRequests(options({
+      signal: controller.signal,
+    }))).rejects.toBe(reason);
+
+    expect(getBlock).toHaveBeenCalledOnce();
+    expect(scanQuicknetRequests).not.toHaveBeenCalled();
+    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(createRegistryReader).not.toHaveBeenCalled();
+    expect(registryMocks.isStored).not.toHaveBeenCalled();
+  });
 });

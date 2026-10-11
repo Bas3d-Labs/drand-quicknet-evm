@@ -285,4 +285,40 @@ describe('waitForQuicknetRound', () => {
       sleep,
     ).not.toHaveBeenCalled();
   });
+
+  it('rejects an already-aborted signal before reading the clock', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const now = vi.fn();
+    const sleep = vi.fn();
+
+    controller.abort(reason);
+
+    await expect(waitForQuicknetRound({
+      round: ROUND,
+      now,
+      sleep,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(now).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('interrupts an active round wait with the original abort reason', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    const waiting = waitForQuicknetRound({
+      round: ROUND,
+      now: () => Number(SCHEDULED_MILLISECONDS - 60_000n),
+      signal: controller.signal,
+    });
+
+    const assertion = expect(waiting).rejects.toBe(reason);
+
+    controller.abort(reason);
+
+    await assertion;
+  });
 });

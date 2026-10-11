@@ -1,4 +1,6 @@
-// apps/relayer/test/fetch-beacon-with-retry.test.ts
+import {
+  setImmediate as nextTurn,
+} from 'node:timers/promises';
 
 import {
   beforeEach,
@@ -714,5 +716,74 @@ describe('fetchQuicknetBeaconWithRetry', () => {
     expect(
       quicknetMocks.fetchBeacon,
     ).not.toHaveBeenCalled();
+  });
+
+  it('rejects an already-aborted signal without fetching', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const sleep = vi.fn();
+
+    controller.abort(reason);
+
+    await expect(fetchQuicknetBeaconWithRetry({
+      round: ROUND,
+      signal: controller.signal,
+      sleep,
+    })).rejects.toBe(reason);
+
+    expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('forwards cancellation to fetch without retrying or wrapping it', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const sleep = vi.fn();
+
+    quicknetMocks.fetchBeacon.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      throw new Error('Fetch interrupted.');
+    });
+
+    await expect(fetchQuicknetBeaconWithRetry({
+      round: ROUND,
+      signal: controller.signal,
+      sleep,
+    })).rejects.toBe(reason);
+
+    expect(quicknetMocks.fetchBeacon).toHaveBeenCalledExactlyOnceWith(
+      ROUND,
+      undefined,
+      { signal: controller.signal },
+    );
+
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('interrupts the retry delay without another fetch attempt', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    quicknetMocks.fetchBeacon.mockRejectedValueOnce(
+      new Error('Beacon unavailable.'),
+    );
+
+    const fetching = fetchQuicknetBeaconWithRetry({
+      round: ROUND,
+      maxAttempts: 2,
+      retryDelayMs: 60_000,
+      signal: controller.signal,
+    });
+
+    const assertion = expect(fetching).rejects.toBe(reason);
+
+    // Let the rejected fetch enter the real retry timer.
+    await nextTurn();
+
+    controller.abort(reason);
+
+    await assertion;
+
+    expect(quicknetMocks.fetchBeacon).toHaveBeenCalledOnce();
   });
 });

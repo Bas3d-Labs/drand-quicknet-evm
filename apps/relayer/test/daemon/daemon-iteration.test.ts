@@ -1523,4 +1523,245 @@ describe('runDaemonIteration', () => {
     );
     expect(save).not.toHaveBeenCalled();
   });
+
+  it('rejects cancellation before loading checkpoint state', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    controller.abort(reason);
+
+    await expect(run({
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(load).not.toHaveBeenCalled();
+    expect(getChainHeads).not.toHaveBeenCalled();
+    expect(reconcileDurableRequests).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('forwards durable cancellation without saving or starting the soft scan', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    vi.mocked(reconcileDurableRequests).mockImplementationOnce(
+      async (options) => {
+        expect(options.signal).toBe(controller.signal);
+
+        controller.abort(reason);
+        throw reason;
+      },
+    );
+
+    await expect(run({
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(reconcileDurableRequests).toHaveBeenCalledOnce();
+    expect(save).not.toHaveBeenCalled();
+    expect(scanQuicknetRequests).not.toHaveBeenCalled();
+    expect(processQuicknetRequests).not.toHaveBeenCalled();
+  });
+
+  it('forwards soft cancellation without advancing the supplied cursor', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const softCursor = { nextBlock: 1_201n };
+
+    // Durable processing is already caught up.
+    load.mockResolvedValue(1_201n);
+
+    vi.mocked(processQuicknetRequests).mockImplementationOnce(
+      async (options) => {
+        expect(options.signal).toBe(controller.signal);
+
+        controller.abort(reason);
+        throw reason;
+      },
+    );
+
+    await expect(run({
+      softCursor,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(processQuicknetRequests).toHaveBeenCalledOnce();
+    expect(reconcileDurableRequests).not.toHaveBeenCalled();
+    expect(softCursor).toEqual({ nextBlock: 1_201n });
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it.each(['checkpoint', 'heads'] as const)(
+    'does not start scans after cancellation during the %s read',
+    async (stage) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+
+      if (stage === 'checkpoint') {
+        load.mockImplementationOnce(async () => {
+          controller.abort(reason);
+          return 1_000n;
+        });
+      } else {
+        vi.mocked(getChainHeads).mockImplementationOnce(async () => {
+          controller.abort(reason);
+
+          return {
+            latestBlock: 1_500n,
+            durableBlock: 1_200n,
+          };
+        });
+      }
+
+      await expect(run({
+        signal: controller.signal,
+      })).rejects.toBe(reason);
+
+      expect(load).toHaveBeenCalledOnce();
+
+      if (stage === 'checkpoint') {
+        expect(getChainHeads).not.toHaveBeenCalled();
+      } else {
+        expect(getChainHeads).toHaveBeenCalledOnce();
+      }
+
+      expect(reconcileDurableRequests).not.toHaveBeenCalled();
+      expect(scanQuicknetRequests).not.toHaveBeenCalled();
+      expect(processQuicknetRequests).not.toHaveBeenCalled();
+      expect(save).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['success', 'failure'] as const)(
+    'does not start soft scanning after shutdown during checkpoint save ending in %s',
+    async (result) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const saveFailure = new Error('Checkpoint persistence failed.');
+      const softCursor = { nextBlock: 1_201n };
+      let saveFinished = false;
+
+      save.mockImplementationOnce(async () => {
+        controller.abort(reason);
+
+        // The active save completes before shutdown propagates.
+        await Promise.resolve();
+
+        if (result === 'failure') {
+          throw saveFailure;
+        }
+
+        saveFinished = true;
+      });
+
+      await expect(run({
+        signal: controller.signal,
+        softCursor,
+      })).rejects.toBe(
+        result === 'failure' ? saveFailure : reason,
+      );
+
+      expect(reconcileDurableRequests).toHaveBeenCalledOnce();
+      expect(save).toHaveBeenCalledExactlyOnceWith(CONSUMER, 1_100n);
+      expect(saveFinished).toBe(result === 'success');
+      expect(scanQuicknetRequests).not.toHaveBeenCalled();
+      expect(processQuicknetRequests).not.toHaveBeenCalled();
+      expect(softCursor).toEqual({ nextBlock: 1_201n });
+    },
+  );
+
+  it.each(['scanned', 'caught-up'] as const)(
+    'propagates cancellation after the soft scan returns %s',
+    async (status) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const softCursor = {
+        nextBlock: status === 'caught-up' ? 1_501n : 1_201n,
+      };
+
+      // Durable processing is already caught up.
+      load.mockResolvedValue(1_201n);
+
+      vi.mocked(scanQuicknetRequests).mockImplementationOnce(
+        async () => {
+          controller.abort(reason);
+
+          if (status === 'caught-up') {
+            return {
+              status: 'caught-up',
+              throughBlock: 1_500n,
+              nextBlock: 1_501n,
+            };
+          }
+
+          return {
+            status: 'scanned',
+            throughBlock: 1_500n,
+            fromBlock: 1_201n,
+            toBlock: 1_300n,
+            nextBlock: 1_301n,
+            requests: [SOFT_REQUEST],
+          };
+        },
+      );
+
+      await expect(run({
+        signal: controller.signal,
+        softCursor,
+      })).rejects.toBe(reason);
+
+      expect(scanQuicknetRequests).toHaveBeenCalledOnce();
+      expect(processQuicknetRequests).not.toHaveBeenCalled();
+      expect(reconcileDurableRequests).not.toHaveBeenCalled();
+      expect(save).not.toHaveBeenCalled();
+      expect(softCursor.nextBlock).toBe(
+        status === 'caught-up' ? 1_501n : 1_201n,
+      );
+    },
+  );
+
+  it('preserves completion reporting without advancing the soft cursor when shutdown accompanies completed processing', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const softCursor = { nextBlock: 1_201n };
+
+    // Durable processing is already caught up.
+    load.mockResolvedValue(1_201n);
+
+    vi.mocked(scanQuicknetRequests).mockResolvedValueOnce({
+      status: 'scanned',
+      throughBlock: 1_500n,
+      fromBlock: 1_201n,
+      toBlock: 1_300n,
+      nextBlock: 1_301n,
+      requests: [SOFT_REQUEST],
+    });
+
+    vi.mocked(processQuicknetRequests).mockImplementationOnce(
+      async ({ onCompleted }) => {
+        onCompleted?.(COMPLETED);
+        return { rounds: [COMPLETED] };
+      },
+    );
+
+    const onCompleted = vi.fn(() => {
+      controller.abort(reason);
+    });
+
+    await expect(run({
+      signal: controller.signal,
+      softCursor,
+      onCompleted,
+    })).rejects.toBe(reason);
+
+    expect(onCompleted).toHaveBeenCalledExactlyOnceWith(
+      'soft',
+      COMPLETED,
+    );
+    expect(processQuicknetRequests).toHaveBeenCalledOnce();
+    expect(scanQuicknetRequests).toHaveBeenCalledOnce();
+    expect(reconcileDurableRequests).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+    expect(softCursor).toEqual({ nextBlock: 1_201n });
+  });
 });

@@ -25,12 +25,14 @@ import type {
 import {
   reconcileDurableRequests,
   type DurableRequestResult,
+  type ReconcileDurableRequestsOptions,
 } from '../consumers/durable-requests.js';
 
 import {
   type IncompleteQuicknetRoundOutcome,
   processQuicknetRequests,
   type ProcessedQuicknetRound,
+  type ProcessQuicknetRequestsOptions,
   type ProcessQuicknetRequestsResult,
 } from '../consumers/request-processor.js';
 
@@ -84,6 +86,7 @@ export interface RunDaemonIterationOptions {
   onReconciliation?: (
     result: DurableRequestResult,
   ) => void;
+  signal?: AbortSignal;
 }
 
 export interface RunDaemonIterationResult {
@@ -138,9 +141,14 @@ export async function runDaemonIteration(
 
   validateOptions(options);
 
+  options.signal?.throwIfAborted();
+
   reportOperation({ name: 'load-checkpoint' });
 
   const checkpoint = await options.checkpointStore.load(options.consumer);
+
+  options.signal?.throwIfAborted();
+
   let durableNextBlock = checkpoint ?? options.startBlock;
 
   reportOperation({ name: 'read-chain-heads' });
@@ -155,6 +163,8 @@ export async function runDaemonIteration(
       finality: options.finality,
     });
   }
+
+  options.signal?.throwIfAborted();
 
   const durableHeadRegressed =
     checkpoint !== undefined &&
@@ -172,7 +182,7 @@ export async function runDaemonIteration(
       maxBlockRange: options.maxBlockRange,
     });
 
-    const reconciliation = await reconcileDurableRequests({
+    const reconciliationOptions: ReconcileDurableRequestsOptions = {
       publicClient: options.publicClient,
       walletClient: options.walletClient,
       account: options.account,
@@ -207,7 +217,15 @@ export async function runDaemonIteration(
           ...progress,
         });
       },
-    });
+    };
+
+    if (options.signal !== undefined) {
+      reconciliationOptions.signal = options.signal;
+    }
+
+    const reconciliation = await reconcileDurableRequests(
+      reconciliationOptions,
+    );
 
     try {
       options.onReconciliation?.(reconciliation);
@@ -301,6 +319,8 @@ export async function runDaemonIteration(
     ProcessedDaemonScan |
     undefined;
 
+  options.signal?.throwIfAborted();
+
   const softResult = await scanQuicknetRequests({
     publicClient: options.publicClient,
     consumers: [
@@ -311,6 +331,8 @@ export async function runDaemonIteration(
     maxBlockRange: options.maxBlockRange,
   });
 
+  options.signal?.throwIfAborted();
+
   if (softResult.status === 'scanned') {
     reportOperation({
       name: 'process-requests',
@@ -319,7 +341,7 @@ export async function runDaemonIteration(
       toBlock: softResult.toBlock,
     });
 
-    const processing = await processQuicknetRequests({
+    const processingOptions: ProcessQuicknetRequestsOptions = {
       publicClient: options.publicClient,
       walletClient: options.walletClient,
       account: options.account,
@@ -348,7 +370,17 @@ export async function runDaemonIteration(
       onIncomplete(outcome) {
         reportIncomplete('soft', outcome);
       },
-    });
+    };
+
+    if (options.signal !== undefined) {
+      processingOptions.signal = options.signal;
+    }
+
+    const processing = await processQuicknetRequests(
+      processingOptions,
+    );
+
+    options.signal?.throwIfAborted();
 
     softCursor = {
       nextBlock: softResult.nextBlock,

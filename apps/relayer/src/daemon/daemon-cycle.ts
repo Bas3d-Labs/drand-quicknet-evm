@@ -28,6 +28,7 @@ import type {
 
 import {
   runDaemonIteration,
+  type RunDaemonIterationOptions,
   type RunDaemonIterationResult,
   type SoftScanCursor,
 } from '../daemon/daemon-iteration.js';
@@ -62,6 +63,7 @@ export interface RunDaemonCycleOptions {
   softCursors: Map<Address, SoftScanCursor>;
   receiptTimeoutMs?: number;
   readChainHeads?: () => Promise<ChainHeads>;
+  signal?: AbortSignal;
 }
 
 export interface DaemonIncompleteRound {
@@ -97,9 +99,18 @@ export interface RunDaemonCycleResult {
 export async function runDaemonCycle(
   options: RunDaemonCycleOptions,
 ): Promise<RunDaemonCycleResult> {
+  options.signal?.throwIfAborted();
+
   try {
     await options.submitter.recover();
   } catch (error) {
+    if (
+      options.signal?.aborted &&
+      error === options.signal.reason
+    ) {
+      throw error;
+    }
+
     // Recovery failure prevents this cycle from preparing transactions.
     // Use the existing consumer-failure reporting and retry next cycle.
     return {
@@ -113,6 +124,10 @@ export async function runDaemonCycle(
 
   const consumers: DaemonConsumerCycleResult[] = [];
   for (const consumer of options.consumers) {
+    if (options.signal?.aborted) {
+      break;
+    }
+
     let operation: OperationContext | undefined;
 
     const completed: {
@@ -125,7 +140,7 @@ export async function runDaemonCycle(
 
     try {
       const softCursor = options.softCursors.get(consumer.address);
-      const iteration = await runDaemonIteration({
+      const iterationOptions: RunDaemonIterationOptions = {
         publicClient: options.publicClient,
         walletClient: options.walletClient,
         account: options.account,
@@ -166,7 +181,13 @@ export async function runDaemonCycle(
         ...(options.readChainHeads !== undefined
           ? { readChainHeads: options.readChainHeads }
           : {}),
-      });
+      };
+
+      if (options.signal !== undefined) {
+        iterationOptions.signal = options.signal;
+      }
+
+      const iteration = await runDaemonIteration(iterationOptions);
 
       options.softCursors.set(consumer.address, iteration.softCursor);
 
@@ -189,6 +210,13 @@ export async function runDaemonCycle(
 
       consumers.push(successful);
     } catch (error) {
+      if (
+        options.signal?.aborted &&
+        error === options.signal.reason
+      ) {
+        throw error;
+      }
+
       const failed: Extract<
         DaemonConsumerCycleResult,
         { status: 'failed' }

@@ -19,6 +19,10 @@ import {
   type RoundImportProgress,
 } from '../diagnostics/operation-context.js';
 
+import type {
+  BeaconSubmitter,
+} from './create-beacon-submitter.js';
+
 import {
   fetchQuicknetBeaconWithRetry,
   type FetchQuicknetBeaconWithRetryOptions,
@@ -26,12 +30,9 @@ import {
 
 import {
   importQuicknetRound,
+  type ImportQuicknetRoundOptions,
   type ImportQuicknetRoundResult,
 } from './import-round.js';
-
-import type {
-  BeaconSubmitter,
-} from './create-beacon-submitter.js';
 
 import {
   waitForQuicknetRound
@@ -48,6 +49,7 @@ export interface ImportQuicknetRoundWhenAvailableOptions {
   fetchRetryDelayMs?: number;
   receiptTimeoutMs?: number;
   onProgress?: ((progress: RoundImportProgress) => void) | undefined;
+  signal?: AbortSignal;
 }
 
 export async function importQuicknetRoundWhenAvailable(
@@ -71,6 +73,8 @@ export async function importQuicknetRoundWhenAvailable(
     options.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS,
   );
 
+  options.signal?.throwIfAborted();
+
   reportImportProgress(options.onProgress, {
     round,
     phase: 'verify-deployment',
@@ -87,7 +91,13 @@ export async function importQuicknetRoundWhenAvailable(
     phase: 'check-stored',
   });
 
-  if (await registry.isStored(round)) {
+  options.signal?.throwIfAborted();
+
+  const stored = await registry.isStored(round);
+
+  options.signal?.throwIfAborted();
+
+  if (stored) {
     const randomness = await registry.getBeacon(round);
     return {
       status: 'already-stored',
@@ -101,11 +111,24 @@ export async function importQuicknetRoundWhenAvailable(
     phase: 'wait-for-beacon',
   });
 
-  await waitForQuicknetRound({round});
+  if (options.signal === undefined) {
+    await waitForQuicknetRound({ round });
+  } else {
+    await waitForQuicknetRound({
+      round,
+      signal: options.signal,
+    });
+  }
+
+  options.signal?.throwIfAborted();
 
   const fetchOptions: FetchQuicknetBeaconWithRetryOptions = {
     round,
   };
+
+  if (options.signal !== undefined) {
+    fetchOptions.signal = options.signal;
+  }
 
   if (maxFetchAttempts !== undefined) {
     fetchOptions.maxAttempts = maxFetchAttempts;
@@ -122,7 +145,9 @@ export async function importQuicknetRoundWhenAvailable(
 
   const beacon = await fetchQuicknetBeaconWithRetry(fetchOptions);
 
-  return importQuicknetRound({
+  options.signal?.throwIfAborted();
+
+  const importOptions: ImportQuicknetRoundOptions = {
     publicClient,
     walletClient,
     account,
@@ -132,5 +157,11 @@ export async function importQuicknetRoundWhenAvailable(
     beacon,
     receiptTimeoutMs,
     onProgress: options.onProgress,
-  });
+  };
+
+  if (options.signal !== undefined) {
+    importOptions.signal = options.signal;
+  }
+
+  return importQuicknetRound(importOptions);
 }

@@ -103,6 +103,8 @@ export async function reconcileDurableRequests(
     throw new RangeError('Invalid durable scan bounds.');
   }
 
+  options.signal?.throwIfAborted();
+
   if (options.nextBlock > options.durableBlock) {
     return {
       status: 'caught-up',
@@ -123,6 +125,8 @@ export async function reconcileDurableRequests(
       options.durableBlock,
     );
   } catch (error) {
+    options.signal?.throwIfAborted();
+
     return {
       status: 'anchor-unavailable',
       durableBlock: options.durableBlock,
@@ -134,6 +138,8 @@ export async function reconcileDurableRequests(
       },
     };
   }
+
+  options.signal?.throwIfAborted();
 
   const scan = await scanQuicknetRequests({
     publicClient: options.publicClient,
@@ -175,6 +181,8 @@ export async function reconcileDurableRequests(
     requests: scan.requests,
   });
 
+  options.signal?.throwIfAborted();
+
   const fulfillment: DurableRoundOutcome[] = [];
   let nextBlock = scan.nextBlock;
 
@@ -191,6 +199,8 @@ export async function reconcileDurableRequests(
       outcome.round,
       anchor,
     );
+
+    options.signal?.throwIfAborted();
 
     fulfillment.push({
       round: outcome.round,
@@ -231,6 +241,8 @@ export async function reconcileDurableRequests(
       error,
     };
   }
+
+  options.signal?.throwIfAborted();
 
   return {
     status: 'scanned',
