@@ -1562,4 +1562,32 @@ describe('runDaemonIteration', () => {
     expect(scanQuicknetRequests).not.toHaveBeenCalled();
     expect(processQuicknetRequests).not.toHaveBeenCalled();
   });
+
+  it('forwards soft cancellation without advancing the supplied cursor', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const softCursor = { nextBlock: 1_201n };
+
+    // Durable processing is already caught up.
+    load.mockResolvedValue(1_201n);
+
+    vi.mocked(processQuicknetRequests).mockImplementationOnce(
+      async (options) => {
+        expect(options.signal).toBe(controller.signal);
+
+        controller.abort(reason);
+        throw reason;
+      },
+    );
+
+    await expect(run({
+      softCursor,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(processQuicknetRequests).toHaveBeenCalledOnce();
+    expect(reconcileDurableRequests).not.toHaveBeenCalled();
+    expect(softCursor).toEqual({ nextBlock: 1_201n });
+    expect(save).not.toHaveBeenCalled();
+  });
 });

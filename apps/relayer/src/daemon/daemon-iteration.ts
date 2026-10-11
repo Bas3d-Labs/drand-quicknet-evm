@@ -32,6 +32,7 @@ import {
   type IncompleteQuicknetRoundOutcome,
   processQuicknetRequests,
   type ProcessedQuicknetRound,
+  type ProcessQuicknetRequestsOptions,
   type ProcessQuicknetRequestsResult,
 } from '../consumers/request-processor.js';
 
@@ -331,7 +332,7 @@ export async function runDaemonIteration(
       toBlock: softResult.toBlock,
     });
 
-    const processing = await processQuicknetRequests({
+    const processingOptions: ProcessQuicknetRequestsOptions = {
       publicClient: options.publicClient,
       walletClient: options.walletClient,
       account: options.account,
@@ -360,7 +361,15 @@ export async function runDaemonIteration(
       onIncomplete(outcome) {
         reportIncomplete('soft', outcome);
       },
-    });
+    };
+
+    if (options.signal !== undefined) {
+      processingOptions.signal = options.signal;
+    }
+
+    const processing = await processQuicknetRequests(
+      processingOptions,
+    );
 
     softCursor = {
       nextBlock: softResult.nextBlock,
