@@ -1381,4 +1381,138 @@ describe.each(ROUND_COMMANDS)('%s failure context', (command) => {
 
     expect(onImportFailure).not.toHaveBeenCalled();
   });
+
+  it.each(
+    SIGNALS.flatMap(shutdownSignal =>
+      (['success', 'failure'] as const).map(outcome => ({
+        shutdownSignal,
+        outcome,
+      })),
+    ),
+  )(
+    'awaits the active import through repeated $shutdownSignal and preserves $outcome',
+    async ({ shutdownSignal, outcome }) => {
+      const before = SIGNALS.map(name => process.listeners(name));
+      const previous = process.listeners(shutdownSignal);
+      const output = vi.fn();
+      const onImportFailure = vi.fn();
+      const failure = new Error('Active import failed.');
+
+      const progress = {
+        round: ROUND,
+        phase: 'wait-for-receipt' as const,
+        transactionHash: HASH,
+      };
+
+      let notifyStarted: () => void = () => {};
+      let finishImport: () => void = () => {};
+
+      const started = new Promise<void>((resolve) => {
+        notifyStarted = resolve;
+      });
+
+      const finished = new Promise<void>((resolve) => {
+        finishImport = resolve;
+      });
+
+      let activeSignal: AbortSignal | undefined;
+
+      operation().mockImplementationOnce(async ({ signal, onProgress }) => {
+        activeSignal = signal;
+        onProgress?.(progress);
+        notifyStarted();
+
+        await finished;
+
+        if (outcome === 'failure') {
+          throw failure;
+        }
+
+        return IMPORTED;
+      });
+
+      let commandFinished = false;
+
+      // Observe rejection immediately so the failure case cannot become
+      // an unhandled rejection while the test controls the active import.
+      const pending = main([
+        command,
+        '--network',
+        PRESET,
+        '--round',
+        ROUND.toString(),
+      ], output, { onImportFailure }).then(
+        () => {
+          commandFinished = true;
+          return { status: 'fulfilled' } as const;
+        },
+        (error: unknown) => {
+          commandFinished = true;
+          return { status: 'rejected', error } as const;
+        },
+      );
+
+      try {
+        await Promise.race([started, pending]);
+
+        expect(operation()).toHaveBeenCalledOnce();
+        expect(activeSignal).toBeInstanceOf(AbortSignal);
+
+        const added = process.listeners(shutdownSignal).filter(
+          listener => !previous.includes(listener),
+        );
+
+        expect(added).toHaveLength(1);
+        const listener = added[0]!;
+
+        listener(shutdownSignal);
+        await Promise.resolve();
+
+        expect(activeSignal?.aborted).toBe(true);
+        expect(commandFinished).toBe(false);
+        expect(process.listeners(shutdownSignal)).toContain(listener);
+
+        listener(shutdownSignal);
+        await Promise.resolve();
+
+        expect(commandFinished).toBe(false);
+        expect(process.listeners(shutdownSignal)).toContain(listener);
+        expect(output).not.toHaveBeenCalled();
+        expect(onImportFailure).not.toHaveBeenCalled();
+      } finally {
+        finishImport();
+        await pending;
+      }
+
+      const result = await pending;
+
+      if (outcome === 'success') {
+        expect(result).toEqual({ status: 'fulfilled' });
+        expect(output).toHaveBeenCalledExactlyOnceWith({
+          type: 'import-result',
+          round: ROUND,
+          result: IMPORTED,
+        });
+        expect(onImportFailure).not.toHaveBeenCalled();
+      } else {
+        expect(result.status).toBe('rejected');
+
+        if (result.status !== 'rejected') {
+          throw new Error('Expected the import failure.');
+        }
+
+        expect(result.error).toBe(failure);
+        expect(output).not.toHaveBeenCalled();
+        expect(onImportFailure).toHaveBeenCalledExactlyOnceWith(
+          failure,
+          progress,
+        );
+      }
+
+      expect(operation()).toHaveBeenCalledOnce();
+      expect(
+        SIGNALS.map(name => process.listeners(name)),
+      ).toEqual(before);
+    },
+  );
 });
