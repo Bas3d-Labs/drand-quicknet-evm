@@ -145,6 +145,8 @@ export async function runDaemonCommand(
     log: logger,
     readChainHeads,
     maxBlockRange: config.maxBlockRange,
+    checkpointFile: config.checkpointFile,
+    startupPollIntervalMs: config.pollIntervalMs,
     signal: options.signal,
     env,
   });

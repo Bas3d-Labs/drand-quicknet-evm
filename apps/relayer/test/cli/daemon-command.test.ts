@@ -547,6 +547,8 @@ describe('runDaemonCommand', () => {
         log: relayerLogMocks,
         readChainHeads: expect.any(Function),
         maxBlockRange: 2_000n,
+        checkpointFile: VERIFIED_DAEMON_CONFIG.checkpointFile,
+        startupPollIntervalMs: VERIFIED_DAEMON_CONFIG.pollIntervalMs,
         signal: undefined,
         env: process.env,
       });
@@ -1161,6 +1163,79 @@ describe('runDaemonCommand', () => {
     expectNotCalled(
       vi.mocked(FileCheckpointStore.open),
       checkpointStoreMocks.load,
+      vi.mocked(collectDaemonStartupSummary),
+      onStartup,
+      vi.mocked(runDaemon),
+    );
+  });
+
+  it('does not open checkpoints until the signer startup wait completes', async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    signerRuntimeMocks.openBeaconSubmitter
+      .mockImplementationOnce(async () => {
+        await waiting;
+        return submitter;
+      });
+
+    const onStartup = vi.fn();
+
+    const pending = runDaemonCommand({
+      source: SOURCE,
+      onStartup,
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(signerRuntimeMocks.openBeaconSubmitter)
+          .toHaveBeenCalledOnce();
+      });
+
+      expectNotCalled(
+        vi.mocked(FileCheckpointStore.open),
+        checkpointStoreMocks.load,
+        vi.mocked(collectDaemonStartupSummary),
+        onStartup,
+        vi.mocked(runDaemon),
+      );
+    } finally {
+      release();
+      await pending;
+    }
+
+    expect(FileCheckpointStore.open).toHaveBeenCalledOnce();
+    expect(onStartup).toHaveBeenCalledOnce();
+    expect(runDaemon).toHaveBeenCalledOnce();
+  });
+
+  it('does not create checkpoints when signer startup is cancelled', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Startup cancelled');
+    const onStartup = vi.fn();
+
+    signerRuntimeMocks.openBeaconSubmitter
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        throw reason;
+      });
+
+    await expect(runDaemonCommand({
+      source: SOURCE,
+      signal: controller.signal,
+      onStartup,
+    })).rejects.toBe(reason);
+
+    expect(
+      signerRuntimeMocks.openBeaconSubmitter.mock.calls[0]![0].signal,
+    ).toBe(controller.signal);
+
+    expectNotCalled(
+      vi.mocked(FileCheckpointStore.open),
+      checkpointStoreMocks.load,
+      checkpointStoreMocks.save,
       vi.mocked(collectDaemonStartupSummary),
       onStartup,
       vi.mocked(runDaemon),

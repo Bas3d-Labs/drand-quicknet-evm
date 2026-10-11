@@ -18,6 +18,10 @@ import {
 } from '../state/broadcast-retry-schedule.js';
 
 import {
+  checkpointExists,
+} from '../state/checkpoint-exists.js';
+
+import {
   FileTransactionJournalStore,
 } from '../state/file-transaction-journal-store.js';
 
@@ -46,6 +50,7 @@ export interface OpenSignerRuntimeOptions {
   readonly log: ScopedRelayerLog;
   readonly createErrorSummary: ErrorSummaryFactory;
   readonly retry: BroadcastRetryScheduleOptions;
+  readonly checkpointFile?: string | undefined;
   readonly env?: NodeJS.ProcessEnv;
 }
 
@@ -55,10 +60,10 @@ export interface SignerRuntime {
 }
 
 /**
- * Opens the command's signer journal and creates the recovery cycle it
- * will reuse through its lifetime. A missing journal remains missing
- * until recovery receives explicit bootstrap authorization.
- * 
+ * Opens the command's signer journal and creates its recovery cycle.
+ * A missing journal may initialize during recovery only after passing
+ * the command's prior-state check.
+ *
  * Call once per signer while holding the service lock. Commands sharing
  * a chain and signer must use the same state directory.
  */
@@ -101,7 +106,28 @@ export async function openSignerRuntime(
 
   const coordinator = await SignerCoordinator.create({
     identity,
-    store,
+    store: {
+      async load() {
+        const current = await store.load();
+
+        if (
+          current.kind === 'missing' &&
+          options.checkpointFile !== undefined &&
+          await checkpointExists(options.checkpointFile)
+        ) {
+          throw Object.assign(
+            new Error(
+              'Cannot automatically initialize a missing signer journal when checkpoint state exists.'
+            ),
+            { code: 'prior-state-present' as const },
+          );
+        }
+
+        return current;
+      },
+
+      save: (snapshot) => store.save(snapshot),
+    },
     maxRetainedAttempts: MAX_RETAINED_ATTEMPTS,
     log,
     createErrorSummary,

@@ -215,4 +215,78 @@ describe('command signer runtime', () => {
       openSignerRuntime(options()),
     ).rejects.toThrow('could not be decoded');
   });
+
+  it('refuses a missing journal when checkpoint state exists', async () => {
+    const checkpointFile = join(directory, 'checkpoint.json');
+
+    await writeFile(checkpointFile, '{}');
+
+    await expect(openSignerRuntime({
+      ...options(),
+      checkpointFile,
+    })).rejects.toMatchObject({
+      code: 'prior-state-present',
+    });
+
+    expect(await readdir(directory)).toEqual([
+      'checkpoint.json',
+    ]);
+  });
+
+  it('allows automatic initialization when the configured checkpoint is absent', async () => {
+    const checkpointFile = join(directory, 'checkpoint.json');
+
+    const runtime = await openSignerRuntime({
+      ...options(),
+      checkpointFile,
+    });
+
+    expect(await readdir(directory)).toEqual([]);
+
+    expect(await runtime.recovery.run(recovery())).toMatchObject({
+      inspection: { status: 'no-attempt' },
+      inclusions: { status: 'inspected' },
+      broadcast: null,
+    });
+
+    expect(runtime.coordinator.status.open).toBe(true);
+
+    expect(await readdir(directory)).toEqual([
+      `transaction-journal-4663-${IDENTITY.signer}.json`,
+    ]);
+  });
+
+  it('recovers an existing journal when checkpoint state exists', async () => {
+    const first = await openSignerRuntime(options());
+
+    await first.recovery.run(recovery());
+
+    const checkpointFile = join(directory, 'checkpoint.json');
+    await writeFile(checkpointFile, '{}');
+
+    // Simulate a later command; the first runtime is no longer used.
+    const reopened = await openSignerRuntime({
+      ...options(),
+      checkpointFile,
+    });
+
+    expect(reopened.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
+
+    await reopened.recovery.run(recovery());
+
+    expect(reopened.coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
+
+    expect((await readdir(directory)).sort()).toEqual([
+      'checkpoint.json',
+      `transaction-journal-4663-${IDENTITY.signer}.json`,
+    ].sort());
+  });
 });

@@ -305,6 +305,13 @@ export class SignerCoordinator {
   }
 
   /**
+   * Whether a journal snapshot has been loaded or durably persisted.
+   */
+  get journalInitialized(): boolean {
+    return this.persistence.current.kind === 'present';
+  }
+
+  /**
    * Determine whether the oldest unresolved attempt was a one-use
    * broadcast permit.
    */
