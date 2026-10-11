@@ -248,6 +248,19 @@ const EVENTS = {
 } as const satisfies Record<string, Definition>;
 
 const TRANSACTION_EVENTS = {
+  signerBootstrapDeferred: [
+    'info',
+    'signer_bootstrap_deferred',
+    'Signer journal initialization deferred because nonce counts disagree',
+    {
+      signer: 'address',
+      durableBlock: 'uint',
+      durableBlockHash: 'hash',
+      durableNonce: 'uint',
+      latestNonce: 'uint',
+      pendingNonce: 'uint',
+    },
+  ],
   signerBlocked: [
     'warn',
     'signer_blocked',

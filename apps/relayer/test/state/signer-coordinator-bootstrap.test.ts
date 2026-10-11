@@ -543,6 +543,100 @@ describe('signer bootstrap during recovery', () => {
       nonce: 7n,
     });
   });
+
+  it('reports deferred initialization with the observed nonce counts', async () => {
+    const t = await setup();
+
+    t.getTransactionCount
+      .mockResolvedValueOnce(7)
+      .mockResolvedValueOnce(8)
+      .mockResolvedValueOnce(9);
+
+    await t.coordinator.recover(t.options, 12);
+
+    const records = t.lines
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.event === 'signer_bootstrap_deferred');
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      level: 30,
+      signer: IDENTITY.signer,
+      cycle: 12,
+      operation: { name: 'reconcile-attempt' },
+      durableBlock: '100',
+      durableBlockHash: HASH,
+      durableNonce: '7',
+      latestNonce: '8',
+      pendingNonce: '9',
+    });
+
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.coordinator.status.recoveryComplete).toBe(false);
+    expect(t.coordinator.canBroadcast).toBe(false);
+  });
+
+  it('suppresses unchanged nonce counts even when the anchor advances', async () => {
+    const t = await setup();
+
+    for (const blockNumber of [100n, 101n]) {
+      t.getBlock.mockResolvedValue({
+        number: blockNumber,
+        hash: HASH,
+      });
+
+      t.getTransactionCount
+        .mockResolvedValueOnce(7)
+        .mockResolvedValueOnce(8)
+        .mockResolvedValueOnce(9);
+
+      await t.coordinator.recover({
+        ...t.options,
+        anchor: { blockNumber, blockHash: HASH },
+      });
+    }
+
+    expect(
+      t.events().filter((event) => event === 'signer_bootstrap_deferred'),
+    ).toHaveLength(1);
+
+    expect(t.getTransactionCount).toHaveBeenCalledTimes(6);
+    expect(t.save).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: 'durable', counts: [6, 8, 9] },
+    { label: 'latest', counts: [7, 9, 9] },
+    { label: 'pending', counts: [7, 8, 10] },
+  ])('reports a changed $label nonce', async ({ counts }) => {
+    const t = await setup();
+
+    t.getTransactionCount
+      .mockResolvedValueOnce(7)
+      .mockResolvedValueOnce(8)
+      .mockResolvedValueOnce(9);
+
+    await t.coordinator.recover(t.options);
+
+    for (const nonce of counts) {
+      t.getTransactionCount.mockResolvedValueOnce(nonce);
+    }
+
+    await t.coordinator.recover(t.options);
+
+    const records = t.lines
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.event === 'signer_bootstrap_deferred');
+
+    expect(records).toHaveLength(2);
+    expect(records[1]).toMatchObject({
+      durableNonce: String(counts[0]),
+      latestNonce: String(counts[1]),
+      pendingNonce: String(counts[2]),
+    });
+
+    expect(t.save).not.toHaveBeenCalled();
+  });
 });
 
 describe('missing journal policy', () => {

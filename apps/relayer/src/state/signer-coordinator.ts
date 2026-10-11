@@ -210,6 +210,11 @@ export class SignerCoordinator {
   private previousPrimary: SignerBlocker | null = null;
   private pendingWrite: PendingWrite | undefined;
   private attemptLog: ScopedRelayerLog | undefined;
+  private lastBootstrapDeferral: {
+    readonly durableNonce: bigint;
+    readonly latestNonce: bigint;
+    readonly pendingNonce: bigint;
+  } | undefined;
 
   private constructor(
     private readonly persistence: JournalPersistence,
@@ -690,9 +695,44 @@ export class SignerCoordinator {
     try {
       if (current.kind === 'missing') {
         const result = await this.readBootstrapObservation(options);
-        if (result.status !== 'ready') {
+
+        if (result.status === 'bootstrap-deferred') {
+          const { observation, latestNonce, pendingNonce } = result;
+          const previous = this.lastBootstrapDeferral;
+
+          if (
+            previous === undefined ||
+            previous.durableNonce !== observation.nonce ||
+            previous.latestNonce !== latestNonce ||
+            previous.pendingNonce !== pendingNonce
+          ) {
+            this.lastBootstrapDeferral = {
+              durableNonce: observation.nonce,
+              latestNonce,
+              pendingNonce,
+            };
+
+            this.emit(
+              (log) => log.signerBootstrapDeferred({
+                signer: this.identity.signer,
+                durableBlock: observation.anchor.blockNumber,
+                durableBlockHash: observation.anchor.blockHash,
+                durableNonce: observation.nonce,
+                latestNonce,
+                pendingNonce,
+              }),
+              cycle,
+            );
+          }
+
           return result;
         }
+
+        if (result.status === 'anchor-changed') {
+          return result;
+        }
+
+        this.lastBootstrapDeferral = undefined;
 
         const { observation } = result;
 

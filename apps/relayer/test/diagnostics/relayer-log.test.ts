@@ -176,6 +176,7 @@ describe('createRelayerLog', () => {
       'roundImported',
       'roundPending',
       'signerBlocked',
+      'signerBootstrapDeferred',
       'signerGateReleased',
       'withContext',
       'withErrorSummary',
@@ -1081,5 +1082,38 @@ describe('createRelayerLog', () => {
         code: 'LOG_RECORD_REJECTED',
         rejected: 'round_imported',
       });
+  });
+
+  it('reports deferred signer initialization with exact nonce counts', () => {
+    const { log, lines } = capture();
+
+    log.signerBootstrapDeferred({
+      signer: CONSUMER,
+      durableBlock: 100n,
+      durableBlockHash: HASH,
+      durableNonce: 9_007_199_254_740_993n,
+      latestNonce: 9_007_199_254_740_994n,
+      pendingNonce: 9_007_199_254_740_995n,
+    });
+
+    expect(lines).toHaveLength(1);
+
+    expect(recordAt(lines)).toEqual({
+      level: 30,
+      time: expect.any(String),
+      component: 'daemon',
+      chainId: CHAIN_ID,
+      runId: expect.any(String),
+      event: 'signer_bootstrap_deferred',
+      msg: 'Signer journal initialization deferred because nonce counts disagree',
+      signer: CONSUMER,
+      durableBlock: '100',
+      durableBlockHash: HASH,
+      durableNonce: '9007199254740993',
+      latestNonce: '9007199254740994',
+      pendingNonce: '9007199254740995',
+    });
+
+    expect(writeSync).not.toHaveBeenCalled();
   });
 });
