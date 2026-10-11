@@ -931,6 +931,85 @@ describe('importQuicknetRound', () => {
       expect(waitForTransactionReceipt).not.toHaveBeenCalled();
     },
   );
+  
+  it.each(['success', 'timeout', 'failure'] as const)(
+    'preserves receipt %s when shutdown occurs during receipt waiting',
+    async (outcome) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const failure = new Error('Receipt RPC failed.');
+
+      waitForTransactionReceipt.mockImplementationOnce(async () => {
+        controller.abort(reason);
+
+        if (outcome === 'timeout') {
+          throw new WaitForTransactionReceiptTimeoutError({
+            hash: SUBMITTED_TRANSACTION_HASH,
+          });
+        }
+
+        if (outcome === 'failure') {
+          throw failure;
+        }
+
+        return {
+          status: 'success',
+          transactionHash: RECEIPT_TRANSACTION_HASH,
+          blockNumber: RECEIPT_BLOCK_NUMBER,
+        };
+      });
+
+      const pending = importQuicknetRound({
+        publicClient,
+        walletClient,
+        account,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        signal: controller.signal,
+      });
+
+      if (outcome === 'failure') {
+        await expect(pending).rejects.toBe(failure);
+      } else if (outcome === 'timeout') {
+        await expect(pending).resolves.toEqual({
+          status: 'pending',
+          round: ROUND,
+          attemptId: '11111111-1111-4111-8111-111111111111',
+          transactionHash: SUBMITTED_TRANSACTION_HASH,
+          reason: 'receipt-timeout',
+        });
+      } else {
+        await expect(pending).resolves.toEqual({
+          status: 'imported',
+          submission: 'witness',
+          round: ROUND,
+          randomness: RANDOMNESS,
+          transactionHash: RECEIPT_TRANSACTION_HASH,
+        });
+      }
+
+      expect(controller.signal.aborted).toBe(true);
+      expect(submissionMocks.simulateBeaconSubmission)
+        .toHaveBeenCalledOnce();
+      expect(submitTransaction).toHaveBeenCalledExactlyOnceWith(
+        SIMULATED_REQUEST,
+      );
+      expect(waitForTransactionReceipt).toHaveBeenCalledExactlyOnceWith({
+        hash: SUBMITTED_TRANSACTION_HASH,
+        timeout: 30_000,
+      });
+
+      if (outcome === 'success') {
+        expect(getBeacon).toHaveBeenCalledExactlyOnceWith(
+          ROUND,
+          RECEIPT_BLOCK_NUMBER,
+        );
+      } else {
+        expect(getBeacon).not.toHaveBeenCalled();
+      }
+    },
+  );
 });
 
 function firstInvocationOrder(
