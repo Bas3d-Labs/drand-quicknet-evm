@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import {
   beforeEach,
   describe,
@@ -5,6 +9,10 @@ import {
   it,
   vi,
 } from 'vitest';
+
+import {
+  TransactionReceiptNotFoundError,
+} from 'viem';
 
 import type {
   PublicClient,
@@ -19,13 +27,25 @@ import {
   drandQuicknetBeaconRegistryAbi,
 } from '@based-labs/drand-quicknet-registry';
 
-import type {
-  SignerCoordinator,
-} from '../../src/state/signer-coordinator.js';
+import {
+  createRelayerLog,
+} from '../../src/diagnostics/relayer-log.js';
+
+import {
+  createScrubber,
+} from '../../src/diagnostics/text-scrubber.js';
 
 import {
   encodeBeaconSubmission,
 } from '../../src/rounds/encode-beacon-submission.js';
+
+import {
+  FileTransactionJournalStore,
+} from '../../src/state/file-transaction-journal-store.js';
+
+import {
+  SignerCoordinator,
+} from '../../src/state/signer-coordinator.js';
 
 const preparationMocks = vi.hoisted(() => ({
   prepareRelayerTransaction: vi.fn(),
@@ -336,5 +356,209 @@ describe('beacon transaction submission', () => {
 
     expect(t.prepareAttempt).toHaveBeenCalledOnce();
     expect(t.broadcastAttempt).toHaveBeenCalledOnce();
+  });
+
+  it('recovers the same signed transaction after cancellation prevents broadcast', async () => {
+    const t = setup();
+    const directory = await mkdtemp(join(tmpdir(), 'relayer-shutdown-'));
+
+    try {
+      const filePath = join(directory, 'journal.json');
+      const identity = {
+        chainId: 4663,
+        signer: ACCOUNT.address,
+      };
+      const anchor = {
+        blockNumber: 100n,
+        blockHash: HASH,
+      };
+      const observation = {
+        anchor,
+        nonce: 4n,
+      };
+
+      const store = await FileTransactionJournalStore.open({
+        filePath,
+        identity,
+      });
+
+      await store.save({
+        version: 1,
+        identity,
+        baseline: observation,
+        lastObservation: observation,
+        nextNonce: 4n,
+        durableNextNonce: 4n,
+        attempts: [],
+      });
+
+      const log = createRelayerLog({
+        chainId: identity.chainId,
+        destination: {
+          write(_line: string) {},
+        },
+      });
+
+      const createErrorSummary = (secrets: readonly string[] = []) => ({
+        scrubText: createScrubber({
+          rpcUrls: [],
+          secrets,
+        }),
+      });
+
+      const coordinator = await SignerCoordinator.create({
+        identity,
+        store,
+        maxRetainedAttempts: 1,
+        log,
+        createErrorSummary,
+      });
+
+      const request = vi.fn<PublicClient['request']>();
+      const getTransactionReceipt =
+        vi.fn<PublicClient['getTransactionReceipt']>();
+
+      const publicClient = {
+        getBlock: async () => ({
+          number: anchor.blockNumber,
+          hash: anchor.blockHash,
+        }),
+        getTransactionCount: async () => 4,
+        getTransactionReceipt,
+        request,
+      } as unknown as PublicClient;
+
+      coordinator.completeRecovery();
+      await coordinator.checkInclusions({
+        publicClient,
+        head: anchor,
+      });
+
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const signTransaction = vi.fn(ACCOUNT.signTransaction);
+      const account = {
+        ...ACCOUNT,
+        signTransaction,
+      };
+
+      const ordinarySave = store.save.bind(store);
+      const saveSpy = vi.spyOn(store, 'save')
+        .mockImplementationOnce(async (snapshot) => {
+          await ordinarySave(snapshot);
+          controller.abort(reason);
+        });
+
+      await expect(submitBeaconTransaction({
+        ...t.options,
+        publicClient,
+        account,
+        coordinator,
+        signal: controller.signal,
+      })).rejects.toBe(reason);
+
+      expect(saveSpy).toHaveBeenCalledOnce();
+      expect(signTransaction).toHaveBeenCalledOnce();
+      expect(request).not.toHaveBeenCalled();
+
+      saveSpy.mockRestore();
+
+      // Reopen from disk and create a fresh coordinator.
+      const reopened = await FileTransactionJournalStore.open({
+        filePath,
+        identity,
+      });
+      const loaded = await reopened.load();
+
+      expect(loaded.kind).toBe('present');
+
+      if (loaded.kind !== 'present') {
+        throw new Error('Expected the saved journal.');
+      }
+
+      expect(loaded.snapshot.nextNonce).toBe(5n);
+      expect(loaded.snapshot.durableNextNonce).toBe(4n);
+      expect(loaded.snapshot.attempts).toHaveLength(1);
+
+      const attempt = loaded.snapshot.attempts[0]!;
+      const signed = attempt.signedTransactions[0]!;
+
+      expect(attempt.phase).toBe('signed');
+      expect(attempt.nonce).toBe(4n);
+      expect(attempt.signedTransactions).toHaveLength(1);
+
+      const restarted = await SignerCoordinator.create({
+        identity,
+        store: reopened,
+        maxRetainedAttempts: 1,
+        log,
+        createErrorSummary,
+      });
+
+      expect(restarted.status.open).toBe(false);
+      expect(restarted.canBroadcast).toBe(false);
+
+      await expect(restarted.prepareAttempt({
+        account,
+        transaction: t.transaction,
+      })).rejects.toThrow('signer gate');
+
+      await expect(restarted.broadcastAttempt({
+        publicClient,
+        attemptId: attempt.attemptId,
+      })).rejects.toThrow('Fresh reconciliation');
+
+      expect(request).not.toHaveBeenCalled();
+
+      getTransactionReceipt.mockRejectedValue(
+        new TransactionReceiptNotFoundError({
+          hash: signed.transactionHash,
+        }),
+      );
+      request.mockResolvedValue(signed.transactionHash);
+
+      await restarted.recover({
+        publicClient,
+        anchor,
+        maxBlockRange: 100n,
+      });
+
+      await expect(restarted.broadcastAttempt({
+        publicClient,
+        attemptId: attempt.attemptId,
+      })).resolves.toEqual({
+        status: 'acknowledged',
+        attemptId: attempt.attemptId,
+        transactionHash: signed.transactionHash,
+        nonce: 4n,
+      });
+
+      expect(request).toHaveBeenCalledExactlyOnceWith({
+        method: 'eth_sendRawTransaction',
+        params: [signed.signedTransaction],
+      }, {
+        retryCount: 0,
+      });
+
+      expect(signTransaction).toHaveBeenCalledOnce();
+
+      const after = await reopened.load();
+
+      expect(after).toMatchObject({
+        kind: 'present',
+        snapshot: {
+          nextNonce: 5n,
+          durableNextNonce: 4n,
+          attempts: [{
+            attemptId: attempt.attemptId,
+            nonce: 4n,
+            phase: 'broadcast-may-have-occurred',
+            signedTransactions: [signed],
+          }],
+        },
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
