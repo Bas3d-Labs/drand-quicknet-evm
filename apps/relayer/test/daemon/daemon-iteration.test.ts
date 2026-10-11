@@ -1631,4 +1631,42 @@ describe('runDaemonIteration', () => {
       expect(save).not.toHaveBeenCalled();
     },
   );
+
+  it.each(['success', 'failure'] as const)(
+    'does not start soft scanning after shutdown during checkpoint save ending in %s',
+    async (result) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const saveFailure = new Error('Checkpoint persistence failed.');
+      const softCursor = { nextBlock: 1_201n };
+      let saveFinished = false;
+
+      save.mockImplementationOnce(async () => {
+        controller.abort(reason);
+
+        // The active save completes before shutdown propagates.
+        await Promise.resolve();
+
+        if (result === 'failure') {
+          throw saveFailure;
+        }
+
+        saveFinished = true;
+      });
+
+      await expect(run({
+        signal: controller.signal,
+        softCursor,
+      })).rejects.toBe(
+        result === 'failure' ? saveFailure : reason,
+      );
+
+      expect(reconcileDurableRequests).toHaveBeenCalledOnce();
+      expect(save).toHaveBeenCalledExactlyOnceWith(CONSUMER, 1_100n);
+      expect(saveFinished).toBe(result === 'success');
+      expect(scanQuicknetRequests).not.toHaveBeenCalled();
+      expect(processQuicknetRequests).not.toHaveBeenCalled();
+      expect(softCursor).toEqual({ nextBlock: 1_201n });
+    },
+  );
 });

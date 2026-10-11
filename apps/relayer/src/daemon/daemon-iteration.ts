@@ -319,6 +319,8 @@ export async function runDaemonIteration(
     ProcessedDaemonScan |
     undefined;
 
+  options.signal?.throwIfAborted();
+
   const softResult = await scanQuicknetRequests({
     publicClient: options.publicClient,
     consumers: [
