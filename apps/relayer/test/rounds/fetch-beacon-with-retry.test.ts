@@ -715,4 +715,46 @@ describe('fetchQuicknetBeaconWithRetry', () => {
       quicknetMocks.fetchBeacon,
     ).not.toHaveBeenCalled();
   });
+
+  it('rejects an already-aborted signal without fetching', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const sleep = vi.fn();
+
+    controller.abort(reason);
+
+    await expect(fetchQuicknetBeaconWithRetry({
+      round: ROUND,
+      signal: controller.signal,
+      sleep,
+    })).rejects.toBe(reason);
+
+    expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('forwards cancellation to fetch without retrying or wrapping it', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const sleep = vi.fn();
+
+    quicknetMocks.fetchBeacon.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      throw new Error('Fetch interrupted.');
+    });
+
+    await expect(fetchQuicknetBeaconWithRetry({
+      round: ROUND,
+      signal: controller.signal,
+      sleep,
+    })).rejects.toBe(reason);
+
+    expect(quicknetMocks.fetchBeacon).toHaveBeenCalledExactlyOnceWith(
+      ROUND,
+      undefined,
+      { signal: controller.signal },
+    );
+
+    expect(sleep).not.toHaveBeenCalled();
+  });
 });

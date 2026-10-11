@@ -11,6 +11,7 @@ export interface FetchQuicknetBeaconWithRetryOptions {
   maxAttempts?: number;
   retryDelayMs?: number;
   sleep?: (milliseconds: number) => Promise<void>,
+  signal?: AbortSignal;
 }
 
 export async function fetchQuicknetBeaconWithRetry(
@@ -33,8 +34,21 @@ export async function fetchQuicknetBeaconWithRetry(
   let lastError: unknown;
 
   for(let attempt=1; attempt <= maxAttempts; attempt++) {
+    options.signal?.throwIfAborted();
+
     try {
-      const beacon = await fetchBeacon(round);
+      let beacon: QuicknetBeacon;
+
+      if (options.signal === undefined) {
+        beacon = await fetchBeacon(round);
+      } else {
+        beacon = await fetchBeacon(round, undefined, {
+          signal: options.signal,
+        });
+      }
+
+      options.signal?.throwIfAborted();
+
       if (beacon.round !== round) {
         throw new Error(
           `Quicknet round mismatch: requested ${round}, received ${beacon.round}.`
@@ -43,6 +57,8 @@ export async function fetchQuicknetBeaconWithRetry(
 
       return beacon;
     } catch (error) {
+      options.signal?.throwIfAborted();
+
       lastError = error;
 
       if (attempt === maxAttempts) {
