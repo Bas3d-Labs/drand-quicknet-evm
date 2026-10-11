@@ -289,4 +289,33 @@ describe('command signer runtime', () => {
       `transaction-journal-4663-${IDENTITY.signer}.json`,
     ].sort());
   });
+
+  it('checks the checkpoint configured through the environment', async () => {
+    const checkpointFile = join(directory, 'checkpoint.json');
+    await writeFile(checkpointFile, '{}');
+
+    const input = options();
+
+    await expect(openSignerRuntime({
+      ...input,
+      env: {
+        ...input.env,
+        QUICKNET_CHECKPOINT_FILE: checkpointFile,
+      },
+    })).rejects.toMatchObject({
+      code: 'prior-state-present',
+    });
+
+    expect(assertServiceLockHeld).toHaveBeenCalledWith({
+      env: {
+        ...input.env,
+        QUICKNET_CHECKPOINT_FILE: checkpointFile,
+      },
+      checkpointFile,
+    });
+
+    expect(await readdir(directory)).toEqual([
+      'checkpoint.json',
+    ]);
+  });
 });

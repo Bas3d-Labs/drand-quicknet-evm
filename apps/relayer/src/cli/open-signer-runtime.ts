@@ -1,4 +1,8 @@
-import { join } from 'node:path';
+import {
+  basename,
+  join,
+  resolve,
+} from 'node:path';
 
 import type {
   ErrorSummaryFactory,
@@ -90,9 +94,34 @@ export async function openSignerRuntime(
 
   const schedule = new BroadcastRetrySchedule(options.retry);
 
+  const env = options.env ?? process.env;
+
+  const configuredCheckpointFile =
+    options.checkpointFile ?? env.QUICKNET_CHECKPOINT_FILE;
+
+  if (
+    configuredCheckpointFile !== undefined &&
+    configuredCheckpointFile.trim().length === 0
+  ) {
+    throw new TypeError('Invalid checkpoint file path.');
+  }
+
+  const resolvedCheckpointFile =
+    configuredCheckpointFile === undefined
+      ? undefined
+      : resolve(configuredCheckpointFile);
+
   const stateDirectory = assertServiceLockHeld({
-    env: options.env ?? process.env,
-  });
+    env,
+    ...(resolvedCheckpointFile === undefined
+      ? {}
+      : { checkpointFile: resolvedCheckpointFile }),
+  })
+
+  const checkpointFile =
+    resolvedCheckpointFile === undefined
+      ? undefined
+      : join(stateDirectory, basename(resolvedCheckpointFile));
 
   const filePath = join(
     stateDirectory,
@@ -112,8 +141,8 @@ export async function openSignerRuntime(
 
         if (
           current.kind === 'missing' &&
-          options.checkpointFile !== undefined &&
-          await checkpointExists(options.checkpointFile)
+          checkpointFile !== undefined &&
+          await checkpointExists(checkpointFile)
         ) {
           throw Object.assign(
             new Error(
