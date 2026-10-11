@@ -995,4 +995,45 @@ describe('reconcileDurableRequests', () => {
     expect(registryMocks.isStored).not.toHaveBeenCalled();
     expect(getBlock).toHaveBeenCalledOnce();
   });
+
+  it.each(['success', 'failure'] as const)(
+    'stops after cancellation during a fulfillment read ending in %s',
+    async (result) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const readFailure = new Error('Historical state unavailable.');
+
+      setScan([
+        request(ROUND_A, 1_010n),
+        request(ROUND_B, 1_020n),
+      ]);
+
+      registryMocks.isStored.mockImplementationOnce(async () => {
+        controller.abort(reason);
+
+        if (result === 'failure') {
+          throw readFailure;
+        }
+
+        return true;
+      });
+
+      const onCompleted = vi.fn();
+
+      await expect(reconcileDurableRequests(options({
+        signal: controller.signal,
+        onCompleted,
+      }))).rejects.toBe(reason);
+
+      expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
+      expect(onCompleted).toHaveBeenCalledTimes(2);
+
+      expect(registryMocks.isStored).toHaveBeenCalledExactlyOnceWith(
+        ROUND_A,
+        DURABLE_BLOCK,
+      );
+
+      expect(getBlock).toHaveBeenCalledOnce();
+    },
+  );
 });

@@ -198,6 +198,8 @@ export async function reconcileDurableRequests(
       anchor,
     );
 
+    options.signal?.throwIfAborted();
+
     fulfillment.push({
       round: outcome.round,
       firstRequestBlock: outcome.firstRequestBlock,
