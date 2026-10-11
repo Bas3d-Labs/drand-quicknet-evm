@@ -25,6 +25,7 @@ import type {
 import {
   reconcileDurableRequests,
   type DurableRequestResult,
+  type ReconcileDurableRequestsOptions,
 } from '../consumers/durable-requests.js';
 
 import {
@@ -84,6 +85,7 @@ export interface RunDaemonIterationOptions {
   onReconciliation?: (
     result: DurableRequestResult,
   ) => void;
+  signal?: AbortSignal;
 }
 
 export interface RunDaemonIterationResult {
@@ -138,6 +140,8 @@ export async function runDaemonIteration(
 
   validateOptions(options);
 
+  options.signal?.throwIfAborted();
+
   reportOperation({ name: 'load-checkpoint' });
 
   const checkpoint = await options.checkpointStore.load(options.consumer);
@@ -172,7 +176,7 @@ export async function runDaemonIteration(
       maxBlockRange: options.maxBlockRange,
     });
 
-    const reconciliation = await reconcileDurableRequests({
+    const reconciliationOptions: ReconcileDurableRequestsOptions = {
       publicClient: options.publicClient,
       walletClient: options.walletClient,
       account: options.account,
@@ -207,7 +211,15 @@ export async function runDaemonIteration(
           ...progress,
         });
       },
-    });
+    };
+
+    if (options.signal !== undefined) {
+      reconciliationOptions.signal = options.signal;
+    }
+
+    const reconciliation = await reconcileDurableRequests(
+      reconciliationOptions,
+    );
 
     try {
       options.onReconciliation?.(reconciliation);

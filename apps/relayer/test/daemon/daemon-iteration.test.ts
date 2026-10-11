@@ -1523,4 +1523,43 @@ describe('runDaemonIteration', () => {
     );
     expect(save).not.toHaveBeenCalled();
   });
+
+  it('rejects cancellation before loading checkpoint state', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    controller.abort(reason);
+
+    await expect(run({
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(load).not.toHaveBeenCalled();
+    expect(getChainHeads).not.toHaveBeenCalled();
+    expect(reconcileDurableRequests).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('forwards durable cancellation without saving or starting the soft scan', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    vi.mocked(reconcileDurableRequests).mockImplementationOnce(
+      async (options) => {
+        expect(options.signal).toBe(controller.signal);
+
+        controller.abort(reason);
+        throw reason;
+      },
+    );
+
+    await expect(run({
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(reconcileDurableRequests).toHaveBeenCalledOnce();
+    expect(save).not.toHaveBeenCalled();
+    expect(scanQuicknetRequests).not.toHaveBeenCalled();
+    expect(processQuicknetRequests).not.toHaveBeenCalled();
+  });
 });
