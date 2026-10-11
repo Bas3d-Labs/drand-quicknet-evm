@@ -39,6 +39,7 @@ import type {
 
 import {
   runDaemonCycle,
+  type RunDaemonCycleOptions,
   type RunDaemonCycleResult,
 } from './daemon-cycle.js';
 
@@ -121,7 +122,7 @@ export async function runDaemon(
       ),
     });
 
-    const result = await runDaemonCycle({
+    const cycleOptions: RunDaemonCycleOptions = {
       publicClient: options.publicClient,
       walletClient: options.walletClient,
       account: options.account,
@@ -137,7 +138,13 @@ export async function runDaemon(
         ? { receiptTimeoutMs: options.receiptTimeoutMs }
         : {}),
       readChainHeads,
-    });
+    };
+
+    if (options.signal !== undefined) {
+      cycleOptions.signal = options.signal;
+    }
+
+    const result = await runDaemonCycle(cycleOptions);
 
     if (options.onCycle !== undefined) {
       await options.onCycle(result, context);
