@@ -23,6 +23,7 @@ import type {
 
 import {
   importQuicknetRoundWhenAvailable,
+  type ImportQuicknetRoundWhenAvailableOptions,
 } from '../rounds/import-round-when-available.js';
 
 import type {
@@ -156,18 +157,25 @@ export async function processQuicknetRequestsWithOutcomes(
     }
 
     try {
-      const result = await importQuicknetRoundWhenAvailable({
+      const importOptions: ImportQuicknetRoundWhenAvailableOptions = {
         publicClient: options.publicClient,
         walletClient: options.walletClient,
         account: options.account,
         submitter: options.submitter,
         deployment: options.deployment,
         round,
-        ...(options.receiptTimeoutMs !== undefined
-          ? { receiptTimeoutMs: options.receiptTimeoutMs }
-          : {}),
         onProgress: options.onProgress,
-      });
+      };
+
+      if (options.receiptTimeoutMs !== undefined) {
+        importOptions.receiptTimeoutMs = options.receiptTimeoutMs;
+      }
+
+      if (options.signal !== undefined) {
+        importOptions.signal = options.signal;
+      }
+
+      const result = await importQuicknetRoundWhenAvailable(importOptions);
 
       if (result.status === 'pending') {
         recordIncomplete({

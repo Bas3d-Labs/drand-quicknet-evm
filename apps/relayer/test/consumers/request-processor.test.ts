@@ -1000,4 +1000,36 @@ describe('processQuicknetRequests', () => {
     });
     expect(outcomes[0]).toHaveProperty('error', failure);
   });
+
+  it('forwards the same abort signal to the import wrapper', async () => {
+    const controller = new AbortController();
+
+    vi.mocked(importQuicknetRoundWhenAvailable).mockResolvedValueOnce(
+      alreadyStoredResult(100n, RANDOMNESS_A),
+    );
+
+    await processQuicknetRequests({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      requests: [createRequest(100n)],
+      receiptTimeoutMs: 45_000,
+      signal: controller.signal,
+    });
+
+    expect(importQuicknetRoundWhenAvailable)
+      .toHaveBeenCalledExactlyOnceWith({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: 100n,
+        onProgress: undefined,
+        receiptTimeoutMs: 45_000,
+        signal: controller.signal,
+      });
+  });
 });
