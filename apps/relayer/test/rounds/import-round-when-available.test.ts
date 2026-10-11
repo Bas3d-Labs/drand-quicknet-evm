@@ -793,6 +793,57 @@ describe(
       expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
       expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
     });
+
+    it('rejects an already-aborted signal before doing work', async () => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+
+      controller.abort(reason);
+
+      await expect(importQuicknetRoundWhenAvailable({
+        publicClient,
+        walletClient,
+        account,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        signal: controller.signal,
+      })).rejects.toBe(reason);
+
+      expect(registryMocks.createRegistryReader).not.toHaveBeenCalled();
+      expect(waitMocks.waitForQuicknetRound).not.toHaveBeenCalled();
+      expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
+      expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
+    });
+
+    it('forwards cancellation to the round wait and stops before fetching', async () => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+
+      waitMocks.waitForQuicknetRound.mockImplementationOnce(async () => {
+        controller.abort(reason);
+        controller.signal.throwIfAborted();
+      });
+
+      await expect(importQuicknetRoundWhenAvailable({
+        publicClient,
+        walletClient,
+        account,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        signal: controller.signal,
+      })).rejects.toBe(reason);
+
+      expect(waitMocks.waitForQuicknetRound)
+        .toHaveBeenCalledExactlyOnceWith({
+          round: ROUND,
+          signal: controller.signal,
+        });
+
+      expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
+      expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
+    });
   },
 );
 

@@ -48,6 +48,7 @@ export interface ImportQuicknetRoundWhenAvailableOptions {
   fetchRetryDelayMs?: number;
   receiptTimeoutMs?: number;
   onProgress?: ((progress: RoundImportProgress) => void) | undefined;
+  signal?: AbortSignal;
 }
 
 export async function importQuicknetRoundWhenAvailable(
@@ -70,6 +71,8 @@ export async function importQuicknetRoundWhenAvailable(
   const receiptTimeoutMs = validateReceiptTimeoutMs(
     options.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS,
   );
+
+  options.signal?.throwIfAborted();
 
   reportImportProgress(options.onProgress, {
     round,
@@ -101,7 +104,16 @@ export async function importQuicknetRoundWhenAvailable(
     phase: 'wait-for-beacon',
   });
 
-  await waitForQuicknetRound({round});
+  if (options.signal === undefined) {
+    await waitForQuicknetRound({ round });
+  } else {
+    await waitForQuicknetRound({
+      round,
+      signal: options.signal,
+    });
+  }
+
+  options.signal?.throwIfAborted();
 
   const fetchOptions: FetchQuicknetBeaconWithRetryOptions = {
     round,
