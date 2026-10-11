@@ -967,4 +967,32 @@ describe('reconcileDurableRequests', () => {
     expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
     expect(createRegistryReader).not.toHaveBeenCalled();
   });
+
+  it('stops before fulfillment reads when the final import completion requests shutdown', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    setScan([request(ROUND_A, 1_010n)]);
+
+    const onCompleted = vi.fn(() => {
+      controller.abort(reason);
+    });
+
+    await expect(reconcileDurableRequests(options({
+      signal: controller.signal,
+      onCompleted,
+    }))).rejects.toBe(reason);
+
+    expect(scanQuicknetRequests).toHaveBeenCalledOnce();
+    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledOnce();
+
+    expect(onCompleted).toHaveBeenCalledExactlyOnceWith({
+      round: ROUND_A,
+      result: imported(ROUND_A),
+    });
+
+    expect(createRegistryReader).not.toHaveBeenCalled();
+    expect(registryMocks.isStored).not.toHaveBeenCalled();
+    expect(getBlock).toHaveBeenCalledOnce();
+  });
 });

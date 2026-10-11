@@ -179,6 +179,8 @@ export async function reconcileDurableRequests(
     requests: scan.requests,
   });
 
+  options.signal?.throwIfAborted();
+
   const fulfillment: DurableRoundOutcome[] = [];
   let nextBlock = scan.nextBlock;
 
