@@ -28,6 +28,10 @@ import {
 } from '../../src/diagnostics/relayer-log.js';
 
 import {
+  isPriorSignerStateError,
+} from '../../src/diagnostics/signer-journal-errors.js';
+
+import {
   assertServiceLockHeld,
 } from '../../src/state/service-lock.js';
 
@@ -221,12 +225,17 @@ describe('command signer runtime', () => {
 
     await writeFile(checkpointFile, '{}');
 
-    await expect(openSignerRuntime({
+    const opening = openSignerRuntime({
       ...options(),
       checkpointFile,
-    })).rejects.toMatchObject({
+    });
+
+    await expect(opening).rejects.toMatchObject({
       code: 'prior-state-present',
     });
+
+    const error: unknown = await opening.catch((error: unknown) => error);
+    expect(isPriorSignerStateError(error)).toBe(true);
 
     expect(await readdir(directory)).toEqual([
       'checkpoint.json',

@@ -13,6 +13,10 @@ import type {
 } from '../diagnostics/relayer-log.js';
 
 import {
+  priorSignerStateError,
+} from '../diagnostics/signer-journal-errors.js';
+
+import {
   isFixedHex,
 } from '../shared/hex.js';
 
@@ -144,12 +148,7 @@ export async function openSignerRuntime(
           checkpointFile !== undefined &&
           await checkpointExists(checkpointFile)
         ) {
-          throw Object.assign(
-            new Error(
-              'Cannot automatically initialize a missing signer journal when checkpoint state exists.'
-            ),
-            { code: 'prior-state-present' as const },
-          );
+          throw priorSignerStateError();
         }
 
         return current;

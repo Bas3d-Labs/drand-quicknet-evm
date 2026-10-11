@@ -29,6 +29,10 @@ import {
   serviceLockReason
 } from '../state/service-lock.js';
 
+import {
+  isPriorSignerStateError,
+} from './signer-journal-errors.js';
+
 export function renderDiagnostic(
   error: unknown,
   errorSummary?: SummarizeErrorOptions,
@@ -68,6 +72,20 @@ export function renderDiagnostic(
           'Use the relayer launcher with util-linux flock on Linux. ' +
           'For daemon mode, the checkpoint must be a direct ' +
           'child of the configured state directory.',
+      });
+    }
+
+    if (isPriorSignerStateError(error)) {
+      return JSON.stringify({
+        event: 'cli_failed',
+        kind: 'signer-journal',
+        code: 'prior-state-present',
+        message:
+          'Checkpoint state exists but the signer transaction journal is missing. ' +
+          'Automatic initialization is blocked. ' +
+          'Verify the configured state directory and restore the matching ' +
+          'journal from backup if available. ' +
+          'Do not delete checkpoint state to bypass this check.',
       });
     }
   } catch {

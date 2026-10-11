@@ -66,6 +66,7 @@ const MODULE_PATHS = {
   'operation-context': 'diagnostics/operation-context.js',
   'service-lock': 'state/service-lock.js',
   'signer-gate': 'state/signer-gate.js',
+  'signer-journal-errors': 'diagnostics/signer-journal-errors.js',
   'text-scrubber': 'diagnostics/text-scrubber.js',
   'usage-error': 'diagnostics/usage-error.js',
   uuid: 'shared/uuid.js',
