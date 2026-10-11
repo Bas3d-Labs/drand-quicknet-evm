@@ -38,11 +38,12 @@ describe('signer journal diagnostics', () => {
       kind: 'signer-journal',
       code: 'prior-state-present',
       message:
-        'Checkpoint state exists but the signer transaction journal is missing. ' +
-        'Automatic initialization is blocked. ' +
-        'Verify the configured state directory and restore the matching ' +
-        'journal from backup if available. ' +
-        'Do not delete checkpoint state to bypass this check.',
+        'Cannot automatically initialize a missing signer journal ' +
+        'because the state directory contains other entries. ' +
+        'Verify the configured directory and restore the matching ' +
+        'journal if available. ' +
+        'Remove entries only after establishing they are unrelated ' +
+        'to prior relayer state.'
     });
 
     expect(output).not.toContain('private-diagnostic-canary');

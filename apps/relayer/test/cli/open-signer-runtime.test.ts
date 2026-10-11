@@ -1,12 +1,21 @@
 import {
+  lstat,
+  mkdir,
   mkdtemp,
+  readFile,
   readdir,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import {
+  tmpdir
+} from 'node:os';
+
+import {
+  join
+} from 'node:path';
 
 import {
   afterEach,
@@ -17,7 +26,9 @@ import {
   vi,
 } from 'vitest';
 
-import type { PublicClient } from 'viem';
+import type {
+  PublicClient
+} from 'viem';
 
 import {
   openSignerRuntime,
@@ -33,11 +44,19 @@ import {
 
 import {
   assertServiceLockHeld,
+  serviceLockReason,
 } from '../../src/state/service-lock.js';
 
-vi.mock('../../src/state/service-lock.js', () => ({
-  assertServiceLockHeld: vi.fn(),
-}));
+vi.mock('../../src/state/service-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../../src/state/service-lock.js')
+  >();
+
+  return {
+    ...actual,
+    assertServiceLockHeld: vi.fn(),
+  };
+});
 
 const IDENTITY = {
   chainId: 4663,
@@ -54,12 +73,18 @@ describe('command signer runtime', () => {
       join(tmpdir(), 'signer-runtime-'),
     );
 
-    vi.mocked(assertServiceLockHeld).mockReset();
-    vi.mocked(assertServiceLockHeld).mockReturnValue({
-      stateDirectory: directory,
-      dev: 1n,
-      ino: 2n,
-    });
+    const lockFile = join(directory, 'relayer.flock');
+    await writeFile(lockFile, '');
+
+    const lock = await lstat(lockFile, { bigint: true });
+
+    vi.mocked(assertServiceLockHeld)
+      .mockReset()
+      .mockReturnValue({
+        stateDirectory: directory,
+        dev: lock.dev,
+        ino: lock.ino,
+      });
   });
 
   afterEach(async () => {
@@ -116,6 +141,12 @@ describe('command signer runtime', () => {
     };
   }
 
+  async function stateEntries(): Promise<string[]> {
+    return (await readdir(directory))
+      .filter((name) => name !== 'relayer.flock')
+      .sort();
+  }
+
   it('leaves a missing journal untouched until automatic recovery', async () => {
     const runtime = await openSignerRuntime(options());
 
@@ -128,7 +159,7 @@ describe('command signer runtime', () => {
       inclusionChecksComplete: false,
     });
 
-    expect(await readdir(directory)).toEqual([]);
+    expect(await stateEntries()).toEqual([]);
 
     expect(await runtime.recovery.run(recovery())).toMatchObject({
       inspection: { status: 'no-attempt' },
@@ -143,7 +174,7 @@ describe('command signer runtime', () => {
       inclusionChecksComplete: true,
     });
 
-    expect(await readdir(directory)).toEqual([
+    expect(await stateEntries()).toEqual([
       `transaction-journal-4663-${IDENTITY.signer}.json`,
     ]);
   });
@@ -159,7 +190,7 @@ describe('command signer runtime', () => {
       inclusionChecksComplete: true,
     });
 
-    expect(await readdir(directory)).toEqual([
+    expect(await stateEntries()).toEqual([
       `transaction-journal-4663-${IDENTITY.signer}.json`,
     ]);
 
@@ -183,7 +214,7 @@ describe('command signer runtime', () => {
       inclusionChecksComplete: true,
     });
 
-    expect(await readdir(directory)).toHaveLength(1);
+    expect(await stateEntries()).toHaveLength(1);
   });
 
   it('does not touch journal files without verified service ownership', async () => {
@@ -195,7 +226,7 @@ describe('command signer runtime', () => {
       openSignerRuntime(options()),
     ).rejects.toThrow('Lock not held');
 
-    expect(await readdir(directory)).toEqual([]);
+    expect(await stateEntries()).toEqual([]);
   });
 
   it('rejects invalid retry configuration before checking ownership or opening storage', async () => {
@@ -207,7 +238,7 @@ describe('command signer runtime', () => {
     ).rejects.toThrow('Invalid broadcast retry delays');
 
     expect(assertServiceLockHeld).not.toHaveBeenCalled();
-    expect(await readdir(directory)).toEqual([]);
+    expect(await stateEntries()).toEqual([]);
   });
 
   it('does not replace a corrupt journal with a new baseline', async () => {
@@ -241,7 +272,7 @@ describe('command signer runtime', () => {
     const error: unknown = await opening.catch((error: unknown) => error);
     expect(isPriorSignerStateError(error)).toBe(true);
 
-    expect(await readdir(directory)).toEqual([
+    expect(await stateEntries()).toEqual([
       'checkpoint.json',
     ]);
   });
@@ -254,7 +285,7 @@ describe('command signer runtime', () => {
       checkpointFile,
     });
 
-    expect(await readdir(directory)).toEqual([]);
+    expect(await stateEntries()).toEqual([]);
 
     expect(await runtime.recovery.run(recovery())).toMatchObject({
       inspection: { status: 'no-attempt' },
@@ -264,7 +295,7 @@ describe('command signer runtime', () => {
 
     expect(runtime.coordinator.status.open).toBe(true);
 
-    expect(await readdir(directory)).toEqual([
+    expect(await stateEntries()).toEqual([
       `transaction-journal-4663-${IDENTITY.signer}.json`,
     ]);
   });
@@ -297,7 +328,7 @@ describe('command signer runtime', () => {
       inclusionChecksComplete: true,
     });
 
-    expect((await readdir(directory)).sort()).toEqual([
+    expect((await stateEntries()).sort()).toEqual([
       'checkpoint.json',
       `transaction-journal-4663-${IDENTITY.signer}.json`,
     ].sort());
@@ -327,8 +358,122 @@ describe('command signer runtime', () => {
       checkpointFile,
     });
 
-    expect(await readdir(directory)).toEqual([
+    expect(await stateEntries()).toEqual([
       'checkpoint.json',
     ]);
+  });
+
+  it.each([
+    'checkpoint.json',
+    'operator-notes.txt',
+    `transaction-journal-4663-0x${'cd'.repeat(20)}.json`,
+  ])('refuses unconfigured prior-state entry: %s', async (name) => {
+    await writeFile(join(directory, name), '{}');
+
+    // Neither an explicit checkpoint nor its environment setting is supplied.
+    await expect(
+      openSignerRuntime(options()),
+    ).rejects.toMatchObject({
+      code: 'prior-state-present',
+    });
+
+    expect(await stateEntries()).toEqual([name]);
+  });
+
+  it.each([
+    'directory',
+    'dangling-symlink',
+  ] as const)('refuses an unexplained %s', async (kind) => {
+    const entry = join(directory, 'unexplained');
+
+    if (kind === 'directory') {
+      await mkdir(entry);
+    } else {
+      await symlink(join(directory, 'missing-target'), entry);
+    }
+
+    await expect(
+      openSignerRuntime(options()),
+    ).rejects.toMatchObject({
+      code: 'prior-state-present',
+    });
+
+    expect(await stateEntries()).toEqual(['unexplained']);
+  });
+
+  it('preserves an owned journal temp file when the journal is missing', async () => {
+    const journalName =
+      `transaction-journal-4663-${IDENTITY.signer}.json`;
+
+    // Matches the store's owned temporary-file naming convention.
+    const tempName =
+      `${journalName}.123.12345678-1234-4123-8123-123456789abc.tmp`;
+
+    const tempFile = join(directory, tempName);
+    await writeFile(tempFile, 'interrupted snapshot');
+
+    await expect(
+      openSignerRuntime(options()),
+    ).rejects.toMatchObject({
+      code: 'prior-state-present',
+    });
+
+    expect(await stateEntries()).toEqual([tempName]);
+    expect(await readFile(tempFile, 'utf8'))
+      .toBe('interrupted snapshot');
+  });
+
+  it('classifies a changed lock identity as an ownership failure', async () => {
+    const lock = await lstat(
+      join(directory, 'relayer.flock'),
+      { bigint: true },
+    );
+
+    vi.mocked(assertServiceLockHeld).mockReturnValueOnce({
+      stateDirectory: directory,
+      dev: lock.dev,
+      ino: lock.ino + 1n,
+    });
+
+    const error: unknown = await openSignerRuntime(options())
+      .catch((error: unknown) => error);
+
+    expect(serviceLockReason(error)).toBe('descriptor');
+    expect(isPriorSignerStateError(error)).toBe(false);
+    expect(await stateEntries()).toEqual([]);
+  });
+
+  it('classifies a lock replaced by a symlink as an ownership failure', async () => {
+    const lockFile = join(directory, 'relayer.flock');
+    const target = join(directory, 'other-lock');
+
+    await writeFile(target, '');
+    await rm(lockFile);
+    await symlink(target, lockFile);
+
+    const error: unknown = await openSignerRuntime(options())
+      .catch((error: unknown) => error);
+
+    expect(serviceLockReason(error)).toBe('lock-file');
+    expect(isPriorSignerStateError(error)).toBe(false);
+  });
+
+  it('allows existing-journal recovery to clean owned temporary files', async () => {
+    const first = await openSignerRuntime(options());
+    await first.recovery.run(recovery());
+
+    const journalName =
+      `transaction-journal-4663-${IDENTITY.signer}.json`;
+
+    const tempName =
+      `${journalName}.123.12345678-1234-4123-8123-123456789abc.tmp`;
+
+    await writeFile(join(directory, tempName), 'orphaned snapshot');
+
+    const reopened = await openSignerRuntime(options());
+    await reopened.recovery.run(recovery());
+
+    expect(reopened.coordinator.status.open).toBe(true);
+    expect(await stateEntries()).toEqual([journalName]);
   });
 });

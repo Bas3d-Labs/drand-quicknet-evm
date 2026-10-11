@@ -372,6 +372,9 @@ head-reading path.
 
 ## Service ownership
 
+Dedicate each state directory to one chain and signing account. All 
+commands using that chain and signer must share that directory.
+
 Protected commands require Linux and util-linux `flock`:
 
 - `import`
@@ -729,14 +732,21 @@ creating checkpoint state and entering normal processing. Initialization
 alone does not authorize submission: the signer gate still requires
 recovery and inclusion checks.
 
-If the configured checkpoint already exists but the signer journal is
-missing, startup fails with `prior-state-present`. Verify the configured
-state directory and restore the matching journal from backup if available.
-Do not delete checkpoint state to bypass this check.
+Before opening a missing signer journal, startup inspects the state
+directory while holding verified service ownership. Automatic
+initialization is allowed only when the directory contains the verified
+`relayer.flock` entry and nothing else. Checkpoints, journal temporary
+files, other signers' journals, and unrelated entries block initialization
+with `prior-state-present`, regardless of whether a checkpoint path was
+configured.
 
-The prior-state check covers the configured checkpoint path. It cannot
-detect state lost from another directory or an unconfigured checkpoint.
-One-shot commands also check `QUICKNET_CHECKPOINT_FILE` when it is set.
+Verify the configured directory and restore the matching journal if
+available. Remove entries only after establishing they are unrelated to
+prior relayer state. Do not delete checkpoint or journal recovery evidence
+to bypass this check.
+
+This check cannot detect an entirely lost or incorrectly selected state
+directory.
 
 Existing journals follow normal recovery. An unreadable or invalid journal
 causes startup to fail; it is not replaced with a new baseline.
@@ -966,9 +976,10 @@ are not copied into the summary. Selected explanation text is scrubbed
 before output.
 
 Registered usage, configuration, service-lock, and prior signer-state
-errors use fixed messages. A missing journal with existing configured
-checkpoint state produces `cli_failed` with kind `signer-journal`,
-code `prior-state-present`, and exit status `1`.
+errors use fixed messages. A missing journal with other entries other
+than the verified `relayer.flock` in the state directory produces
+`cli_failed` with kind `signer-journal`, code `prior-state-present`,
+and exit status `1`.
 
 Other failures use fixed fallback descriptions until the credential-aware
 diagnostic policy is installed.
@@ -1102,8 +1113,7 @@ relayer configuration or operator documentation.
 Multiple independent relayers improve availability. The registry does not
 require leader election to accept beacon submissions.
 
-Use a separate signing account and checkpoint file for each independent
-relayer.
+Use a separate signing account, state directory, and checkpoint file for each independent relayer.
 
 If multiple relayers submit the same round, the first successful import
 populates the cache. Later successful submissions return the cached value

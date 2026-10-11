@@ -6,7 +6,11 @@ export function priorSignerStateError(): Error & {
   const error = Object.assign(
     new Error(
       'Cannot automatically initialize a missing signer journal ' +
-      'when checkpoint state exists.'
+      'because the state directory contains other entries. ' +
+      'Verify the configured directory and restore the matching ' +
+      'journal if available. ' +
+      'Remove entries only after establishing they are unrelated ' +
+      'to prior relayer state.'
     ),
     { code: 'prior-state-present' as const },
   );
