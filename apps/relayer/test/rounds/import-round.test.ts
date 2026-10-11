@@ -783,6 +783,53 @@ describe('importQuicknetRound', () => {
     expect(submitTransaction).not.toHaveBeenCalled();
     expect(waitForTransactionReceipt).not.toHaveBeenCalled();
   });
+
+  it('rejects an already-aborted signal before doing work', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    controller.abort(reason);
+
+    await expect(importQuicknetRound({
+      publicClient,
+      walletClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(registryMocks.createRegistryReader).not.toHaveBeenCalled();
+    expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
+    expect(submissionMocks.simulateBeaconSubmission).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it('does not enter the signer when cancelled at the submission boundary', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    await expect(importQuicknetRound({
+      publicClient,
+      walletClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      signal: controller.signal,
+      onProgress(progress) {
+        if (progress.phase === 'submit-transaction') {
+          controller.abort(reason);
+        }
+      },
+    })).rejects.toBe(reason);
+
+    expect(submissionMocks.simulateBeaconSubmission).toHaveBeenCalledOnce();
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+  });
 });
 
 function firstInvocationOrder(

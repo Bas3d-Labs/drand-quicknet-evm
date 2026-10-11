@@ -54,6 +54,7 @@ export interface ImportQuicknetRoundOptions {
   beacon?: QuicknetBeacon;
   receiptTimeoutMs?: number;
   onProgress?: ((progress: RoundImportProgress) => void) | undefined;
+  signal?: AbortSignal;
 }
 
 export type ImportQuicknetRoundResult =
@@ -111,6 +112,8 @@ export async function importQuicknetRound(
   const receiptTimeoutMs = validateReceiptTimeoutMs(
     options.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS,
   );
+
+  options.signal?.throwIfAborted();
 
   reportImportProgress(options.onProgress, {
     round,
@@ -182,6 +185,8 @@ export async function importQuicknetRound(
     round,
     phase: 'submit-transaction',
   });
+
+  options.signal?.throwIfAborted();
   
   const submitted = await options.submitter.submit(request);
 
