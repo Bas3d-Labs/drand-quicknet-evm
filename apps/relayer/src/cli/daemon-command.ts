@@ -80,6 +80,8 @@ export async function runDaemonCommand(
 ): Promise<void> {
   const env = options.env ?? process.env;
 
+  options.signal?.throwIfAborted();
+
   assertServiceLockHeld({ env });
 
   const loadedConfig = await loadDaemonConfig({
@@ -89,6 +91,8 @@ export async function runDaemonCommand(
       ? { onDiagnostics: options.onDiagnostics }
       : {}),
   });
+
+  options.signal?.throwIfAborted();
 
   const configuredCheckpointFile = resolve(
     loadedConfig.checkpointFile,
@@ -125,12 +129,16 @@ export async function runDaemonCommand(
     clients.publicClient,
     config.deployment,
   );
+
+  options.signal?.throwIfAborted();
   
   const validatedConsumers = await validateQuicknetConsumers({
     publicClient: clients.publicClient,
     deployment: config.deployment,
     consumers: config.consumers,
   });
+
+  options.signal?.throwIfAborted();
 
   const readChainHeads = createChainHeadsReader({
     publicClient: clients.publicClient,
@@ -151,14 +159,21 @@ export async function runDaemonCommand(
     env,
   });
 
+  options.signal?.throwIfAborted();
+
   const checkpointStore = await FileCheckpointStore.open({
     filePath: config.checkpointFile,
     deployment: config.deployment,
   });
+
+  options.signal?.throwIfAborted();
   
   const durableNextBlocks = new Map<Address, bigint>();
   for (const consumer of validatedConsumers) {
     const nextBlock = await checkpointStore.load(consumer.address);
+
+    options.signal?.throwIfAborted();
+
     if (nextBlock !== undefined) {
       durableNextBlocks.set(consumer.address, nextBlock);
     }
@@ -169,7 +184,12 @@ export async function runDaemonCommand(
     config,
     durableNextBlocks,
   });
+
+  options.signal?.throwIfAborted();
+  
   options.onStartup?.(startupSummary);
+
+  options.signal?.throwIfAborted();
 
   await runDaemon({
     publicClient: clients.publicClient,

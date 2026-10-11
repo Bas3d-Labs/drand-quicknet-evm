@@ -1242,4 +1242,186 @@ describe('runDaemonCommand', () => {
       vi.mocked(runDaemon),
     );
   });
+
+  it('stops before ownership verification when already cancelled', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Startup cancelled');
+    const onStartup = vi.fn();
+
+    controller.abort(reason);
+
+    await expect(runDaemonCommand({
+      source: SOURCE,
+      signal: controller.signal,
+      onStartup,
+    })).rejects.toBe(reason);
+
+    expectNotCalled(
+      vi.mocked(assertServiceLockHeld),
+      vi.mocked(loadDaemonConfig),
+      vi.mocked(createRelayerLog),
+      signerRuntimeMocks.openBeaconSubmitter,
+      vi.mocked(FileCheckpointStore.open),
+      onStartup,
+      vi.mocked(runDaemon),
+    );
+  });
+
+  it.each([
+    'configuration',
+    'deployment',
+    'consumers',
+    'signer',
+    'checkpoint-open',
+    'checkpoint-load',
+    'summary',
+  ] as const)(
+    'stops after %s completes when cancellation was requested',
+    async (stage) => {
+      const controller = new AbortController();
+      const reason = new Error('Startup cancelled');
+      const onStartup = vi.fn();
+
+      switch (stage) {
+        case 'configuration':
+          vi.mocked(loadDaemonConfig).mockImplementationOnce(async () => {
+            controller.abort(reason);
+            return DAEMON_CONFIG;
+          });
+          break;
+
+        case 'deployment':
+          vi.mocked(verifyRegistryDeployment)
+            .mockImplementationOnce(async () => {
+              controller.abort(reason);
+            });
+          break;
+
+        case 'consumers':
+          vi.mocked(validateQuicknetConsumers)
+            .mockImplementationOnce(async () => {
+              controller.abort(reason);
+              return VALIDATED_CONSUMERS;
+            });
+          break;
+
+        case 'signer':
+          signerRuntimeMocks.openBeaconSubmitter
+            .mockImplementationOnce(async () => {
+              controller.abort(reason);
+              return submitter;
+            });
+          break;
+
+        case 'checkpoint-open':
+          // Preserve the existing fixture's correctly typed store result.
+          vi.mocked(FileCheckpointStore.open)
+            .mockImplementationOnce(async (...args) => {
+              const store = await FileCheckpointStore.open(...args);
+              controller.abort(reason);
+              return store;
+            });
+          break;
+
+        case 'checkpoint-load':
+          checkpointStoreMocks.load.mockImplementationOnce(async () => {
+            controller.abort(reason);
+            return 123_500n;
+          });
+          break;
+
+        case 'summary':
+          vi.mocked(collectDaemonStartupSummary)
+            .mockImplementationOnce(async () => {
+              controller.abort(reason);
+              return STARTUP_SUMMARY;
+            });
+          break;
+      }
+
+      await expect(runDaemonCommand({
+        source: SOURCE,
+        signal: controller.signal,
+        onStartup,
+      })).rejects.toBe(reason);
+
+      expectNotCalled(onStartup, vi.mocked(runDaemon));
+
+      switch (stage) {
+        case 'configuration':
+          expect(createRelayerLog).not.toHaveBeenCalled();
+          expect(verifyRegistryDeployment).not.toHaveBeenCalled();
+          break;
+
+        case 'deployment':
+          expect(validateQuicknetConsumers).not.toHaveBeenCalled();
+          break;
+
+        case 'consumers':
+          expect(signerRuntimeMocks.openBeaconSubmitter)
+            .not.toHaveBeenCalled();
+          break;
+
+        case 'signer':
+          expect(FileCheckpointStore.open).not.toHaveBeenCalled();
+          break;
+
+        case 'checkpoint-open':
+          expect(checkpointStoreMocks.load).not.toHaveBeenCalled();
+          break;
+
+        case 'checkpoint-load':
+          expect(checkpointStoreMocks.load)
+            .toHaveBeenCalledExactlyOnceWith(CONSUMER_A);
+          expect(collectDaemonStartupSummary).not.toHaveBeenCalled();
+          break;
+
+        case 'summary':
+          expect(collectDaemonStartupSummary).toHaveBeenCalledOnce();
+          break;
+      }
+    },
+  );
+
+  it('does not enter the daemon when the startup callback cancels', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Startup cancelled');
+
+    const onStartup = vi.fn(() => {
+      controller.abort(reason);
+    });
+
+    await expect(runDaemonCommand({
+      source: SOURCE,
+      signal: controller.signal,
+      onStartup,
+    })).rejects.toBe(reason);
+
+    expect(onStartup).toHaveBeenCalledExactlyOnceWith(STARTUP_SUMMARY);
+    expect(runDaemon).not.toHaveBeenCalled();
+  });
+
+  it('preserves a deployment failure after cancellation is requested', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Startup cancelled');
+    const failure = new Error('Deployment verification failed.');
+
+    vi.mocked(verifyRegistryDeployment)
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        throw failure;
+      });
+
+    await expect(runDaemonCommand({
+      source: SOURCE,
+      signal: controller.signal,
+    })).rejects.toBe(failure);
+
+    expectNotCalled(
+      vi.mocked(validateQuicknetConsumers),
+      signerRuntimeMocks.openBeaconSubmitter,
+      vi.mocked(FileCheckpointStore.open),
+      vi.mocked(runDaemon),
+    );
+  });
 });
