@@ -27,40 +27,43 @@ export function configMessage(
   setting: ConfigSetting,
 ): string {
   switch(code) {
-    case 'MISSING_REQUIRED_SETTING':
-      return `Missing required environment variable: ${setting}.`;
-
-    case 'INVALID_RPC_URL':
-      return `Invalid RPC URL. Check ${setting}.`;
-
-    case 'UNSUPPORTED_RPC_PROTOCOL':
-      return `RPC URL must use http: or https:. Check ${setting}.`;
-
-    case 'INVALID_PRIVATE_KEY':
-      return 'PRIVATE_KEY must be a valid nonzero secp256k1 private key encoded as 32 hex bytes';
+    case 'EMPTY_CHECKPOINT_FILE':
+      return 'QUICKNET_CHECKPOINT_FILE must not be empty.';
 
     case 'EMPTY_CONSUMER':
       return 'QUICKNET_CONSUMERS contains an empty consumer address.';
 
-    case 'INVALID_CONSUMER':
-      return 'QUICKNET_CONSUMERS contains an invalid consumer address.';
-
-    case 'INVALID_START_BLOCK':
-      return 'QUICKNET_START_BLOCK must be a non-negative decimal integer.';
-
-    case 'EMPTY_CHECKPOINT_FILE':
-      return 'QUICKNET_CHECKPOINT_FILE must not be empty.';
-
     case 'INVALID_BLOCK_RANGE':
       return 'QUICKNET_MAX_BLOCK_RANGE must be a positive decimal integer.';
-
-    case 'INVALID_POLL_INTERVAL':
-      return 'QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.';
 
     case 'INVALID_BROADCAST_RETRY_DELAY':
       return `${setting} must be a decimal integer between 1 and 2147483647 milliseconds.`;
 
     case 'INVALID_BROADCAST_RETRY_RANGE':
       return 'QUICKNET_BROADCAST_RETRY_MAX_MS must be greater than or equal to QUICKNET_BROADCAST_RETRY_INITIAL_MS.';
+
+    case 'INVALID_CONSUMER':
+      return 'QUICKNET_CONSUMERS contains an invalid consumer address.';
+
+    case 'INVALID_PRIVATE_KEY':
+      return 'PRIVATE_KEY must be a valid nonzero secp256k1 private key encoded as 32 hex bytes';
+
+    case 'INVALID_RPC_URL':
+      return `Invalid RPC URL. Check ${setting}.`;
+
+    case 'INVALID_POLL_INTERVAL':
+      return 'QUICKNET_POLL_INTERVAL_MS must be a positive safe integer.';
+
+    case 'INVALID_RECEIPT_TIMEOUT':
+      return 'QUICKNET_RECEIPT_TIMEOUT_MS must be a decimal integer between 1 and 2147483647 milliseconds.';
+
+    case 'INVALID_START_BLOCK':
+      return 'QUICKNET_START_BLOCK must be a non-negative decimal integer.';
+      
+    case 'MISSING_REQUIRED_SETTING':
+      return `Missing required environment variable: ${setting}.`;
+
+    case 'UNSUPPORTED_RPC_PROTOCOL':
+      return `RPC URL must use http: or https:. Check ${setting}.`;
   }
 }

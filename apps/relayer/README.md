@@ -166,6 +166,26 @@ Do not give the relayer account:
 
 Never commit private keys or populated `.env` files.
 
+### Receipt timeout
+
+`QUICKNET_RECEIPT_TIMEOUT_MS` controls receipt waiting for `import`,
+`import-when-available`, and `daemon`. It defaults to `30000` milliseconds
+and accepts decimal integers from `1` through `2147483647`. Zero is rejected.
+
+```dotenv
+QUICKNET_RECEIPT_TIMEOUT_MS=30000
+```
+
+When the receipt wait times out, the import returns `pending` with reason
+`receipt-timeout`. The journal attempt remains available for recovery.
+Timeout does not establish transaction failure, release the signer gate,
+or authorize another broadcast.
+
+One-shot commands exit after reporting pending work. The daemon continues
+recovery on subsequent cycles.
+
+This setting controls receipt waiting, not total command or cycle duration.
+
 ### Required daemon settings
 
 These settings are required for `daemon`, in addition to the network and
@@ -372,6 +392,9 @@ head-reading path.
 
 ## Service ownership
 
+Dedicate each state directory to one chain and signing account. All 
+commands using that chain and signer must share that directory.
+
 Protected commands require Linux and util-linux `flock`:
 
 - `import`
@@ -489,18 +512,18 @@ Package managers and supervisors may additionally report wrapper errors.
 | `0` | Successful command completion or graceful daemon shutdown. |
 | `1` | Application failure or an explicit launcher validation failure. |
 | `2` | CLI output failure; the operation may already have succeeded. |
-| `3` | One-shot import remains pending or was deferred; completion was not confirmed. |
+| `3` | One-shot import remains pending. A journaled transaction attempt remains unresolved. |
+| `4` | One-shot import was deferred because the signer is unavailable. |
 | `9` | Node startup failure observed when a configured env file is missing. |
 | `75` | Another process holds the service lock; this may have no diagnostic output. |
 
 For `import` and `import-when-available`, status `0` means the round was
-imported or was already stored. Status `3` means the command reported
-incomplete work:
+imported or was already stored. Incomplete work uses separate statuses:
 
-- `pending`: a journaled transaction was not acknowledged by the RPC,
+- `3` (`pending`): a journaled transaction was not acknowledged by the RPC,
   or receipt waiting timed out. Output includes the attempt ID,
   locally computed transaction hash, and pending reason.
-- `deferred`: fresh signer recovery left the gate closed, so this
+- `4` (`deferred`): fresh signer recovery left the gate closed, so this
   submission prepared no new attempt. Output includes the signer blocker.
 
 Neither outcome proves that the beacon is absent on-chain. Pending
@@ -508,8 +531,8 @@ transactions remain available for journal recovery. The one-shot command
 exits rather than continuing recovery in the background.
 
 If rendering or writing the result fails, status `2` takes precedence
-over status `3`. Service ownership is released when the process exits;
-the journal is retained.
+over statuses `3` and `4`. Service ownership is released when the process
+exits; the journal is retained.
 
 Other startup failures can retain the exit status of the failing tool.
 Do not interpret every nonzero status as contention.
@@ -729,14 +752,21 @@ creating checkpoint state and entering normal processing. Initialization
 alone does not authorize submission: the signer gate still requires
 recovery and inclusion checks.
 
-If the configured checkpoint already exists but the signer journal is
-missing, startup fails with `prior-state-present`. Verify the configured
-state directory and restore the matching journal from backup if available.
-Do not delete checkpoint state to bypass this check.
+Before opening a missing signer journal, startup inspects the state
+directory while holding verified service ownership. Automatic
+initialization is allowed only when the directory contains the verified
+`relayer.flock` entry and nothing else. Checkpoints, journal temporary
+files, other signers' journals, and unrelated entries block initialization
+with `prior-state-present`, regardless of whether a checkpoint path was
+configured.
 
-The prior-state check covers the configured checkpoint path. It cannot
-detect state lost from another directory or an unconfigured checkpoint.
-One-shot commands also check `QUICKNET_CHECKPOINT_FILE` when it is set.
+Verify the configured directory and restore the matching journal if
+available. Remove entries only after establishing they are unrelated to
+prior relayer state. Do not delete checkpoint or journal recovery evidence
+to bypass this check.
+
+This check cannot detect an entirely lost or incorrectly selected state
+directory.
 
 Existing journals follow normal recovery. An unreadable or invalid journal
 causes startup to fail; it is not replaced with a new baseline.
@@ -966,9 +996,10 @@ are not copied into the summary. Selected explanation text is scrubbed
 before output.
 
 Registered usage, configuration, service-lock, and prior signer-state
-errors use fixed messages. A missing journal with existing configured
-checkpoint state produces `cli_failed` with kind `signer-journal`,
-code `prior-state-present`, and exit status `1`.
+errors use fixed messages. A missing journal with other entries other
+than the verified `relayer.flock` in the state directory produces
+`cli_failed` with kind `signer-journal`, code `prior-state-present`,
+and exit status `1`.
 
 Other failures use fixed fallback descriptions until the credential-aware
 diagnostic policy is installed.
@@ -1102,8 +1133,7 @@ relayer configuration or operator documentation.
 Multiple independent relayers improve availability. The registry does not
 require leader election to accept beacon submissions.
 
-Use a separate signing account and checkpoint file for each independent
-relayer.
+Use a separate signing account, state directory, and checkpoint file for each independent relayer.
 
 If multiple relayers submit the same round, the first successful import
 populates the cache. Later successful submissions return the cached value

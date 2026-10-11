@@ -182,6 +182,7 @@ const CONFIG: LoadedRelayerConfig = {
     initialDelayMs: 5_000,
     maxDelayMs: 60_000,
   },
+  receiptTimeoutMs: 45_000,
   errorSummary: ERROR_SUMMARY,
   createErrorSummary: () => ERROR_SUMMARY,
 };
@@ -356,7 +357,11 @@ beforeEach(() => {
 
   vi.mocked(assertServiceLockHeld)
     .mockReset()
-    .mockReturnValue('/verified-state');
+    .mockReturnValue({
+      stateDirectory: '/verified-state',
+      dev: 1n,
+      ino: 2n,
+    });
 
   submitter = {
     recover: vi.fn<BeaconSubmitter['recover']>(),
@@ -665,6 +670,7 @@ describe('main', () => {
           submitter,
           deployment: CONFIG.deployment,
           round: ROUND,
+          receiptTimeoutMs: CONFIG.receiptTimeoutMs,
           onProgress: expect.any(Function),
         });
 

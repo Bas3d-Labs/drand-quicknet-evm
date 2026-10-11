@@ -1119,6 +1119,30 @@ describe('runDaemon', () => {
       failure
     );
   });
+
+  it('rejects an invalid receipt timeout before starting a cycle', async () => {
+    const readChainHeads = vi.fn();
+
+    await expect(runDaemon({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      checkpointStore: CHECKPOINT_STORE,
+      consumers: [VALIDATED_CONSUMER_A],
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      pollIntervalMs: 1_000,
+      receiptTimeoutMs: 0,
+      readChainHeads,
+    })).rejects.toThrow('Invalid receipt timeout.');
+
+    expect(readChainHeads).not.toHaveBeenCalled();
+    expect(runDaemonCycle).not.toHaveBeenCalled();
+    expect(submitter.recover).not.toHaveBeenCalled();
+  });
 });
 
 describe('daemon cycle correlation', () => {

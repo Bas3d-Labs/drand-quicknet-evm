@@ -1011,3 +1011,34 @@ describe('signed transaction secret guard', () => {
       .toThrow(new TypeError('Invalid signed transaction.'));
   });
 });
+
+describe('receipt timeout loading', () => {
+  it.each([
+    [undefined, 30_000],
+    ['45000', 45_000],
+  ] as const)('loads setting %s', async (value, expected) => {
+    const config = await loadRelayerConfig({
+      source: PRESET_SOURCE,
+      env: createEnvironment({
+        QUICKNET_RECEIPT_TIMEOUT_MS: value,
+      }),
+    });
+
+    expect(config.receiptTimeoutMs).toBe(expected);
+  });
+
+  it('rejects an invalid timeout before deployment loading', async () => {
+    await expectConfigRejection(
+      loadRelayerConfig({
+        source: PRESET_SOURCE,
+        env: createEnvironment({
+          QUICKNET_RECEIPT_TIMEOUT_MS: '0',
+        }),
+      }),
+      'INVALID_RECEIPT_TIMEOUT',
+      'QUICKNET_RECEIPT_TIMEOUT_MS',
+    );
+
+    expect(loadRegistryDeployment).not.toHaveBeenCalled();
+  });
+});

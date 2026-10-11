@@ -1,5 +1,4 @@
 import {
-  basename,
   join,
   resolve,
 } from 'node:path';
@@ -13,21 +12,17 @@ import type {
 } from '../diagnostics/relayer-log.js';
 
 import {
-  priorSignerStateError,
-} from '../diagnostics/signer-journal-errors.js';
-
-import {
   isFixedHex,
 } from '../shared/hex.js';
+
+import {
+  assertSignerBootstrapState,
+} from '../state/assert-signer-bootstrap-state.js';
 
 import {
   BroadcastRetrySchedule,
   type BroadcastRetryScheduleOptions,
 } from '../state/broadcast-retry-schedule.js';
-
-import {
-  checkpointExists,
-} from '../state/checkpoint-exists.js';
 
 import {
   FileTransactionJournalStore,
@@ -115,22 +110,21 @@ export async function openSignerRuntime(
       ? undefined
       : resolve(configuredCheckpointFile);
 
-  const stateDirectory = assertServiceLockHeld({
+  const ownership = assertServiceLockHeld({
     env,
     ...(resolvedCheckpointFile === undefined
       ? {}
       : { checkpointFile: resolvedCheckpointFile }),
-  })
+  });
 
-  const checkpointFile =
-    resolvedCheckpointFile === undefined
-      ? undefined
-      : join(stateDirectory, basename(resolvedCheckpointFile));
+  const { stateDirectory } = ownership;
 
   const filePath = join(
     stateDirectory,
     `transaction-journal-${identity.chainId}-${identity.signer.toLowerCase()}.json`,
   );
+
+  await assertSignerBootstrapState(filePath, ownership);
 
   const store = await FileTransactionJournalStore.open({
     filePath,
@@ -139,23 +133,7 @@ export async function openSignerRuntime(
 
   const coordinator = await SignerCoordinator.create({
     identity,
-    store: {
-      async load() {
-        const current = await store.load();
-
-        if (
-          current.kind === 'missing' &&
-          checkpointFile !== undefined &&
-          await checkpointExists(checkpointFile)
-        ) {
-          throw priorSignerStateError();
-        }
-
-        return current;
-      },
-
-      save: (snapshot) => store.save(snapshot),
-    },
+    store,
     maxRetainedAttempts: MAX_RETAINED_ATTEMPTS,
     log,
     createErrorSummary,

@@ -216,6 +216,7 @@ const DAEMON_CONFIG: DaemonConfig = {
   checkpointFile: './state/checkpoint.json',
   maxBlockRange: 2_000n,
   pollIntervalMs: 1_000,
+  receiptTimeoutMs: 45_000,
 };
 
 const VERIFIED_STATE_DIRECTORY = resolve(
@@ -329,7 +330,11 @@ describe('runDaemonCommand', () => {
 
     vi.mocked(assertServiceLockHeld)
       .mockReset()
-      .mockReturnValue(VERIFIED_STATE_DIRECTORY);
+      .mockReturnValue({
+        stateDirectory: VERIFIED_STATE_DIRECTORY,
+        dev: 1n,
+        ino: 2n,
+      });
 
     vi.mocked(FileCheckpointStore.open).mockClear();
 
@@ -570,6 +575,7 @@ describe('runDaemonCommand', () => {
       maxBlockRange: 2_000n,
       finality: { type: 'safe' },
       pollIntervalMs: 1_000,
+      receiptTimeoutMs: 45_000,
       onCycle: expect.any(Function),
     });
 
@@ -836,7 +842,11 @@ describe('runDaemonCommand', () => {
     const failure = new ServiceLockNotHeldError('state-directory');
 
     vi.mocked(assertServiceLockHeld)
-      .mockReturnValueOnce(VERIFIED_STATE_DIRECTORY)
+      .mockReturnValueOnce({
+        stateDirectory: VERIFIED_STATE_DIRECTORY,
+        dev: 1n,
+        ino: 2n,
+      })
       .mockImplementationOnce(() => {
         throw failure;
       });

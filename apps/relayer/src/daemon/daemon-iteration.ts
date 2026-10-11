@@ -70,6 +70,7 @@ export interface RunDaemonIterationOptions {
   maxBlockRange: bigint;
   finality: FinalityPolicy;
   softCursor?: SoftScanCursor;
+  receiptTimeoutMs?: number;
   readChainHeads?: () => Promise<ChainHeads>;
   onOperation?: (operation: OperationContext) => void;
   onCompleted?: (
@@ -181,6 +182,10 @@ export async function runDaemonIteration(
       nextBlock: durableNextBlock,
       durableBlock: heads.durableBlock,
       maxBlockRange: options.maxBlockRange,
+
+      ...(options.receiptTimeoutMs !== undefined
+        ? { receiptTimeoutMs: options.receiptTimeoutMs }
+        : {}),
 
       onCompleted(result) {
         reportCompleted('durable', result);
@@ -322,6 +327,10 @@ export async function runDaemonIteration(
       deployment: options.deployment,
       requests: softResult.requests,
 
+      ...(options.receiptTimeoutMs !== undefined
+        ? { receiptTimeoutMs: options.receiptTimeoutMs }
+        : {}),
+
       onProgress(progress) {
         reportOperation({
           name: 'import-round',
@@ -344,6 +353,7 @@ export async function runDaemonIteration(
     softCursor = {
       nextBlock: softResult.nextBlock,
     };
+
     softScan = {
       fromBlock: softResult.fromBlock,
       toBlock: softResult.toBlock,
