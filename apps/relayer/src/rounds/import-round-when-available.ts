@@ -19,6 +19,10 @@ import {
   type RoundImportProgress,
 } from '../diagnostics/operation-context.js';
 
+import type {
+  BeaconSubmitter,
+} from './create-beacon-submitter.js';
+
 import {
   fetchQuicknetBeaconWithRetry,
   type FetchQuicknetBeaconWithRetryOptions,
@@ -26,12 +30,9 @@ import {
 
 import {
   importQuicknetRound,
+  type ImportQuicknetRoundOptions,
   type ImportQuicknetRoundResult,
 } from './import-round.js';
-
-import type {
-  BeaconSubmitter,
-} from './create-beacon-submitter.js';
 
 import {
   waitForQuicknetRound
@@ -140,7 +141,7 @@ export async function importQuicknetRoundWhenAvailable(
 
   options.signal?.throwIfAborted();
 
-  return importQuicknetRound({
+  const importOptions: ImportQuicknetRoundOptions = {
     publicClient,
     walletClient,
     account,
@@ -150,5 +151,11 @@ export async function importQuicknetRoundWhenAvailable(
     beacon,
     receiptTimeoutMs,
     onProgress: options.onProgress,
-  });
+  };
+
+  if (options.signal !== undefined) {
+    importOptions.signal = options.signal;
+  }
+
+  return importQuicknetRound(importOptions);
 }

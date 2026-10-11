@@ -898,6 +898,34 @@ describe(
 
       expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
     });
+
+    it('forwards the same abort signal into direct import', async () => {
+      const controller = new AbortController();
+
+      await importQuicknetRoundWhenAvailable({
+        publicClient,
+        walletClient,
+        account,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        signal: controller.signal,
+      });
+
+      expect(importMocks.importQuicknetRound)
+        .toHaveBeenCalledExactlyOnceWith({
+          publicClient,
+          walletClient,
+          account,
+          submitter,
+          deployment: DEPLOYMENT,
+          round: ROUND,
+          beacon: BEACON,
+          receiptTimeoutMs: 30_000,
+          onProgress: undefined,
+          signal: controller.signal,
+        });
+    });
   },
 );
 
