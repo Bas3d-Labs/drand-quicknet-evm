@@ -7,6 +7,10 @@ import {
   vi,
 } from 'vitest';
 
+import {
+  WaitForTransactionReceiptTimeoutError,
+} from 'viem';
+
 import type {
   Account,
   Address,
@@ -382,6 +386,55 @@ describe('importQuicknetRound', () => {
     ).toBe(SIMULATED_REQUEST);
   });
 
+  it('returns deferred when the signer is unavailable without waiting for a receipt', async () => {
+    submitTransaction.mockResolvedValueOnce({
+      status: 'signer-unavailable',
+      blocker: 'unresolved-attempt',
+    });
+
+    await expect(importRound()).resolves.toEqual({
+      status: 'deferred',
+      round: ROUND,
+      reason: 'signer-unavailable',
+      blocker: 'unresolved-attempt',
+    });
+
+    expect(submissionMocks.simulateBeaconSubmission)
+      .toHaveBeenCalledOnce();
+    expect(submitTransaction).toHaveBeenCalledExactlyOnceWith(
+      SIMULATED_REQUEST,
+    );
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+    expect(getBeacon).not.toHaveBeenCalled();
+  });
+
+  it('returns pending for an unacknowledged broadcast without retrying or waiting for a receipt', async () => {
+    const attemptId = '11111111-1111-4111-8111-111111111111';
+
+    submitTransaction.mockResolvedValueOnce({
+      status: 'not-acknowledged',
+      attemptId,
+      transactionHash: SUBMITTED_TRANSACTION_HASH,
+      nonce: 4n,
+    });
+
+    await expect(importRound()).resolves.toEqual({
+      status: 'pending',
+      round: ROUND,
+      attemptId,
+      transactionHash: SUBMITTED_TRANSACTION_HASH,
+      reason: 'broadcast-not-acknowledged',
+    });
+
+    expect(submissionMocks.simulateBeaconSubmission)
+      .toHaveBeenCalledOnce();
+    expect(submitTransaction).toHaveBeenCalledExactlyOnceWith(
+      SIMULATED_REQUEST,
+    );
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+    expect(getBeacon).not.toHaveBeenCalled();
+  });
+
   it('does not broadcast if simulation fails', async () => {
     const error = new Error('Simulation failed');
 
@@ -407,6 +460,32 @@ describe('importQuicknetRound', () => {
 
     expect(submitTransaction).toHaveBeenCalledOnce();
     expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it('propagates an ordinary receipt error without resubmitting', async () => {
+    waitForTransactionReceipt.mockRejectedValueOnce(
+      new WaitForTransactionReceiptTimeoutError({
+        hash: SUBMITTED_TRANSACTION_HASH,
+      }),
+    );
+
+    await expect(importRound()).resolves.toEqual({
+      status: 'pending',
+      round: ROUND,
+      attemptId: '11111111-1111-4111-8111-111111111111',
+      transactionHash: SUBMITTED_TRANSACTION_HASH,
+      reason: 'receipt-timeout',
+    });
+
+    expect(submissionMocks.simulateBeaconSubmission)
+      .toHaveBeenCalledOnce();
+    expect(submitTransaction).toHaveBeenCalledExactlyOnceWith(
+      SIMULATED_REQUEST,
+    );
+    expect(waitForTransactionReceipt).toHaveBeenCalledExactlyOnceWith({
+      hash: SUBMITTED_TRANSACTION_HASH,
+    });
+    expect(getBeacon).not.toHaveBeenCalled();
   });
 
   it('does not resubmit after a receipt timeout', async () => {

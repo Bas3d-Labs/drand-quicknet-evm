@@ -19,8 +19,26 @@ import type {
 } from '@based-labs/drand-quicknet-registry';
 
 import type {
+  QuicknetRandomnessRequest,
+} from '../../src/consumers/request-events.js';
+
+import {
+  processQuicknetRequests,
+  processQuicknetRequestsWithOutcomes,
+} from '../../src/consumers/request-processor.js';
+
+import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
+
+import type {
+  ImportQuicknetRoundResult,
+  PendingImportResult,
+} from '../../src/rounds/import-round.js';
+
+import {
+  importQuicknetRoundWhenAvailable,
+} from '../../src/rounds/import-round-when-available.js';
 
 vi.mock(
   '../../src/rounds/import-round-when-available.js',
@@ -28,19 +46,6 @@ vi.mock(
     importQuicknetRoundWhenAvailable: vi.fn(),
   }),
 );
-
-import type {
-  ImportQuicknetRoundResult,
-} from '../../src/rounds/import-round.js';
-import {
-  importQuicknetRoundWhenAvailable,
-} from '../../src/rounds/import-round-when-available.js';
-import type {
-  QuicknetRandomnessRequest,
-} from '../../src/consumers/request-events.js';
-import {
-  processQuicknetRequests,
-} from '../../src/consumers/request-processor.js';
 
 const CONSUMER_A: Address = '0x1111111111111111111111111111111111111111';
 const CONSUMER_B: Address = '0x2222222222222222222222222222222222222222';
@@ -592,5 +597,333 @@ describe('processQuicknetRequests', () => {
       deployment: DEPLOYMENT,
       round: 902n,
     });
+  });
+
+  it('retains a pending outcome and continues to the next round', async () => {
+    const onCompleted = vi.fn();
+
+    const pending = {
+      status: 'pending',
+      round: 1_000n,
+      attemptId: '11111111-1111-4111-8111-111111111111',
+      transactionHash: TRANSACTION_HASH_A,
+      reason: 'broadcast-not-acknowledged',
+    } as const;
+
+    const completed = alreadyStoredResult(1_001n, RANDOMNESS_B);
+
+    vi.mocked(importQuicknetRoundWhenAvailable)
+      .mockResolvedValueOnce(pending)
+      .mockResolvedValueOnce(completed);
+
+    const outcomes = await processQuicknetRequestsWithOutcomes({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      requests: [
+        createRequest(1_000n, CONSUMER_A, 2_000n),
+        createRequest(1_001n, CONSUMER_A, 2_001n),
+      ],
+      onCompleted,
+    });
+
+    expect(outcomes).toEqual([
+      {
+        round: 1_000n,
+        firstRequestBlock: 2_000n,
+        status: 'pending',
+        result: pending,
+      },
+      {
+        round: 1_001n,
+        firstRequestBlock: 2_001n,
+        status: 'completed',
+        result: completed,
+      },
+    ]);
+
+    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
+    expect(onCompleted).toHaveBeenCalledExactlyOnceWith({
+      round: 1_001n,
+      result: completed,
+    });
+  });
+
+  it('defers the remaining batch after signer unavailability without failure', async () => {
+    const onCompleted = vi.fn();
+
+    const pending = {
+      status: 'pending',
+      round: 1_100n,
+      attemptId: '11111111-1111-4111-8111-111111111111',
+      transactionHash: TRANSACTION_HASH_A,
+      reason: 'receipt-timeout',
+    } as const;
+
+    vi.mocked(importQuicknetRoundWhenAvailable)
+      .mockResolvedValueOnce(pending)
+      .mockResolvedValueOnce({
+        status: 'deferred',
+        round: 1_101n,
+        reason: 'signer-unavailable',
+        blocker: 'journal-capacity-reached',
+      });
+
+    const outcomes = await processQuicknetRequestsWithOutcomes({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      requests: [
+        createRequest(1_100n, CONSUMER_A, 2_100n),
+        createRequest(1_101n, CONSUMER_A, 2_101n),
+        createRequest(1_102n, CONSUMER_A, 2_102n),
+      ],
+      onCompleted,
+    });
+
+    expect(outcomes).toEqual([
+      {
+        round: 1_100n,
+        firstRequestBlock: 2_100n,
+        status: 'pending',
+        result: pending,
+      },
+      {
+        round: 1_101n,
+        firstRequestBlock: 2_101n,
+        status: 'deferred',
+        reason: 'signer-unavailable',
+        blocker: 'journal-capacity-reached',
+      },
+      {
+        round: 1_102n,
+        firstRequestBlock: 2_102n,
+        status: 'deferred',
+        reason: 'signer-unavailable',
+        blocker: 'journal-capacity-reached',
+      },
+    ]);
+
+    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
+    expect(onCompleted).not.toHaveBeenCalled();
+  });
+
+  it('excludes pending and deferred work from the completed-round collection', async () => {
+    const onCompleted = vi.fn();
+    const completed = alreadyStoredResult(1_200n, RANDOMNESS_A);
+
+    vi.mocked(importQuicknetRoundWhenAvailable)
+      .mockResolvedValueOnce(completed)
+      .mockResolvedValueOnce({
+        status: 'pending',
+        round: 1_201n,
+        attemptId: '11111111-1111-4111-8111-111111111111',
+        transactionHash: TRANSACTION_HASH_A,
+        reason: 'receipt-timeout',
+      })
+      .mockResolvedValueOnce({
+        status: 'deferred',
+        round: 1_202n,
+        reason: 'signer-unavailable',
+        blocker: 'unresolved-attempt',
+      });
+
+    const result = await processQuicknetRequests({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      requests: [
+        createRequest(1_200n),
+        createRequest(1_201n),
+        createRequest(1_202n),
+        createRequest(1_203n),
+      ],
+      onCompleted,
+    });
+
+    expect(result).toEqual({
+      rounds: [{ round: 1_200n, result: completed }],
+    });
+
+    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(3);
+    expect(onCompleted).toHaveBeenCalledExactlyOnceWith({
+      round: 1_200n,
+      result: completed,
+    });
+  });
+
+  it.each([false, true])(
+    'reports pending and continues to completion (callback throws: %s)',
+    async (callbackThrows) => {
+      const pending: PendingImportResult = {
+        status: 'pending',
+        round: 100n,
+        attemptId: 'attempt-100',
+        transactionHash: TRANSACTION_HASH_A,
+        reason: 'broadcast-not-acknowledged',
+      };
+      const stored = alreadyStoredResult(101n, RANDOMNESS_B);
+      const reported: string[] = [];
+      const onIncomplete = vi.fn(() => {
+        reported.push('pending');
+
+        if (callbackThrows) {
+          throw new Error('Reporting failed.');
+        }
+      });
+      const onCompleted = vi.fn(() => {
+        reported.push('completed');
+      });
+
+      vi.mocked(importQuicknetRoundWhenAvailable)
+        .mockResolvedValueOnce(pending)
+        .mockResolvedValueOnce(stored);
+
+      const outcomes = await processQuicknetRequestsWithOutcomes({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        submitter,
+        deployment: DEPLOYMENT,
+        requests: [createRequest(100n), createRequest(101n)],
+        onIncomplete,
+        onCompleted,
+      });
+
+      expect(outcomes).toEqual([
+        {
+          round: 100n,
+          firstRequestBlock: 1_000n,
+          status: 'pending',
+          result: pending,
+        },
+        {
+          round: 101n,
+          firstRequestBlock: 1_000n,
+          status: 'completed',
+          result: stored,
+        },
+      ]);
+      expect(onIncomplete.mock.calls).toEqual([[outcomes[0]]]);
+      expect(onCompleted.mock.calls).toEqual([
+        [{ round: 101n, result: stored }],
+      ]);
+      expect(reported).toEqual(['pending', 'completed']);
+      expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([false, true])(
+    'reports every signer deferral in order (callback throws: %s)',
+    async (callbackThrows) => {
+      const onIncomplete = vi.fn(() => {
+        if (callbackThrows) {
+          throw new Error('Reporting failed.');
+        }
+      });
+      const onCompleted = vi.fn();
+
+      vi.mocked(importQuicknetRoundWhenAvailable).mockResolvedValueOnce({
+        status: 'deferred',
+        round: 200n,
+        reason: 'signer-unavailable',
+        blocker: 'journal-capacity-reached',
+      });
+
+      const outcomes = await processQuicknetRequestsWithOutcomes({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        submitter,
+        deployment: DEPLOYMENT,
+        requests: [
+          createRequest(200n, CONSUMER_A, 1_000n),
+          createRequest(201n, CONSUMER_A, 1_001n),
+          createRequest(202n, CONSUMER_A, 1_002n),
+        ],
+        onIncomplete,
+        onCompleted,
+      });
+
+      expect(outcomes).toEqual([
+        {
+          round: 200n,
+          firstRequestBlock: 1_000n,
+          status: 'deferred',
+          reason: 'signer-unavailable',
+          blocker: 'journal-capacity-reached',
+        },
+        {
+          round: 201n,
+          firstRequestBlock: 1_001n,
+          status: 'deferred',
+          reason: 'signer-unavailable',
+          blocker: 'journal-capacity-reached',
+        },
+        {
+          round: 202n,
+          firstRequestBlock: 1_002n,
+          status: 'deferred',
+          reason: 'signer-unavailable',
+          blocker: 'journal-capacity-reached',
+        },
+      ]);
+      expect(onIncomplete.mock.calls).toEqual(
+        outcomes.map((outcome) => [outcome]),
+      );
+      expect(onCompleted).not.toHaveBeenCalled();
+      expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('reports pending before the wrapper propagates a later import failure', async () => {
+    const pending: PendingImportResult = {
+      status: 'pending',
+      round: 300n,
+      attemptId: 'attempt-300',
+      transactionHash: TRANSACTION_HASH_A,
+      reason: 'receipt-timeout',
+    };
+    const failure = new Error('Import failed.');
+    const onIncomplete = vi.fn();
+    const onCompleted = vi.fn();
+
+    vi.mocked(importQuicknetRoundWhenAvailable)
+      .mockResolvedValueOnce(pending)
+      .mockRejectedValueOnce(failure);
+
+    await expect(
+      processQuicknetRequests({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        submitter,
+        deployment: DEPLOYMENT,
+        requests: [
+          createRequest(300n),
+          createRequest(301n),
+          createRequest(302n),
+        ],
+        onIncomplete,
+        onCompleted,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(onIncomplete.mock.calls).toEqual([
+      [{
+        round: 300n,
+        firstRequestBlock: 1_000n,
+        status: 'pending',
+        result: pending,
+      }],
+    ]);
+    expect(onCompleted).not.toHaveBeenCalled();
+    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
   });
 });

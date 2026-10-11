@@ -374,8 +374,14 @@ describe('signer recovery cycle', () => {
 
     t.request.mockRejectedValueOnce(new Error(KEY));
 
-    await expect(t.cycle.run(t.recovery))
-      .rejects.toThrow('outcome is uncertain');
+    const result = await t.cycle.run(t.recovery);
+
+    expect(result.broadcast).toMatchObject({
+      status: 'not-acknowledged',
+      nonce: 4n,
+    });
+    expect(result.retryDelayMs).toBe(100);
+    expect(t.coordinator.canBroadcast).toBe(false);
 
     expect(await t.cycle.run(t.recovery)).toMatchObject({
       broadcast: null,
@@ -668,27 +674,17 @@ describe('signer recovery cycle', () => {
     expect(t.request).not.toHaveBeenCalled();
   });
 
-  it('does not automatically bootstrap a missing journal', async () => {
+  it('automatically initializes a missing journal and completes inclusion checks', async () => {
     const t = await setup({ missing: true });
 
-    await expect(t.cycle.run(t.recovery))
-      .rejects.toThrow('explicit bootstrap authorization');
-
-    expect(t.getBlock).not.toHaveBeenCalled();
-    expect(t.save).not.toHaveBeenCalled();
-  });
-
-  it('passes explicit bootstrap authorization through without preparing a transaction', async () => {
-    const t = await setup({ missing: true });
-
-    expect(await t.cycle.run({
-      ...t.recovery,
-      bootstrap: {
-        expectedNonce: 4n,
-        confirmNoUntrackedTransactions: true,
+    expect(await t.cycle.run(t.recovery)).toMatchObject({
+      inspection: {
+        status: 'no-attempt',
+        observation: OBSERVATION,
       },
-    })).toMatchObject({
-      inspection: { status: 'no-attempt' },
+      inclusions: {
+        status: 'inspected',
+      },
       broadcast: null,
       retryDelayMs: null,
     });
@@ -698,9 +694,103 @@ describe('signer recovery cycle', () => {
       recoveryComplete: true,
       inclusionChecksComplete: true,
     });
+
+    expect(t.save).toHaveBeenCalledTimes(2);
+
+    expect(t.save.mock.calls[0]![0]).toEqual({
+      version: 1,
+      identity: IDENTITY,
+      baseline: OBSERVATION,
+      lastObservation: OBSERVATION,
+      nextNonce: 4n,
+      durableNextNonce: 4n,
+      attempts: [],
+    });
+
+    // Bootstrap reads all three counts before saving the baseline.
+    // The separate inclusion pass then reads and persists its observation.
+    expect(t.events).toEqual([
+      'nonce',
+      'nonce',
+      'nonce',
+      'save',
+      'nonce',
+      'save',
+    ]);
+
+    expect(t.coordinator.attempts).toEqual([]);
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.getTransactionReceipt).not.toHaveBeenCalled();
     expect(t.signTransaction).not.toHaveBeenCalled();
     expect(t.request).not.toHaveBeenCalled();
   });
+
+  it.each(['latest', 'pending'] as const)(
+    'defers a missing journal when %s disagrees and releases cycle ownership',
+    async (tag) => {
+      const t = await setup({ missing: true });
+
+      t.getTransactionCount.mockResolvedValueOnce(4);
+
+      if (tag === 'pending') {
+        t.getTransactionCount.mockResolvedValueOnce(4);
+      }
+
+      t.getTransactionCount.mockResolvedValueOnce(5);
+
+      expect(await t.cycle.run(t.recovery)).toEqual({
+        inspection: {
+          status: 'bootstrap-deferred',
+          reason: 'nonce-count-mismatch',
+          observation: OBSERVATION,
+          latestNonce: tag === 'latest' ? 5n : 4n,
+          pendingNonce: tag === 'pending' ? 5n : 4n,
+        },
+        inclusions: null,
+        broadcast: null,
+        retryDelayMs: null,
+      });
+
+      expect(t.visible()).toEqual({ kind: 'missing' });
+      expect(t.save).not.toHaveBeenCalled();
+      expect(t.getTransactionCount).toHaveBeenCalledTimes(3);
+
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: false,
+        inclusionChecksComplete: false,
+        persistenceState: 'idle',
+      });
+
+      expect(t.coordinator.canBroadcast).toBe(false);
+      expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+      expect(t.signTransaction).not.toHaveBeenCalled();
+      expect(t.request).not.toHaveBeenCalled();
+
+      // The next cycle can retry initialization when the counts agree.
+      expect(await t.cycle.run(t.recovery)).toMatchObject({
+        inspection: {
+          status: 'no-attempt',
+          observation: OBSERVATION,
+        },
+        inclusions: {
+          status: 'inspected',
+        },
+        broadcast: null,
+        retryDelayMs: null,
+      });
+
+      expect(t.save).toHaveBeenCalledTimes(2);
+      expect(t.coordinator.status).toMatchObject({
+        open: true,
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+      });
+
+      expect(t.signTransaction).not.toHaveBeenCalled();
+      expect(t.request).not.toHaveBeenCalled();
+    },
+  );
 
   it('exposes frozen attempt summaries without signed bytes', async () => {
     const t = await setup();

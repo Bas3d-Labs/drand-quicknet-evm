@@ -1,7 +1,13 @@
+import {
+  WaitForTransactionReceiptTimeoutError,
+} from 'viem';
+
 import type {
   Account,
+  Hash,
   Hex,
   PublicClient,
+  TransactionReceipt,
   WalletClient,
 } from 'viem';
 
@@ -19,6 +25,10 @@ import {
   reportImportProgress,
   type RoundImportProgress,
 } from '../diagnostics/operation-context.js';
+
+import type {
+  SignerBlocker,
+} from '../state/signer-gate.js';
 
 import {
   simulateBeaconSubmission,
@@ -51,14 +61,37 @@ export type ImportQuicknetRoundResult =
       round: bigint;
       randomness: Hex;
       transactionHash: Hex;
-    } & BeaconSubmissionDetails);
+    } & BeaconSubmissionDetails)
+  | PendingImportResult
+  | DeferredImportResult;
+
+export interface PendingImportResult {
+  readonly status: 'pending';
+  readonly round: bigint;
+  readonly attemptId: string;
+  readonly transactionHash: Hash;
+  readonly reason:
+    | 'broadcast-not-acknowledged'
+    | 'receipt-timeout';
+}
+
+export interface DeferredImportResult {
+  readonly status: 'deferred';
+  readonly round: bigint;
+  readonly reason: 'signer-unavailable';
+  readonly blocker: SignerBlocker;
+}
+
+export type CompletedImportResult = Extract<
+  ImportQuicknetRoundResult,
+  { status: 'imported' | 'already-stored' }
+>;
 
 export async function importQuicknetRound(
   options: ImportQuicknetRoundOptions,
 ): Promise<ImportQuicknetRoundResult> {
   const {
     publicClient,
-    walletClient,
     account,
     deployment,
     round,
@@ -140,9 +173,28 @@ export async function importQuicknetRound(
     phase: 'submit-transaction',
   });
   
-  const {
-    transactionHash: hash,
-  } = await options.submitter.submit(request);
+  const submitted = await options.submitter.submit(request);
+
+  if (submitted.status === 'signer-unavailable') {
+    return {
+      status: 'deferred',
+      round,
+      reason: 'signer-unavailable',
+      blocker: submitted.blocker,
+    };
+  }
+
+  if (submitted.status === 'not-acknowledged') {
+    return {
+      status: 'pending',
+      round,
+      attemptId: submitted.attemptId,
+      transactionHash: submitted.transactionHash,
+      reason: 'broadcast-not-acknowledged',
+    };
+  }
+
+  const hash = submitted.transactionHash;
 
   reportImportProgress(options.onProgress, {
     round,
@@ -150,7 +202,23 @@ export async function importQuicknetRound(
     transactionHash: hash,
   });
 
-  const receipt = await publicClient.waitForTransactionReceipt({hash});
+  let receipt: TransactionReceipt;
+
+  try {
+    receipt = await publicClient.waitForTransactionReceipt({ hash });
+  } catch (error) {
+    if (!(error instanceof WaitForTransactionReceiptTimeoutError)) {
+      throw error;
+    }
+
+    return {
+      status: 'pending',
+      round,
+      attemptId: submitted.attemptId,
+      transactionHash: submitted.transactionHash,
+      reason: 'receipt-timeout',
+    };
+  }
   if (receipt.status !== 'success') {
     throw new Error(`Registry submission reverted: ${receipt.transactionHash}`);
   }

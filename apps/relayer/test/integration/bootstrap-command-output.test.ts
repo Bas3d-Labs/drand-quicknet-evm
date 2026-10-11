@@ -98,13 +98,29 @@ afterAll(() => {
   }
 });
 
-it.skipIf(process.platform !== 'linux').each([
-  'import',
-  'import-when-available',
-  'daemon',
-])(
-  '%s preserves exit code 2 through the real command path',
-  (command) => {
+const COMMAND_OUTPUT_CASES = [
+  ...(['import', 'import-when-available', 'daemon'] as const).map(
+    (command) => ({
+      command,
+      outcome: 'imported' as const,
+      outputFails: true,
+    }),
+  ),
+  ...(['import', 'import-when-available'] as const).flatMap(
+    (command) =>
+      (['pending', 'deferred'] as const).flatMap((outcome) =>
+        [false, true].map((outputFails) => ({
+          command,
+          outcome,
+          outputFails,
+        })),
+      ),
+  ),
+];
+
+it.skipIf(process.platform !== 'linux').each(COMMAND_OUTPUT_CASES)(
+  '$command reports $outcome (output fails: $outputFails)',
+  ({ command, outcome, outputFails }) => {
     const checkpoint = join(fixture, command + '.json');
     const observed = join(fixture, command + '.observed');
     const entered = join(fixture, command + '.entered');
@@ -130,13 +146,28 @@ it.skipIf(process.platform !== 'linux').each([
       };
     `;
 
-    const result = `{
-      status: 'imported',
-      submission: 'witness',
-      round: 100n,
-      randomness: '0x' + '33'.repeat(32),
-      transactionHash: '0x' + '44'.repeat(32),
-    }`;
+    const result = outcome === 'pending'
+      ? `{
+          status: 'pending',
+          round: 100n,
+          attemptId: '11111111-1111-4111-8111-111111111111',
+          transactionHash: '0x' + '44'.repeat(32),
+          reason: 'receipt-timeout',
+        }`
+      : outcome === 'deferred'
+        ? `{
+            status: 'deferred',
+            round: 100n,
+            reason: 'signer-unavailable',
+            blocker: 'unresolved-attempt',
+          }`
+        : `{
+            status: 'imported',
+            submission: 'witness',
+            round: 100n,
+            randomness: '0x' + '33'.repeat(32),
+            transactionHash: '0x' + '44'.repeat(32),
+          }`;
 
     // Stub configuration, network work, and signer-runtime opening.
     // Bootstrap, CLI dispatch, runDaemonCommand, output rendering,
@@ -205,7 +236,9 @@ it.skipIf(process.platform !== 'linux').each([
               'completed',
             );
 
-            closeSync(1);
+            if (${outputFails}) {
+              closeSync(1);
+            }
 
             return result;
           }
@@ -237,7 +270,9 @@ it.skipIf(process.platform !== 'linux').each([
               'completed',
             );
 
-            closeSync(1);
+            if (${outputFails}) {
+              closeSync(1);
+            }
 
             return result;
           }
@@ -433,27 +468,43 @@ it.skipIf(process.platform !== 'linux').each([
 
     expect(child.error).toBeUndefined();
     expect(child.signal).toBeNull();
-    expect(child.status, child.stderr).toBe(2);
-    expect(child.stdout).toBe('');
+    expect(child.status, child.stderr).toBe(outputFails ? 2 : 3);
 
-    // The sentinel must preserve output failure without producing
-    // a second ordinary CLI failure.
-    expect(child.stderr).not.toContain('cli_failed');
-    expect(child.stderr.endsWith('\n')).toBe(true);
+    let failure: Record<string, unknown> = {};
 
-    expect(
-      child.stderr.trimEnd().split('\n'),
-    ).toHaveLength(1);
+    if (outputFails) {
+      expect(child.stdout).toBe('');
+      expect(child.stderr).not.toContain('cli_failed');
+      expect(child.stderr.endsWith('\n')).toBe(true);
+      expect(child.stderr.trimEnd().split('\n')).toHaveLength(1);
 
-    const failure = JSON.parse(child.stderr);
+      failure = JSON.parse(child.stderr);
 
-    expect(failure).toMatchObject({
-      event: 'output_failed',
-      code: 'CLI_OUTPUT_FAILED',
-      err: {
-        name: 'Error',
-      },
-    });
+      expect(failure).toMatchObject({
+        event: 'output_failed',
+        code: 'CLI_OUTPUT_FAILED',
+        err: {
+          name: 'Error',
+        },
+      });
+    } else {
+      expect(child.stderr).toBe('');
+
+      const expected = outcome === 'pending'
+        ? [
+            'Quicknet round 100 import is pending.',
+            'Reason: receipt-timeout',
+            'Attempt: 11111111-1111-4111-8111-111111111111',
+            'Transaction: ' + '0x' + '44'.repeat(32),
+          ]
+        : [
+            'Quicknet round 100 import is deferred.',
+            'Reason: signer-unavailable',
+            'Signer blocker: unresolved-attempt',
+          ];
+
+      expect(child.stdout).toBe(expected.join('\n') + '\n');
+    }
 
     expect(existsSync(lockFile)).toBe(true);
 
@@ -503,12 +554,36 @@ it.skipIf(process.platform !== 'linux').each([
         readFileSync(completed, 'utf8'),
       ).toBe('completed');
 
-      expect(failure).toMatchObject({
-        output: 'import-result',
-        status: 'imported',
-        round: '100',
-        transactionHash: '0x' + '44'.repeat(32),
-      });
+      if (outputFails) {
+        expect(failure).toMatchObject({
+          output: 'import-result',
+          status: outcome,
+          round: '100',
+        });
+
+        if (outcome === 'deferred') {
+          expect(failure).toMatchObject({
+            reason: 'signer-unavailable',
+            blocker: 'unresolved-attempt',
+          });
+          expect(failure).not.toHaveProperty('attemptId');
+          expect(failure).not.toHaveProperty('transactionHash');
+        } else {
+          expect(failure.transactionHash)
+            .toBe('0x' + '44'.repeat(32));
+
+          if (outcome === 'pending') {
+            expect(failure).toMatchObject({
+              attemptId: '11111111-1111-4111-8111-111111111111',
+              reason: 'receipt-timeout',
+            });
+          }
+        }
+
+        if (outcome !== 'imported') {
+          expect(failure).not.toHaveProperty('randomness');
+        }
+      }
     }
   },
 );

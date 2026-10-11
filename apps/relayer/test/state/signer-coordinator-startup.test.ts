@@ -2098,19 +2098,47 @@ describe('signer coordinator startup', () => {
 
         const publicClient = { request } as unknown as PublicClient;
 
-        const failure = await t.coordinator.broadcastAttempt({
+        const result = await t.coordinator.broadcastAttempt({
           publicClient,
           attemptId: prepared.attemptId,
-        }).then(
-          () => undefined,
-          (error: unknown) => error,
-        );
+        });
 
-        expect(failure).toBeInstanceOf(Error);
-        expect(String(failure)).toContain('Reconciliation is required');
-        expect(failure).not.toHaveProperty('cause');
-        expect(String(failure)).not.toContain(t.signed.signedTransaction);
-        expect(String(failure)).not.toContain(KEY);
+        expect(result).toEqual({
+          ...prepared,
+          status: 'not-acknowledged',
+        });
+        expect(Object.isFrozen(result)).toBe(true);
+
+        const broadcasts = t.lines
+          .map((line) => JSON.parse(line))
+          .filter(
+            (record) =>
+              record.event === 'attempt_broadcast_not_acknowledged',
+          );
+
+        expect(broadcasts).toHaveLength(1);
+        expect(broadcasts[0]).toMatchObject({
+          signer: ACCOUNT.address,
+          attemptId: prepared.attemptId,
+          transactionHash: prepared.transactionHash,
+          nonce: prepared.nonce.toString(),
+          operation: { name: 'broadcast-attempt' },
+          observation: failureKind === 'rpc-failure'
+            ? 'request-error'
+            : 'hash-mismatch',
+        });
+
+        if (failureKind === 'rpc-failure') {
+          expect(broadcasts[0]).toHaveProperty('err');
+          expect(broadcasts[0]).not.toHaveProperty('returnedTransactionHash');
+        } else {
+          expect(broadcasts[0]).not.toHaveProperty('err');
+          expect(broadcasts[0].returnedTransactionHash)
+            .toBe(`0x${'ee'.repeat(32)}`);
+        }
+
+        expect(t.lines.join('')).not.toContain(t.signed.signedTransaction);
+        expect(t.lines.join('')).not.toContain(KEY);
 
         expect(t.coordinator.attempts[2]!.phase)
           .toBe('broadcast-may-have-occurred');

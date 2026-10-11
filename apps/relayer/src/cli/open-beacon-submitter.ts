@@ -24,6 +24,10 @@ import {
   openSignerRuntime,
 } from './open-signer-runtime.js';
 
+import {
+  waitForSignerJournal,
+} from './wait-for-signer-journal.js';
+
 export interface OpenBeaconSubmitterOptions {
   readonly config: RelayerConfig;
   readonly publicClient: PublicClient;
@@ -31,6 +35,10 @@ export interface OpenBeaconSubmitterOptions {
   readonly log: ScopedRelayerLog;
   readonly readChainHeads: () => Promise<ChainHeads>;
   readonly maxBlockRange: bigint;
+  readonly checkpointFile?: string | undefined;
+
+  /** Wait for first-use journal initialization before returning. */
+  readonly startupPollIntervalMs?: number | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly env?: NodeJS.ProcessEnv | undefined;
 }
@@ -72,10 +80,11 @@ export async function openBeaconSubmitter(
     log,
     createErrorSummary,
     retry: broadcastRetry,
+    checkpointFile: options.checkpointFile,
     env: options.env ?? process.env,
   });
 
-  return createBeaconSubmitter({
+  const submitter = createBeaconSubmitter({
     publicClient,
     walletClient,
     account: config.account,
@@ -85,4 +94,15 @@ export async function openBeaconSubmitter(
     maxBlockRange,
     signal,
   });
+
+  if (options.startupPollIntervalMs !== undefined) {
+    await waitForSignerJournal({
+      coordinator: runtime.coordinator,
+      submitter,
+      pollIntervalMs: options.startupPollIntervalMs,
+      signal,
+    });
+  }
+
+  return submitter;
 }

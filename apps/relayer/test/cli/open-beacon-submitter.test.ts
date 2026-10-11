@@ -21,12 +21,16 @@ import {
   robinhoodTestnet,
 } from 'viem/chains';
 
+vi.mock('../../src/rounds/create-beacon-submitter.js', () => ({
+  createBeaconSubmitter: vi.fn(),
+}));
+
 vi.mock('../../src/cli/open-signer-runtime.js', () => ({
   openSignerRuntime: vi.fn(),
 }));
 
-vi.mock('../../src/rounds/create-beacon-submitter.js', () => ({
-  createBeaconSubmitter: vi.fn(),
+vi.mock('../../src/cli/wait-for-signer-journal.js', () => ({
+  waitForSignerJournal: vi.fn(),
 }));
 
 import {
@@ -37,6 +41,10 @@ import {
 import {
   openSignerRuntime,
 } from '../../src/cli/open-signer-runtime.js';
+
+import {
+  waitForSignerJournal,
+} from '../../src/cli/wait-for-signer-journal.js';
 
 import {
   createBeaconSubmitter,
@@ -116,6 +124,7 @@ function fixture() {
     log: {} as ScopedRelayerLog,
     readChainHeads,
     maxBlockRange: 250n,
+    checkpointFile: '/test/signer-state/checkpoint.json',
     signal: controller.signal,
     env,
   };
@@ -136,6 +145,9 @@ describe('openBeaconSubmitter', () => {
   beforeEach(() => {
     vi.mocked(openSignerRuntime).mockReset();
     vi.mocked(createBeaconSubmitter).mockReset();
+    vi.mocked(waitForSignerJournal)
+      .mockReset()
+      .mockResolvedValue(undefined);
   });
 
   it('opens the configured runtime and returns its bound submitter', async () => {
@@ -157,6 +169,7 @@ describe('openBeaconSubmitter', () => {
       log: options.log,
       createErrorSummary: CREATE_ERROR_SUMMARY,
       retry: CONFIG.broadcastRetry,
+      checkpointFile: options.checkpointFile,
       env,
     });
 
@@ -170,6 +183,8 @@ describe('openBeaconSubmitter', () => {
       maxBlockRange: 250n,
       signal: options.signal,
     });
+
+    expect(waitForSignerJournal).not.toHaveBeenCalled();
 
     const openedWith = vi.mocked(openSignerRuntime).mock.calls[0]![0];
     const boundWith = vi.mocked(createBeaconSubmitter).mock.calls[0]![0];
@@ -250,5 +265,65 @@ describe('openBeaconSubmitter', () => {
     expect(openSignerRuntime).toHaveBeenCalledOnce();
     expect(createBeaconSubmitter).not.toHaveBeenCalled();
     expect(readChainHeads).not.toHaveBeenCalled();
+  });
+
+  it('waits for journal initialization before returning the submitter', async () => {
+    const t = fixture();
+
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    vi.mocked(waitForSignerJournal).mockReturnValueOnce(waiting);
+
+    let returned = false;
+
+    const pending = openBeaconSubmitter({
+      ...t.options,
+      startupPollIntervalMs: 100,
+    }).then((result) => {
+      returned = true;
+      return result;
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(waitForSignerJournal).toHaveBeenCalledExactlyOnceWith({
+          coordinator: t.runtime.coordinator,
+          submitter: t.submitter,
+          pollIntervalMs: 100,
+          signal: t.options.signal,
+        });
+      });
+
+      expect(returned).toBe(false);
+    } finally {
+      release();
+      await pending;
+    }
+
+    expect(await pending).toBe(t.submitter);
+  });
+
+  it('propagates cancellation from the journal wait', async () => {
+    const t = fixture();
+    const controller = new AbortController();
+    const reason = new Error('Startup cancelled');
+
+    vi.mocked(waitForSignerJournal).mockImplementationOnce(
+      async ({ signal }) => {
+        controller.abort(reason);
+        signal!.throwIfAborted();
+      },
+    );
+
+    await expect(openBeaconSubmitter({
+      ...t.options,
+      signal: controller.signal,
+      startupPollIntervalMs: 100,
+    })).rejects.toBe(reason);
+
+    expect(t.submitter.submit).not.toHaveBeenCalled();
   });
 });

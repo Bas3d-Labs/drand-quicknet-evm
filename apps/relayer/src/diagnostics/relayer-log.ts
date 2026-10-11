@@ -33,16 +33,13 @@ import {
   type OperationContext,
 } from './operation-context.js';
 
-import {
-  snapshotResolutionEvidence,
-  assertResolutionTransaction,
-} from './resolution-validation.js';
-
 import type {
   AttemptResolutionEvidence,
 } from './transaction-evidence.js';
 
-import { isUuidV4 } from '../shared/uuid.js';
+import {
+  isUuidV4,
+} from '../shared/uuid.js';
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
 type ScanType = 'durable' | 'soft';
@@ -86,12 +83,20 @@ interface Values {
   scanType: ScanType;
   error: unknown;
   consumers: readonly ConsumerHealth[];
+  deferralReason: 'signer-unavailable';
   submission: 'witness' | 'compressed';
   fallbackReason:
     | 'witness-rejected'
     | 'witness-decode-failed'
     | undefined;
   operation: OperationContext | undefined;
+  pendingReason:
+    | 'broadcast-not-acknowledged'
+    | 'receipt-timeout';
+  broadcastObservation:
+    | 'request-error'
+    | 'invalid-response'
+    | 'hash-mismatch';
   resolution: AttemptResolutionEvidence;
   blocker: SignerBlocker;
   blockers: readonly SignerBlocker[];
@@ -176,6 +181,16 @@ const EVENTS = {
       nextBlock: 'uint',
     },
   ],
+  roundAlreadyStored: [
+    'debug',
+    'round_already_stored',
+    'Quicknet round already stored',
+    {
+      consumer: 'address',
+      scanType: 'scanType',
+      round: 'uint',
+    },
+  ],
   roundImported: [
     'info',
     'round_imported',
@@ -189,14 +204,29 @@ const EVENTS = {
       fallbackReason: 'fallbackReason',
     },
   ],
-  roundAlreadyStored: [
-    'debug',
-    'round_already_stored',
-    'Quicknet round already stored',
+  roundDeferred: [
+    'info',
+    'round_deferred',
+    'Quicknet round import deferred because the signer is unavailable',
     {
       consumer: 'address',
       scanType: 'scanType',
       round: 'uint',
+      reason: 'deferralReason',
+      blocker: 'blocker',
+    },
+  ],
+  roundPending: [
+    'info',
+    'round_pending',
+    'Quicknet round import is pending',
+    {
+      consumer: 'address',
+      scanType: 'scanType',
+      round: 'uint',
+      attemptId: 'id',
+      transactionHash: 'hash',
+      reason: 'pendingReason',
     },
   ],
   heartbeat: [
@@ -218,6 +248,19 @@ const EVENTS = {
 } as const satisfies Record<string, Definition>;
 
 const TRANSACTION_EVENTS = {
+  signerBootstrapDeferred: [
+    'info',
+    'signer_bootstrap_deferred',
+    'Signer journal initialization deferred because nonce counts disagree',
+    {
+      signer: 'address',
+      durableBlock: 'uint',
+      durableBlockHash: 'hash',
+      durableNonce: 'uint',
+      latestNonce: 'uint',
+      pendingNonce: 'uint',
+    },
+  ],
   signerBlocked: [
     'warn',
     'signer_blocked',
@@ -237,6 +280,29 @@ const TRANSACTION_EVENTS = {
       signer: 'address',
       cleared: 'blockers',
       blockedSince: 'timestamp',
+    },
+  ],
+  attemptBroadcastAccepted: [
+    'info',
+    'attempt_broadcast_accepted',
+    'Broadcast acknowledged by RPC. Inclusion is not established',
+    {
+      signer: 'address',
+      attemptId: 'id',
+      transactionHash: 'hash',
+      nonce: 'uint',
+    },
+  ],
+  attemptBroadcastNotAcknowledged: [
+    'info',
+    'attempt_broadcast_not_acknowledged',
+    'Broadcast acknowledgement not established. Reconciliation is required',
+    {
+      signer: 'address',
+      attemptId: 'id',
+      transactionHash: 'hash',
+      nonce: 'uint',
+      observation: 'broadcastObservation',
     },
   ],
   attemptResolved: [
@@ -272,9 +338,36 @@ export type RelayerLog = {
     (context: Context<(typeof EVENTS)[K][3]>) => void;
 };
 
+export type AttemptBroadcastNotAcknowledgedContext = {
+  readonly signer: Address;
+  readonly attemptId: string;
+  readonly transactionHash: Hash;
+  readonly nonce: bigint;
+} & (
+  | {
+      readonly observation: 'request-error';
+      readonly error: unknown;
+      readonly returnedTransactionHash?: never;
+    }
+  | {
+      readonly observation: 'invalid-response';
+      readonly error?: never;
+      readonly returnedTransactionHash?: never;
+    }
+  | {
+      readonly observation: 'hash-mismatch';
+      readonly error?: never;
+      readonly returnedTransactionHash: Hash;
+    }
+);
+
 type TransactionLog = {
   readonly [K in keyof typeof TRANSACTION_EVENTS]:
-    (context: Context<(typeof TRANSACTION_EVENTS)[K][3]>) => void;
+    (
+      context: K extends 'attemptBroadcastNotAcknowledged'
+        ? AttemptBroadcastNotAcknowledgedContext
+        : Context<(typeof TRANSACTION_EVENTS)[K][3]>
+    ) => void;
 };
 
 export interface LogDestination {
@@ -443,6 +536,63 @@ export function createRelayerLog(
 
     try {
       const projected = project(schema, context, policy);
+
+      if (event === 'attempt_broadcast_not_acknowledged') {
+        if (typeof context !== 'object' || context === null) {
+          throw new TypeError('Invalid logging context.');
+        }
+
+        const observation = projected.observation;
+        const hasError = Object.hasOwn(context, 'error');
+        const hasReturnedHash = Object.hasOwn(
+          context,
+          'returnedTransactionHash',
+        );
+
+        if (
+          hasError !== (observation === 'request-error') ||
+          hasReturnedHash !== (observation === 'hash-mismatch')
+        ) {
+          throw new TypeError('Invalid broadcast observation fields.');
+        }
+
+        switch (observation) {
+          case 'request-error':
+            Object.assign(
+              projected,
+              project({ error: 'error' }, context, policy),
+            );
+            break;
+          
+          case 'invalid-response':
+            break;
+
+          case 'hash-mismatch': {
+            const conditional = project(
+              { returnedTransactionHash: 'hash' },
+              context,
+              policy,
+            );
+
+            const expected = projected.transactionHash;
+            const returned = conditional.returnedTransactionHash;
+
+            if (
+              typeof expected !== 'string' ||
+              typeof returned !== 'string' ||
+              expected.toLowerCase() === returned.toLowerCase()
+            ) {
+              throw new TypeError('Invalid broadcast hash mismatch.');
+            }
+
+            Object.assign(projected, conditional);
+            break;
+          }
+
+          default:
+            throw new TypeError('Invalid broadcast observation.');
+        }
+      }
 
       for (const key of ['signer', 'attemptId']) {
         const bound = bindings[key];
@@ -764,6 +914,34 @@ function scalar(
       value === 'witness-rejected' ||
       value === 'witness-decode-failed'
     )
+  ) {
+    return value;
+  }
+
+  if (
+    kind === 'broadcastObservation' &&
+    (
+      value === 'request-error' ||
+      value === 'invalid-response' ||
+      value === 'hash-mismatch'
+    )
+  ) {
+      return value;
+  }
+
+  if (
+    kind === 'pendingReason' &&
+    (
+      value === 'broadcast-not-acknowledged' ||
+      value === 'receipt-timeout'
+    )
+  ) {
+    return value;
+  }
+
+  if (
+    kind === 'deferralReason' &&
+    value === 'signer-unavailable'
   ) {
     return value;
   }

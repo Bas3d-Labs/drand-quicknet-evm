@@ -17,12 +17,17 @@ import type {
 } from '../rounds/create-beacon-submitter.js';
 
 import type {
-  ImportQuicknetRoundResult,
+  CompletedImportResult,
+  PendingImportResult,
 } from '../rounds/import-round.js';
 
 import {
   importQuicknetRoundWhenAvailable,
 } from '../rounds/import-round-when-available.js';
+
+import type {
+  SignerBlocker,
+} from '../state/signer-gate.js';
 
 import type {
   QuicknetRandomnessRequest,
@@ -39,11 +44,14 @@ export interface ProcessQuicknetRequestsOptions {
   onCompleted?:
     | ((result: ProcessedQuicknetRound) => void)
     | undefined;
+  onIncomplete?:
+    | ((outcome: IncompleteQuicknetRoundOutcome) => void)
+    | undefined;
 }
 
 export interface ProcessedQuicknetRound {
   round: bigint;
-  result: ImportQuicknetRoundResult;
+  result: CompletedImportResult;
 }
 
 export interface ProcessQuicknetRequestsResult {
@@ -56,7 +64,11 @@ export type QuicknetRoundOutcome = {
 } & (
   | {
       status: 'completed';
-      result: ImportQuicknetRoundResult;
+      result: CompletedImportResult;
+    }
+  | {
+      status: 'pending';
+      result: PendingImportResult;
     }
   | {
       status: 'failed';
@@ -66,7 +78,23 @@ export type QuicknetRoundOutcome = {
       status: 'deferred';
       reason: 'earlier-import-failed';
     }
+  | {
+      status: 'deferred';
+      reason: 'signer-unavailable';
+      blocker: SignerBlocker;
+    }
 );
+
+export type IncompleteQuicknetRoundOutcome = Extract<
+  QuicknetRoundOutcome,
+  | { 
+      status: 'pending';
+    }
+  | { 
+      status: 'deferred';
+      reason: 'signer-unavailable';
+    }
+>;
 
 export async function processQuicknetRequestsWithOutcomes(
   options: ProcessQuicknetRequestsOptions,
@@ -85,7 +113,19 @@ export async function processQuicknetRequestsWithOutcomes(
   }
 
   const outcomes: QuicknetRoundOutcome[] = [];
+
+  function recordIncomplete(outcome: IncompleteQuicknetRoundOutcome): void {
+    outcomes.push(outcome);
+
+    try {
+      options.onIncomplete?.(outcome);
+    } catch {
+      // Reporting must not interrupt request processing.
+    }
+  }
+
   let failed = false;
+  let signerUnavailable: SignerBlocker | undefined;
 
   for (const [round, firstRequestBlock] of firstBlocks) {
     if (failed) {
@@ -94,6 +134,18 @@ export async function processQuicknetRequestsWithOutcomes(
         firstRequestBlock,
         status: 'deferred',
         reason: 'earlier-import-failed',
+      });
+
+      continue;
+    }
+
+    if (signerUnavailable !== undefined) {
+      recordIncomplete({
+        round,
+        firstRequestBlock,
+        status: 'deferred',
+        reason: 'signer-unavailable',
+        blocker: signerUnavailable,
       });
 
       continue;
@@ -109,6 +161,31 @@ export async function processQuicknetRequestsWithOutcomes(
         round,
         onProgress: options.onProgress,
       });
+
+      if (result.status === 'pending') {
+        recordIncomplete({
+          round,
+          firstRequestBlock,
+          status: 'pending',
+          result,
+        });
+
+        continue;
+      }
+
+      if (result.status === 'deferred') {
+        signerUnavailable = result.blocker;
+
+        recordIncomplete({
+          round,
+          firstRequestBlock,
+          status: 'deferred',
+          reason: result.reason,
+          blocker: result.blocker,
+        });
+
+        continue;
+      }
 
       outcomes.push({
         round,

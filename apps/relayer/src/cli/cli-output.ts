@@ -10,6 +10,10 @@ import {
   isFixedHex,
 } from '../shared/hex.js';
 
+import {
+  isUuidV4,
+} from '../shared/uuid.js';
+
 import type {
   DaemonStartupSummary,
 } from '../daemon/daemon-startup.js';
@@ -17,6 +21,10 @@ import type {
 import type {
   ImportQuicknetRoundResult,
 } from '../rounds/import-round.js';
+
+import {
+  BLOCKER_PRECEDENCE,
+} from '../state/signer-gate.js';
 
 export type CliOutput =
   | {
@@ -216,8 +224,55 @@ export function renderCliOutput(
     const round = uint(own(output, 'round'));
     const result = own(output, 'result');
 
-    const randomness = hex(own(result, 'randomness'), 32);
     const status = own(result, 'status');
+
+    if (status === 'pending') {
+      const attemptId = own(result, 'attemptId');
+      const hash = hex(own(result, 'transactionHash'), 32);
+      const reason = own(result, 'reason');
+
+      if (!isUuidV4(attemptId)) {
+        throw new TypeError('Invalid CLI attempt ID.');
+      }
+
+      if (
+        reason !== 'broadcast-not-acknowledged' &&
+        reason !== 'receipt-timeout'
+      ) {
+        throw new TypeError('Invalid pending reason.');
+      }
+
+      return [
+        'Quicknet round ' + round + ' import is pending.',
+        'Reason: ' + reason,
+        'Attempt: ' + attemptId,
+        'Transaction: ' + hash,
+      ].join('\n');
+    }
+
+    if (status === 'deferred') {
+      const reason = own(result, 'reason');
+      const blocker = own(result, 'blocker');
+
+      if (reason !== 'signer-unavailable') {
+        throw new TypeError('Invalid deferral reason.');
+      }
+
+      if (
+        typeof blocker !== 'string' ||
+        !BLOCKER_PRECEDENCE.some((allowed) => allowed === blocker)
+      ) {
+        throw new TypeError('Invalid signer blocker.');
+      }
+
+      return [
+        'Quicknet round ' + round + ' import is deferred.',
+        'Reason: ' + reason,
+        'Signer blocker: ' + blocker,
+      ].join('\n');
+    }
+
+    const randomness = hex(own(result, 'randomness'), 32);
 
     if (status === 'already-stored') {
       return [
@@ -288,7 +343,7 @@ export function renderCliOutput(
   throw new TypeError('Invalid CLI output type.');
 }
 
-// Perserve a known import outcome if rendering or writing its output fails.
+// Preserve a known import outcome if rendering or writing its output fails.
 export function renderOutputFailure(
   output: CliOutput,
   error: unknown,
@@ -311,9 +366,55 @@ export function renderOutputFailure(
       const round = uint(own(output, 'round'));
       const result = own(output, 'result');
       const status = own(result, 'status');
-      const randomness = hex(own(result, 'randomness'), 32);
 
-      if (status === 'imported') {
+      if (status === 'pending') {
+        const attemptId = own(result, 'attemptId');
+        const transactionHash = hex(own(result, 'transactionHash'), 32);
+        const reason = own(result, 'reason');
+
+        if (!isUuidV4(attemptId)) {
+          throw new TypeError('Invalid CLI attempt ID.');
+        }
+
+        if (
+          reason !== 'broadcast-not-acknowledged' &&
+          reason !== 'receipt-timeout'
+        ) {
+          throw new TypeError('Invalid pending reason.');
+        }
+
+        context = {
+          output: type,
+          round,
+          status,
+          attemptId,
+          transactionHash,
+          reason,
+        };
+      } else if (status === 'deferred') {
+        const reason = own(result, 'reason');
+        const blocker = own(result, 'blocker');
+
+        if (reason !== 'signer-unavailable') {
+          throw new TypeError('Invalid deferral reason.');
+        }
+
+        if (
+          typeof blocker !== 'string' ||
+          !BLOCKER_PRECEDENCE.some((allowed) => allowed === blocker)
+        ) {
+          throw new TypeError('Invalid signer blocker.');
+        }
+
+        context = {
+          output: type,
+          round,
+          status,
+          reason,
+          blocker,
+        };
+      } else if (status === 'imported') {
+        const randomness = hex(own(result, 'randomness'), 32);
         const transactionHash = hex(own(result, 'transactionHash'), 32);
 
         context = {
@@ -324,6 +425,8 @@ export function renderOutputFailure(
           transactionHash,
         };
       } else if (status === 'already-stored') {
+        const randomness = hex(own(result, 'randomness'), 32);
+
         context = {
           output: type,
           round,

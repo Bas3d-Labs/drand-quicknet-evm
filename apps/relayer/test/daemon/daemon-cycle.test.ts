@@ -244,6 +244,7 @@ describe('runDaemonCycle', () => {
       finality: FINALITY,
       onOperation: expect.any(Function),
       onCompleted: expect.any(Function),
+      onIncomplete: expect.any(Function),
       onReconciliation: expect.any(Function),
     });
 
@@ -315,6 +316,7 @@ describe('runDaemonCycle', () => {
       softCursor: existingCursor,
       onOperation: expect.any(Function),
       onCompleted: expect.any(Function),
+      onIncomplete: expect.any(Function),
       onReconciliation: expect.any(Function),
     });
   });
@@ -459,6 +461,7 @@ describe('runDaemonCycle', () => {
         finality: FINALITY,
         onOperation: expect.any(Function),
         onCompleted: expect.any(Function),
+        onIncomplete: expect.any(Function),
         onReconciliation: expect.any(Function),
       },
     );
@@ -480,6 +483,7 @@ describe('runDaemonCycle', () => {
         finality: FINALITY,
         onOperation: expect.any(Function),
         onCompleted: expect.any(Function),
+        onIncomplete: expect.any(Function),
         onReconciliation: expect.any(Function),
       },
     );

@@ -841,7 +841,7 @@ describe('coordinator recovery', () => {
     expect(t.coordinator.status.open).toBe(true);
   });
 
-  it('refuses to initialize a missing journal', async () => {
+  it('initializes a missing journal without inspecting an attempt', async () => {
     const t = await setup();
 
     t.setVisible({
@@ -850,11 +850,38 @@ describe('coordinator recovery', () => {
 
     const coordinator = await t.create();
 
-    await expect(
-      coordinator.recover(t.options),
-    ).rejects.toThrow('initialized journal');
+    expect(await coordinator.recover(t.options)).toEqual({
+      status: 'no-attempt',
+      observation: {
+        anchor: t.options.anchor,
+        nonce: 5n,
+      },
+    });
 
-    expect(t.getBlock).not.toHaveBeenCalled();
-    expect(t.save).not.toHaveBeenCalled();
+    expect(t.save).toHaveBeenCalledExactlyOnceWith({
+      version: 1,
+      identity: IDENTITY,
+      baseline: {
+        anchor: t.options.anchor,
+        nonce: 5n,
+      },
+      lastObservation: {
+        anchor: t.options.anchor,
+        nonce: 5n,
+      },
+      nextNonce: 5n,
+      durableNextNonce: 5n,
+      attempts: [],
+    });
+
+    expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+
+    expect(coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
+    expect(coordinator.canBroadcast).toBe(false);
   });
 });

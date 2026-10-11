@@ -83,10 +83,6 @@ async function setup(nonce = 7) {
     } as unknown as PublicClient,
     anchor: { ...ANCHOR },
     maxBlockRange: 2n,
-    bootstrap: {
-      expectedNonce: BigInt(nonce),
-      confirmNoUntrackedTransactions: true,
-    },
   };
 
   const recover = () => coordinator.recover({
@@ -124,7 +120,7 @@ function deferred() {
 
 describe('signer bootstrap during recovery', () => {
   it.each([0, 7])(
-    'bootstraps authorized nonce %i in one recovery call',
+    'automatically initializes nonce %i in one recovery call',
     async (nonce) => {
       const t = await setup(nonce);
 
@@ -132,6 +128,9 @@ describe('signer bootstrap during recovery', () => {
       expect(t.getTransactionCount).not.toHaveBeenCalled();
 
       const result = await t.coordinator.recover(t.options);
+
+      expect(t.save).toHaveBeenCalledOnce();
+      expect(t.coordinator.canBroadcast).toBe(false);
 
       expect(result).toEqual({
         status: 'no-attempt',
@@ -198,63 +197,8 @@ describe('signer bootstrap during recovery', () => {
     },
   );
 
-  it.each([false, undefined, 'true'])(
-    'rejects confirmation %s before RPC or persistence',
-    async (confirmation) => {
-      const t = await setup();
-
-      const options = {
-        ...t.options,
-        bootstrap: {
-          ...t.options.bootstrap!,
-          confirmNoUntrackedTransactions: confirmation,
-        },
-      };
-
-      await expect(
-        t.coordinator.recover(options as RecoverSignerOptions),
-      ).rejects.toThrow('authorization');
-
-      expect(t.getBlock).not.toHaveBeenCalled();
-      expect(t.save).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([-1n, 1n << 256n, 7, undefined])(
-    'rejects invalid expected nonce %s before RPC',
-    async (expectedNonce) => {
-      const t = await setup();
-
-      await expect(t.coordinator.recover({
-        ...t.options,
-        bootstrap: {
-          ...t.options.bootstrap!,
-          expectedNonce,
-        },
-      } as RecoverSignerOptions)).rejects.toThrow('authorization');
-
-      expect(t.getBlock).not.toHaveBeenCalled();
-      expect(t.save).not.toHaveBeenCalled();
-    },
-  );
-
-  it('rejects an anchored nonce different from the approved value', async () => {
-    const t = await setup();
-
-    await expect(t.coordinator.recover({
-      ...t.options,
-      bootstrap: {
-        ...t.options.bootstrap!,
-        expectedNonce: 6n,
-      },
-    })).rejects.toThrow('authorized baseline');
-
-    expect(t.getTransactionCount).toHaveBeenCalledTimes(1);
-    expect(t.save).not.toHaveBeenCalled();
-  });
-
   it.each(['latest', 'pending'] as const)(
-    'refuses activity reflected in the %s count',
+    'defers initialization when the %s count disagrees',
     async (tag) => {
       const t = await setup();
 
@@ -266,12 +210,52 @@ describe('signer bootstrap during recovery', () => {
 
       t.getTransactionCount.mockResolvedValueOnce(8);
 
-      await expect(
-        t.coordinator.recover(t.options),
-      ).rejects.toThrow('nonce counts');
+      expect(await t.coordinator.recover(t.options)).toEqual({
+        status: 'bootstrap-deferred',
+        reason: 'nonce-count-mismatch',
+        observation: {
+          anchor: ANCHOR,
+          nonce: 7n,
+        },
+        latestNonce: tag === 'latest' ? 8n : 7n,
+        pendingNonce: tag === 'pending' ? 8n : 7n,
+      });
 
       expect(t.save).not.toHaveBeenCalled();
-      expect(t.coordinator.status.open).toBe(false);
+      expect(t.getTransactionCount).toHaveBeenCalledTimes(3);
+
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: false,
+        inclusionChecksComplete: false,
+        persistenceState: 'idle',
+      });
+
+      expect(t.coordinator.canBroadcast).toBe(false);
+      expect(t.coordinator.attempts).toEqual([]);
+      expect(t.events()).not.toContain('signer_gate_released');
+
+      // Deferral must leave the journal missing.
+      expect(() => t.coordinator.completeRecovery())
+        .toThrow('initialized journal');
+
+      // A later pass can initialize after the observations agree.
+      expect(await t.coordinator.recover(t.options)).toEqual({
+        status: 'no-attempt',
+        observation: {
+          anchor: ANCHOR,
+          nonce: 7n,
+        },
+      });
+
+      expect(t.save).toHaveBeenCalledOnce();
+      expect(t.getTransactionCount).toHaveBeenCalledTimes(6);
+
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: true,
+        inclusionChecksComplete: false,
+      });
     },
   );
 
@@ -448,9 +432,8 @@ describe('signer bootstrap during recovery', () => {
 
     const first = t.save.mock.calls[0]![0];
 
-    Object.assign(t.options.bootstrap!, {
-      expectedNonce: 8n,
-    });
+    // New RPC observations must not replace the retained failed snapshot.
+    t.getTransactionCount.mockResolvedValue(8);
 
     await expect(
       t.coordinator.recover(t.options),
@@ -479,8 +462,6 @@ describe('signer bootstrap during recovery', () => {
 
     expect(t.events()).not.toContain('signer_gate_released');
 
-    t.getTransactionCount.mockResolvedValue(8);
-
     await t.recover();
 
     expect(t.coordinator.status.primaryReason)
@@ -489,7 +470,7 @@ describe('signer bootstrap during recovery', () => {
     expect(t.save.mock.calls[3]![0].nextNonce).toBe(7n);
   });
 
-  it('uses existing state instead of reapplying bootstrap authorization', async () => {
+  it('recovers an existing journal without repeating first-use initialization', async () => {
     const t = await setup();
 
     await t.coordinator.recover(t.options);
@@ -498,10 +479,6 @@ describe('signer bootstrap during recovery', () => {
     const restarted = await t.create();
 
     expect(restarted.status.open).toBe(false);
-
-    Object.assign(t.options.bootstrap!, {
-      expectedNonce: 0n,
-    });
 
     await restarted.recover(t.options);
 
@@ -538,15 +515,10 @@ describe('signer bootstrap during recovery', () => {
     expect(t.save).not.toHaveBeenCalled();
   });
 
-  it('captures authorization and anchor before awaiting RPC', async () => {
+  it('captures the bootstrap anchor before awaiting RPC', async () => {
     const t = await setup();
 
     t.getBlock.mockImplementationOnce(async () => {
-      Object.assign(t.options.bootstrap!, {
-        expectedNonce: 8n,
-        confirmNoUntrackedTransactions: false,
-      });
-
       Object.assign(t.options.anchor, {
         blockNumber: 200n,
         blockHash: OTHER,
@@ -571,21 +543,129 @@ describe('signer bootstrap during recovery', () => {
       nonce: 7n,
     });
   });
+
+  it('reports deferred initialization with the observed nonce counts', async () => {
+    const t = await setup();
+
+    t.getTransactionCount
+      .mockResolvedValueOnce(7)
+      .mockResolvedValueOnce(8)
+      .mockResolvedValueOnce(9);
+
+    await t.coordinator.recover(t.options, 12);
+
+    const records = t.lines
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.event === 'signer_bootstrap_deferred');
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      level: 30,
+      signer: IDENTITY.signer,
+      cycle: 12,
+      operation: { name: 'reconcile-attempt' },
+      durableBlock: '100',
+      durableBlockHash: HASH,
+      durableNonce: '7',
+      latestNonce: '8',
+      pendingNonce: '9',
+    });
+
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.coordinator.status.recoveryComplete).toBe(false);
+    expect(t.coordinator.canBroadcast).toBe(false);
+  });
+
+  it('suppresses unchanged nonce counts even when the anchor advances', async () => {
+    const t = await setup();
+
+    for (const blockNumber of [100n, 101n]) {
+      t.getBlock.mockResolvedValue({
+        number: blockNumber,
+        hash: HASH,
+      });
+
+      t.getTransactionCount
+        .mockResolvedValueOnce(7)
+        .mockResolvedValueOnce(8)
+        .mockResolvedValueOnce(9);
+
+      await t.coordinator.recover({
+        ...t.options,
+        anchor: { blockNumber, blockHash: HASH },
+      });
+    }
+
+    expect(
+      t.events().filter((event) => event === 'signer_bootstrap_deferred'),
+    ).toHaveLength(1);
+
+    expect(t.getTransactionCount).toHaveBeenCalledTimes(6);
+    expect(t.save).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: 'durable', counts: [6, 8, 9] },
+    { label: 'latest', counts: [7, 9, 9] },
+    { label: 'pending', counts: [7, 8, 10] },
+  ])('reports a changed $label nonce', async ({ counts }) => {
+    const t = await setup();
+
+    t.getTransactionCount
+      .mockResolvedValueOnce(7)
+      .mockResolvedValueOnce(8)
+      .mockResolvedValueOnce(9);
+
+    await t.coordinator.recover(t.options);
+
+    for (const nonce of counts) {
+      t.getTransactionCount.mockResolvedValueOnce(nonce);
+    }
+
+    await t.coordinator.recover(t.options);
+
+    const records = t.lines
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.event === 'signer_bootstrap_deferred');
+
+    expect(records).toHaveLength(2);
+    expect(records[1]).toMatchObject({
+      durableNonce: String(counts[0]),
+      latestNonce: String(counts[1]),
+      pendingNonce: String(counts[2]),
+    });
+
+    expect(t.save).not.toHaveBeenCalled();
+  });
 });
 
 describe('missing journal policy', () => {
   it.each([0, 7])(
-    'does not infer authorization from nonce %i',
+    'keeps a missing journal closed until recovery for nonce %i',
     async (nonce) => {
       const t = await setup(nonce);
 
-      await expect(
-        t.recover(),
-      ).rejects.toThrow('explicit bootstrap authorization');
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: false,
+        inclusionChecksComplete: false,
+      });
+
+      expect(() => t.coordinator.completeRecovery())
+        .toThrow('initialized journal');
 
       expect(t.getBlock).not.toHaveBeenCalled();
+      expect(t.getTransactionCount).not.toHaveBeenCalled();
       expect(t.save).not.toHaveBeenCalled();
-      expect(t.coordinator.status.open).toBe(false);
+
+      await t.recover();
+
+      expect(t.save).toHaveBeenCalledOnce();
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: true,
+        inclusionChecksComplete: false,
+      });
     },
   );
 

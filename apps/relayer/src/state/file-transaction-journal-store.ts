@@ -245,6 +245,10 @@ async function readBoundedJournal(
       throw new Error('Journal path is not a regular file.');
     }
 
+    if (stat.nlink !== 1) {
+      throw new Error('Journal file must have exactly one hard link.');
+    }
+
     if (stat.size > MAX_JOURNAL_BYTES) {
       throw new Error('Journal file exceeds its size limit.');
     }

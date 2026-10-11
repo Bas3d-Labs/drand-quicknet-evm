@@ -28,6 +28,7 @@ import {
 } from '../consumers/durable-requests.js';
 
 import {
+  type IncompleteQuicknetRoundOutcome,
   processQuicknetRequests,
   type ProcessedQuicknetRound,
   type ProcessQuicknetRequestsResult,
@@ -75,6 +76,10 @@ export interface RunDaemonIterationOptions {
     scanType: 'durable' | 'soft',
     result: ProcessedQuicknetRound,
   ) => void;
+  onIncomplete?: (
+    scanType: 'durable' | 'soft',
+    outcome: IncompleteQuicknetRoundOutcome,
+  ) => void;
   onReconciliation?: (
     result: DurableRequestResult,
   ) => void;
@@ -114,6 +119,17 @@ export async function runDaemonIteration(
   ): void {
     try {
       options.onCompleted?.(scanType, result);
+    } catch {
+      // Reporting must not change processing or replace its error.
+    }
+  }
+
+  function reportIncomplete(
+    scanType: 'durable' | 'soft',
+    outcome: IncompleteQuicknetRoundOutcome,
+  ): void {
+    try {
+      options.onIncomplete?.(scanType, outcome);
     } catch {
       // Reporting must not change processing or replace its error.
     }
@@ -168,6 +184,10 @@ export async function runDaemonIteration(
 
       onCompleted(result) {
         reportCompleted('durable', result);
+      },
+
+      onIncomplete(outcome) {
+        reportIncomplete('durable', outcome);
       },
 
       onProgress(progress) {
@@ -301,6 +321,7 @@ export async function runDaemonIteration(
       submitter: options.submitter,
       deployment: options.deployment,
       requests: softResult.requests,
+
       onProgress(progress) {
         reportOperation({
           name: 'import-round',
@@ -310,8 +331,13 @@ export async function runDaemonIteration(
           ...progress,
         });
       },
+
       onCompleted(result) {
         reportCompleted('soft', result);
+      },
+
+      onIncomplete(outcome) {
+        reportIncomplete('soft', outcome);
       },
     });
 

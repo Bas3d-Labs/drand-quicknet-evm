@@ -10,9 +10,13 @@ import type {
 
 import {
   blockAnchorsMatch,
-  getBlockAnchor,
   type BlockAnchor,
 } from '../chain/block-anchor.js';
+
+import {
+  inspectSignerBootstrap,
+  type SignerBootstrapDecision,
+} from '../chain/inspect-signer-bootstrap.js';
 
 import {
   inspectSignerInclusions,
@@ -23,11 +27,6 @@ import {
   inspectSignerRecovery,
   type SignerRecoveryInspection,
 } from '../chain/inspect-signer-recovery.js';
-
-import {
-  readAnchoredNonce,
-  type AnchoredNonceResult,
-} from '../chain/read-anchored-nonce.js';
 
 import type {
   ReplacementSearchResult,
@@ -99,27 +98,18 @@ export interface RecordSearchProgressOptions {
   >;
 }
 
-export interface SignerBootstrapAuthorization {
-  readonly expectedNonce: bigint;
-
-  /** 
-   * Operator confirms no signed or broadcast transactions 
-   * remain unaccounted for. 
-   */
-  readonly confirmNoUntrackedTransactions: true;
-}
-
 export interface RecoverSignerOptions {
   readonly publicClient: PublicClient;
   readonly anchor: Readonly<BlockAnchor>;
   readonly maxBlockRange: bigint;
-
-  /**
-   * Explicit first-use authorization, considered only when the journal
-   * is missing.
-   */
-  readonly bootstrap?: SignerBootstrapAuthorization;
 }
+
+export type SignerRecoveryResult =
+  | SignerRecoveryInspection
+  | Extract<
+      SignerBootstrapDecision,
+      { status: 'bootstrap-deferred' }
+    >;
 
 type ResolutionEvent =
   Parameters<ScopedRelayerLog['attemptResolved']>[0];
@@ -167,9 +157,23 @@ export interface BroadcastAttemptOptions {
   readonly attemptId: string;
 }
 
-export type BroadcastAttemptResult = PreparedAttempt & {
-  readonly status: 'acknowledged';
-};
+/**
+ * Reports whether the RPC returned the locally computed transaction hash.
+ * 
+ * The broadcast permit is consumed before the request is sent.
+ * Neither outcome establishes inclusion or execution, advances nonce
+ * allocation, resolves an attempt, or rolls allocation back.
+ * 
+ * Another broadcast requires fresh reconiliation.
+ */
+export type BroadcastAttemptResult = PreparedAttempt & (
+  | {
+      readonly status: 'acknowledged';
+    }
+  | {
+      readonly status: 'not-acknowledged';
+    }
+);
 
 export interface AttemptSummary {
   readonly attemptId: string;
@@ -206,6 +210,11 @@ export class SignerCoordinator {
   private previousPrimary: SignerBlocker | null = null;
   private pendingWrite: PendingWrite | undefined;
   private attemptLog: ScopedRelayerLog | undefined;
+  private lastBootstrapDeferral: {
+    readonly durableNonce: bigint;
+    readonly latestNonce: bigint;
+    readonly pendingNonce: bigint;
+  } | undefined;
 
   private constructor(
     private readonly persistence: JournalPersistence,
@@ -298,6 +307,13 @@ export class SignerCoordinator {
         transactionHashes,
       });
     }));
+  }
+
+  /**
+   * Whether a journal snapshot has been loaded or durably persisted.
+   */
+  get journalInitialized(): boolean {
+    return this.persistence.current.kind === 'present';
   }
 
   /**
@@ -549,6 +565,20 @@ export class SignerCoordinator {
         this.pendingWrite = undefined;
       }
 
+      const identity = {
+        signer: this.identity.signer,
+        attemptId: attempt.attemptId,
+        transactionHash: transaction.transactionHash,
+        nonce: attempt.nonce,
+      };
+
+      const notAcknowledged = Object.freeze({
+        status: 'not-acknowledged',
+        attemptId: attempt.attemptId,
+        transactionHash: transaction.transactionHash,
+        nonce: attempt.nonce,
+      } as const);
+
       let returnedHash: unknown;
 
       try {
@@ -558,20 +588,55 @@ export class SignerCoordinator {
         }, {
           retryCount: 0,
         });
-      } catch {
-        throw new Error(
-          'Transaction broadcast outcome is uncertain. Reconciliation is required.'
+      } catch (error) {
+        this.emit(
+          (log) => log.attemptBroadcastNotAcknowledged({
+            ...identity,
+            observation: 'request-error',
+            error,
+          }),
+          cycle,
+          'broadcast-attempt',
         );
+
+        return notAcknowledged;
+      }
+
+      if (!isFixedHex(returnedHash, 32)) {
+        this.emit(
+          (log) => log.attemptBroadcastNotAcknowledged({
+            ...identity,
+            observation: 'invalid-response',
+          }),
+          cycle,
+          'broadcast-attempt',
+        );
+
+        return notAcknowledged;
       }
 
       if (
-        !isFixedHex(returnedHash, 32) ||
-        returnedHash.toLowerCase() !== transaction.transactionHash.toLowerCase()
+        returnedHash.toLowerCase() !==
+        transaction.transactionHash.toLowerCase()
       ) {
-        throw new Error(
-          'RPC returned an unexpected transaction hash. Reconciliation is required.'
+        this.emit(
+          (log) => log.attemptBroadcastNotAcknowledged({
+            ...identity,
+            observation: 'hash-mismatch',
+            returnedTransactionHash: returnedHash,
+          }),
+          cycle,
+          'broadcast-attempt',
         );
+
+        return notAcknowledged;
       }
+
+      this.emit(
+        (log) => log.attemptBroadcastAccepted(identity),
+        cycle,
+        'broadcast-attempt',
+      );
 
       return Object.freeze({
         status: 'acknowledged',
@@ -600,8 +665,18 @@ export class SignerCoordinator {
   async recover(
     options: RecoverSignerOptions,
     cycle?: number,
-  ): Promise<SignerRecoveryInspection> {
+  ): Promise<SignerRecoveryResult> {
     this.assertAvailable();
+
+    const { maxBlockRange } = options;
+
+    if (
+      typeof maxBlockRange !== 'bigint' ||
+      maxBlockRange <= 0n ||
+      maxBlockRange >= (1n << 256n)
+    ) {
+      throw new TypeError('Invalid signer recovery input.');
+    }
 
     if (
       this.pendingWrite !== undefined ||
@@ -620,9 +695,44 @@ export class SignerCoordinator {
     try {
       if (current.kind === 'missing') {
         const result = await this.readBootstrapObservation(options);
+
+        if (result.status === 'bootstrap-deferred') {
+          const { observation, latestNonce, pendingNonce } = result;
+          const previous = this.lastBootstrapDeferral;
+
+          if (
+            previous === undefined ||
+            previous.durableNonce !== observation.nonce ||
+            previous.latestNonce !== latestNonce ||
+            previous.pendingNonce !== pendingNonce
+          ) {
+            this.lastBootstrapDeferral = {
+              durableNonce: observation.nonce,
+              latestNonce,
+              pendingNonce,
+            };
+
+            this.emit(
+              (log) => log.signerBootstrapDeferred({
+                signer: this.identity.signer,
+                durableBlock: observation.anchor.blockNumber,
+                durableBlockHash: observation.anchor.blockHash,
+                durableNonce: observation.nonce,
+                latestNonce,
+                pendingNonce,
+              }),
+              cycle,
+            );
+          }
+
+          return result;
+        }
+
         if (result.status === 'anchor-changed') {
           return result;
         }
+
+        this.lastBootstrapDeferral = undefined;
 
         const { observation } = result;
 
@@ -1142,100 +1252,21 @@ export class SignerCoordinator {
   }
 
   /**
-   * Reads the operator-approved starting nonce for a missing journal. Latest
-   * and pending counts can veto adoption, but only the anchored observation
-   * becomes the persisted baseline.
+   * Checks whether a missing journal can adopt the selected durable nonce.
+   * Only a ready decision may proceed to baseline persistence.
    */
   private async readBootstrapObservation(
     options: RecoverSignerOptions,
-  ): Promise<AnchoredNonceResult> {
-    if (options.bootstrap === undefined) {
-      throw new Error(
-        'Cannot recover without an initialized journal or explicit bootstrap authorization'
-      );
-    }
-
+  ): Promise<SignerBootstrapDecision> {
     if (this.blockers.size !== 0) {
       throw new Error('Cannot bootstrap while coordinator blockers remain.');
     }
 
-    const {
-      publicClient,
-      maxBlockRange,
-    } = options;
-
-    const {
-      expectedNonce,
-      confirmNoUntrackedTransactions,
-    } = options.bootstrap;
-
-    if (
-      confirmNoUntrackedTransactions !== true ||
-      typeof expectedNonce !== 'bigint' ||
-      expectedNonce < 0n ||
-      expectedNonce >= (1n << 256n)
-    ) {
-      throw new TypeError('Invalid signer bootstrap authorization.');
-    }
-
-    if (
-      typeof maxBlockRange !== 'bigint' ||
-      maxBlockRange <= 0n ||
-      maxBlockRange >= (1n << 256n)
-    ) {
-      throw new TypeError('Invalid signer recovery input.');
-    }
-
-    const result = await readAnchoredNonce({
-      publicClient,
+    return inspectSignerBootstrap({
+      publicClient: options.publicClient,
       signer: this.identity.signer,
       anchor: options.anchor,
     });
-
-    if (result.status === 'anchor-changed') {
-      return result;
-    }
-
-    const { observation } = result;
-
-    if (observation.nonce !== expectedNonce) {
-      throw new Error(
-        'The anchored nonce does not match the authorized baseline.'
-      );
-    }
-
-    for (const blockTag of ['latest', 'pending'] as const) {
-      const nonce = await publicClient.getTransactionCount({
-        address: this.identity.signer,
-        blockTag,
-      });
-
-      if (
-        typeof nonce !== 'number' ||
-        !Number.isSafeInteger(nonce) ||
-        nonce < 0
-      ) {
-        throw new TypeError('Invalid bootstrap nonce response.');
-      }
-
-      if (BigInt(nonce) !== observation.nonce) {
-        throw new Error('Signer nonce counts do not match the bootstrap baselines.');
-      }
-    }
-
-    const closingAnchor = await getBlockAnchor(
-      publicClient,
-      observation.anchor.blockNumber,
-    );
-
-    if (!blockAnchorsMatch(observation.anchor, closingAnchor)) {
-      return {
-        status: 'anchor-changed',
-        observedAnchor: Object.freeze(closingAnchor),
-      };
-    }
-
-    return result;
   }
 
   /**

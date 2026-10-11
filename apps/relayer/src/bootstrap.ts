@@ -17,6 +17,13 @@ type RenderDiagnostic =
 type RoundImportProgress =
   import('./diagnostics/operation-context.js').RoundImportProgress;
 
+const EXIT_CODE = {
+  SUCCESS: 0,
+  FAILURE: 1,
+  OUTPUT_FAILURE: 2,
+  IMPORT_INCOMPLETE: 3,
+} as const;
+
 const WRITE_BUDGET_MS = 250;
 const MAX_WRITE_ATTEMPTS = 128;
 
@@ -145,7 +152,7 @@ function fatal(
   error: unknown,
 ): never {
   if (handlingFatal) {
-    process.exit(1);
+    process.exit(EXIT_CODE.FAILURE);
   }
 
   handlingFatal = true;
@@ -161,13 +168,13 @@ function fatal(
     // Reporting is best effort if stderr itself is unavailable.
   }
 
-  process.exit(1);
+  process.exit(EXIT_CODE.FAILURE);
 }
 
 // Install both handlers before evaluating any application module.
 process.on('uncaughtException', (error) => {
   fatal('uncaught_exception', error);
-})
+});
 
 process.on('unhandledRejection', (error) => {
   fatal('unhandled_rejection', error);
@@ -194,6 +201,16 @@ try {
   await main(process.argv.slice(2), (record) => {
     try {
       writeLine(1, renderCliOutput(record));
+
+      if (
+        record.type === 'import-result' &&
+        (
+          record.result.status === 'pending' ||
+          record.result.status === 'deferred'
+        )
+      ) {
+        process.exitCode = EXIT_CODE.IMPORT_INCOMPLETE;
+      }
     } catch (error) {
       try {
         writeLine(2, renderOutputFailure(record, error, errorSummary));
@@ -213,9 +230,9 @@ try {
   });
 } catch (error) {
   if (error === outputFailure) {
-    process.exitCode = 2;
+    process.exitCode = EXIT_CODE.OUTPUT_FAILURE;
   } else {
-    process.exitCode = 1;
+    process.exitCode = EXIT_CODE.FAILURE;
 
     try {
       if (renderDiagnostic === undefined) {
@@ -223,7 +240,7 @@ try {
           event: 'cli_failed',
           kind: 'bootstrap',
           err: summarizeError(error, errorSummary),
-        })
+        });
         writeLine(2, line);
       } else {
         let progress: RoundImportProgress | undefined;

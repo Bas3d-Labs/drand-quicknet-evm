@@ -80,6 +80,29 @@ function logCycle(
   result: RunDaemonCycleResult,
 ): void {
   for (const consumer of result.consumers) {
+    for (const { scanType, outcome } of consumer.incomplete ?? []) {
+      if (outcome.status === 'pending') {
+        logger.roundPending({
+          consumer: consumer.consumer.address,
+          scanType,
+          round: outcome.round,
+          attemptId: outcome.result.attemptId,
+          transactionHash: outcome.result.transactionHash,
+          reason: outcome.result.reason,
+        });
+
+        continue;
+      }
+
+      logger.roundDeferred({
+        consumer: consumer.consumer.address,
+        scanType,
+        round: outcome.round,
+        reason: outcome.reason,
+        blocker: outcome.blocker,
+      });
+    }
+
     if (consumer.status === 'failed') {
       for (const completed of consumer.completed ?? []) {
         logRound(

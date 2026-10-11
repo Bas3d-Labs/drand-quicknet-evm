@@ -28,6 +28,10 @@ import {
 } from '../../src/diagnostics/relayer-log.js';
 
 import {
+  isPriorSignerStateError,
+} from '../../src/diagnostics/signer-journal-errors.js';
+
+import {
   assertServiceLockHeld,
 } from '../../src/state/service-lock.js';
 
@@ -108,30 +112,42 @@ describe('command signer runtime', () => {
     };
   }
 
-  it('leaves a missing journal blocked without creating a baseline', async () => {
+  it('leaves a missing journal untouched until automatic recovery', async () => {
     const runtime = await openSignerRuntime(options());
 
     expect(Object.isFrozen(runtime)).toBe(true);
     expect(runtime.coordinator.attempts).toEqual([]);
-    expect(runtime.coordinator.status.open).toBe(false);
 
-    await expect(
-      runtime.recovery.run(recovery()),
-    ).rejects.toThrow();
+    expect(runtime.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
 
     expect(await readdir(directory)).toEqual([]);
+
+    expect(await runtime.recovery.run(recovery())).toMatchObject({
+      inspection: { status: 'no-attempt' },
+      inclusions: { status: 'inspected' },
+      broadcast: null,
+      retryDelayMs: null,
+    });
+
+    expect(runtime.coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
+
+    expect(await readdir(directory)).toEqual([
+      `transaction-journal-4663-${IDENTITY.signer}.json`,
+    ]);
   });
 
   it('uses the same persisted journal across signer casing and requires recovery on reopen', async () => {
     const first = await openSignerRuntime(options());
 
-    await first.recovery.run({
-      ...recovery(),
-      bootstrap: {
-        expectedNonce: 4n,
-        confirmNoUntrackedTransactions: true,
-      },
-    });
+    await first.recovery.run(recovery());
 
     expect(first.coordinator.status).toMatchObject({
       open: true,
@@ -202,5 +218,113 @@ describe('command signer runtime', () => {
     await expect(
       openSignerRuntime(options()),
     ).rejects.toThrow('could not be decoded');
+  });
+
+  it('refuses a missing journal when checkpoint state exists', async () => {
+    const checkpointFile = join(directory, 'checkpoint.json');
+
+    await writeFile(checkpointFile, '{}');
+
+    const opening = openSignerRuntime({
+      ...options(),
+      checkpointFile,
+    });
+
+    await expect(opening).rejects.toMatchObject({
+      code: 'prior-state-present',
+    });
+
+    const error: unknown = await opening.catch((error: unknown) => error);
+    expect(isPriorSignerStateError(error)).toBe(true);
+
+    expect(await readdir(directory)).toEqual([
+      'checkpoint.json',
+    ]);
+  });
+
+  it('allows automatic initialization when the configured checkpoint is absent', async () => {
+    const checkpointFile = join(directory, 'checkpoint.json');
+
+    const runtime = await openSignerRuntime({
+      ...options(),
+      checkpointFile,
+    });
+
+    expect(await readdir(directory)).toEqual([]);
+
+    expect(await runtime.recovery.run(recovery())).toMatchObject({
+      inspection: { status: 'no-attempt' },
+      inclusions: { status: 'inspected' },
+      broadcast: null,
+    });
+
+    expect(runtime.coordinator.status.open).toBe(true);
+
+    expect(await readdir(directory)).toEqual([
+      `transaction-journal-4663-${IDENTITY.signer}.json`,
+    ]);
+  });
+
+  it('recovers an existing journal when checkpoint state exists', async () => {
+    const first = await openSignerRuntime(options());
+
+    await first.recovery.run(recovery());
+
+    const checkpointFile = join(directory, 'checkpoint.json');
+    await writeFile(checkpointFile, '{}');
+
+    // Simulate a later command; the first runtime is no longer used.
+    const reopened = await openSignerRuntime({
+      ...options(),
+      checkpointFile,
+    });
+
+    expect(reopened.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
+
+    await reopened.recovery.run(recovery());
+
+    expect(reopened.coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
+
+    expect((await readdir(directory)).sort()).toEqual([
+      'checkpoint.json',
+      `transaction-journal-4663-${IDENTITY.signer}.json`,
+    ].sort());
+  });
+
+  it('checks the checkpoint configured through the environment', async () => {
+    const checkpointFile = join(directory, 'checkpoint.json');
+    await writeFile(checkpointFile, '{}');
+
+    const input = options();
+
+    await expect(openSignerRuntime({
+      ...input,
+      env: {
+        ...input.env,
+        QUICKNET_CHECKPOINT_FILE: checkpointFile,
+      },
+    })).rejects.toMatchObject({
+      code: 'prior-state-present',
+    });
+
+    expect(assertServiceLockHeld).toHaveBeenCalledWith({
+      env: {
+        ...input.env,
+        QUICKNET_CHECKPOINT_FILE: checkpointFile,
+      },
+      checkpointFile,
+    });
+
+    expect(await readdir(directory)).toEqual([
+      'checkpoint.json',
+    ]);
   });
 });

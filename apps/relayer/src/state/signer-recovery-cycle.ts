@@ -11,10 +11,6 @@ import {
 } from '../shared/hex.js';
 
 import type {
-  SignerRecoveryInspection,
-} from '../chain/inspect-signer-recovery.js';
-
-import type {
   BroadcastRetrySchedule,
 } from './broadcast-retry-schedule.js';
 
@@ -22,6 +18,7 @@ import type {
   SignerCoordinator,
   BroadcastAttemptResult,
   RecoverSignerOptions,
+  SignerRecoveryResult,
 } from './signer-coordinator.js';
 
 export interface SignerRecoveryCycleOptions {
@@ -40,8 +37,8 @@ export interface RunSignerRecoveryCycleOptions
 }
 
 export interface SignerRecoveryCycleResult {
-  /** Final durable recovery inspection performed during this cycle. */
-  readonly inspection: SignerRecoveryInspection;
+  /** Final recovery or first-use initialization result for this cycle. */
+  readonly inspection: SignerRecoveryResult;
   readonly broadcast: BroadcastAttemptResult | null;
   readonly inclusions: SignerInclusionInspection | null;
 
@@ -90,7 +87,7 @@ export class SignerRecoveryCycle {
           blockHash: options.head.blockHash,
         });
 
-      let recovery: RecoverSignerOptions = {
+      const recovery: RecoverSignerOptions = {
         publicClient: options.publicClient,
         anchor: {
           blockNumber: options.anchor.blockNumber,
@@ -98,17 +95,6 @@ export class SignerRecoveryCycle {
         },
         maxBlockRange: options.maxBlockRange,
       };
-
-      if (options.bootstrap !== undefined) {
-        recovery = {
-          ...recovery,
-          bootstrap: {
-            expectedNonce: options.bootstrap.expectedNonce,
-            confirmNoUntrackedTransactions:
-              options.bootstrap.confirmNoUntrackedTransactions,
-          },
-        };
-      }
 
       if (
         head !== undefined &&

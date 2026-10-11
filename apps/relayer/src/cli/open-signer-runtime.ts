@@ -1,4 +1,8 @@
-import { join } from 'node:path';
+import {
+  basename,
+  join,
+  resolve,
+} from 'node:path';
 
 import type {
   ErrorSummaryFactory,
@@ -9,6 +13,10 @@ import type {
 } from '../diagnostics/relayer-log.js';
 
 import {
+  priorSignerStateError,
+} from '../diagnostics/signer-journal-errors.js';
+
+import {
   isFixedHex,
 } from '../shared/hex.js';
 
@@ -16,6 +24,10 @@ import {
   BroadcastRetrySchedule,
   type BroadcastRetryScheduleOptions,
 } from '../state/broadcast-retry-schedule.js';
+
+import {
+  checkpointExists,
+} from '../state/checkpoint-exists.js';
 
 import {
   FileTransactionJournalStore,
@@ -46,6 +58,7 @@ export interface OpenSignerRuntimeOptions {
   readonly log: ScopedRelayerLog;
   readonly createErrorSummary: ErrorSummaryFactory;
   readonly retry: BroadcastRetryScheduleOptions;
+  readonly checkpointFile?: string | undefined;
   readonly env?: NodeJS.ProcessEnv;
 }
 
@@ -55,10 +68,10 @@ export interface SignerRuntime {
 }
 
 /**
- * Opens the command's signer journal and creates the recovery cycle it
- * will reuse through its lifetime. A missing journal remains missing
- * until recovery receives explicit bootstrap authorization.
- * 
+ * Opens the command's signer journal and creates its recovery cycle.
+ * A missing journal may initialize during recovery only after passing
+ * the command's prior-state check.
+ *
  * Call once per signer while holding the service lock. Commands sharing
  * a chain and signer must use the same state directory.
  */
@@ -85,9 +98,34 @@ export async function openSignerRuntime(
 
   const schedule = new BroadcastRetrySchedule(options.retry);
 
+  const env = options.env ?? process.env;
+
+  const configuredCheckpointFile =
+    options.checkpointFile ?? env.QUICKNET_CHECKPOINT_FILE;
+
+  if (
+    configuredCheckpointFile !== undefined &&
+    configuredCheckpointFile.trim().length === 0
+  ) {
+    throw new TypeError('Invalid checkpoint file path.');
+  }
+
+  const resolvedCheckpointFile =
+    configuredCheckpointFile === undefined
+      ? undefined
+      : resolve(configuredCheckpointFile);
+
   const stateDirectory = assertServiceLockHeld({
-    env: options.env ?? process.env,
-  });
+    env,
+    ...(resolvedCheckpointFile === undefined
+      ? {}
+      : { checkpointFile: resolvedCheckpointFile }),
+  })
+
+  const checkpointFile =
+    resolvedCheckpointFile === undefined
+      ? undefined
+      : join(stateDirectory, basename(resolvedCheckpointFile));
 
   const filePath = join(
     stateDirectory,
@@ -101,7 +139,23 @@ export async function openSignerRuntime(
 
   const coordinator = await SignerCoordinator.create({
     identity,
-    store,
+    store: {
+      async load() {
+        const current = await store.load();
+
+        if (
+          current.kind === 'missing' &&
+          checkpointFile !== undefined &&
+          await checkpointExists(checkpointFile)
+        ) {
+          throw priorSignerStateError();
+        }
+
+        return current;
+      },
+
+      save: (snapshot) => store.save(snapshot),
+    },
     maxRetainedAttempts: MAX_RETAINED_ATTEMPTS,
     log,
     createErrorSummary,

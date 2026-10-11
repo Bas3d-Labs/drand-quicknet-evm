@@ -268,7 +268,19 @@ describe('journaled transaction broadcast', () => {
       primaryReason: 'unresolved-attempt',
     });
 
-    expect(t.records()).toEqual([]);
+    expect(t.records()).toEqual([
+      expect.objectContaining({
+        event: 'attempt_broadcast_accepted',
+        cycle: 7,
+        signer: ACCOUNT.address,
+        attemptId: t.prepared.attemptId,
+        transactionHash: t.prepared.transactionHash,
+        nonce: '4',
+        operation: { name: 'broadcast-attempt' },
+      }),
+    ]);
+
+    expect(t.coordinator.canBroadcast).toBe(false);
     expect(t.signTransaction).toHaveBeenCalledTimes(1);
   });
 
@@ -436,7 +448,7 @@ describe('journaled transaction broadcast', () => {
     'already known',
     'nonce too low',
   ])(
-    'retains an uncertain attempt after RPC error: %s',
+    'returns not-acknowledged and retains the attempt after RPC error: %s',
     async (message) => {
       const t = await setup();
 
@@ -444,15 +456,13 @@ describe('journaled transaction broadcast', () => {
         `${message} ${KEY} ${t.signedTransaction}`,
       ));
 
-      const failure = await t.broadcast()
-        .catch((error: unknown) => error);
+      const result = await t.broadcast();
 
-      expect(failure).toHaveProperty(
-        'message',
-        'Transaction broadcast outcome is uncertain. Reconciliation is required.',
-      );
-
-      expect(failure).not.toHaveProperty('cause');
+      expect(result).toEqual({
+        ...t.prepared,
+        status: 'not-acknowledged',
+      });
+      expect(Object.isFrozen(result)).toBe(true);
 
       expect(t.visible()).toMatchObject({
         snapshot: {
@@ -465,34 +475,108 @@ describe('journaled transaction broadcast', () => {
         },
       });
 
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: false,
+        inclusionChecksComplete: false,
+        persistenceState: 'idle',
+      });
+      expect(t.coordinator.canBroadcast).toBe(false);
+
       await expect(t.broadcast())
         .rejects.toThrow('Fresh reconciliation');
 
       expect(t.request).toHaveBeenCalledTimes(1);
-      expect(t.records()).toEqual([]);
+
+      expect(t.records()).toEqual([
+        expect.objectContaining({
+          event: 'attempt_broadcast_not_acknowledged',
+          cycle: 7,
+          signer: ACCOUNT.address,
+          attemptId: t.prepared.attemptId,
+          transactionHash: t.prepared.transactionHash,
+          nonce: '4',
+          operation: { name: 'broadcast-attempt' },
+          observation: 'request-error',
+          err: expect.any(Object),
+        }),
+      ]);
+
+      expect(t.records()[0])
+        .not.toHaveProperty('returnedTransactionHash');
+
+      expect(t.lines.join('')).not.toContain(KEY);
+      expect(t.lines.join('')).not.toContain(t.signedTransaction);
     },
   );
 
   it.each([
-    OTHER,
-    '0x1234',
-    undefined,
-  ])(
-    'rejects unexpected RPC hash %# without clearing the attempt',
-    async (hash) => {
+    {
+      hash: OTHER,
+      observation: 'hash-mismatch',
+    },
+    {
+      hash: '0x1234',
+      observation: 'invalid-response',
+    },
+    {
+      hash: undefined,
+      observation: 'invalid-response',
+    },
+  ] as const)(
+    'returns not-acknowledged for $observation without clearing the attempt',
+    async ({ hash, observation }) => {
       const t = await setup();
 
       t.request.mockResolvedValueOnce(hash as never);
 
-      await expect(t.broadcast())
-        .rejects.toThrow('unexpected transaction hash');
+      await expect(t.broadcast()).resolves.toEqual({
+        ...t.prepared,
+        status: 'not-acknowledged',
+      });
+
+      expect(t.visible()).toMatchObject({
+        snapshot: {
+          nextNonce: 5n,
+          durableNextNonce: 4n,
+          attempts: [{
+            attemptId: t.prepared.attemptId,
+            phase: 'broadcast-may-have-occurred',
+            inclusion: null,
+          }],
+        },
+      });
 
       expect(t.coordinator.status.open).toBe(false);
+      expect(t.coordinator.canBroadcast).toBe(false);
 
       await expect(t.broadcast())
         .rejects.toThrow('Fresh reconciliation');
 
       expect(t.request).toHaveBeenCalledTimes(1);
+
+      expect(t.records()).toEqual([
+        expect.objectContaining({
+          event: 'attempt_broadcast_not_acknowledged',
+          cycle: 7,
+          signer: ACCOUNT.address,
+          attemptId: t.prepared.attemptId,
+          transactionHash: t.prepared.transactionHash,
+          nonce: '4',
+          operation: { name: 'broadcast-attempt' },
+          observation,
+        }),
+      ]);
+
+      const record = t.records()[0];
+
+      expect(record).not.toHaveProperty('err');
+
+      if (observation === 'hash-mismatch') {
+        expect(record.returnedTransactionHash).toBe(OTHER);
+      } else {
+        expect(record).not.toHaveProperty('returnedTransactionHash');
+      }
     },
   );
 
@@ -656,7 +740,10 @@ describe('journaled transaction broadcast', () => {
     await expect(t.coordinator.broadcastAttempt({
       ...t.options,
       publicClient,
-    })).rejects.toThrow('outcome is uncertain');
+    })).resolves.toEqual({
+      ...t.prepared,
+      status: 'not-acknowledged',
+    });
 
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });

@@ -16,6 +16,7 @@ import type {
 } from '../../src/consumers/consumer.js';
 
 import type {
+  DaemonIncompleteRound,
   RunDaemonCycleResult,
 } from '../../src/daemon/daemon-cycle.js';
 
@@ -70,6 +71,8 @@ const loggerMocks = {
   checkpointAdvanced: vi.fn<RelayerLog['checkpointAdvanced']>(),
   roundImported: vi.fn<RelayerLog['roundImported']>(),
   roundAlreadyStored: vi.fn<RelayerLog['roundAlreadyStored']>(),
+  roundDeferred: vi.fn<RelayerLog['roundDeferred']>(),
+  roundPending: vi.fn<RelayerLog['roundPending']>(),
   heartbeat: vi.fn<RelayerLog['heartbeat']>(),
   loggingFailed: vi.fn<RelayerLog['loggingFailed']>(),
   durableFulfillmentPending:
@@ -198,6 +201,118 @@ describe('createDaemonLogger', () => {
       mock.mockReset();
     }
   });
+
+  it.each([
+    { failed: false, scanType: 'durable' },
+    { failed: false, scanType: 'soft' },
+    { failed: true, scanType: 'durable' },
+    { failed: true, scanType: 'soft' },
+  ] as const)(
+    'reports incomplete $scanType rounds once (cycle failed: $failed)',
+    ({ failed, scanType }) => {
+      const failure = new Error('Later import failed.');
+      const attemptId = '11111111-1111-4111-8111-111111111111';
+      const reason = scanType === 'durable'
+        ? 'broadcast-not-acknowledged'
+        : 'receipt-timeout';
+
+      const incomplete: DaemonIncompleteRound[] = [
+        {
+          scanType,
+          outcome: {
+            round: ROUND,
+            firstRequestBlock: 800n,
+            status: 'pending',
+            result: {
+              status: 'pending',
+              round: ROUND,
+              attemptId,
+              transactionHash: TRANSACTION_HASH,
+              reason,
+            },
+          },
+        },
+        {
+          scanType,
+          outcome: {
+            round: ROUND + 1n,
+            firstRequestBlock: 801n,
+            status: 'deferred',
+            reason: 'signer-unavailable',
+            blocker: 'unresolved-attempt',
+          },
+        },
+      ];
+
+      const reported: string[] = [];
+
+      loggerMocks.roundPending.mockImplementation(() => {
+        reported.push('pending');
+      });
+      loggerMocks.roundDeferred.mockImplementation(() => {
+        reported.push('deferred');
+      });
+      loggerMocks.consumerFailed.mockImplementation(() => {
+        reported.push('failed');
+      });
+
+      const base = failed
+        ? createFailedCycle(failure)
+        : createSuccessfulCycle();
+
+      const cycle: RunDaemonCycleResult = {
+        ...base,
+        consumers: base.consumers.map((consumer) => ({
+          ...consumer,
+          incomplete,
+        })),
+      };
+
+      const daemonLogger = createDaemonLogger({
+        logger: LOGGER,
+        now: () => 0,
+      });
+
+      daemonLogger.onCycle(cycle);
+
+      expect(loggerMocks.roundPending).toHaveBeenCalledExactlyOnceWith({
+        consumer: CONSUMER_A,
+        scanType,
+        round: ROUND,
+        attemptId,
+        transactionHash: TRANSACTION_HASH,
+        reason,
+      });
+
+      expect(loggerMocks.roundDeferred).toHaveBeenCalledExactlyOnceWith({
+        consumer: CONSUMER_A,
+        scanType,
+        round: ROUND + 1n,
+        reason: 'signer-unavailable',
+        blocker: 'unresolved-attempt',
+      });
+
+      expect(reported).toEqual(
+        failed
+          ? ['pending', 'deferred', 'failed']
+          : ['pending', 'deferred'],
+      );
+
+      if (failed) {
+        expect(loggerMocks.consumerFailed).toHaveBeenCalledOnce();
+        expect(
+          loggerMocks.consumerFailed.mock.calls[0]?.[0].error,
+        ).toBe(failure);
+      } else {
+        expect(loggerMocks.consumerFailed).not.toHaveBeenCalled();
+      }
+
+      expect(loggerMocks.roundImported).not.toHaveBeenCalled();
+      expect(loggerMocks.roundAlreadyStored).not.toHaveBeenCalled();
+      expect(loggerMocks.checkpointAdvanced).not.toHaveBeenCalled();
+      expect(loggerMocks.loggingFailed).not.toHaveBeenCalled();
+    },
+  );
 
   it('rejects a zero heartbeat interval', () => {
     expect(() => {

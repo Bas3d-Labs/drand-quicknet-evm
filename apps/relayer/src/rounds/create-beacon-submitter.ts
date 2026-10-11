@@ -18,6 +18,10 @@ import type {
 } from '../state/signer-coordinator.js';
 
 import type {
+  SignerBlocker,
+} from '../state/signer-gate.js';
+
+import type {
   SignerRecoveryCycle,
   SignerRecoveryCycleResult,
 } from '../state/signer-recovery-cycle.js';
@@ -30,13 +34,24 @@ import {
 export type BeaconSubmissionRequest =
   SubmitBeaconTransactionOptions['request'];
 
+export type BeaconSubmissionResult =
+  | BroadcastAttemptResult
+  | {
+      /**
+       * Fresh recovery completed, but the signer gate remained closed.
+       * No new attempt was prepared for this submission.
+       */
+      readonly status: 'signer-unavailable';
+      readonly blocker: SignerBlocker;
+    };
+
 export interface BeaconSubmitter {
   recover(cycle?: number): Promise<SignerRecoveryCycleResult>;
 
   submit(
     request: BeaconSubmissionRequest,
     cycle?: number,
-  ): Promise<BroadcastAttemptResult>;
+  ): Promise<BeaconSubmissionResult>;
 }
 
 export interface CreateBeaconSubmitterOptions {
@@ -83,10 +98,23 @@ export function createBeaconSubmitter(
   async function submit(
     request: BeaconSubmissionRequest,
     cycle?: number,
-  ): Promise<BroadcastAttemptResult> {
+  ): Promise<BeaconSubmissionResult> {
     await recover(cycle);
 
     signal?.throwIfAborted();
+
+    const status = coordinator.status;
+
+    if (!status.open) {
+      if (status.primaryReason === null) {
+        throw new Error('Signer gate is closed without a reported blocker.');
+      }
+
+      return {
+        status: 'signer-unavailable',
+        blocker: status.primaryReason,
+      };
+    }
 
     return submitBeaconTransaction({
       publicClient,

@@ -1,8 +1,10 @@
 import {
+  link,
   mkdtemp,
   readFile,
   rename,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 
@@ -376,5 +378,42 @@ describe('file transaction journal store', () => {
       kind: 'present',
       snapshot,
     });
+  });
+
+  it('rejects a hard-linked journal without rewriting either path', async () => {
+    const contents = await encodeJournalSnapshot(fixture(), IDENTITY);
+    const alias = join(directory, 'journal-alias.json');
+
+    await writeFile(filePath, contents);
+    await link(filePath, alias);
+
+    await expect(openStore()).rejects.toMatchObject({
+      message: 'Transaction journal could not be loaded.',
+      cause: {
+        message: 'Journal file must have exactly one hard link.',
+      },
+    });
+
+    expect(durableReplace).not.toHaveBeenCalled();
+    expect(await readFile(filePath, 'utf8')).toBe(contents);
+    expect(await readFile(alias, 'utf8')).toBe(contents);
+  });
+
+  it('rejects a symlink journal without rewriting its target', async () => {
+    const contents = await encodeJournalSnapshot(fixture(), IDENTITY);
+    const target = join(directory, 'journal-target.json');
+
+    await writeFile(target, contents);
+    await symlink(target, filePath);
+
+    await expect(openStore()).rejects.toMatchObject({
+      message: 'Transaction journal could not be loaded.',
+      cause: {
+        code: 'ELOOP',
+      },
+    });
+
+    expect(durableReplace).not.toHaveBeenCalled();
+    expect(await readFile(target, 'utf8')).toBe(contents);
   });
 });
