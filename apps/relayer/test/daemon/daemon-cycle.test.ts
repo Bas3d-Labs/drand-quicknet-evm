@@ -1373,4 +1373,91 @@ describe('runDaemonCycle', () => {
       expect(softCursors.size).toBe(0);
     },
   );
+
+  it('stops before consumers when shutdown occurs during successful recovery', async () => {
+    const controller = new AbortController();
+
+    vi.mocked(submitter.recover).mockImplementationOnce(async () => {
+      controller.abort();
+
+      return {
+        inspection: {
+          status: 'no-attempt',
+          observation: {
+            anchor: {
+              blockNumber: 1_200n,
+              blockHash: REGISTRY_RUNTIME_CODEHASH,
+            },
+            nonce: 0n,
+          },
+        },
+        broadcast: null,
+        inclusions: null,
+        retryDelayMs: null,
+      };
+    });
+
+    const result = await runDaemonCycle({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      checkpointStore: CHECKPOINT_STORE,
+      consumers: [VALIDATED_CONSUMER_A],
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursors: new Map<Address, SoftScanCursor>(),
+      signal: controller.signal,
+    });
+
+    expect(result).toEqual({ consumers: [] });
+    expect(submitter.recover).toHaveBeenCalledOnce();
+    expect(runDaemonIteration).not.toHaveBeenCalled();
+  });
+
+  it('forwards the signal and retains completed work before stopping between consumers', async () => {
+    const controller = new AbortController();
+    const softCursors = new Map<Address, SoftScanCursor>();
+    const iteration = caughtUpResult(CONSUMER_A, 1_501n);
+
+    vi.mocked(runDaemonIteration).mockImplementationOnce(
+      async (options) => {
+        expect(options.signal).toBe(controller.signal);
+
+        controller.abort();
+        return iteration;
+      },
+    );
+
+    const result = await runDaemonCycle({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      checkpointStore: CHECKPOINT_STORE,
+      consumers: [
+        VALIDATED_CONSUMER_A,
+        VALIDATED_CONSUMER_B,
+      ],
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursors,
+      signal: controller.signal,
+    });
+
+    expect(runDaemonIteration).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      consumers: [{
+        status: 'success',
+        consumer: VALIDATED_CONSUMER_A,
+        iteration,
+      }],
+    });
+    expect(softCursors.get(CONSUMER_A)).toBe(iteration.softCursor);
+    expect(softCursors.has(CONSUMER_B)).toBe(false);
+  });
 });
