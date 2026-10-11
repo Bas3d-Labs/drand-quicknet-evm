@@ -888,6 +888,49 @@ describe('importQuicknetRound', () => {
     expect(submitTransaction).not.toHaveBeenCalled();
     expect(waitForTransactionReceipt).not.toHaveBeenCalled();
   });
+
+  it.each(['deployment', 'storage'] as const)(
+    'stops after cancellation during the %s read',
+    async (stage) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+
+      if (stage === 'deployment') {
+        verifyDeployment.mockImplementationOnce(async () => {
+          controller.abort(reason);
+        });
+      } else {
+        isStored.mockImplementationOnce(async () => {
+          controller.abort(reason);
+          return true;
+        });
+      }
+
+      await expect(importQuicknetRound({
+        publicClient,
+        walletClient,
+        account,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        signal: controller.signal,
+      })).rejects.toBe(reason);
+
+      expect(verifyDeployment).toHaveBeenCalledOnce();
+
+      if (stage === 'deployment') {
+        expect(isStored).not.toHaveBeenCalled();
+      } else {
+        expect(isStored).toHaveBeenCalledOnce();
+      }
+
+      expect(getBeacon).not.toHaveBeenCalled();
+      expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
+      expect(submissionMocks.simulateBeaconSubmission).not.toHaveBeenCalled();
+      expect(submitTransaction).not.toHaveBeenCalled();
+      expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+    },
+  );
 });
 
 function firstInvocationOrder(
