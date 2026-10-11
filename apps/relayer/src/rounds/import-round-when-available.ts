@@ -91,7 +91,13 @@ export async function importQuicknetRoundWhenAvailable(
     phase: 'check-stored',
   });
 
-  if (await registry.isStored(round)) {
+  options.signal?.throwIfAborted();
+
+  const stored = await registry.isStored(round);
+
+  options.signal?.throwIfAborted();
+
+  if (stored) {
     const randomness = await registry.getBeacon(round);
     return {
       status: 'already-stored',

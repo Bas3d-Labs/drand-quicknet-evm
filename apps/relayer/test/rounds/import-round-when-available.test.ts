@@ -926,8 +926,50 @@ describe(
           signal: controller.signal,
         });
     });
-  },
-);
+
+    it.each(['deployment', 'storage'] as const)(
+      'stops after cancellation during the %s read',
+      async (stage) => {
+        const controller = new AbortController();
+        const reason = new Error('Shutdown requested.');
+
+        if (stage === 'deployment') {
+          verifyDeployment.mockImplementationOnce(async () => {
+            controller.abort(reason);
+          });
+        } else {
+          isStored.mockImplementationOnce(async () => {
+            controller.abort(reason);
+            return true;
+          });
+        }
+
+        await expect(importQuicknetRoundWhenAvailable({
+          publicClient,
+          walletClient,
+          account,
+          submitter,
+          deployment: DEPLOYMENT,
+          round: ROUND,
+          signal: controller.signal,
+        })).rejects.toBe(reason);
+
+        expect(verifyDeployment).toHaveBeenCalledOnce();
+
+        if (stage === 'deployment') {
+          expect(isStored).not.toHaveBeenCalled();
+        } else {
+          expect(isStored).toHaveBeenCalledOnce();
+        }
+
+        expect(getBeacon).not.toHaveBeenCalled();
+        expect(waitMocks.waitForQuicknetRound).not.toHaveBeenCalled();
+        expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
+        expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
+      },
+    );
+});
+
 
 function firstInvocationOrder(
   mock: {
