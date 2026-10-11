@@ -594,6 +594,40 @@ describe('main', () => {
       expect(createRelayerClients).not.toHaveBeenCalled();
     },
   );
+  
+  it.each(SIGNALS)(
+    'completes gracefully when %s cancels startup',
+    async (signal) => {
+      const before = SIGNALS.map(
+        (name) => process.listeners(name),
+      );
+      const previous = process.listeners(signal);
+      const output = vi.fn();
+
+      vi.mocked(runDaemonCommand).mockImplementationOnce(
+        async ({ signal: abortSignal }) => {
+          const added = process.listeners(signal).filter(
+            (listener) => !previous.includes(listener),
+          );
+
+          expect(added).toHaveLength(1);
+          added[0]!(signal);
+
+          expect(abortSignal?.aborted).toBe(true);
+          abortSignal!.throwIfAborted();
+        },
+      );
+
+      await expect(
+        main(['daemon', '--network', PRESET], output),
+      ).resolves.toBeUndefined();
+
+      expect(output).not.toHaveBeenCalled();
+      expect(
+        SIGNALS.map((name) => process.listeners(name)),
+      ).toEqual(before);
+    },
+  );
 
   describe.each(ROUND_COMMANDS)('%s', (command) => {
     function operation() {
@@ -873,6 +907,43 @@ describe('main', () => {
         await main(['daemon', '--network', PRESET], vi.fn());
 
         expect(process.listeners(signal)).toEqual(before);
+      },
+    );
+
+    it.each(SIGNALS)(
+      'preserves an unrelated failure after %s requests shutdown',
+      async (signal) => {
+        const before = SIGNALS.map(
+          (name) => process.listeners(name),
+        );
+        const previous = process.listeners(signal);
+        const failure = new Error('Journal persistence failed.');
+        const output = vi.fn();
+
+        vi.mocked(runDaemonCommand).mockImplementationOnce(
+          async ({ signal: abortSignal }) => {
+            const added = process.listeners(signal).filter(
+              (listener) => !previous.includes(listener),
+            );
+
+            expect(added).toHaveLength(1);
+            added[0]!(signal);
+
+            expect(abortSignal?.aborted).toBe(true);
+            expect(abortSignal?.reason).not.toBe(failure);
+
+            throw failure;
+          },
+        );
+
+        await expect(
+          main(['daemon', '--network', PRESET], output),
+        ).rejects.toBe(failure);
+
+        expect(output).not.toHaveBeenCalled();
+        expect(
+          SIGNALS.map((name) => process.listeners(name)),
+        ).toEqual(before);
       },
     );
 

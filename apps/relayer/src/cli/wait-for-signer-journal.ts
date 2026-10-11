@@ -29,7 +29,7 @@ export interface WaitForSignerJournalOptions {
  * 
  * Existing journals return immediately, even when the signer is blocked.
  * Deferred bootstrap and anchor changes are retried at the polling interval.
- * RPC and persistence failures propogate to the caller.
+ * RPC and persistence failures propagate to the caller.
  */
 export async function waitForSignerJournal(
   options: WaitForSignerJournalOptions,
@@ -51,9 +51,16 @@ export async function waitForSignerJournal(
 
   const sleep = options.sleep ?? (
     async (milliseconds: number, abortSignal?: AbortSignal) => {
-      await delay(milliseconds, undefined, {
-        signal: abortSignal,
-      });
+      try {
+        await delay(milliseconds, undefined, {
+          signal: abortSignal,
+        });
+      } catch (error) {
+        // Timer cancellation rejects with a wrapper error. Propagate
+        // the signal's reason consistently with throwIfAborted().
+        abortSignal?.throwIfAborted();
+        throw error;
+      }
     }
   );
 

@@ -253,4 +253,48 @@ describe('waitForSignerJournal', () => {
 
     expect(recover).not.toHaveBeenCalled();
   });
+
+  it('propagates the exact cancellation reason from the default timer', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Startup cancelled');
+
+    const recover = vi.fn<BeaconSubmitter['recover']>()
+      .mockResolvedValue(deferredResult());
+
+    const pending = waitForSignerJournal({
+      coordinator: { journalInitialized: false },
+      submitter: { recover },
+      pollIntervalMs: 60_000,
+      signal: controller.signal,
+    });
+
+    try {
+      await Promise.resolve();
+
+      controller.abort(reason);
+
+      await expect(pending).rejects.toBe(reason);
+
+      expect(recover).toHaveBeenCalledOnce();
+    } finally {
+      // Ensure the real timer is cancelled even if an assertion fails.
+      controller.abort(reason);
+    }
+  });
+
+  it('preserves a recovery failure after cancellation is requested', async () => {
+    const t = setup();
+    const reason = new Error('Startup cancelled');
+    const failure = new Error('Journal persistence failed.');
+
+    t.recover.mockImplementationOnce(async () => {
+      t.controller.abort(reason);
+      throw failure;
+    });
+
+    await expect(t.run()).rejects.toBe(failure);
+
+    expect(t.recover).toHaveBeenCalledOnce();
+    expect(t.sleep).not.toHaveBeenCalled();
+  });
 });

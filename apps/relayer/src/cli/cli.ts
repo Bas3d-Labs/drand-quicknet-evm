@@ -290,6 +290,15 @@ async function runDaemonCli(
         options.onDiagnostics?.(policy);
       },
     });
+  } catch (error) {
+    if (
+      !controller.signal.aborted ||
+      error !== controller.signal.reason
+    ) {
+      throw error;
+    }
+
+    // Requested shutdown completed after active work unwound.
   } finally {
     process.removeListener('SIGINT', handleShutdown);
     process.removeListener('SIGTERM', handleShutdown);
