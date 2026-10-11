@@ -119,6 +119,10 @@ export async function importQuicknetRoundWhenAvailable(
     round,
   };
 
+  if (options.signal !== undefined) {
+    fetchOptions.signal = options.signal;
+  }
+
   if (maxFetchAttempts !== undefined) {
     fetchOptions.maxAttempts = maxFetchAttempts;
   }
@@ -133,6 +137,8 @@ export async function importQuicknetRoundWhenAvailable(
   });
 
   const beacon = await fetchQuicknetBeaconWithRetry(fetchOptions);
+
+  options.signal?.throwIfAborted();
 
   return importQuicknetRound({
     publicClient,
