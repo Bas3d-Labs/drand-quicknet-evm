@@ -48,6 +48,7 @@ export interface ProcessQuicknetRequestsOptions {
   onIncomplete?:
     | ((outcome: IncompleteQuicknetRoundOutcome) => void)
     | undefined;
+  signal?: AbortSignal;
 }
 
 export interface ProcessedQuicknetRound {
@@ -100,6 +101,8 @@ export type IncompleteQuicknetRoundOutcome = Extract<
 export async function processQuicknetRequestsWithOutcomes(
   options: ProcessQuicknetRequestsOptions,
 ): Promise<readonly QuicknetRoundOutcome[]> {
+  options.signal?.throwIfAborted();
+
   const firstBlocks = new Map<bigint, bigint>();
 
   for (const request of options.requests) {
@@ -204,6 +207,13 @@ export async function processQuicknetRequestsWithOutcomes(
         // Reporting must not replace a successful import.
       }
     } catch (error) {
+      if (
+        options.signal?.aborted &&
+        error === options.signal.reason
+      ) {
+        throw error;
+      }
+
       outcomes.push({
         round,
         firstRequestBlock,
