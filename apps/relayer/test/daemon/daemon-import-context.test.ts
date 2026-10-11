@@ -502,4 +502,74 @@ describe('round import diagnostic context', () => {
       expect(fixtureState.submitTransaction).toHaveBeenCalledOnce();
     },
   );
+
+  it.each(['durable', 'soft'] as const)(
+    'propagates shutdown from the %s round wait without submitting',
+    async (scanType) => {
+      const fixtureState = fixture();
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const onCycle = vi.fn();
+      const sleep = vi.fn();
+
+      let requestBlock = 1000n;
+
+      if (scanType === 'soft') {
+        requestBlock = 1101n;
+      }
+
+      const event = {
+        address: CONSUMER,
+        args: { round: ROUND },
+        blockNumber: requestBlock,
+        transactionHash: HASH,
+        logIndex: 0,
+      };
+
+      fixtureState.getLogs.mockReset();
+      fixtureState.getLogs.mockResolvedValue([]);
+
+      if (scanType === 'soft') {
+        // Finish an empty durable scan before reaching the soft request.
+        fixtureState.getLogs.mockResolvedValueOnce([]);
+      }
+
+      fixtureState.getLogs.mockResolvedValueOnce([event]);
+
+      mocks.waitForQuicknetRound.mockImplementationOnce(async () => {
+        controller.abort(reason);
+        throw reason;
+      });
+
+      await expect(runDaemon({
+        ...fixtureState.options,
+        pollIntervalMs: 1_000,
+        signal: controller.signal,
+        readChainHeads: async () => ({
+          latestBlock: 1200n,
+          durableBlock: 1100n,
+        }),
+        onCycle,
+        sleep,
+      })).rejects.toBe(reason);
+
+      expect(mocks.waitForQuicknetRound)
+        .toHaveBeenCalledExactlyOnceWith({
+          round: ROUND,
+          signal: controller.signal,
+        });
+
+      expect(mocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
+      expect(mocks.simulateBeaconSubmission).not.toHaveBeenCalled();
+      expect(fixtureState.submitTransaction).not.toHaveBeenCalled();
+      expect(fixtureState.waitForTransactionReceipt).not.toHaveBeenCalled();
+      expect(onCycle).not.toHaveBeenCalled();
+      expect(sleep).not.toHaveBeenCalled();
+
+      if (scanType === 'durable') {
+        expect(fixtureState.save).not.toHaveBeenCalled();
+        expect(fixtureState.getLogs).toHaveBeenCalledOnce();
+      }
+    },
+  );
 });
