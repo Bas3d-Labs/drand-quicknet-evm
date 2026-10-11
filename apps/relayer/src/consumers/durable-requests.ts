@@ -125,6 +125,8 @@ export async function reconcileDurableRequests(
       options.durableBlock,
     );
   } catch (error) {
+    options.signal?.throwIfAborted();
+
     return {
       status: 'anchor-unavailable',
       durableBlock: options.durableBlock,

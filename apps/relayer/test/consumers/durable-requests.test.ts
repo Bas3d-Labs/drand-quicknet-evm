@@ -1085,4 +1085,25 @@ describe('reconcileDurableRequests', () => {
       expect(getBlock).toHaveBeenCalledTimes(2);
     },
   );
+
+  it('propagates cancellation when the initial anchor read fails during shutdown', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const readFailure = new Error('Initial anchor unavailable.');
+
+    getBlock.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      throw readFailure;
+    });
+
+    await expect(reconcileDurableRequests(options({
+      signal: controller.signal,
+    }))).rejects.toBe(reason);
+
+    expect(getBlock).toHaveBeenCalledOnce();
+    expect(scanQuicknetRequests).not.toHaveBeenCalled();
+    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(createRegistryReader).not.toHaveBeenCalled();
+    expect(registryMocks.isStored).not.toHaveBeenCalled();
+  });
 });
