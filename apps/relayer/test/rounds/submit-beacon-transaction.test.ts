@@ -279,4 +279,62 @@ describe('beacon transaction submission', () => {
     expect(t.prepareAttempt).toHaveBeenCalledOnce();
     expect(t.broadcastAttempt).not.toHaveBeenCalled();
   });
+
+  it.each(['acknowledged', 'not-acknowledged'] as const)(
+    'preserves a %s broadcast result when shutdown occurs during broadcasting',
+    async (status) => {
+      const t = setup();
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const broadcast = {
+        ...t.broadcast,
+        status,
+      };
+
+      t.broadcastAttempt.mockImplementationOnce(async () => {
+        controller.abort(reason);
+        return broadcast;
+      });
+
+      const result = await submitBeaconTransaction({
+        ...t.options,
+        signal: controller.signal,
+      }, 7);
+
+      expect(result).toBe(broadcast);
+      expect(controller.signal.aborted).toBe(true);
+
+      expect(preparationMocks.prepareRelayerTransaction)
+        .toHaveBeenCalledOnce();
+
+      expect(t.prepareAttempt).toHaveBeenCalledOnce();
+      expect(t.broadcastAttempt).toHaveBeenCalledExactlyOnceWith({
+        publicClient: t.options.publicClient,
+        attemptId: t.attempt.attemptId,
+      }, 7);
+    },
+  );
+
+  it('preserves a broadcast failure when shutdown occurs during broadcasting', async () => {
+    const t = setup();
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const failure = new Error('Broadcast operation failed.');
+
+    t.broadcastAttempt.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      throw failure;
+    });
+
+    await expect(submitBeaconTransaction({
+      ...t.options,
+      signal: controller.signal,
+    })).rejects.toBe(failure);
+
+    expect(preparationMocks.prepareRelayerTransaction)
+      .toHaveBeenCalledOnce();
+
+    expect(t.prepareAttempt).toHaveBeenCalledOnce();
+    expect(t.broadcastAttempt).toHaveBeenCalledOnce();
+  });
 });
