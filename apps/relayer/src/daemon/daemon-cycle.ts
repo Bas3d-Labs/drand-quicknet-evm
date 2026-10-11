@@ -62,6 +62,7 @@ export interface RunDaemonCycleOptions {
   softCursors: Map<Address, SoftScanCursor>;
   receiptTimeoutMs?: number;
   readChainHeads?: () => Promise<ChainHeads>;
+  signal?: AbortSignal;
 }
 
 export interface DaemonIncompleteRound {
@@ -97,9 +98,18 @@ export interface RunDaemonCycleResult {
 export async function runDaemonCycle(
   options: RunDaemonCycleOptions,
 ): Promise<RunDaemonCycleResult> {
+  options.signal?.throwIfAborted();
+
   try {
     await options.submitter.recover();
   } catch (error) {
+    if (
+      options.signal?.aborted &&
+      error === options.signal.reason
+    ) {
+      throw error;
+    }
+
     // Recovery failure prevents this cycle from preparing transactions.
     // Use the existing consumer-failure reporting and retry next cycle.
     return {
@@ -189,6 +199,13 @@ export async function runDaemonCycle(
 
       consumers.push(successful);
     } catch (error) {
+      if (
+        options.signal?.aborted &&
+        error === options.signal.reason
+      ) {
+        throw error;
+      }
+
       const failed: Extract<
         DaemonConsumerCycleResult,
         { status: 'failed' }

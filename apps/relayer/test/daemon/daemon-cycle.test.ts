@@ -1300,4 +1300,77 @@ describe('runDaemonCycle', () => {
     expect(softCursors.size).toBe(1);
     expect(softCursors.get(CONSUMER_A)).toBe(existingCursor);
   });
+
+  it('rejects cancellation before signer recovery', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    controller.abort(reason);
+
+    await expect(runDaemonCycle({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      account: ACCOUNT,
+      submitter,
+      deployment: DEPLOYMENT,
+      checkpointStore: CHECKPOINT_STORE,
+      consumers: [VALIDATED_CONSUMER_A],
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursors: new Map<Address, SoftScanCursor>(),
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(submitter.recover).not.toHaveBeenCalled();
+    expect(runDaemonIteration).not.toHaveBeenCalled();
+  });
+
+  it.each(['recovery', 'iteration'] as const)(
+    'propagates cancellation from %s without processing another consumer',
+    async (stage) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const softCursors = new Map<Address, SoftScanCursor>();
+
+      const cancel = async () => {
+        controller.abort(reason);
+        throw reason;
+      };
+
+      if (stage === 'recovery') {
+        vi.mocked(submitter.recover).mockImplementationOnce(cancel);
+      } else {
+        vi.mocked(runDaemonIteration).mockImplementationOnce(cancel);
+      }
+
+      await expect(runDaemonCycle({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        submitter,
+        deployment: DEPLOYMENT,
+        checkpointStore: CHECKPOINT_STORE,
+        consumers: [
+          VALIDATED_CONSUMER_A,
+          VALIDATED_CONSUMER_B,
+        ],
+        startBlock: 1_000n,
+        maxBlockRange: 100n,
+        finality: FINALITY,
+        softCursors,
+        signal: controller.signal,
+      })).rejects.toBe(reason);
+
+      expect(submitter.recover).toHaveBeenCalledOnce();
+
+      if (stage === 'recovery') {
+        expect(runDaemonIteration).not.toHaveBeenCalled();
+      } else {
+        expect(runDaemonIteration).toHaveBeenCalledOnce();
+      }
+
+      expect(softCursors.size).toBe(0);
+    },
+  );
 });
