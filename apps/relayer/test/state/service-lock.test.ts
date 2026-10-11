@@ -155,6 +155,7 @@ describe.skipIf(process.platform !== 'linux')(
         `
 import {
   closeSync,
+  fstatSync,
   openSync,
 } from 'node:fs';
 
@@ -190,11 +191,24 @@ try {
     options.checkpointFile = checkpointFile;
   }
 
-  const canonicalDirectory = assertServiceLockHeld(options);
+  const verified = assertServiceLockHeld(options);
+
+  if (mode === 'probe-fd-zero') {
+    const held = fstatSync(0, { bigint: true });
+
+    if (
+      verified.dev !== held.dev ||
+      verified.ino !== held.ino
+    ) {
+      throw new Error(
+        'Returned lock identity does not match the held descriptor.',
+      );
+    }
+  }
 
   process.stdout.write(JSON.stringify({
     status: 'held',
-    stateDirectory: canonicalDirectory,
+    stateDirectory: verified.stateDirectory,
   }) + '\\n');
 
   if (mode === 'hold') {
@@ -320,7 +334,7 @@ try {
       });
     });
 
-    it('verifies an exclusive lock inherited on fd 0', async () => {
+    it('returns the identity of the exclusive lock held on fd 0', async () => {
       const stateDirectory = await createStateDirectory();
 
       const result = await execFileAsync(
@@ -331,7 +345,7 @@ try {
             'set -eu',
             'exec 0<>"$1"',
             'flock --exclusive --nonblock --conflict-exit-code 75 0 || exit $?',
-            'exec "$2" "$3" probe "$4"',
+            'exec "$2" "$3" probe-fd-zero "$4"',
           ].join('\n'),
           'service-lock-fd-zero',
           join(stateDirectory, 'relayer.flock'),

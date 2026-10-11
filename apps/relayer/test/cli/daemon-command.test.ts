@@ -329,7 +329,11 @@ describe('runDaemonCommand', () => {
 
     vi.mocked(assertServiceLockHeld)
       .mockReset()
-      .mockReturnValue(VERIFIED_STATE_DIRECTORY);
+      .mockReturnValue({
+        stateDirectory: VERIFIED_STATE_DIRECTORY,
+        dev: 1n,
+        ino: 2n,
+      });
 
     vi.mocked(FileCheckpointStore.open).mockClear();
 
@@ -836,7 +840,11 @@ describe('runDaemonCommand', () => {
     const failure = new ServiceLockNotHeldError('state-directory');
 
     vi.mocked(assertServiceLockHeld)
-      .mockReturnValueOnce(VERIFIED_STATE_DIRECTORY)
+      .mockReturnValueOnce({
+        stateDirectory: VERIFIED_STATE_DIRECTORY,
+        dev: 1n,
+        ino: 2n,
+      })
       .mockImplementationOnce(() => {
         throw failure;
       });

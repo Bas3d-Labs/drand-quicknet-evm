@@ -81,7 +81,11 @@ describe('configuration failure diagnostics through the CLI', () => {
 
     vi.mocked(assertServiceLockHeld)
       .mockReset()
-      .mockReturnValue(process.cwd());
+      .mockReturnValue({
+        stateDirectory: process.cwd(),
+        dev: 1n,
+        ino: 2n,
+      });
   });
 
   afterEach(() => {

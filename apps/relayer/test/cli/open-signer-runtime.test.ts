@@ -55,7 +55,11 @@ describe('command signer runtime', () => {
     );
 
     vi.mocked(assertServiceLockHeld).mockReset();
-    vi.mocked(assertServiceLockHeld).mockReturnValue(directory);
+    vi.mocked(assertServiceLockHeld).mockReturnValue({
+      stateDirectory: directory,
+      dev: 1n,
+      ino: 2n,
+    });
   });
 
   afterEach(async () => {

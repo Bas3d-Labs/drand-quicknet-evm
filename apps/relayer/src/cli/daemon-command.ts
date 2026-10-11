@@ -98,7 +98,7 @@ export async function runDaemonCommand(
     loadedConfig.checkpointFile,
   );
 
-  const stateDirectory = assertServiceLockHeld({
+  const { stateDirectory } = assertServiceLockHeld({
     env,
     checkpointFile: configuredCheckpointFile,
   });

@@ -115,7 +115,7 @@ export async function openSignerRuntime(
       ? undefined
       : resolve(configuredCheckpointFile);
 
-  const stateDirectory = assertServiceLockHeld({
+  const { stateDirectory } = assertServiceLockHeld({
     env,
     ...(resolvedCheckpointFile === undefined
       ? {}

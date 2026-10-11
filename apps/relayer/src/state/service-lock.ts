@@ -30,6 +30,12 @@ export interface AssertServiceLockHeldOptions {
   checkpointFile?: string;
 }
 
+export interface VerifiedServiceLock {
+  readonly stateDirectory: string;
+  readonly dev: bigint;
+  readonly ino: bigint;
+}
+
 const failures = new WeakMap<object, ServiceLockReason>();
 
 export class ServiceLockNotHeldError extends Error {
@@ -55,19 +61,21 @@ export function serviceLockReason(
   return failures.get(error);
 }
 
-/// Verifies ownership inherited from the Linux service launcher.
-///
-/// Checks the immediate state directory's type and world-write mode.
-/// Trusted, stable ancestors and a local filesystem are deployment
-/// assumptions; this function does not validate them.
-///
-/// Never remove or replace relayer.flock while a writer may be running.
-///
-/// Returns the canonical state directory. Does not acquire or release
-/// ownership and must not close the inherited descriptor.
+/** Verifies ownership inherited from the Linux service launcher.
+ *
+ * Checks the immediate state directory's type and world-write mode.
+ * Trusted, stable ancestors and a local filesystem are deployment
+ * assumptions; this function does not validate them.
+ *
+ * Never remove or replace relayer.flock while a writer may be running.
+ *
+ * Returns the canonical state directory and verified lock identity.
+ * Does not acquire or release ownership and must not close the
+ * inherited descriptor.
+ */
 export function assertServiceLockHeld(
   options: AssertServiceLockHeldOptions = {},
-): string {
+): VerifiedServiceLock {
   if (process.platform !== 'linux') {
     throw new ServiceLockNotHeldError('platform');
   }
@@ -148,7 +156,11 @@ export function assertServiceLockHeld(
         if (hasExclusiveFlock(info)) {
           // Borrow the inherited descriptor. Do not close it, wrap it
           // in a FileHandle, or pass it to children through stdio.
-          return stateDirectory;
+          return Object.freeze({
+            stateDirectory,
+            dev: actual.dev,
+            ino: actual.ino,
+          });
         }
       } catch {
         // An unrelated descriptor may disappear during enumeration.

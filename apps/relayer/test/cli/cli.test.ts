@@ -356,7 +356,11 @@ beforeEach(() => {
 
   vi.mocked(assertServiceLockHeld)
     .mockReset()
-    .mockReturnValue('/verified-state');
+    .mockReturnValue({
+      stateDirectory: '/verified-state',
+      dev: 1n,
+      ino: 2n,
+    });
 
   submitter = {
     recover: vi.fn<BeaconSubmitter['recover']>(),
