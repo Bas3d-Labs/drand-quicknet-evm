@@ -380,6 +380,8 @@ export async function runDaemonIteration(
       processingOptions,
     );
 
+    options.signal?.throwIfAborted();
+
     softCursor = {
       nextBlock: softResult.nextBlock,
     };

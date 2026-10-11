@@ -1719,4 +1719,49 @@ describe('runDaemonIteration', () => {
       );
     },
   );
+
+  it('preserves completion reporting without advancing the soft cursor when shutdown accompanies completed processing', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+    const softCursor = { nextBlock: 1_201n };
+
+    // Durable processing is already caught up.
+    load.mockResolvedValue(1_201n);
+
+    vi.mocked(scanQuicknetRequests).mockResolvedValueOnce({
+      status: 'scanned',
+      throughBlock: 1_500n,
+      fromBlock: 1_201n,
+      toBlock: 1_300n,
+      nextBlock: 1_301n,
+      requests: [SOFT_REQUEST],
+    });
+
+    vi.mocked(processQuicknetRequests).mockImplementationOnce(
+      async ({ onCompleted }) => {
+        onCompleted?.(COMPLETED);
+        return { rounds: [COMPLETED] };
+      },
+    );
+
+    const onCompleted = vi.fn(() => {
+      controller.abort(reason);
+    });
+
+    await expect(run({
+      signal: controller.signal,
+      softCursor,
+      onCompleted,
+    })).rejects.toBe(reason);
+
+    expect(onCompleted).toHaveBeenCalledExactlyOnceWith(
+      'soft',
+      COMPLETED,
+    );
+    expect(processQuicknetRequests).toHaveBeenCalledOnce();
+    expect(scanQuicknetRequests).toHaveBeenCalledOnce();
+    expect(reconcileDurableRequests).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+    expect(softCursor).toEqual({ nextBlock: 1_201n });
+  });
 });
