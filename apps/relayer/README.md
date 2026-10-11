@@ -286,7 +286,9 @@ Accepts a positive decimal integer.
 Default: `1000` milliseconds.
 
 Delay after each completed daemon cycle before starting the next one.
-Shutdown interrupts this delay.
+Shutdown interrupts this delay. During first-use daemon startup, this 
+also sets the delay between signer initialization attempts when nonce 
+counts disagree or the selected durable anchor changes.
 
 This is not a fixed cycle duration or an end-to-end import latency
 guarantee. Scanning, beacon retrieval, and transaction confirmation
@@ -703,8 +705,41 @@ chain and signer must use the same state directory. Releasing the service
 lock does not prove that a transaction was rejected, and an unstored round
 does not prove that an earlier broadcast was never accepted.
 
-A missing journal requires explicit bootstrap authorization. Ordinary
-command recovery does not automatically adopt a nonce or initialize it.
+### First-use signer initialization
+
+A missing signer journal initializes automatically during recovery.
+There is no separate initialization command.
+
+Initialization requires matching transaction counts at the selected
+durable block, `latest`, and `pending`. The durable block's hash is
+rechecked before accepting the observation. Only an accepted observation
+is persisted as the journal's initial nonce baseline.
+
+Matching counts do not prove that no untracked signed transactions exist.
+Use a dedicated signer with no outstanding transactions outside this
+relayer's journal and service-ownership boundary.
+
+When counts disagree, initialization is deferred and the journal remains
+missing. The daemon retries at `QUICKNET_POLL_INTERVAL_MS`; an anchor
+change also causes another startup pass. RPC and persistence failures
+propagate as failures rather than entering this polling retry loop.
+
+The daemon waits for signer journal initialization before opening or
+creating checkpoint state and entering normal processing. Initialization
+alone does not authorize submission: the signer gate still requires
+recovery and inclusion checks.
+
+If the configured checkpoint already exists but the signer journal is
+missing, startup fails with `prior-state-present`. Verify the configured
+state directory and restore the matching journal from backup if available.
+Do not delete checkpoint state to bypass this check.
+
+The prior-state check covers the configured checkpoint path. It cannot
+detect state lost from another directory or an unconfigured checkpoint.
+One-shot commands also check `QUICKNET_CHECKPOINT_FILE` when it is set.
+
+Existing journals follow normal recovery. An unreadable or invalid journal
+causes startup to fail; it is not replaced with a new baseline.
 
 One-shot commands exit after reporting pending or deferred work; they do
 not keep recovery running in the background. The daemon continues recovery
@@ -880,17 +915,28 @@ pnpm --filter @based-labs/drand-quicknet-relayer start \
 Important structured events include:
 
 ```text
-round_imported
-durable_head_regressed
-consumer_failed
-heartbeat
 checkpoint_advanced
-round_already_stored
+consumer_failed
+durable_head_regressed
+heartbeat
 logging_failed
+round_already_stored
+round_imported
+signer_bootstrap_deferred
 ```
 
 `checkpoint_advanced` and `round_already_stored` are debug-level routine
 progress. `heartbeat` is emitted periodically at info level.
+
+`signer_bootstrap_deferred` is an info-level event emitted when first-use
+initialization observes mismatched nonce counts. It includes `signer`,
+`durableBlock`, `durableBlockHash`, `durableNonce`, `latestNonce`, and
+`pendingNonce`; block numbers and nonce counts are decimal strings.
+
+The coordinator reports the first mismatch and subsequent changes to
+any of the three nonce counts. Unchanged counts are suppressed even
+when the durable anchor advances. Suppression is process-local, so
+restarting can report the same mismatch again.
 
 Logging failures are isolated so logging itself does not stop the daemon.
 
@@ -919,9 +965,13 @@ headers, request bodies, ABI objects, and other undeclared properties
 are not copied into the summary. Selected explanation text is scrubbed
 before output.
 
-Registered usage, configuration, and service-lock errors use fixed
-messages. Other failures use fixed fallback descriptions until the
-credential-aware diagnostic policy is installed.
+Registered usage, configuration, service-lock, and prior signer-state
+errors use fixed messages. A missing journal with existing configured
+checkpoint state produces `cli_failed` with kind `signer-journal`,
+code `prior-state-present`, and exit status `1`.
+
+Other failures use fixed fallback descriptions until the credential-aware
+diagnostic policy is installed.
 
 If scrubbing a field throws, that field becomes
 `[diagnostic text unavailable]`.
@@ -1035,6 +1085,8 @@ At minimum, operators should monitor:
 - distance between the durable head and the durable checkpoint
 - successful compressed fallback frequency, grouped by fallback reason
 - uncertain submissions and pending signer transactions
+- daemon startup remaining deferred on mismatched signer nonce counts.
+  Unchanged counts do not produce repeated log events
 
 For chain profiles that rely on sequencer timestamp freshness, the configured
 skew warning may intentionally sit close to normal timestamp truncation plus
