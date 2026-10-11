@@ -166,6 +166,26 @@ Do not give the relayer account:
 
 Never commit private keys or populated `.env` files.
 
+### Receipt timeout
+
+`QUICKNET_RECEIPT_TIMEOUT_MS` controls receipt waiting for `import`,
+`import-when-available`, and `daemon`. It defaults to `30000` milliseconds
+and accepts decimal integers from `1` through `2147483647`. Zero is rejected.
+
+```dotenv
+QUICKNET_RECEIPT_TIMEOUT_MS=30000
+```
+
+When the receipt wait times out, the import returns `pending` with reason
+`receipt-timeout`. The journal attempt remains available for recovery.
+Timeout does not establish transaction failure, release the signer gate,
+or authorize another broadcast.
+
+One-shot commands exit after reporting pending work. The daemon continues
+recovery on subsequent cycles.
+
+This setting controls receipt waiting, not total command or cycle duration.
+
 ### Required daemon settings
 
 These settings are required for `daemon`, in addition to the network and
@@ -259,6 +279,21 @@ QUICKNET_MAX_BLOCK_RANGE=2000
 QUICKNET_POLL_INTERVAL_MS=1000
 QUICKNET_LOG_LEVEL=info
 ```
+
+### Receipt waiting
+
+`QUICKNET_RECEIPT_TIMEOUT_MS` defaults to `30000` milliseconds and applies
+to `import`, `import-when-available`, and daemon imports. It accepts decimal
+integers from `1` through `2147483647`; zero is rejected.
+
+The timeout bounds receipt waiting after an acknowledged broadcast.
+Expiration returns `pending` with reason `receipt-timeout`. The signed
+attempt remains journaled for recovery; expiration does not prove that
+the transaction failed and does not authorize a new submission.
+
+This setting does not bound the entire import or daemon cycle. Beacon
+waiting, RPC calls, simulation, and post-receipt verification take
+additional time.
 
 #### `QUICKNET_MAX_BLOCK_RANGE`
 

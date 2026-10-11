@@ -22,6 +22,10 @@ import type {
   CompressedSignature,
 } from '@based-labs/drand-quicknet';
 
+import {
+  runDaemon,
+} from '../../src/daemon/daemon.js';
+
 import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
@@ -454,4 +458,48 @@ describe('round import diagnostic context', () => {
     expect(fixtureState.waitForTransactionReceipt)
       .toHaveBeenCalledTimes(1);
   });
+
+  it.each(['durable', 'soft'] as const)(
+    'passes a custom receipt timeout through the %s daemon scan',
+    async (scanType) => {
+      const fixtureState = fixture();
+      const controller = new AbortController();
+      const event = {
+        address: CONSUMER,
+        args: { round: ROUND },
+        blockNumber: scanType === 'durable' ? 1000n : 1101n,
+        transactionHash: HASH,
+        logIndex: 0,
+      };
+
+      fixtureState.getLogs.mockReset();
+      fixtureState.getLogs.mockResolvedValue([]);
+
+      if (scanType === 'soft') {
+        fixtureState.getLogs.mockResolvedValueOnce([]);
+      }
+
+      fixtureState.getLogs.mockResolvedValueOnce([event]);
+
+      await runDaemon({
+        ...fixtureState.options,
+        receiptTimeoutMs: 45_000,
+        pollIntervalMs: 1_000,
+        signal: controller.signal,
+        readChainHeads: async () => ({
+          latestBlock: 1200n,
+          durableBlock: 1100n,
+        }),
+        onCycle: () => controller.abort(),
+      });
+
+      expect(fixtureState.waitForTransactionReceipt)
+        .toHaveBeenCalledExactlyOnceWith({
+          hash: HASH,
+          timeout: 45_000,
+        });
+
+      expect(fixtureState.submitTransaction).toHaveBeenCalledOnce();
+    },
+  );
 });

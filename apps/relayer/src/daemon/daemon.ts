@@ -21,6 +21,10 @@ import type {
   FinalityPolicy,
 } from '../chain/finality-policy.js';
 
+import {
+  validateReceiptTimeoutMs,
+} from '../config/receipt-config.js';
+
 import type {
   ValidatedQuicknetConsumer,
 } from '../consumers/consumer.js';
@@ -60,6 +64,7 @@ export interface RunDaemonOptions {
   maxBlockRange: bigint;
   finality: FinalityPolicy;
   pollIntervalMs: number;
+  receiptTimeoutMs?: number;
   signal?: AbortSignal;
   readChainHeads?: () => Promise<ChainHeads>;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
@@ -77,6 +82,10 @@ export async function runDaemon(
     options.pollIntervalMs <= 0
   ) {
     throw new Error('pollIntervalMs must be a positive safe integer.');
+  }
+
+  if (options.receiptTimeoutMs !== undefined) {
+    validateReceiptTimeoutMs(options.receiptTimeoutMs);
   }
 
   const sleep = options.sleep ?? sleepUntilTimeoutOrAbort;
@@ -124,6 +133,9 @@ export async function runDaemon(
       maxBlockRange: options.maxBlockRange,
       finality: options.finality,
       softCursors,
+      ...(options.receiptTimeoutMs !== undefined
+        ? { receiptTimeoutMs: options.receiptTimeoutMs }
+        : {}),
       readChainHeads,
     });
 

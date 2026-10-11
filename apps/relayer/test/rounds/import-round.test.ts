@@ -484,6 +484,7 @@ describe('importQuicknetRound', () => {
     );
     expect(waitForTransactionReceipt).toHaveBeenCalledExactlyOnceWith({
       hash: SUBMITTED_TRANSACTION_HASH,
+      timeout: 30_000,
     });
     expect(getBeacon).not.toHaveBeenCalled();
   });
@@ -510,6 +511,7 @@ describe('importQuicknetRound', () => {
 
     expect(waitForTransactionReceipt).toHaveBeenCalledWith({
       hash: SUBMITTED_TRANSACTION_HASH,
+      timeout: 30_000,
     });
   });
 
@@ -746,6 +748,40 @@ describe('importQuicknetRound', () => {
     expect(submitOrder).toBeLessThan(submissionOrder);
     expect(submissionOrder).toBeLessThan(receiptOrder);
     expect(receiptOrder).toBeLessThan(readOrder);
+  });
+
+  it('uses a custom receipt timeout', async () => {
+    await importQuicknetRound({
+      publicClient,
+      walletClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      receiptTimeoutMs: 45_000,
+    });
+
+    expect(waitForTransactionReceipt).toHaveBeenCalledExactlyOnceWith({
+      hash: SUBMITTED_TRANSACTION_HASH,
+      timeout: 45_000,
+    });
+  });
+
+  it('rejects an invalid receipt timeout before performing work', async () => {
+    await expect(importQuicknetRound({
+      publicClient,
+      walletClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      receiptTimeoutMs: 0,
+    })).rejects.toThrow('Invalid receipt timeout.');
+
+    expect(registryMocks.createRegistryReader).not.toHaveBeenCalled();
+    expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
   });
 });
 

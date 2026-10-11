@@ -60,6 +60,7 @@ export interface RunDaemonCycleOptions {
   maxBlockRange: bigint;
   finality: FinalityPolicy;
   softCursors: Map<Address, SoftScanCursor>;
+  receiptTimeoutMs?: number;
   readChainHeads?: () => Promise<ChainHeads>;
 }
 
@@ -135,23 +136,33 @@ export async function runDaemonCycle(
         startBlock: options.startBlock,
         maxBlockRange: options.maxBlockRange,
         finality: options.finality,
+
         onOperation(current) {
           operation = current;
         },
+
         onCompleted(scanType, result) {
           completed.push({ scanType, result });
         },
+
         onIncomplete(scanType, outcome) {
           incomplete.push({ scanType, outcome });
         },
+
         onReconciliation(result) {
           reconciliation = result;
         },
+
         ...(softCursor === undefined
           ? {}
           : {
               softCursor,
             }),
+
+        ...(options.receiptTimeoutMs !== undefined
+          ? { receiptTimeoutMs: options.receiptTimeoutMs }
+          : {}),
+          
         ...(options.readChainHeads !== undefined
           ? { readChainHeads: options.readChainHeads }
           : {}),

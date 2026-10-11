@@ -186,6 +186,7 @@ async function runImportCommand(
       submitter,
       deployment: config.deployment,
       round: command.round,
+      receiptTimeoutMs: config.receiptTimeoutMs,
       onProgress(current) {
         progress = current;
       },
@@ -246,6 +247,7 @@ async function runImportWhenAvailableCommand(
       submitter,
       deployment: config.deployment,
       round: command.round,
+      receiptTimeoutMs: config.receiptTimeoutMs,
       onProgress(current) {
         progress = current;
       },

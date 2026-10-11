@@ -40,6 +40,7 @@ export interface ProcessQuicknetRequestsOptions {
   submitter: BeaconSubmitter;
   deployment: RegistryDeployment;
   requests: readonly QuicknetRandomnessRequest[];
+  receiptTimeoutMs?: number;
   onProgress?: ((progress: RoundImportProgress) => void) | undefined;
   onCompleted?:
     | ((result: ProcessedQuicknetRound) => void)
@@ -159,6 +160,9 @@ export async function processQuicknetRequestsWithOutcomes(
         submitter: options.submitter,
         deployment: options.deployment,
         round,
+        ...(options.receiptTimeoutMs !== undefined
+          ? { receiptTimeoutMs: options.receiptTimeoutMs }
+          : {}),
         onProgress: options.onProgress,
       });
 

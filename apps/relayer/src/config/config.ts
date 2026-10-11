@@ -62,6 +62,10 @@ import {
 } from '../diagnostics/usage-error.js';
 
 import {
+  loadReceiptTimeoutMs,
+} from './receipt-config.js';
+
+import {
   loadBroadcastRetryConfig,
   type BroadcastRetryConfig,
 } from './signer-config.js';
@@ -118,6 +122,7 @@ export type ErrorSummaryFactory = (
 export interface RelayerConfig extends ResolvedNetworkConfig {
   account: ReturnType<typeof privateKeyToAccount>;
   broadcastRetry?: Readonly<BroadcastRetryConfig>;
+  receiptTimeoutMs?: number;
 
   // Configs constructed by callers may omit configured diagnostics.
   errorSummary?: SummarizeErrorOptions;
@@ -126,6 +131,7 @@ export interface RelayerConfig extends ResolvedNetworkConfig {
 
 export interface LoadedRelayerConfig extends RelayerConfig {
   broadcastRetry: Readonly<BroadcastRetryConfig>;
+  receiptTimeoutMs: number;
   errorSummary: Readonly<SummarizeErrorOptions>;
   createErrorSummary: ErrorSummaryFactory;
 }
@@ -202,12 +208,14 @@ export async function loadRelayerConfig(
   options.onDiagnostics?.(errorSummary);
 
   const broadcastRetry = loadBroadcastRetryConfig(env);
+  const receiptTimeoutMs = loadReceiptTimeoutMs(env);
   const network = await resolveNetworkConfig(source, rpcUrl);
 
   return {
     ...network,
     account,
     broadcastRetry,
+    receiptTimeoutMs,
     errorSummary,
     createErrorSummary,
   };

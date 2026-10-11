@@ -182,6 +182,7 @@ const CONFIG: LoadedRelayerConfig = {
     initialDelayMs: 5_000,
     maxDelayMs: 60_000,
   },
+  receiptTimeoutMs: 45_000,
   errorSummary: ERROR_SUMMARY,
   createErrorSummary: () => ERROR_SUMMARY,
 };
@@ -669,6 +670,7 @@ describe('main', () => {
           submitter,
           deployment: CONFIG.deployment,
           round: ROUND,
+          receiptTimeoutMs: CONFIG.receiptTimeoutMs,
           onProgress: expect.any(Function),
         });
 

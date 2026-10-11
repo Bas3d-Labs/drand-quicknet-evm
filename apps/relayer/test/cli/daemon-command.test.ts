@@ -216,6 +216,7 @@ const DAEMON_CONFIG: DaemonConfig = {
   checkpointFile: './state/checkpoint.json',
   maxBlockRange: 2_000n,
   pollIntervalMs: 1_000,
+  receiptTimeoutMs: 45_000,
 };
 
 const VERIFIED_STATE_DIRECTORY = resolve(
@@ -574,6 +575,7 @@ describe('runDaemonCommand', () => {
       maxBlockRange: 2_000n,
       finality: { type: 'safe' },
       pollIntervalMs: 1_000,
+      receiptTimeoutMs: 45_000,
       onCycle: expect.any(Function),
     });
 

@@ -203,6 +203,9 @@ export async function runDaemonCommand(
     maxBlockRange: config.maxBlockRange,
     finality: config.finality,
     pollIntervalMs: config.pollIntervalMs,
+    ...(config.receiptTimeoutMs !== undefined
+      ? { receiptTimeoutMs: config.receiptTimeoutMs }
+      : {}),
     readChainHeads,
     onCycle(result, context) {
       const cycleLogger = logger.withContext({

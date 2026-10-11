@@ -22,6 +22,11 @@ import {
 } from '@based-labs/drand-quicknet';
 
 import {
+  DEFAULT_RECEIPT_TIMEOUT_MS,
+  validateReceiptTimeoutMs,
+} from '../config/receipt-config.js';
+
+import {
   reportImportProgress,
   type RoundImportProgress,
 } from '../diagnostics/operation-context.js';
@@ -47,6 +52,7 @@ export interface ImportQuicknetRoundOptions {
   round: bigint;
   submitter: BeaconSubmitter;
   beacon?: QuicknetBeacon;
+  receiptTimeoutMs?: number;
   onProgress?: ((progress: RoundImportProgress) => void) | undefined;
 }
 
@@ -101,6 +107,10 @@ export async function importQuicknetRound(
   if (round <= 0n) {
     throw new RangeError('Quicknet round must be greater than zero.');
   }
+
+  const receiptTimeoutMs = validateReceiptTimeoutMs(
+    options.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS,
+  );
 
   reportImportProgress(options.onProgress, {
     round,
@@ -205,7 +215,10 @@ export async function importQuicknetRound(
   let receipt: TransactionReceipt;
 
   try {
-    receipt = await publicClient.waitForTransactionReceipt({ hash });
+    receipt = await publicClient.waitForTransactionReceipt({
+      hash,
+      timeout: receiptTimeoutMs,
+    });
   } catch (error) {
     if (!(error instanceof WaitForTransactionReceiptTimeoutError)) {
       throw error;

@@ -228,8 +228,7 @@ describe(
       ) {
         return importQuicknetRoundWhenAvailable({
           ...importOptions,
-          fetchRetryDelayMs:
-            options.fetchRetryDelayMs,
+          fetchRetryDelayMs: options.fetchRetryDelayMs,
         });
       }
 
@@ -602,6 +601,8 @@ describe(
           deployment: DEPLOYMENT,
           round: ROUND,
           beacon: BEACON,
+          receiptTimeoutMs: 30_000,
+          onProgress: undefined,
         });
 
       expect(
@@ -634,10 +635,8 @@ describe(
         status: 'imported',
         submission: 'witness',
         round: ROUND,
-        randomness:
-          RANDOMNESS,
-        transactionHash:
-          TRANSACTION_HASH,
+        randomness: RANDOMNESS,
+        transactionHash: TRANSACTION_HASH,
       });
     });
 
@@ -645,22 +644,18 @@ describe(
       importMocks
         .importQuicknetRound
         .mockResolvedValue({
-          status:
-            'already-stored',
+          status: 'already-stored',
           round: ROUND,
-          randomness:
-            RANDOMNESS,
+          randomness: RANDOMNESS,
         });
 
       const result =
         await importRound();
 
       expect(result).toEqual({
-        status:
-          'already-stored',
+        status: 'already-stored',
         round: ROUND,
-        randomness:
-          RANDOMNESS,
+        randomness: RANDOMNESS,
       });
 
       expect(
@@ -763,6 +758,41 @@ describe(
         importOrder,
       );
     });
+
+    it('forwards a custom receipt timeout', async () => {
+      await importQuicknetRoundWhenAvailable({
+        publicClient,
+        walletClient,
+        account,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        receiptTimeoutMs: 45_000,
+      });
+
+      expect(importMocks.importQuicknetRound).toHaveBeenCalledWith(
+        expect.objectContaining({
+          receiptTimeoutMs: 45_000,
+        }),
+      );
+    });
+
+    it('rejects an invalid timeout before waiting or fetching', async () => {
+      await expect(importQuicknetRoundWhenAvailable({
+        publicClient,
+        walletClient,
+        account,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        receiptTimeoutMs: 0,
+      })).rejects.toThrow('Invalid receipt timeout.');
+
+      expect(registryMocks.createRegistryReader).not.toHaveBeenCalled();
+      expect(waitMocks.waitForQuicknetRound).not.toHaveBeenCalled();
+      expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
+      expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
+    });
   },
 );
 
@@ -773,10 +803,7 @@ function firstInvocationOrder(
     };
   },
 ): number {
-  const order =
-    mock.mock
-      .invocationCallOrder[0];
-
+  const order = mock.mock.invocationCallOrder[0];
   if (order === undefined) {
     throw new Error(
       'Expected mock to have been called.',
