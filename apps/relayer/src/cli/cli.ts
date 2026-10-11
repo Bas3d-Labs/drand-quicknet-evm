@@ -127,7 +127,9 @@ export async function main(
 
     case 'import-when-available':
       assertServiceLockHeld();
-      await runImportWhenAvailableCommand(command, output, options);
+      await runWithShutdownSignal(async (signal) => {
+        await runImportWhenAvailableCommand(command, output, options, signal);
+      });
       return;
     
     case 'daemon':
@@ -222,13 +224,18 @@ async function runImportWhenAvailableCommand(
   command: ImportWhenAvailableCommandArguments,
   output: CliOutputHandler,
   options: CliOptions,
+  signal: AbortSignal,
 ): Promise<void> {
+  signal.throwIfAborted();
+
   const config = await loadRelayerConfig({
     source: command.source,
     ...(options.onDiagnostics !== undefined
       ? { onDiagnostics: options.onDiagnostics }
       : {}),
   });
+
+  signal.throwIfAborted();
 
   const clients = createRelayerClients(config);
 
@@ -249,7 +256,10 @@ async function runImportWhenAvailableCommand(
       finality: config.finality,
     }),
     maxBlockRange: IMPORT_REPLACEMENT_BLOCK_RANGE,
+    signal,
   });
+
+  signal.throwIfAborted();
 
   let progress: RoundImportProgress | undefined;
   let result: ImportQuicknetRoundResult;
@@ -266,8 +276,13 @@ async function runImportWhenAvailableCommand(
       onProgress(current) {
         progress = current;
       },
+      signal,
     });
   } catch (error) {
+    if (signal.aborted && error === signal.reason) {
+      throw error;
+    }
+
     reportImportFailure(options, error, progress);
     throw error;
   }
