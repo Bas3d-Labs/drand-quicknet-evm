@@ -108,30 +108,42 @@ describe('command signer runtime', () => {
     };
   }
 
-  it('leaves a missing journal blocked without creating a baseline', async () => {
+  it('leaves a missing journal untouched until automatic recovery', async () => {
     const runtime = await openSignerRuntime(options());
 
     expect(Object.isFrozen(runtime)).toBe(true);
     expect(runtime.coordinator.attempts).toEqual([]);
-    expect(runtime.coordinator.status.open).toBe(false);
 
-    await expect(
-      runtime.recovery.run(recovery()),
-    ).rejects.toThrow();
+    expect(runtime.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
 
     expect(await readdir(directory)).toEqual([]);
+
+    expect(await runtime.recovery.run(recovery())).toMatchObject({
+      inspection: { status: 'no-attempt' },
+      inclusions: { status: 'inspected' },
+      broadcast: null,
+      retryDelayMs: null,
+    });
+
+    expect(runtime.coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
+
+    expect(await readdir(directory)).toEqual([
+      `transaction-journal-4663-${IDENTITY.signer}.json`,
+    ]);
   });
 
   it('uses the same persisted journal across signer casing and requires recovery on reopen', async () => {
     const first = await openSignerRuntime(options());
 
-    await first.recovery.run({
-      ...recovery(),
-      bootstrap: {
-        expectedNonce: 4n,
-        confirmNoUntrackedTransactions: true,
-      },
-    });
+    await first.recovery.run(recovery());
 
     expect(first.coordinator.status).toMatchObject({
       open: true,

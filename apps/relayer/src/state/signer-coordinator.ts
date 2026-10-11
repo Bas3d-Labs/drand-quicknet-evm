@@ -10,9 +10,13 @@ import type {
 
 import {
   blockAnchorsMatch,
-  getBlockAnchor,
   type BlockAnchor,
 } from '../chain/block-anchor.js';
+
+import {
+  inspectSignerBootstrap,
+  type SignerBootstrapDecision,
+} from '../chain/inspect-signer-bootstrap.js';
 
 import {
   inspectSignerInclusions,
@@ -23,11 +27,6 @@ import {
   inspectSignerRecovery,
   type SignerRecoveryInspection,
 } from '../chain/inspect-signer-recovery.js';
-
-import {
-  readAnchoredNonce,
-  type AnchoredNonceResult,
-} from '../chain/read-anchored-nonce.js';
 
 import type {
   ReplacementSearchResult,
@@ -99,32 +98,18 @@ export interface RecordSearchProgressOptions {
   >;
 }
 
-export interface SignerBootstrapAuthorization {
-  readonly expectedNonce: bigint;
-
-  /** 
-   * Operator confirms no signed or broadcast transactions 
-   * remain unaccounted for. 
-   */
-  readonly confirmNoUntrackedTransactions: true;
-}
-
 export interface RecoverSignerOptions {
   readonly publicClient: PublicClient;
   readonly anchor: Readonly<BlockAnchor>;
   readonly maxBlockRange: bigint;
-
-  /**
-   * Explicit first-use authorization, considered only when the journal
-   * is missing.
-   */
-  readonly bootstrap?: SignerBootstrapAuthorization;
 }
 
-export interface BootstrapSignerOptions
-  extends RecoverSignerOptions {
-  readonly bootstrap: SignerBootstrapAuthorization;
-}
+export type SignerRecoveryResult =
+  | SignerRecoveryInspection
+  | Extract<
+      SignerBootstrapDecision,
+      { status: 'bootstrap-deferred' }
+    >;
 
 type ResolutionEvent =
   Parameters<ScopedRelayerLog['attemptResolved']>[0];
@@ -660,29 +645,6 @@ export class SignerCoordinator {
   }
 
   /**
-   * Initializes a missing journal using explicit operator authorization.
-   * Existing journals must use ordinary recovery.
-   */
-  async bootstrap(
-    options: BootstrapSignerOptions,
-  ): Promise<SignerRecoveryInspection> {
-    this.assertAvailable();
-
-    if (
-      this.pendingWrite !== undefined ||
-      this.persistence.state !== 'idle'
-    ) {
-      throw new Error('A pending journal write must be retried first.');
-    }
-
-    if (this.persistence.current.kind !== 'missing') {
-      throw new Error('Cannot bootstrap an existing signer journal.');
-    }
-
-    return this.recover(options);
-  }
-
-  /**
    * Reconciles the signer against a durable block and saves the resulting
    * observation, resolution, or search progress together. Keeps other
    * coordinator operations out until inspection and persistence finish.
@@ -691,8 +653,18 @@ export class SignerCoordinator {
   async recover(
     options: RecoverSignerOptions,
     cycle?: number,
-  ): Promise<SignerRecoveryInspection> {
+  ): Promise<SignerRecoveryResult> {
     this.assertAvailable();
+
+    const { maxBlockRange } = options;
+
+    if (
+      typeof maxBlockRange !== 'bigint' ||
+      maxBlockRange <= 0n ||
+      maxBlockRange >= (1n << 256n)
+    ) {
+      throw new TypeError('Invalid signer recovery input.');
+    }
 
     if (
       this.pendingWrite !== undefined ||
@@ -711,7 +683,7 @@ export class SignerCoordinator {
     try {
       if (current.kind === 'missing') {
         const result = await this.readBootstrapObservation(options);
-        if (result.status === 'anchor-changed') {
+        if (result.status !== 'ready') {
           return result;
         }
 
@@ -1233,100 +1205,21 @@ export class SignerCoordinator {
   }
 
   /**
-   * Reads the operator-approved starting nonce for a missing journal. Latest
-   * and pending counts can veto adoption, but only the anchored observation
-   * becomes the persisted baseline.
+   * Checks whether a missing journal can adopt the selected durable nonce.
+   * Only a ready decision may proceed to baseline persistence.
    */
   private async readBootstrapObservation(
     options: RecoverSignerOptions,
-  ): Promise<AnchoredNonceResult> {
-    if (options.bootstrap === undefined) {
-      throw new Error(
-        'Cannot recover without an initialized journal or explicit bootstrap authorization'
-      );
-    }
-
+  ): Promise<SignerBootstrapDecision> {
     if (this.blockers.size !== 0) {
       throw new Error('Cannot bootstrap while coordinator blockers remain.');
     }
 
-    const {
-      publicClient,
-      maxBlockRange,
-    } = options;
-
-    const {
-      expectedNonce,
-      confirmNoUntrackedTransactions,
-    } = options.bootstrap;
-
-    if (
-      confirmNoUntrackedTransactions !== true ||
-      typeof expectedNonce !== 'bigint' ||
-      expectedNonce < 0n ||
-      expectedNonce >= (1n << 256n)
-    ) {
-      throw new TypeError('Invalid signer bootstrap authorization.');
-    }
-
-    if (
-      typeof maxBlockRange !== 'bigint' ||
-      maxBlockRange <= 0n ||
-      maxBlockRange >= (1n << 256n)
-    ) {
-      throw new TypeError('Invalid signer recovery input.');
-    }
-
-    const result = await readAnchoredNonce({
-      publicClient,
+    return inspectSignerBootstrap({
+      publicClient: options.publicClient,
       signer: this.identity.signer,
       anchor: options.anchor,
     });
-
-    if (result.status === 'anchor-changed') {
-      return result;
-    }
-
-    const { observation } = result;
-
-    if (observation.nonce !== expectedNonce) {
-      throw new Error(
-        'The anchored nonce does not match the authorized baseline.'
-      );
-    }
-
-    for (const blockTag of ['latest', 'pending'] as const) {
-      const nonce = await publicClient.getTransactionCount({
-        address: this.identity.signer,
-        blockTag,
-      });
-
-      if (
-        typeof nonce !== 'number' ||
-        !Number.isSafeInteger(nonce) ||
-        nonce < 0
-      ) {
-        throw new TypeError('Invalid bootstrap nonce response.');
-      }
-
-      if (BigInt(nonce) !== observation.nonce) {
-        throw new Error('Signer nonce counts do not match the bootstrap baselines.');
-      }
-    }
-
-    const closingAnchor = await getBlockAnchor(
-      publicClient,
-      observation.anchor.blockNumber,
-    );
-
-    if (!blockAnchorsMatch(observation.anchor, closingAnchor)) {
-      return {
-        status: 'anchor-changed',
-        observedAnchor: Object.freeze(closingAnchor),
-      };
-    }
-
-    return result;
   }
 
   /**

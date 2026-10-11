@@ -53,20 +53,22 @@ const RPC_URL =
 // Keep the fixture layout identical to the production layout.
 const MODULE_PATHS = {
   bootstrap: 'bootstrap.js',
-  'error-output': 'diagnostics/error-output.js',
-  'error-summary': 'diagnostics/error-summary.js',
-  'diagnostic-messages': 'diagnostics/diagnostic-messages.js',
-  'text-scrubber': 'diagnostics/text-scrubber.js',
-  'usage-error': 'diagnostics/usage-error.js',
+  cli: 'cli/cli.js',
+  'cli-output': 'cli/cli-output.js',
   'config-errors': 'diagnostics/config-errors.js',
   diagnostics: 'diagnostics/diagnostics.js',
-  'cli-output': 'cli/cli-output.js',
-  cli: 'cli/cli.js',
+  'diagnostic-messages': 'diagnostics/diagnostic-messages.js',
+  'error-output': 'diagnostics/error-output.js',
+  'error-summary': 'diagnostics/error-summary.js',
   hex: 'shared/hex.js',
   'mismatch-errors': 'diagnostics/mismatch-errors.js',
   'network-presets': 'config/network-presets.js',
   'operation-context': 'diagnostics/operation-context.js',
   'service-lock': 'state/service-lock.js',
+  'signer-gate': 'state/signer-gate.js',
+  'text-scrubber': 'diagnostics/text-scrubber.js',
+  'usage-error': 'diagnostics/usage-error.js',
+  uuid: 'shared/uuid.js',
 } as const;
 
 type ModuleName = keyof typeof MODULE_PATHS;
