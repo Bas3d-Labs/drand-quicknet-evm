@@ -103,6 +103,8 @@ export async function reconcileDurableRequests(
     throw new RangeError('Invalid durable scan bounds.');
   }
 
+  options.signal?.throwIfAborted();
+
   if (options.nextBlock > options.durableBlock) {
     return {
       status: 'caught-up',
@@ -134,6 +136,8 @@ export async function reconcileDurableRequests(
       },
     };
   }
+
+  options.signal?.throwIfAborted();
 
   const scan = await scanQuicknetRequests({
     publicClient: options.publicClient,

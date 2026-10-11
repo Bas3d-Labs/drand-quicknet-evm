@@ -928,4 +928,43 @@ describe('reconcileDurableRequests', () => {
       nextBlock: TO_BLOCK + 1n,
     });
   });
+
+  it('rejects cancellation before reading the durable anchor', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    controller.abort(reason);
+
+    await expect(reconcileDurableRequests(options({
+      signal: controller.signal,
+    }))).rejects.toBe(reason);
+
+    expect(getBlock).not.toHaveBeenCalled();
+    expect(scanQuicknetRequests).not.toHaveBeenCalled();
+    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(createRegistryReader).not.toHaveBeenCalled();
+  });
+
+  it('does not scan after cancellation during the durable anchor read', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    getBlock.mockImplementationOnce(async () => {
+      controller.abort(reason);
+
+      return {
+        number: DURABLE_BLOCK,
+        hash: HASH_A,
+      };
+    });
+
+    await expect(reconcileDurableRequests(options({
+      signal: controller.signal,
+    }))).rejects.toBe(reason);
+
+    expect(getBlock).toHaveBeenCalledOnce();
+    expect(scanQuicknetRequests).not.toHaveBeenCalled();
+    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(createRegistryReader).not.toHaveBeenCalled();
+  });
 });
