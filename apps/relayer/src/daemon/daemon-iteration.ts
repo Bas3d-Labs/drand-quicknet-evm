@@ -146,6 +146,9 @@ export async function runDaemonIteration(
   reportOperation({ name: 'load-checkpoint' });
 
   const checkpoint = await options.checkpointStore.load(options.consumer);
+
+  options.signal?.throwIfAborted();
+
   let durableNextBlock = checkpoint ?? options.startBlock;
 
   reportOperation({ name: 'read-chain-heads' });
@@ -160,6 +163,8 @@ export async function runDaemonIteration(
       finality: options.finality,
     });
   }
+
+  options.signal?.throwIfAborted();
 
   const durableHeadRegressed =
     checkpoint !== undefined &&

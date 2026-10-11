@@ -1590,4 +1590,45 @@ describe('runDaemonIteration', () => {
     expect(softCursor).toEqual({ nextBlock: 1_201n });
     expect(save).not.toHaveBeenCalled();
   });
+
+  it.each(['checkpoint', 'heads'] as const)(
+    'does not start scans after cancellation during the %s read',
+    async (stage) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+
+      if (stage === 'checkpoint') {
+        load.mockImplementationOnce(async () => {
+          controller.abort(reason);
+          return 1_000n;
+        });
+      } else {
+        vi.mocked(getChainHeads).mockImplementationOnce(async () => {
+          controller.abort(reason);
+
+          return {
+            latestBlock: 1_500n,
+            durableBlock: 1_200n,
+          };
+        });
+      }
+
+      await expect(run({
+        signal: controller.signal,
+      })).rejects.toBe(reason);
+
+      expect(load).toHaveBeenCalledOnce();
+
+      if (stage === 'checkpoint') {
+        expect(getChainHeads).not.toHaveBeenCalled();
+      } else {
+        expect(getChainHeads).toHaveBeenCalledOnce();
+      }
+
+      expect(reconcileDurableRequests).not.toHaveBeenCalled();
+      expect(scanQuicknetRequests).not.toHaveBeenCalled();
+      expect(processQuicknetRequests).not.toHaveBeenCalled();
+      expect(save).not.toHaveBeenCalled();
+    },
+  );
 });
