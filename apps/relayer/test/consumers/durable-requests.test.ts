@@ -1036,4 +1036,53 @@ describe('reconcileDurableRequests', () => {
       expect(getBlock).toHaveBeenCalledOnce();
     },
   );
+
+  it.each(['success', 'failure'] as const)(
+    'rejects cancellation during the final anchor read ending in %s',
+    async (result) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+      const readFailure = new Error('Final anchor unavailable.');
+
+      setScan([request(ROUND_A, 1_010n)]);
+
+      getBlock
+        .mockResolvedValueOnce({
+          number: DURABLE_BLOCK,
+          hash: HASH_A,
+        })
+        .mockImplementationOnce(async () => {
+          controller.abort(reason);
+
+          if (result === 'failure') {
+            throw readFailure;
+          }
+
+          return {
+            number: DURABLE_BLOCK,
+            hash: HASH_A,
+          };
+        });
+
+      const onCompleted = vi.fn();
+
+      await expect(reconcileDurableRequests(options({
+        signal: controller.signal,
+        onCompleted,
+      }))).rejects.toBe(reason);
+
+      expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledOnce();
+      expect(onCompleted).toHaveBeenCalledExactlyOnceWith({
+        round: ROUND_A,
+        result: imported(ROUND_A),
+      });
+
+      expect(registryMocks.isStored).toHaveBeenCalledExactlyOnceWith(
+        ROUND_A,
+        DURABLE_BLOCK,
+      );
+
+      expect(getBlock).toHaveBeenCalledTimes(2);
+    },
+  );
 });

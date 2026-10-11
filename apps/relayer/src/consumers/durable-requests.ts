@@ -240,6 +240,8 @@ export async function reconcileDurableRequests(
     };
   }
 
+  options.signal?.throwIfAborted();
+
   return {
     status: 'scanned',
     fromBlock: scan.fromBlock,
