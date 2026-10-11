@@ -830,6 +830,64 @@ describe('importQuicknetRound', () => {
     expect(submitTransaction).not.toHaveBeenCalled();
     expect(waitForTransactionReceipt).not.toHaveBeenCalled();
   });
+
+  it('forwards cancellation to direct beacon fetching without submitting', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    quicknetMocks.fetchBeacon.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      throw reason;
+    });
+
+    await expect(importQuicknetRound({
+      publicClient,
+      walletClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(quicknetMocks.fetchBeacon).toHaveBeenCalledExactlyOnceWith(
+      ROUND,
+      undefined,
+      { signal: controller.signal },
+    );
+
+    expect(submissionMocks.simulateBeaconSubmission).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it('does not simulate when cancellation accompanies a fetched beacon', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    quicknetMocks.fetchBeacon.mockImplementationOnce(async () => {
+      controller.abort(reason);
+
+      return {
+        round: ROUND,
+        signature: COMPRESSED_SIGNATURE,
+      };
+    });
+
+    await expect(importQuicknetRound({
+      publicClient,
+      walletClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(submissionMocks.simulateBeaconSubmission).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+  });
 });
 
 function firstInvocationOrder(
