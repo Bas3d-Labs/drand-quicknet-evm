@@ -672,6 +672,7 @@ describe('main', () => {
           round: ROUND,
           receiptTimeoutMs: CONFIG.receiptTimeoutMs,
           onProgress: expect.any(Function),
+          signal: expect.any(AbortSignal),
         });
 
         expect(signerRuntimeMocks.openBeaconSubmitter)
@@ -1011,6 +1012,218 @@ describe('main', () => {
       ).toEqual(before);
     });
   });
+
+  it.each(SIGNALS)(
+    'forwards the import signal and handles %s cancellation without failure reporting',
+    async (shutdownSignal) => {
+      const before = SIGNALS.map(name => process.listeners(name));
+      const previous = process.listeners(shutdownSignal);
+      const output = vi.fn();
+      const onImportFailure = vi.fn();
+
+      vi.mocked(importQuicknetRound).mockImplementationOnce(
+        async ({ signal, onProgress }) => {
+          expect(signal).toBeInstanceOf(AbortSignal);
+          expect(
+            signerRuntimeMocks.openBeaconSubmitter.mock.calls[0]![0].signal,
+          ).toBe(signal);
+
+          onProgress?.({
+            round: ROUND,
+            phase: 'fetch-beacon',
+          });
+
+          const added = process.listeners(shutdownSignal).filter(
+            listener => !previous.includes(listener),
+          );
+
+          expect(added).toHaveLength(1);
+          added[0]!(shutdownSignal);
+
+          expect(signal?.aborted).toBe(true);
+          signal!.throwIfAborted();
+
+          throw new Error('Expected cancellation to throw.');
+        },
+      );
+
+      await expect(main([
+        'import',
+        '--network',
+        PRESET,
+        '--round',
+        ROUND.toString(),
+      ], output, { onImportFailure })).resolves.toBeUndefined();
+
+      expect(importQuicknetRound).toHaveBeenCalledOnce();
+      expect(output).not.toHaveBeenCalled();
+      expect(onImportFailure).not.toHaveBeenCalled();
+      expect(
+        SIGNALS.map(name => process.listeners(name)),
+      ).toEqual(before);
+    },
+  );
+
+  it.each(['configuration', 'signer'] as const)(
+    'stops import startup after cancellation during %s',
+    async (stage) => {
+      const before = SIGNALS.map(name => process.listeners(name));
+      const previous = process.listeners('SIGTERM');
+      const output = vi.fn();
+
+      function requestShutdown(): void {
+        const added = process.listeners('SIGTERM').filter(
+          listener => !previous.includes(listener),
+        );
+
+        expect(added).toHaveLength(1);
+        added[0]!('SIGTERM');
+      }
+
+      if (stage === 'configuration') {
+        vi.mocked(loadRelayerConfig).mockImplementationOnce(async () => {
+          requestShutdown();
+          return CONFIG;
+        });
+      } else {
+        signerRuntimeMocks.openBeaconSubmitter
+          .mockImplementationOnce(async () => {
+            requestShutdown();
+            return submitter;
+          });
+      }
+
+      await expect(main([
+        'import',
+        '--network',
+        PRESET,
+        '--round',
+        ROUND.toString(),
+      ], output)).resolves.toBeUndefined();
+
+      if (stage === 'configuration') {
+        expect(createRelayerClients).not.toHaveBeenCalled();
+        expect(signerRuntimeMocks.openBeaconSubmitter)
+          .not.toHaveBeenCalled();
+      } else {
+        expect(signerRuntimeMocks.openBeaconSubmitter)
+          .toHaveBeenCalledOnce();
+      }
+
+      expect(importQuicknetRound).not.toHaveBeenCalled();
+      expect(output).not.toHaveBeenCalled();
+      expect(
+        SIGNALS.map(name => process.listeners(name)),
+      ).toEqual(before);
+    },
+  );
+
+  it.each(SIGNALS)(
+    'forwards the import-when-available signal and handles %s cancellation without failure reporting',
+    async (shutdownSignal) => {
+      const before = SIGNALS.map(name => process.listeners(name));
+      const previous = process.listeners(shutdownSignal);
+      const output = vi.fn();
+      const onImportFailure = vi.fn();
+
+      vi.mocked(importQuicknetRoundWhenAvailable).mockImplementationOnce(
+        async ({ signal, onProgress }) => {
+          expect(signal).toBeInstanceOf(AbortSignal);
+          expect(
+            signerRuntimeMocks.openBeaconSubmitter.mock.calls[0]![0].signal,
+          ).toBe(signal);
+
+          onProgress?.({
+            round: ROUND,
+            phase: 'wait-for-beacon',
+          });
+
+          const added = process.listeners(shutdownSignal).filter(
+            listener => !previous.includes(listener),
+          );
+
+          expect(added).toHaveLength(1);
+          added[0]!(shutdownSignal);
+
+          expect(signal?.aborted).toBe(true);
+          signal!.throwIfAborted();
+
+          throw new Error('Expected cancellation to throw.');
+        },
+      );
+
+      await expect(main([
+        'import-when-available',
+        '--network',
+        PRESET,
+        '--round',
+        ROUND.toString(),
+      ], output, { onImportFailure })).resolves.toBeUndefined();
+
+      expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledOnce();
+      expect(importQuicknetRound).not.toHaveBeenCalled();
+      expect(output).not.toHaveBeenCalled();
+      expect(onImportFailure).not.toHaveBeenCalled();
+      expect(
+        SIGNALS.map(name => process.listeners(name)),
+      ).toEqual(before);
+    },
+  );
+
+  it.each(['configuration', 'signer'] as const)(
+    'stops import-when-available startup after cancellation during %s',
+    async (stage) => {
+      const before = SIGNALS.map(name => process.listeners(name));
+      const previous = process.listeners('SIGTERM');
+      const output = vi.fn();
+
+      function requestShutdown(): void {
+        const added = process.listeners('SIGTERM').filter(
+          listener => !previous.includes(listener),
+        );
+
+        expect(added).toHaveLength(1);
+        added[0]!('SIGTERM');
+      }
+
+      if (stage === 'configuration') {
+        vi.mocked(loadRelayerConfig).mockImplementationOnce(async () => {
+          requestShutdown();
+          return CONFIG;
+        });
+      } else {
+        signerRuntimeMocks.openBeaconSubmitter
+          .mockImplementationOnce(async () => {
+            requestShutdown();
+            return submitter;
+          });
+      }
+
+      await expect(main([
+        'import-when-available',
+        '--network',
+        PRESET,
+        '--round',
+        ROUND.toString(),
+      ], output)).resolves.toBeUndefined();
+
+      if (stage === 'configuration') {
+        expect(createRelayerClients).not.toHaveBeenCalled();
+        expect(signerRuntimeMocks.openBeaconSubmitter)
+          .not.toHaveBeenCalled();
+      } else {
+        expect(signerRuntimeMocks.openBeaconSubmitter)
+          .toHaveBeenCalledOnce();
+      }
+
+      expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+      expect(importQuicknetRound).not.toHaveBeenCalled();
+      expect(output).not.toHaveBeenCalled();
+      expect(
+        SIGNALS.map(name => process.listeners(name)),
+      ).toEqual(before);
+    },
+  );
 });
 
 describe('diagnostic policy handoff', () => {
@@ -1168,4 +1381,138 @@ describe.each(ROUND_COMMANDS)('%s failure context', (command) => {
 
     expect(onImportFailure).not.toHaveBeenCalled();
   });
+
+  it.each(
+    SIGNALS.flatMap(shutdownSignal =>
+      (['success', 'failure'] as const).map(outcome => ({
+        shutdownSignal,
+        outcome,
+      })),
+    ),
+  )(
+    'awaits the active import through repeated $shutdownSignal and preserves $outcome',
+    async ({ shutdownSignal, outcome }) => {
+      const before = SIGNALS.map(name => process.listeners(name));
+      const previous = process.listeners(shutdownSignal);
+      const output = vi.fn();
+      const onImportFailure = vi.fn();
+      const failure = new Error('Active import failed.');
+
+      const progress = {
+        round: ROUND,
+        phase: 'wait-for-receipt' as const,
+        transactionHash: HASH,
+      };
+
+      let notifyStarted: () => void = () => {};
+      let finishImport: () => void = () => {};
+
+      const started = new Promise<void>((resolve) => {
+        notifyStarted = resolve;
+      });
+
+      const finished = new Promise<void>((resolve) => {
+        finishImport = resolve;
+      });
+
+      let activeSignal: AbortSignal | undefined;
+
+      operation().mockImplementationOnce(async ({ signal, onProgress }) => {
+        activeSignal = signal;
+        onProgress?.(progress);
+        notifyStarted();
+
+        await finished;
+
+        if (outcome === 'failure') {
+          throw failure;
+        }
+
+        return IMPORTED;
+      });
+
+      let commandFinished = false;
+
+      // Observe rejection immediately so the failure case cannot become
+      // an unhandled rejection while the test controls the active import.
+      const pending = main([
+        command,
+        '--network',
+        PRESET,
+        '--round',
+        ROUND.toString(),
+      ], output, { onImportFailure }).then(
+        () => {
+          commandFinished = true;
+          return { status: 'fulfilled' } as const;
+        },
+        (error: unknown) => {
+          commandFinished = true;
+          return { status: 'rejected', error } as const;
+        },
+      );
+
+      try {
+        await Promise.race([started, pending]);
+
+        expect(operation()).toHaveBeenCalledOnce();
+        expect(activeSignal).toBeInstanceOf(AbortSignal);
+
+        const added = process.listeners(shutdownSignal).filter(
+          listener => !previous.includes(listener),
+        );
+
+        expect(added).toHaveLength(1);
+        const listener = added[0]!;
+
+        listener(shutdownSignal);
+        await Promise.resolve();
+
+        expect(activeSignal?.aborted).toBe(true);
+        expect(commandFinished).toBe(false);
+        expect(process.listeners(shutdownSignal)).toContain(listener);
+
+        listener(shutdownSignal);
+        await Promise.resolve();
+
+        expect(commandFinished).toBe(false);
+        expect(process.listeners(shutdownSignal)).toContain(listener);
+        expect(output).not.toHaveBeenCalled();
+        expect(onImportFailure).not.toHaveBeenCalled();
+      } finally {
+        finishImport();
+        await pending;
+      }
+
+      const result = await pending;
+
+      if (outcome === 'success') {
+        expect(result).toEqual({ status: 'fulfilled' });
+        expect(output).toHaveBeenCalledExactlyOnceWith({
+          type: 'import-result',
+          round: ROUND,
+          result: IMPORTED,
+        });
+        expect(onImportFailure).not.toHaveBeenCalled();
+      } else {
+        expect(result.status).toBe('rejected');
+
+        if (result.status !== 'rejected') {
+          throw new Error('Expected the import failure.');
+        }
+
+        expect(result.error).toBe(failure);
+        expect(output).not.toHaveBeenCalled();
+        expect(onImportFailure).toHaveBeenCalledExactlyOnceWith(
+          failure,
+          progress,
+        );
+      }
+
+      expect(operation()).toHaveBeenCalledOnce();
+      expect(
+        SIGNALS.map(name => process.listeners(name)),
+      ).toEqual(before);
+    },
+  );
 });

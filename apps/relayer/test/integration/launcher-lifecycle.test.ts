@@ -130,6 +130,7 @@ function writePreload(
   runtimeDirectory: string = directory,
   applicationDirectory: string = compiledApplication,
   startupRecovery = false,
+  command: 'daemon' | 'import' | 'import-when-available' = 'daemon',
 ): string {
   const preload = join(directory, 'preload.mjs');
 
@@ -530,6 +531,66 @@ function writePreload(
     `);
   }
 
+  if (command !== 'daemon') {
+    replace('config/config.js', `
+      import {
+        loadDaemonConfig,
+      } from ${JSON.stringify(
+        compiledModuleUrl(
+          'config/daemon-config.js',
+          applicationDirectory,
+        ),
+      )};
+
+      export function parseRelayerNetworkPreset() {
+        return 'robinhood-testnet';
+      }
+
+      export async function loadRelayerConfig() {
+        return loadDaemonConfig();
+      }
+    `);
+
+    const operationName = command === 'import'
+      ? 'importQuicknetRound'
+      : 'importQuicknetRoundWhenAvailable';
+
+    const modulePath = command === 'import'
+      ? 'rounds/import-round.js'
+      : 'rounds/import-round-when-available.js';
+
+    // Reuse the existing pending-work fixture and its lock assertions.
+    // Its cycle-* marker names also represent an active one-shot import.
+    replace(modulePath, `
+      import {
+        runDaemonCycle,
+      } from ${JSON.stringify(
+        compiledModuleUrl(
+          'daemon/daemon-cycle.js',
+          applicationDirectory,
+        ),
+      )};
+
+      export async function ${operationName}({ round, signal }) {
+        if (!(signal instanceof AbortSignal)) {
+          throw new Error('Expected an import shutdown signal.');
+        }
+
+        await runDaemonCycle();
+
+        if (!signal.aborted) {
+          throw new Error('Expected shutdown before import completion.');
+        }
+
+        return {
+          status: 'already-stored',
+          round,
+          randomness: '0x' + '66'.repeat(32),
+        };
+      }
+    `);
+  }
+
   writeFileSync(preload, `
     import { registerHooks } from 'node:module';
 
@@ -577,29 +638,60 @@ function writePreload(
 
 it.skipIf(process.platform !== 'linux').each([
   {
+    command: 'daemon',
     signal: 'SIGTERM',
     closedStdin: false,
   },
   {
+    command: 'daemon',
     signal: 'SIGINT',
     closedStdin: false,
   },
   {
+    command: 'daemon',
     signal: 'SIGKILL',
     closedStdin: false,
   },
   {
+    command: 'daemon',
     signal: 'SIGTERM',
     closedStdin: true,
   },
+  {
+    command: 'import',
+    signal: 'SIGTERM',
+    closedStdin: false,
+  },
+  {
+    command: 'import',
+    signal: 'SIGINT',
+    closedStdin: false,
+  },
+  {
+    command: 'import-when-available',
+    signal: 'SIGTERM',
+    closedStdin: false,
+  },
+  {
+    command: 'import-when-available',
+    signal: 'SIGINT',
+    closedStdin: false,
+  },
 ] as const)(
-  '$signal releases ownership only after exit; closed stdin: $closedStdin',
-  async ({ signal, closedStdin }) => {
+  '$command: $signal releases ownership only after exit; closed stdin: $closedStdin',
+  async ({ command, signal, closedStdin }) => {
     const directory = mkdtempSync(
       join(fixture, `${signal}-`),
     );
 
-    const preload = writePreload(directory, signal);
+    const preload = writePreload(
+      directory,
+      signal,
+      directory,
+      compiledApplication,
+      false,
+      command,
+    );
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -617,10 +709,14 @@ it.skipIf(process.platform !== 'linux').each([
 
     const args = [
       launcher,
-      'daemon',
+      command,
       '--network',
       'robinhood-testnet',
     ];
+
+    if (command !== 'daemon') {
+      args.push('--round', '1');
+    }
 
     let launchArgs = args;
 

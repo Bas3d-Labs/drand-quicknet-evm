@@ -481,10 +481,27 @@ and uses util-linux flock to acquire exclusive ownership. It then
 replaces itself with Node, preserving the locked descriptor and direct
 signal delivery.
 
-For daemon execution, SIGINT and SIGTERM request shutdown. The daemon
-awaits its active cycle before exiting; repeated shutdown signals do
-not bypass that wait. Give the service enough shutdown time for its
-configured network and transaction waits.
+For `daemon`, `import`, and `import-when-available`, SIGINT and SIGTERM
+request cooperative shutdown. Round waits, beacon fetching, and
+cancellable retry delays receive the shutdown signal. Other active
+operations finish before cancellation is checked at operation boundaries.
+
+Signing and journal persistence are allowed to finish once started.
+If cancellation prevents broadcasting a recorded signed attempt, that
+attempt remains in the journal for recovery on a later run. Shutdown
+does not discard the attempt or reset its nonce.
+
+Once broadcasting starts, its outcome is preserved. An acknowledged
+broadcast proceeds through receipt waiting using the configured receipt
+timeout and, on success, stored-beacon verification. Shutdown does not
+interrupt those steps or trigger another submission. One-shot commands
+still report the resulting import outcome; unrelated failures remain
+failures.
+
+Repeated shutdown signals do not bypass active work. Give the service
+enough shutdown time for network requests, journal writes, receipt
+waiting, and post-receipt verification. The receipt timeout alone is
+not a bound on total shutdown time.
 
 Ownership remains held until process exit. SIGKILL also releases
 ownership after the process exits, but bypasses application cleanup.
@@ -509,7 +526,7 @@ Package managers and supervisors may additionally report wrapper errors.
 
 | Status | Meaning |
 | --- | --- |
-| `0` | Successful command completion or graceful daemon shutdown. |
+| `0` | Successful command completion or handled graceful shutdown. Cancellation may produce no import result. This status alone does not prove a round was imported or that the journal has no unresolved attempt. |
 | `1` | Application failure or an explicit launcher validation failure. |
 | `2` | CLI output failure; the operation may already have succeeded. |
 | `3` | One-shot import remains pending. A journaled transaction attempt remains unresolved. |
@@ -1174,9 +1191,10 @@ Ensure the service user can create the lock and update checkpoints.
 A world-writable state directory is refused.
 
 The entrypoint uses the service launcher. Without `--init`, Node becomes
-PID 1. The daemon installs SIGINT/SIGTERM handlers and waits for active
-work before exiting. Configure the container stop timeout accordingly;
-expiry can force termination before work completes.
+PID 1. The daemon and both one-shot import commands install SIGINT/SIGTERM
+handlers and await active work during graceful shutdown. Configure the
+container stop timeout accordingly; expiry can force termination before
+work completes.
 
 Running with `--init` is also supported. Never delete the lock file to
 force a second container to start.

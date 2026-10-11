@@ -120,12 +120,16 @@ export async function main(
   switch (command.command) {
     case 'import':
       assertServiceLockHeld();
-      await runImportCommand(command, output, options);
+      await runWithShutdownSignal(async (signal) => {
+        await runImportCommand(command, output, options, signal);
+      });
       return;
 
     case 'import-when-available':
       assertServiceLockHeld();
-      await runImportWhenAvailableCommand(command, output, options);
+      await runWithShutdownSignal(async (signal) => {
+        await runImportWhenAvailableCommand(command, output, options, signal);
+      });
       return;
     
     case 'daemon':
@@ -146,13 +150,18 @@ async function runImportCommand(
   command: ImportCommandArguments,
   output: CliOutputHandler,
   options: CliOptions,
+  signal: AbortSignal,
 ): Promise<void> {
+  signal.throwIfAborted();
+
   const config = await loadRelayerConfig({
     source: command.source,
     ...(options.onDiagnostics !== undefined
       ? { onDiagnostics: options.onDiagnostics }
       : {}),
   })
+
+  signal.throwIfAborted();
 
   const clients = createRelayerClients(config);
 
@@ -173,7 +182,10 @@ async function runImportCommand(
       finality: config.finality,
     }),
     maxBlockRange: IMPORT_REPLACEMENT_BLOCK_RANGE,
+    signal,
   });
+
+  signal.throwIfAborted();
 
   let progress: RoundImportProgress | undefined;
   let result: ImportQuicknetRoundResult;
@@ -190,8 +202,13 @@ async function runImportCommand(
       onProgress(current) {
         progress = current;
       },
+      signal,
     });
   } catch (error) {
+    if (signal.aborted && error === signal.reason) {
+      throw error;
+    }
+
     reportImportFailure(options, error, progress);
     throw error;
   }
@@ -207,13 +224,18 @@ async function runImportWhenAvailableCommand(
   command: ImportWhenAvailableCommandArguments,
   output: CliOutputHandler,
   options: CliOptions,
+  signal: AbortSignal,
 ): Promise<void> {
+  signal.throwIfAborted();
+
   const config = await loadRelayerConfig({
     source: command.source,
     ...(options.onDiagnostics !== undefined
       ? { onDiagnostics: options.onDiagnostics }
       : {}),
   });
+
+  signal.throwIfAborted();
 
   const clients = createRelayerClients(config);
 
@@ -234,7 +256,10 @@ async function runImportWhenAvailableCommand(
       finality: config.finality,
     }),
     maxBlockRange: IMPORT_REPLACEMENT_BLOCK_RANGE,
+    signal,
   });
+
+  signal.throwIfAborted();
 
   let progress: RoundImportProgress | undefined;
   let result: ImportQuicknetRoundResult;
@@ -251,8 +276,13 @@ async function runImportWhenAvailableCommand(
       onProgress(current) {
         progress = current;
       },
+      signal,
     });
   } catch (error) {
+    if (signal.aborted && error === signal.reason) {
+      throw error;
+    }
+
     reportImportFailure(options, error, progress);
     throw error;
   }
@@ -264,10 +294,8 @@ async function runImportWhenAvailableCommand(
   });
 }
 
-async function runDaemonCli(
-  source: NetworkSource,
-  output: CliOutputHandler,
-  options: CliOptions,
+async function runWithShutdownSignal(
+  run: (signal: AbortSignal) => Promise<void>,
 ): Promise<void> {
   const controller = new AbortController();
 
@@ -279,19 +307,7 @@ async function runDaemonCli(
   process.on('SIGTERM', handleShutdown);
 
   try {
-    await runDaemonCommand({
-      source,
-      signal: controller.signal,
-      onStartup(summary) {
-        output({
-          type: 'daemon-startup',
-          summary,
-        });
-      },
-      onDiagnostics(policy) {
-        options.onDiagnostics?.(policy);
-      },
-    });
+    await run(controller.signal);
   } catch (error) {
     if (
       !controller.signal.aborted ||
@@ -305,6 +321,28 @@ async function runDaemonCli(
     process.removeListener('SIGINT', handleShutdown);
     process.removeListener('SIGTERM', handleShutdown);
   }
+}
+
+async function runDaemonCli(
+  source: NetworkSource,
+  output: CliOutputHandler,
+  options: CliOptions,
+): Promise<void> {
+  await runWithShutdownSignal(async (signal) => {
+    await runDaemonCommand({
+      source,
+      signal,
+      onStartup(summary) {
+        output({
+          type: 'daemon-startup',
+          summary,
+        });
+      },
+      onDiagnostics(policy) {
+        options.onDiagnostics?.(policy);
+      },
+    });
+  });
 }
 
 export function parseCommandArguments(
