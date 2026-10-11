@@ -21,7 +21,8 @@ const EXIT_CODE = {
   SUCCESS: 0,
   FAILURE: 1,
   OUTPUT_FAILURE: 2,
-  IMPORT_INCOMPLETE: 3,
+  IMPORT_PENDING: 3,
+  IMPORT_DEFERRED: 4,
 } as const;
 
 const WRITE_BUDGET_MS = 250;
@@ -202,14 +203,12 @@ try {
     try {
       writeLine(1, renderCliOutput(record));
 
-      if (
-        record.type === 'import-result' &&
-        (
-          record.result.status === 'pending' ||
-          record.result.status === 'deferred'
-        )
-      ) {
-        process.exitCode = EXIT_CODE.IMPORT_INCOMPLETE;
+      if (record.type === 'import-result') {
+        if (record.result.status === 'pending') {
+          process.exitCode = EXIT_CODE.IMPORT_PENDING;
+        } else if (record.result.status === 'deferred') {
+          process.exitCode = EXIT_CODE.IMPORT_DEFERRED;
+        }
       }
     } catch (error) {
       try {

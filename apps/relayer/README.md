@@ -280,21 +280,6 @@ QUICKNET_POLL_INTERVAL_MS=1000
 QUICKNET_LOG_LEVEL=info
 ```
 
-### Receipt waiting
-
-`QUICKNET_RECEIPT_TIMEOUT_MS` defaults to `30000` milliseconds and applies
-to `import`, `import-when-available`, and daemon imports. It accepts decimal
-integers from `1` through `2147483647`; zero is rejected.
-
-The timeout bounds receipt waiting after an acknowledged broadcast.
-Expiration returns `pending` with reason `receipt-timeout`. The signed
-attempt remains journaled for recovery; expiration does not prove that
-the transaction failed and does not authorize a new submission.
-
-This setting does not bound the entire import or daemon cycle. Beacon
-waiting, RPC calls, simulation, and post-receipt verification take
-additional time.
-
 #### `QUICKNET_MAX_BLOCK_RANGE`
 
 Default: `2000` blocks.
@@ -527,18 +512,18 @@ Package managers and supervisors may additionally report wrapper errors.
 | `0` | Successful command completion or graceful daemon shutdown. |
 | `1` | Application failure or an explicit launcher validation failure. |
 | `2` | CLI output failure; the operation may already have succeeded. |
-| `3` | One-shot import remains pending or was deferred; completion was not confirmed. |
+| `3` | One-shot import remains pending. A journaled transaction attempt remains unresolved. |
+| `4` | One-shot import was deferred because the signer is unavailable. |
 | `9` | Node startup failure observed when a configured env file is missing. |
 | `75` | Another process holds the service lock; this may have no diagnostic output. |
 
 For `import` and `import-when-available`, status `0` means the round was
-imported or was already stored. Status `3` means the command reported
-incomplete work:
+imported or was already stored. Incomplete work uses separate statuses:
 
-- `pending`: a journaled transaction was not acknowledged by the RPC,
+- `3` (`pending`): a journaled transaction was not acknowledged by the RPC,
   or receipt waiting timed out. Output includes the attempt ID,
   locally computed transaction hash, and pending reason.
-- `deferred`: fresh signer recovery left the gate closed, so this
+- `4` (`deferred`): fresh signer recovery left the gate closed, so this
   submission prepared no new attempt. Output includes the signer blocker.
 
 Neither outcome proves that the beacon is absent on-chain. Pending
@@ -546,8 +531,8 @@ transactions remain available for journal recovery. The one-shot command
 exits rather than continuing recovery in the background.
 
 If rendering or writing the result fails, status `2` takes precedence
-over status `3`. Service ownership is released when the process exits;
-the journal is retained.
+over statuses `3` and `4`. Service ownership is released when the process
+exits; the journal is retained.
 
 Other startup failures can retain the exit status of the failing tool.
 Do not interpret every nonzero status as contention.

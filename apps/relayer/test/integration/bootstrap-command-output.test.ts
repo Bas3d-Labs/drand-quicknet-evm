@@ -468,7 +468,18 @@ it.skipIf(process.platform !== 'linux').each(COMMAND_OUTPUT_CASES)(
 
     expect(child.error).toBeUndefined();
     expect(child.signal).toBeNull();
-    expect(child.status, child.stderr).toBe(outputFails ? 2 : 3);
+    
+    let expectedExitCode: number;
+
+    if (outputFails) {
+      expectedExitCode = 2;
+    } else if (outcome === 'pending') {
+      expectedExitCode = 3;
+    } else {
+      expectedExitCode = 4;
+    }
+
+    expect(child.status, child.stderr).toBe(expectedExitCode);
 
     let failure: Record<string, unknown> = {};
 
