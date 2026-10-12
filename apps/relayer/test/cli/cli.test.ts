@@ -55,6 +55,10 @@ vi.mock('../../src/cli/daemon-command.js', () => ({
   runDaemonCommand: vi.fn(),
 }));
 
+vi.mock('../../src/cli/sync-nonce.js', () => ({
+  syncNonce: vi.fn(),
+}));
+
 vi.mock(
   '../../src/cli/open-beacon-submitter.js',
   () => signerRuntimeMocks,
@@ -89,6 +93,15 @@ import type {
 } from '../../src/cli/cli-output.js';
 
 import {
+  runDaemonCommand,
+} from '../../src/cli/daemon-command.js';
+
+import {
+  syncNonce,
+  type SyncNonceResult,
+} from '../../src/cli/sync-nonce.js';
+
+import {
   createRelayerClients,
 } from '../../src/chain/clients.js';
 
@@ -98,26 +111,9 @@ import {
   type LoadedRelayerConfig,
 } from '../../src/config/config.js';
 
-import {
-  runDaemonCommand,
-} from '../../src/cli/daemon-command.js';
-
 import type {
   DaemonStartupSummary,
 } from '../../src/daemon/daemon-startup.js';
-
-import {
-  assertServiceLockHeld,
-  ServiceLockNotHeldError,
-} from '../../src/state/service-lock.js';
-
-import {
-  importQuicknetRound,
-} from '../../src/rounds/import-round.js';
-
-import {
-  importQuicknetRoundWhenAvailable,
-} from '../../src/rounds/import-round-when-available.js';
 
 import {
   createRpcMetrics,
@@ -128,6 +124,19 @@ import {
   usageCode,
   type UsageCode,
 } from '../../src/diagnostics/usage-error.js';
+
+import {
+  importQuicknetRound,
+} from '../../src/rounds/import-round.js';
+
+import {
+  importQuicknetRoundWhenAvailable,
+} from '../../src/rounds/import-round-when-available.js';
+
+import {
+  assertServiceLockHeld,
+  ServiceLockNotHeldError,
+} from '../../src/state/service-lock.js';
 
 const PRESET = 'robinhood-testnet';
 const CONFIG_FILE = './networks/example-mainnet.json';
@@ -354,6 +363,12 @@ beforeEach(() => {
   vi.mocked(runDaemonCommand)
     .mockReset()
     .mockResolvedValue(undefined);
+
+  vi.mocked(syncNonce)
+    .mockReset()
+    .mockResolvedValue({
+      status: 'already-synchronized',
+    });
 
   vi.mocked(assertServiceLockHeld)
     .mockReset()
@@ -1515,4 +1530,474 @@ describe.each(ROUND_COMMANDS)('%s failure context', (command) => {
       ).toEqual(before);
     },
   );
+});
+
+const NONCE_REPAIR = {
+  kind: 'sync-nonce' as const,
+  at: '2026-10-12T12:00:00.000Z',
+  previousNextNonce: 4n,
+  nextNonce: 8n,
+  observation: {
+    anchor: {
+      blockNumber: 110n,
+      blockHash: HASH,
+    },
+    nonce: 8n,
+  },
+};
+
+const NONCE_PREVIEW: SyncNonceResult = {
+  status: 'repair-available',
+  repair: NONCE_REPAIR,
+  snapshot: {
+    version: 1,
+    identity: {
+      chainId: CONFIG.chain.id,
+      signer: ACCOUNT.address,
+    },
+    baseline: {
+      anchor: {
+        blockNumber: 100n,
+        blockHash: HASH,
+      },
+      nonce: 4n,
+    },
+    lastObservation: NONCE_REPAIR.observation,
+    nextNonce: 8n,
+    durableNextNonce: 8n,
+    repairs: [NONCE_REPAIR],
+    attempts: [],
+  },
+};
+
+const SYNC_ARGS = [
+  'sync-nonce',
+  '--network',
+  PRESET,
+];
+
+async function useRealNonceLogger(
+  write: (line: string) => void,
+): Promise<void> {
+  const actual = await vi.importActual<
+    typeof import('../../src/diagnostics/relayer-log.js')
+  >('../../src/diagnostics/relayer-log.js');
+
+  const logger = actual.createRelayerLog({
+    chainId: CONFIG.chain.id,
+    level: 'info',
+    errorSummary: ERROR_SUMMARY,
+    destination: { write },
+  });
+
+  importLogMocks.createRelayerLog.mockReturnValue(logger);
+}
+
+describe('sync-nonce argument parsing', () => {
+  it.each(NETWORK_CASES)(
+    'defaults to preview with $name',
+    ({ args, source }) => {
+      expect(parseCommandArguments([
+        'sync-nonce',
+        ...args,
+      ])).toEqual({
+        command: 'sync-nonce',
+        source,
+        apply: false,
+      });
+    },
+  );
+
+  it.each(NETWORK_CASES)(
+    'accepts --apply before or after $name',
+    ({ args, source }) => {
+      for (const options of [
+        ['--apply', ...args],
+        [...args, '--apply'],
+      ]) {
+        expect(parseCommandArguments([
+          'sync-nonce',
+          ...options,
+        ])).toEqual({
+          command: 'sync-nonce',
+          source,
+          apply: true,
+        });
+      }
+    },
+  );
+
+  it.each(NETWORK_FAILURES)(
+    'rejects $name',
+    ({ args, code }) => {
+      expectUsage([
+        'sync-nonce',
+        ...args,
+      ], code);
+    },
+  );
+
+  it('rejects duplicate --apply', () => {
+    expectUsage([
+      ...SYNC_ARGS,
+      '--apply',
+      '--apply',
+    ], 'DUPLICATE_APPLY');
+  });
+
+  it.each([
+    ['--round', '1'],
+    ['--apply=false'],
+    ['--apply', 'false'],
+    ['--unknown'],
+  ])('rejects unsupported arguments: %j', (...args) => {
+    expectUsage([
+      ...SYNC_ARGS,
+      ...args,
+    ], 'UNKNOWN_ARGUMENT');
+  });
+
+  it.each(['--help', '-h'])(
+    'preserves help precedence: %s',
+    (flag) => {
+      expect(parseCommandArguments([
+        'sync-nonce',
+        '--apply',
+        '--apply',
+        flag,
+      ])).toEqual({
+        command: 'help',
+      });
+    },
+  );
+});
+
+describe('sync-nonce command execution', () => {
+  const outcomes: {
+    name: string;
+    apply: boolean;
+    result: SyncNonceResult;
+    outcome: 'success' | 'deferred' | 'failure';
+  }[] = [
+    {
+      name: 'eligible preview',
+      apply: false,
+      result: NONCE_PREVIEW,
+      outcome: 'success',
+    },
+    {
+      name: 'already synchronized preview',
+      apply: false,
+      result: { status: 'already-synchronized' },
+      outcome: 'success',
+    },
+    {
+      name: 'already synchronized apply',
+      apply: true,
+      result: { status: 'already-synchronized' },
+      outcome: 'success',
+    },
+    {
+      name: 'applied repair',
+      apply: true,
+      result: {
+        status: 'applied',
+        repair: NONCE_REPAIR,
+      },
+      outcome: 'success',
+    },
+    {
+      name: 'nonce mismatch',
+      apply: true,
+      result: {
+        status: 'deferred',
+        reason: 'nonce-count-mismatch',
+      },
+      outcome: 'deferred',
+    },
+    {
+      name: 'anchor change',
+      apply: true,
+      result: {
+        status: 'deferred',
+        reason: 'anchor-changed',
+      },
+      outcome: 'deferred',
+    },
+    {
+      name: 'refused repair',
+      apply: true,
+      result: {
+        status: 'refused',
+        reason: 'retained-attempts',
+      },
+      outcome: 'failure',
+    },
+  ];
+
+  it.each(outcomes)(
+    'reports $name with outcome $outcome',
+    async ({ apply, result, outcome }) => {
+      const lines: string[] = [];
+      await useRealNonceLogger((line) => lines.push(line));
+
+      vi.mocked(syncNonce).mockResolvedValueOnce(result);
+
+      const output = vi.fn<(record: CliOutput) => void>();
+
+      expect(await main([
+        ...SYNC_ARGS,
+        ...(apply ? ['--apply'] : []),
+      ], output)).toBe(outcome);
+
+      expect(syncNonce).toHaveBeenCalledExactlyOnceWith({
+        publicClient: PUBLIC_CLIENT,
+        identity: {
+          chainId: CONFIG.chain.id,
+          signer: ACCOUNT.address,
+        },
+        finality: CONFIG.finality,
+        apply,
+        signal: expect.any(AbortSignal),
+      });
+
+      expect(output).toHaveBeenCalledExactlyOnceWith({
+        type: 'nonce-sync-result',
+        identity: {
+          chainId: CONFIG.chain.id,
+          signer: ACCOUNT.address,
+        },
+        mode: apply ? 'apply' : 'preview',
+        result,
+      });
+
+      const records = lines.map((line) => JSON.parse(line));
+
+      if (result.status === 'applied') {
+        expect(records).toHaveLength(1);
+        expect(records[0]).toMatchObject({
+          level: 40,
+          event: 'signer_nonce_synced',
+          chainId: CONFIG.chain.id,
+          signer: ACCOUNT.address,
+          previousNextNonce: '4',
+          nextNonce: '8',
+          durableBlock: '110',
+          durableBlockHash: HASH,
+          durableNonce: '8',
+          repairAt: NONCE_REPAIR.at,
+        });
+      } else {
+        expect(records).toEqual([]);
+      }
+
+      expect(signerRuntimeMocks.openBeaconSubmitter)
+        .not.toHaveBeenCalled();
+      expect(importQuicknetRound).not.toHaveBeenCalled();
+      expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+      expect(runDaemonCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects missing ownership before configuration loading', async () => {
+    const failure = new ServiceLockNotHeldError('descriptor');
+
+    vi.mocked(assertServiceLockHeld).mockImplementationOnce(() => {
+      throw failure;
+    });
+
+    const output = vi.fn();
+
+    await expect(main(SYNC_ARGS, output)).rejects.toBe(failure);
+
+    expect(loadRelayerConfig).not.toHaveBeenCalled();
+    expect(syncNonce).not.toHaveBeenCalled();
+    expect(output).not.toHaveBeenCalled();
+  });
+
+  it('runs help without ownership or configuration', async () => {
+    const output = vi.fn();
+
+    expect(await main([
+      'sync-nonce',
+      '--help',
+    ], output)).toBe('success');
+
+    expect(output).toHaveBeenCalledExactlyOnceWith({ type: 'help' });
+    expect(assertServiceLockHeld).not.toHaveBeenCalled();
+    expect(loadRelayerConfig).not.toHaveBeenCalled();
+    expect(syncNonce).not.toHaveBeenCalled();
+  });
+
+  it('emits the repair warning after completion and before output', async () => {
+    const events: string[] = [];
+
+    await useRealNonceLogger(() => {
+      events.push('warning');
+    });
+
+    vi.mocked(syncNonce).mockImplementationOnce(async () => {
+      events.push('repair-completed');
+
+      return {
+        status: 'applied',
+        repair: NONCE_REPAIR,
+      };
+    });
+
+    expect(await main([
+      ...SYNC_ARGS,
+      '--apply',
+    ], () => {
+      events.push('output');
+    })).toBe('success');
+
+    expect(events).toEqual([
+      'repair-completed',
+      'warning',
+      'output',
+    ]);
+  });
+
+  it('does not emit a repair warning or result after persistence failure', async () => {
+    const lines: string[] = [];
+    await useRealNonceLogger((line) => lines.push(line));
+
+    const failure = new Error('Journal persistence failed');
+    vi.mocked(syncNonce).mockRejectedValueOnce(failure);
+
+    const output = vi.fn();
+
+    await expect(main([
+      ...SYNC_ARGS,
+      '--apply',
+    ], output)).rejects.toBe(failure);
+
+    expect(lines).toEqual([]);
+    expect(output).not.toHaveBeenCalled();
+  });
+
+  it('preserves an output failure after a committed repair', async () => {
+    const lines: string[] = [];
+    await useRealNonceLogger((line) => lines.push(line));
+
+    vi.mocked(syncNonce).mockResolvedValueOnce({
+      status: 'applied',
+      repair: NONCE_REPAIR,
+    });
+
+    const failure = new Error('Output failed');
+
+    await expect(main([
+      ...SYNC_ARGS,
+      '--apply',
+    ], () => {
+      throw failure;
+    })).rejects.toBe(failure);
+
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!).event).toBe('signer_nonce_synced');
+    expect(syncNonce).toHaveBeenCalledOnce();
+  });
+
+  it('reports the committed result when the real logger destination fails', async () => {
+    const write = vi.fn(() => {
+      throw new Error('Log destination failed');
+    });
+
+    await useRealNonceLogger(write);
+
+    vi.mocked(syncNonce).mockResolvedValueOnce({
+      status: 'applied',
+      repair: NONCE_REPAIR,
+    });
+
+    const output = vi.fn();
+
+    expect(await main([
+      ...SYNC_ARGS,
+      '--apply',
+    ], output)).toBe('success');
+
+    expect(write).toHaveBeenCalled();
+    expect(output).toHaveBeenCalledExactlyOnceWith({
+      type: 'nonce-sync-result',
+      identity: {
+        chainId: CONFIG.chain.id,
+        signer: ACCOUNT.address,
+      },
+      mode: 'apply',
+      result: {
+        status: 'applied',
+        repair: NONCE_REPAIR,
+      },
+    });
+  });
+
+  it.each(SIGNALS)(
+    'returns interrupted for handled %s cancellation',
+    async (shutdownSignal) => {
+      const output = vi.fn();
+      const listenersBefore = {
+        SIGINT: process.listenerCount('SIGINT'),
+        SIGTERM: process.listenerCount('SIGTERM'),
+      };
+
+      vi.mocked(syncNonce).mockImplementationOnce(async ({ signal }) => {
+        expect(signal).toBeInstanceOf(AbortSignal);
+
+        process.emit(shutdownSignal);
+
+        signal!.throwIfAborted();
+        throw new Error('Expected cancellation.');
+      });
+
+      expect(await main(SYNC_ARGS, output)).toBe('interrupted');
+
+      expect(output).not.toHaveBeenCalled();
+      expect(process.listenerCount('SIGINT')).toBe(listenersBefore.SIGINT);
+      expect(process.listenerCount('SIGTERM')).toBe(listenersBefore.SIGTERM);
+    },
+  );
+
+  it('reports applied when active persistence succeeds after a signal', async () => {
+    const lines: string[] = [];
+    await useRealNonceLogger((line) => lines.push(line));
+
+    vi.mocked(syncNonce).mockImplementationOnce(async ({ signal }) => {
+      process.emit('SIGTERM');
+
+      expect(signal?.aborted).toBe(true);
+
+      return {
+        status: 'applied',
+        repair: NONCE_REPAIR,
+      };
+    });
+
+    const output = vi.fn();
+
+    expect(await main([
+      ...SYNC_ARGS,
+      '--apply',
+    ], output)).toBe('success');
+
+    expect(output).toHaveBeenCalledOnce();
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!).event).toBe('signer_nonce_synced');
+  });
+
+  it('preserves an unrelated failure when a shutdown signal also arrives', async () => {
+    const failure = new Error('RPC failed');
+    const output = vi.fn();
+
+    vi.mocked(syncNonce).mockImplementationOnce(async () => {
+      process.emit('SIGTERM');
+      throw failure;
+    });
+
+    await expect(main(SYNC_ARGS, output)).rejects.toBe(failure);
+
+    expect(output).not.toHaveBeenCalled();
+  });
 });

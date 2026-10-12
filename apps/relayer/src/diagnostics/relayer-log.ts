@@ -282,6 +282,20 @@ const TRANSACTION_EVENTS = {
       blockedSince: 'timestamp',
     },
   ],
+  signerNonceSynced: [
+    'warn',
+    'signer_nonce_synced',
+    'Operator advanced signer nonce allocation. Repair persisted',
+    {
+      signer: 'address',
+      previousNextNonce: 'uint',
+      nextNonce: 'uint',
+      durableBlock: 'uint',
+      durableBlockHash: 'hash',
+      durableNonce: 'uint',
+      repairAt: 'timestamp',
+    },
+  ],
   attemptBroadcastAccepted: [
     'info',
     'attempt_broadcast_accepted',

@@ -7,6 +7,7 @@ export const USAGE_MESSAGES = {
   UNKNOWN_COMMAND: 'Unknown command. Run relayer --help.',
   UNKNOWN_ARGUMENT: 'Unknown argument. Run relayer --help.',
   EXPECTED_ARGUMENT: 'Expected a command argument.',
+  DUPLICATE_APPLY: 'Duplicate argument: --apply.',
   DUPLICATE_ROUND: 'Duplicate argument: --round.',
   DUPLICATE_NETWORK: 'Duplicate argument: --network.',
   DUPLICATE_NETWORK_CONFIG: 'Duplicate argument: --network-config',

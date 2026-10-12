@@ -131,6 +131,71 @@ Every command accepts either `--network` for a built-in preset or
 The daemon requires the additional consumer/checkpoint environment variables
 described below.
 
+### `sync-nonce`
+
+Previews a forward nonce-allocation repair for an existing signer journal:
+
+```bash
+pnpm --filter @based-labs/drand-quicknet-relayer start \
+  sync-nonce \
+  --network-config "$PWD/network.json"
+```
+
+To apply an eligible repair, repeat the command with `--apply`.
+Apply performs a fresh inspection; it does not commit a previously
+displayed preview.
+
+Stop any other command using the same chain, signer, and state directory
+first. Preview and apply both require exclusive service ownership.
+
+The journal must exist and contain no retained attempts, including
+included attempts awaiting durable resolution. The RPC chain ID must
+match the journal identity. Durable, latest, and pending nonce counts
+must agree, and the selected durable anchor must remain stable during
+inspection.
+
+Matching the journal's allocation to the durable nonce is not sufficient
+for an already-synchronized result. For an otherwise eligible journal and
+observation, disagreement between durable, latest, and pending counts
+produces a deferred result—even when allocation already equals the durable
+nonce.
+
+Investigate outstanding or external signer activity before retrying.
+Nonce synchronization does not resolve pending transactions.
+
+A repair only advances allocation. It preserves the original baseline,
+records the accepted observation, and retains the newest eight repair
+records in the journal. Matching RPC counts do not prove that no
+untracked signed transactions or hidden pending transactions exist.
+The dedicated-signer requirement still applies.
+
+Preview does not rewrite the journal or remove journal temporary files.
+An eligible apply uses normal journal opening, including temporary-file
+cleanup and a durability rewrite, before saving the repair. Cancellation
+after writable opening may therefore leave those maintenance operations
+completed even when no repair is applied.
+
+Once repair persistence starts, the command waits for its actual outcome.
+A shutdown signal does not turn a successfully persisted repair into an
+interrupted result.
+
+A successful repair emits `signer_nonce_synced` at warning level, subject
+to the configured log level. The journal retains the repair independently
+of log delivery.
+
+Exit statuses are:
+
+- `0`: preview completed with an eligible repair, already synchronized,
+  or repair applied.
+- `1`: repair refused or an operational failure occurred.
+- `2`: command output failed; a repair may already have been applied.
+- `4`: inspection deferred.
+- `5`: handled cancellation before a result was returned.
+- `75`: another process holds service ownership.
+
+The command does not sign or broadcast transactions, create a missing
+journal, or modify checkpoints.
+
 ## Configuration
 
 The package `start` script requires the repository root `.env` and loads
@@ -353,7 +418,7 @@ again after restart. These settings do not authorize journal bootstrap.
 
 Default: `info`.
 
-Controls the minimum severity emitted by the daemon's structured logger.
+Controls the minimum severity emitted by the relayer’s structured logger.
 Accepted values, from most verbose to least verbose, are:
 
 - `trace`
@@ -409,6 +474,7 @@ Protected commands require Linux and util-linux `flock`:
 - `import`
 - `import-when-available`
 - `daemon`
+- `sync-nonce`
 
 Use the package scripts or installed `relayer` executable. They enter
 through `scripts/relayer.sh`, which acquires an exclusive, nonblocking
@@ -490,9 +556,9 @@ and uses util-linux flock to acquire exclusive ownership. It then
 replaces itself with Node, preserving the locked descriptor and direct
 signal delivery.
 
-For `daemon`, `import`, and `import-when-available`, SIGINT and SIGTERM
-request cooperative shutdown. Round waits, beacon fetching, and
-cancellable retry delays receive the shutdown signal. Other active
+For `daemon`, `import`, `import-when-available`, and `sync-nonce`, SIGINT
+and SIGTERM request cooperative shutdown. Round waits, beacon fetching,
+and cancellable retry delays receive the shutdown signal. Other active
 operations finish before cancellation is checked at operation boundaries.
 
 Signing and journal persistence are allowed to finish once started.
@@ -536,11 +602,11 @@ Package managers and supervisors may additionally report wrapper errors.
 | Status | Meaning |
 | --- | --- |
 | `0` | Successful command completion or graceful daemon shutdown. |
-| `1` | Application failure or an explicit launcher validation failure. |
+| `1` | Application failure, refused nonce repair, or explicit launcher validation failure. |
 | `2` | CLI output failure; the operation may already have succeeded. |
 | `3` | One-shot import remains pending. A journaled transaction attempt remains unresolved. |
-| `4` | One-shot import was deferred because the signer is unavailable. |
-| `5` | One-shot import interrupted by SIGINT/SIGTERM without producing an import result. A signed attempt may remain in the journal for recovery. |
+| `4` | Import deferred because the signer is unavailable, or nonce-sync inspection deferred. |
+| `5` | One-shot command handled SIGINT/SIGTERM before producing a result. Retained journal state may still require recovery. |
 | `9` | Node startup failure observed when a configured env file is missing. |
 | `75` | Another process holds the service lock; this may have no diagnostic output. |
 
@@ -573,9 +639,10 @@ Retained transaction attempts remain available for journal recovery.
 The one-shot command exits rather than continuing recovery in the
 background.
 
-If rendering or writing the result fails, status `2` takes precedence
-over statuses `3` and `4`. Service ownership is released when the process
-exits; the journal is retained.
+If rendering or writing a command result fails, status `2` takes precedence 
+over the result’s normal exit status. An import or nonce repair may already 
+have succeeded. Service ownership is released when the process exits. The 
+journal is retained.
 
 Other startup failures can retain the exit status of the failing tool.
 Do not interpret every nonzero status as contention.
@@ -650,7 +717,8 @@ deployment manifests, and operator configuration.
 
 ## Exact-round processing
 
-All commands use the same submission path for an exact round `R`:
+`import`, `import-when-available`, and `daemon` use the same submission path 
+for an exact round `R`:
 
 1. Verify the configured registry and verifier deployment.
 2. If `R` is already stored, return its randomness without fetching a
@@ -996,6 +1064,7 @@ logging_failed
 round_already_stored
 round_imported
 signer_bootstrap_deferred
+signer_nonce_synced
 ```
 
 `checkpoint_advanced` and `round_already_stored` are debug-level routine
@@ -1010,6 +1079,11 @@ The coordinator reports the first mismatch and subsequent changes to
 any of the three nonce counts. Unchanged counts are suppressed even
 when the durable anchor advances. Suppression is process-local, so
 restarting can report the same mismatch again.
+
+`signer_nonce_synced` is emitted at warning level after repair persistence
+succeeds. It includes `signer`, `previousNextNonce`, `nextNonce`, `durableBlock`,
+`durableBlockHash`, `durableNonce`, and `repairAt`, alongside the logger’s
+chain identity. Nonces and block numbers are decimal strings.
 
 Logging failures are isolated so logging itself does not stop the daemon.
 
@@ -1038,11 +1112,11 @@ headers, request bodies, ABI objects, and other undeclared properties
 are not copied into the summary. Selected explanation text is scrubbed
 before output.
 
-Registered usage, configuration, service-lock, and prior signer-state
-errors use fixed messages. A missing journal with other entries other
+During import or daemon startup, a missing journal with entries other 
 than the verified `relayer.flock` in the state directory produces
-`cli_failed` with kind `signer-journal`, code `prior-state-present`,
-and exit status `1`.
+`cli_failed` with kind `signer-journal`, code `prior-state-present`, 
+and exit status `1`. `sync-nonce` instead reports `journal-missing` and
+does not initialize the journal.
 
 Other failures use fixed fallback descriptions until the credential-aware
 diagnostic policy is installed.
@@ -1095,17 +1169,22 @@ simulation fallback, transaction retry, or recovery decisions.
 
 ### CLI and output failures
 
-CLI failures are emitted as structured `cli_failed` records.
+CLI exceptions are emitted as structured `cli_failed` records. A refused
+nonce repair is reported as a command result with exit status `1`.
 Uncaught exceptions and unhandled rejections use the same configured
 scrubbing and summary limits when initialization has reached that point.
+
+For nonce synchronization, `output_failed` preserves validated identity,
+mode, status, and repair details when available. Output failure does not
+undo a persisted repair.
 
 If rendering or writing command output fails, the CLI attempts to emit
 `output_failed` and exits with status `2`.
 
 That diagnostic preserves validated import outcome fields when available:
 completed results include randomness and, for imported results, the
-transaction hash; pending results include the attempt ID, transaction
-hash, and reason; deferred results include the reason and signer blocker.
+transaction hash. Pending results include the attempt ID, transaction
+hash, and reason. Deferred results include the reason and signer blocker.
 
 An output failure does not change the underlying import outcome.
 
@@ -1217,10 +1296,10 @@ Ensure the service user can create the lock and update checkpoints.
 A world-writable state directory is refused.
 
 The entrypoint uses the service launcher. Without `--init`, Node becomes
-PID 1. The daemon and both one-shot import commands install SIGINT/SIGTERM
-handlers and await active work during graceful shutdown. Configure the
-container stop timeout accordingly; expiry can force termination before
-work completes.
+PID 1. The daemon, both import commands, and `sync-nonce` install
+SIGINT/SIGTERM handlers and await active work during graceful shutdown.
+Configure the container stop timeout accordingly; expiry can force
+termination before work completes.
 
 Running with `--init` is also supported. Never delete the lock file to
 force a second container to start.

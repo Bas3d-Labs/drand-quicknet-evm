@@ -49,6 +49,7 @@ const relayerLogMocks = vi.hoisted(() => ({
   signerBlocked: vi.fn(),
   signerBootstrapDeferred: vi.fn(),
   signerGateReleased: vi.fn(),
+  signerNonceSynced: vi.fn(),
 
   withContext: 
     vi.fn<ScopedRelayerLog['withContext']>(),
