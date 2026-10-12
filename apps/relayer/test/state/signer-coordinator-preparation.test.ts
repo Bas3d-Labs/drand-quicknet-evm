@@ -77,6 +77,7 @@ async function setup(options: {
     lastObservation: OBSERVATION,
     nextNonce: 4n,
     durableNextNonce: 4n,
+    repairs: [],
     attempts: [],
   };
 

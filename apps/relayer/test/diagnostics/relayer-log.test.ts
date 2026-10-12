@@ -178,6 +178,7 @@ describe('createRelayerLog', () => {
       'signerBlocked',
       'signerBootstrapDeferred',
       'signerGateReleased',
+      'signerNonceSynced',
       'withContext',
       'withErrorSummary',
     ]);

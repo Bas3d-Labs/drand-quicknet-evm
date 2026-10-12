@@ -60,6 +60,10 @@ import {
   openBeaconSubmitter,
 } from './open-beacon-submitter.js';
 
+import {
+  syncNonce,
+} from './sync-nonce.js';
+
 // Maximum replacement-search blocks per retained attempt in one pass.
 const IMPORT_REPLACEMENT_BLOCK_RANGE = 1_000n;
 
@@ -79,6 +83,7 @@ export interface CliOptions {
 
 export type CliOutcome =
   | 'success'
+  | 'failure'
   | 'pending'
   | 'deferred'
   | 'interrupted';
@@ -108,10 +113,17 @@ interface HelpCommandArguments {
   command: 'help';
 }
 
+interface SyncNonceCommandArguments {
+  command: 'sync-nonce';
+  source: NetworkSource;
+  apply: boolean;
+}
+
 type CommandArguments =
   | ImportCommandArguments
   | ImportWhenAvailableCommandArguments
   | DaemonCommandArguments
+  | SyncNonceCommandArguments
   | DaemonHelpCommandArguments
   | HelpCommandArguments;
 
@@ -149,6 +161,18 @@ export async function main(
     case 'daemon-help':
       output({ type: 'daemon-help' });
       return 'success';
+
+    case 'sync-nonce':
+      assertServiceLockHeld();
+      return runWithShutdownSignal(
+        (signal) => runSyncNonceCommand(
+          command,
+          output,
+          options,
+          signal,
+        ),
+        'interrupted',
+      );
 
     case 'help':
       output({ type: 'help' });
@@ -362,6 +386,80 @@ async function runDaemonCli(
   }, 'success');
 }
 
+async function runSyncNonceCommand(
+  command: SyncNonceCommandArguments,
+  output: CliOutputHandler,
+  options: CliOptions,
+  signal: AbortSignal,
+): Promise<CliOutcome> {
+  signal.throwIfAborted();
+
+  const config = await loadRelayerConfig({
+    source: command.source,
+    ...(options.onDiagnostics !== undefined
+      ? { onDiagnostics: options.onDiagnostics }
+      : {}),
+  });
+
+  signal.throwIfAborted();
+
+  const clients = createRelayerClients(config);
+
+  const logger = createRelayerLog({
+    chainId: config.chain.id,
+    level: process.env.QUICKNET_LOG_LEVEL ?? 'info',
+    errorSummary: config.errorSummary,
+    destination: process.stderr,
+  });
+
+  const identity = {
+    chainId: config.chain.id,
+    signer: config.account.address,
+  };
+
+  const result = await syncNonce({
+    publicClient: clients.publicClient,
+    identity,
+    finality: config.finality,
+    apply: command.apply,
+    signal,
+  });
+
+  if (result.status === 'applied') {
+    const { repair } = result;
+
+    logger.signerNonceSynced({
+      signer: identity.signer,
+      previousNextNonce: repair.previousNextNonce,
+      nextNonce: repair.nextNonce,
+      durableBlock: repair.observation.anchor.blockNumber,
+      durableBlockHash: repair.observation.anchor.blockHash,
+      durableNonce: repair.observation.nonce,
+      repairAt: repair.at,
+    });
+  }
+
+  output({
+    type: 'nonce-sync-result',
+    identity,
+    mode: command.apply ? 'apply' : 'preview',
+    result,
+  });
+
+  switch (result.status) {
+    case 'repair-available':
+    case 'already-synchronized':
+    case 'applied':
+      return 'success';
+
+    case 'deferred':
+      return 'deferred';
+
+    case 'refused':
+      return 'failure';
+  }
+}
+
 function importOutcome(
   result: ImportQuicknetRoundResult,
 ): CliOutcome {
@@ -409,6 +507,9 @@ export function parseCommandArguments(
 
     case 'daemon':
       return parseDaemonArguments(commandArgs);
+      
+    case 'sync-nonce':
+      return parseSyncNonceArguments(commandArgs);
 
     default:
       throw new UsageError('UNKNOWN_COMMAND');
@@ -474,6 +575,48 @@ function parseDaemonArguments(
   return {
     command: 'daemon',
     source,
+  };
+}
+
+function parseSyncNonceArguments(
+  args: readonly string[],
+): SyncNonceCommandArguments {
+  let source: NetworkSource | undefined;
+  let apply = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const argument = args[i];
+    if (argument === undefined) {
+      throw new UsageError('EXPECTED_ARGUMENT');
+    }
+
+    const networkArgument = parseNetworkSourceArgument(args, i, source);
+    if (networkArgument !== undefined) {
+      source = networkArgument.source;
+      i = networkArgument.nextIndex;
+      continue;
+    }
+
+    if (argument === '--apply') {
+      if (apply) {
+        throw new UsageError('DUPLICATE_APPLY');
+      }
+
+      apply = true;
+      continue;
+    }
+
+    throw new UsageError('UNKNOWN_ARGUMENT');
+  }
+
+  if (source === undefined) {
+    throw new UsageError('MISSING_NETWORK');
+  }
+
+  return {
+    command: 'sync-nonce',
+    source,
+    apply,
   };
 }
 

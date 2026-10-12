@@ -12,11 +12,16 @@ import {
   isFixedHex,
 } from '../shared/hex.js';
 
+import {
+  MAX_RETAINED_NONCE_REPAIRS,
+} from './transaction-journal.js';
+
 import type {
   AnchoredNonceObservation,
   JournalAttempt,
   JournalIdentity,
   JournalInclusionObservation,
+  JournalNonceRepair,
   JournalSignedTransaction,
   ReplacementSearch,
   TransactionJournalSnapshot,
@@ -55,6 +60,20 @@ export function validateJournalSnapshotStructure(
   requireValid(durableNextNonce >= baseline.nonce);
   requireValid(nextNonce >= durableNextNonce);
 
+  const repairs = readRepairs(field(input, 'repairs'));
+
+  for (let index = 1; index < repairs.length; index += 1) {
+    requireValidRepair(
+      repairs[index]!.previousNextNonce >= repairs[index - 1]!.nextNonce,
+    );
+  }
+
+  const latestRepair = repairs[repairs.length - 1];
+  requireValidRepair(
+    latestRepair === undefined ||
+    latestRepair.nextNonce <= durableNextNonce
+  );
+
   const attempts = readArray(field(input, 'attempts'), readAttempt);
 
   requireValid(
@@ -90,6 +109,7 @@ export function validateJournalSnapshotStructure(
     lastObservation,
     nextNonce,
     durableNextNonce,
+    repairs,
     attempts,
   });
 }
@@ -123,7 +143,7 @@ function readAnchor(input: unknown): Readonly<BlockAnchor> {
   });
 }
 
-function readObservation(
+export function readObservation(
   input: unknown,
 ): AnchoredNonceObservation {
   return Object.freeze({
@@ -314,6 +334,56 @@ function readInclusion(
   }
 }
 
+function readRepairs(input: unknown): readonly JournalNonceRepair[] {
+  try {
+    requireValidRepair(Array.isArray(input));
+
+    const length = ownValue(input, 'length');
+
+    requireValidRepair(
+      typeof length === 'number' &&
+      Number.isSafeInteger(length) &&
+      length >= 0 &&
+      length <= MAX_RETAINED_NONCE_REPAIRS
+    );
+
+    return readArray(input, readRepair);
+  } catch {
+    // Keep diagnostics fixed and identify the affected journal field.
+    throw new TypeError('Invalid transaction journal repairs.');
+  }
+}
+
+function readRepair(input: unknown): JournalNonceRepair {
+  requireValidRepair(field(input, 'kind') === 'sync-nonce');
+
+  const at = field(input, 'at');
+
+  requireValidRepair(typeof at === 'string');
+
+  // Use the same canonical ISO representation as attempt.createdAt.
+  // Array order, not timestamp order, determines repair sequence.
+  const timestamp = Date.parse(at);
+
+  requireValidRepair(Number.isFinite(timestamp));
+  requireValidRepair(new Date(timestamp).toISOString() === at);
+
+  const previousNextNonce = readUint(field(input, 'previousNextNonce'));
+  const nextNonce = readUint(field(input, 'nextNonce'));
+  const observation = readObservation(field(input, 'observation'));
+
+  requireValidRepair(nextNonce > previousNextNonce);
+  requireValidRepair(observation.nonce === nextNonce);
+
+  return Object.freeze({
+    kind: 'sync-nonce',
+    at,
+    previousNextNonce,
+    nextNonce,
+    observation,
+  });
+}
+
 function readUint(input: unknown): bigint {
   requireValid(
     typeof input === 'bigint' &&
@@ -382,6 +452,12 @@ function ownValue(
   );
 
   return descriptor.value;
+}
+
+function requireValidRepair(condition: unknown): asserts condition {
+  if (!condition) {
+    throw new TypeError('Invalid transaction journal repairs.');
+  }
 }
 
 function requireValid(condition: unknown): asserts condition {

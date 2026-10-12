@@ -55,6 +55,7 @@ function emptySnapshot(): TransactionJournalSnapshot {
     lastObservation: observation,
     nextNonce: 4n,
     durableNextNonce: 4n,
+    repairs: [],
     attempts: [],
   };
 }

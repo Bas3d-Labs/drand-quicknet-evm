@@ -87,6 +87,7 @@ async function setup(options: {
     },
     nextNonce: options.empty ? 4n : 5n,
     durableNextNonce: 4n,
+    repairs: [],
     attempts: options.empty ? [] : [attempt],
   };
 

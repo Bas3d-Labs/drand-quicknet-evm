@@ -73,6 +73,7 @@ async function setup(options: {
       lastObservation: OBSERVATION,
       nextNonce: 4n,
       durableNextNonce: 4n,
+      repairs: [],
       attempts: [],
     },
   };
@@ -704,6 +705,7 @@ describe('signer recovery cycle', () => {
       lastObservation: OBSERVATION,
       nextNonce: 4n,
       durableNextNonce: 4n,
+      repairs: [],
       attempts: [],
     });
 

@@ -2,6 +2,10 @@ import {
   isDecimalInteger,
 } from '../shared/decimal.js';
 
+import {
+  MAX_RETAINED_NONCE_REPAIRS,
+} from './transaction-journal.js';
+
 import type {
   JournalIdentity,
   TransactionJournalSnapshot,
@@ -88,6 +92,7 @@ export async function decodeJournalSnapshot(
       lastObservation: decodeObservation(root.lastObservation),
       nextNonce: decimal(root.nextNonce), 
       durableNextNonce: decimal(root.durableNextNonce),
+      repairs: decodeRepairs(root.repairs),
       attempts: decodeArray(root.attempts, decodeAttempt),
     };
 
@@ -172,6 +177,29 @@ function decodeInclusion(input: unknown) {
     default:
       throw new TypeError(INVALID_ENCODING);
   }
+}
+
+function decodeRepairs(input: unknown) {
+  if (
+    !Array.isArray(input) ||
+    input.length > MAX_RETAINED_NONCE_REPAIRS
+  ) {
+    throw new TypeError(INVALID_ENCODING);
+  }
+
+  return decodeArray(input, decodeRepair);
+}
+
+function decodeRepair(input: unknown) {
+  const value = object(input);
+
+  return {
+    kind: value.kind,
+    at: value.at,
+    previousNextNonce: decimal(value.previousNextNonce),
+    nextNonce: decimal(value.nextNonce),
+    observation: decodeObservation(value.observation),
+  };
 }
 
 function decodeSearch(input: unknown) {

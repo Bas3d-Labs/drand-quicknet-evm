@@ -225,6 +225,7 @@ try {
   // Output failures throw and are assigned OUTPUT_FAILURE below.
   const outcomeExitCodes = {
     success: EXIT_CODE.SUCCESS,
+    failure: EXIT_CODE.FAILURE,
     pending: EXIT_CODE.IMPORT_PENDING,
     deferred: EXIT_CODE.IMPORT_DEFERRED,
     interrupted: EXIT_CODE.IMPORT_INTERRUPTED,

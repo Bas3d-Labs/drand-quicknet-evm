@@ -389,6 +389,7 @@ describe('beacon transaction submission', () => {
         lastObservation: observation,
         nextNonce: 4n,
         durableNextNonce: 4n,
+        repairs: [],
         attempts: [],
       });
 

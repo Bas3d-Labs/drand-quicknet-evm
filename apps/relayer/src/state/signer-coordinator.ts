@@ -747,6 +747,7 @@ export class SignerCoordinator {
           lastObservation: observation,
           nextNonce: observation.nonce,
           durableNextNonce: observation.nonce,
+          repairs: [],
           attempts: [],
         });
 

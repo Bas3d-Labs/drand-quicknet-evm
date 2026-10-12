@@ -6,14 +6,6 @@ import type {
   SummarizeErrorOptions,
 } from '../diagnostics/error-summary.js';
 
-import {
-  isFixedHex,
-} from '../shared/hex.js';
-
-import {
-  isUuidV4,
-} from '../shared/uuid.js';
-
 import type {
   DaemonStartupSummary,
 } from '../daemon/daemon-startup.js';
@@ -23,12 +15,34 @@ import type {
 } from '../rounds/import-round.js';
 
 import {
+  isFixedHex,
+} from '../shared/hex.js';
+
+import {
+  isUuidV4,
+} from '../shared/uuid.js';
+
+import {
   BLOCKER_PRECEDENCE,
 } from '../state/signer-gate.js';
+
+import type {
+  JournalIdentity,
+} from '../state/transaction-journal.js';
+
+import type {
+  SyncNonceResult,
+} from './sync-nonce.js';
 
 export type CliOutput =
   | {
       type: 'help' | 'daemon-help'
+    }
+  | {
+      type: 'nonce-sync-result';
+      identity: JournalIdentity;
+      mode: 'preview' | 'apply';
+      result: SyncNonceResult;
     }
   | {
       type: 'import-result';
@@ -42,17 +56,45 @@ export type CliOutput =
 
 export type CliOutputHandler = (output: CliOutput) => void;
 
+interface NonceSyncFields {
+  chainId: number;
+  signer: string;
+  mode: 'preview' | 'apply';
+  status:
+    | 'repair-available'
+    | 'already-synchronized'
+    | 'applied'
+    | 'deferred'
+    | 'refused';
+  reason?: string;
+  previousNextNonce?: string;
+  nextNonce?: string;
+  durableBlock?: string;
+  durableBlockHash?: string;
+  repairAt?: string;
+}
+
 const MAX_UINT256 = (1n << 256n) - 1n;
 const MAX_STARTUP_CONSUMERS = 25;
+
+const NONCE_SYNC_REFUSAL_REASONS = [
+  'journal-missing',
+  'journal-changed',
+  'retained-attempts',
+  'nonce-regression',
+  'anchor-regression',
+  'anchor-conflict',
+] as const;
 
 const HELP = [
   'Usage:',
   '  relayer <command> [options]',
   '',
   'Commands:',
-  '  import                 Import an exact Quicknet round immediately.',
+  '  import                  Import an exact Quicknet round immediately.',
   '  import-when-available   Wait for and import an exact Quicknet round.',
-  '  daemon                 Watch consumers and relay requested rounds.',
+  '  daemon                  Watch consumers and relay requested rounds.',
+  '  sync-nonce              Preview or apply a forward signer nonce repair.',
   '',
   'Network selection:',
   '  --network <preset>       Use an official network preset.',
@@ -207,6 +249,156 @@ function consumerLines(
   return lines;
 }
 
+function nonceSyncFields(
+  output: unknown,
+): NonceSyncFields {
+  const identity = own(output, 'identity');
+  const chainId = positiveInteger(own(identity, 'chainId'));
+  const signer = hex(own(identity, 'signer'), 20);
+  const mode = own(output, 'mode');
+
+  if (mode !== 'preview' && mode !== 'apply') {
+    throw new TypeError('Invalid nonce sync mode.');
+  }
+
+  const result = own(output, 'result');
+  const status = own(result, 'status');
+
+  if (status === 'already-synchronized') {
+    return {
+      chainId,
+      signer,
+      mode,
+      status,
+    };
+  }
+
+  if (status === 'deferred' || status === 'refused') {
+    const reason = own(result, 'reason');
+
+    const validReason = status === 'deferred'
+      ? (
+          reason === 'nonce-count-mismatch' ||
+          reason === 'anchor-changed'
+        )
+      : NONCE_SYNC_REFUSAL_REASONS.some(
+        (allowed) => allowed === reason,
+      );
+    
+    if (typeof reason !== 'string' || !validReason) {
+      throw new TypeError('Invalid nonce sync reason.');
+    }
+
+    return {
+      chainId,
+      signer,
+      mode,
+      status,
+      reason,
+    };
+  }
+
+  if (status !== 'repair-available' && status !== 'applied') {
+    throw new TypeError('Invalid nonce sync status.');
+  }
+
+  if (
+    (status === 'repair-available' && mode !== 'preview') ||
+    (status === 'applied' && mode !== 'apply')
+  ) {
+    throw new TypeError('Invalid nonce sync outcome mode.');
+  }
+
+  const repair = own(result, 'repair');
+
+  if (own(repair, 'kind') !== 'sync-nonce') {
+    throw new TypeError('Invalid nonce repair kind.');
+  }
+
+  const previousNextNonce = uint(own(repair, 'previousNextNonce'));
+  const nextNonce = uint(own(repair, 'nextNonce'));
+
+  if (BigInt(nextNonce) <= BigInt(previousNextNonce)) {
+    throw new TypeError('Invalid nonce repair progression.');
+  }
+
+  const observation = own(repair, 'observation');
+
+  if (uint(own(observation, 'nonce')) !== nextNonce) {
+    throw new TypeError('Invalid nonce repair observation.');
+  }
+
+  const anchor = own(observation, 'anchor');
+  const durableBlock = uint(own(anchor, 'blockNumber'));
+  const durableBlockHash = hex(own(anchor, 'blockHash'), 32);
+  const repairAt = own(repair, 'at');
+
+  if (typeof repairAt !== 'string') {
+    throw new TypeError('Invalid nonce repair timestamp.');
+  }
+
+  const timestamp = Date.parse(repairAt);
+
+  if (
+    !Number.isFinite(timestamp) ||
+    new Date(timestamp).toISOString() !== repairAt
+  ) {
+    throw new TypeError('Invalid nonce repair timestamp.');
+  }
+
+  return {
+    chainId,
+    signer,
+    mode,
+    status,
+    previousNextNonce,
+    nextNonce,
+    durableBlock,
+    durableBlockHash,
+    repairAt,
+  };
+}
+
+function renderNonceSyncOutput(
+  output: unknown,
+): string {
+  const fields = nonceSyncFields(output);
+
+  const lines = [
+    'Nonce sync: ' + fields.status,
+    'Mode: ' + fields.mode,
+    'Chain ID: ' + fields.chainId,
+    'Signer: ' + fields.signer,
+  ];
+
+  if (fields.reason !== undefined) {
+    lines.push('Reason: ' + fields.reason);
+  }
+
+  if (fields.previousNextNonce !== undefined) {
+    lines.push(
+      'Previous next nonce: ' + fields.previousNextNonce,
+      'Next nonce: ' + fields.nextNonce,
+      'Durable block: ' + fields.durableBlock,
+      'Durable block hash: ' + fields.durableBlockHash,
+      (
+        fields.status === 'applied'
+          ? 'Repair timestamp: '
+          : 'Proposed repair timestamp: '
+      ) + fields.repairAt,
+    );
+  }
+
+  if (fields.status === 'repair-available') {
+    lines.push(
+      'Preview only. No journal changes were made.',
+      'Run with --apply to perform a fresh inspection and apply an eligible repair.',
+    );
+  }
+
+  return lines.join('\n');
+}
+
 // Construct and validate the complete output before any writer receives it.
 export function renderCliOutput(
   output: CliOutput,
@@ -340,6 +532,10 @@ export function renderCliOutput(
     ].join('\n');
   }
 
+  if (type === 'nonce-sync-result') {
+    return renderNonceSyncOutput(output);
+  }
+
   throw new TypeError('Invalid CLI output type.');
 }
 
@@ -356,7 +552,12 @@ export function renderOutputFailure(
   try {
     const type = own(output, 'type');
 
-    if (
+    if (type === 'nonce-sync-result') {
+      context = {
+        output: type,
+        ...nonceSyncFields(output),
+      };
+    } else if (
       type === 'help' ||
       type === 'daemon-help' ||
       type === 'daemon-startup'

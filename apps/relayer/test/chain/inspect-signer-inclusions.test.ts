@@ -100,6 +100,7 @@ async function setup() {
     },
     nextNonce: 6n,
     durableNextNonce: 4n,
+    repairs: [],
     attempts: [first, second],
   };
 

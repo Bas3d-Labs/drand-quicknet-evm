@@ -35,6 +35,10 @@ import {
 } from '../../src/cli/open-signer-runtime.js';
 
 import {
+  syncNonce,
+} from '../../src/cli/sync-nonce.js';
+
+import {
   createRelayerLog,
 } from '../../src/diagnostics/relayer-log.js';
 
@@ -46,6 +50,15 @@ import {
   assertServiceLockHeld,
   serviceLockReason,
 } from '../../src/state/service-lock.js';
+
+import type {
+  TransactionJournalSnapshot,
+} from '../../src/state/transaction-journal.js';
+
+import {
+  decodeJournalSnapshot,
+  encodeJournalSnapshot,
+} from '../../src/state/transaction-journal-serialization.js';
 
 vi.mock('../../src/state/service-lock.js', async (importOriginal) => {
   const actual = await importOriginal<
@@ -215,6 +228,161 @@ describe('command signer runtime', () => {
     });
 
     expect(await stateEntries()).toHaveLength(1);
+  });
+
+  it('accepts an applied nonce repair after reopening and recovery', async () => {
+    const filePath = join(
+      directory,
+      `transaction-journal-4663-${IDENTITY.signer}.json`,
+    );
+
+    const snapshot: TransactionJournalSnapshot = {
+      version: 1,
+      identity: { ...IDENTITY },
+      baseline: {
+        anchor: {
+          blockNumber: 90n,
+          blockHash: HASH,
+        },
+        nonce: 4n,
+      },
+      lastObservation: {
+        anchor: {
+          blockNumber: 100n,
+          blockHash: HASH,
+        },
+        nonce: 8n,
+      },
+      nextNonce: 4n,
+      durableNextNonce: 4n,
+      repairs: [],
+      attempts: [],
+    };
+
+    await writeFile(
+      filePath,
+      await encodeJournalSnapshot(snapshot, IDENTITY),
+    );
+
+    const blocked = await openSignerRuntime(options());
+
+    expect(blocked.coordinator.status).toMatchObject({
+      open: false,
+      primaryReason: 'unattributed-signer-activity',
+    });
+
+    const anchor = {
+      blockNumber: 110n,
+      blockHash: HASH,
+    };
+
+    const getChainId = vi.fn().mockResolvedValue(IDENTITY.chainId);
+    const getBlockNumber = vi.fn().mockResolvedValue(anchor.blockNumber);
+    const getBlock = vi.fn().mockResolvedValue({
+      number: anchor.blockNumber,
+      hash: anchor.blockHash,
+    });
+    const getTransactionCount = vi.fn().mockResolvedValue(8);
+
+    const request = vi.fn().mockRejectedValue(
+      new Error('Unexpected raw RPC request.'),
+    );
+    const sendRawTransaction = vi.fn().mockRejectedValue(
+      new Error('Unexpected transaction broadcast.'),
+    );
+
+    const publicClient = {
+      getChainId,
+      getBlockNumber,
+      getBlock,
+      getTransactionCount,
+      request,
+      sendRawTransaction,
+    } as unknown as PublicClient;
+
+    // Simulate a later command under the same service ownership.
+    // The blocked runtime is no longer used.
+    const result = await syncNonce({
+      publicClient,
+      identity: { ...IDENTITY },
+      finality: { type: 'safe' },
+      apply: true,
+      env: options().env,
+    });
+
+    expect(result.status).toBe('applied');
+
+    if (result.status !== 'applied') {
+      throw new Error('Expected nonce repair to be applied.');
+    }
+
+    expect(result.repair).toMatchObject({
+      kind: 'sync-nonce',
+      previousNextNonce: 4n,
+      nextNonce: 8n,
+      observation: {
+        anchor,
+        nonce: 8n,
+      },
+    });
+
+    const repaired = await decodeJournalSnapshot(
+      await readFile(filePath, 'utf8'),
+      IDENTITY,
+    );
+
+    expect(repaired.baseline).toEqual(snapshot.baseline);
+    expect(repaired.nextNonce).toBe(8n);
+    expect(repaired.durableNextNonce).toBe(8n);
+    expect(repaired.lastObservation).toEqual({
+      anchor,
+      nonce: 8n,
+    });
+    expect(repaired.repairs).toEqual([result.repair]);
+    expect(repaired.attempts).toEqual([]);
+
+    const reopened = await openSignerRuntime(options());
+
+    // Repair persistence alone must not bypass runtime recovery.
+    expect(reopened.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
+
+    expect(await reopened.recovery.run({
+      publicClient,
+      anchor,
+      maxBlockRange: 10n,
+    })).toMatchObject({
+      inspection: { status: 'no-attempt' },
+      inclusions: { status: 'inspected' },
+      broadcast: null,
+      retryDelayMs: null,
+    });
+
+    expect(reopened.coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      primaryReason: null,
+      blockers: [],
+    });
+
+    expect(reopened.coordinator.attempts).toEqual([]);
+    expect(request).not.toHaveBeenCalled();
+    expect(sendRawTransaction).not.toHaveBeenCalled();
+
+    const recovered = await decodeJournalSnapshot(
+      await readFile(filePath, 'utf8'),
+      IDENTITY,
+    );
+
+    expect(recovered.baseline).toEqual(snapshot.baseline);
+    expect(recovered.repairs).toEqual([result.repair]);
+    expect(recovered.nextNonce).toBe(8n);
+    expect(recovered.durableNextNonce).toBe(8n);
+    expect(recovered.attempts).toEqual([]);
   });
 
   it('does not touch journal files without verified service ownership', async () => {
