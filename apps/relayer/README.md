@@ -176,6 +176,14 @@ and accepts decimal integers from `1` through `2147483647`. Zero is rejected.
 QUICKNET_RECEIPT_TIMEOUT_MS=30000
 ```
 
+Choose a timeout that allows a few expected transaction-inclusion times
+on your network, with room for ordinary congestion. A shorter value
+reports pending work sooner; a longer value keeps the current import
+waiting longer before returning to recovery.
+
+This is an operational waiting threshold, not a transaction-safety or
+finality bound. Expiry does not cancel the transaction.
+
 When the receipt wait times out, the import returns `pending` with reason
 `receipt-timeout`. The journal attempt remains available for recovery.
 Timeout does not establish transaction failure, release the signer gate,
