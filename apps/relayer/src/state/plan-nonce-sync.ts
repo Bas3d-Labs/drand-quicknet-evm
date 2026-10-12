@@ -7,6 +7,7 @@ import {
 } from './transaction-journal.js';
 
 import {
+  readObservation,
   validateJournalSnapshotStructure,
 } from './transaction-journal-validation.js';
 
@@ -55,10 +56,7 @@ export function planNonceSync(
   );
 
   // Reuse the existing observation validator through snapshot validator.
-  const observation = validateJournalSnapshotStructure({
-    ...current,
-    lastObservation: options.observation,
-  }, options.identity).lastObservation;
+  const observation = readObservation(options.observation);
 
   requireNonce(options.latestNonce);
   requireNonce(options.pendingNonce);

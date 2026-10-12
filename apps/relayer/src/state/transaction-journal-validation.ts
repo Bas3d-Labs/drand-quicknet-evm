@@ -143,7 +143,7 @@ function readAnchor(input: unknown): Readonly<BlockAnchor> {
   });
 }
 
-function readObservation(
+export function readObservation(
   input: unknown,
 ): AnchoredNonceObservation {
   return Object.freeze({
