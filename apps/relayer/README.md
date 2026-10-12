@@ -110,9 +110,10 @@ pnpm --filter @based-labs/drand-quicknet-relayer start \
   --round 31192648
 ```
 
-Beacon retrieval uses bounded retries. Submission uses the simulation
-fallback policy described below; an import attempt does not automatically
-rebroadcast after a wallet error or receipt timeout.
+Beacon retrieval uses a bounded number of attempts. Submission
+uses the simulation fallback policy described below; an import
+attempt does not automatically rebroadcast after a wallet error
+or receipt timeout.
 
 ### `daemon`
 
@@ -175,6 +176,14 @@ and accepts decimal integers from `1` through `2147483647`. Zero is rejected.
 ```dotenv
 QUICKNET_RECEIPT_TIMEOUT_MS=30000
 ```
+
+Choose a timeout that allows a few expected transaction-inclusion times
+on your network, with room for ordinary congestion. A shorter value
+reports pending work sooner; a longer value keeps the current import
+waiting longer before returning to recovery.
+
+This is an operational waiting threshold, not a transaction-safety or
+finality bound. Expiry does not cancel the transaction.
 
 When the receipt wait times out, the import returns `pending` with reason
 `receipt-timeout`. The journal attempt remains available for recovery.
@@ -526,26 +535,43 @@ Package managers and supervisors may additionally report wrapper errors.
 
 | Status | Meaning |
 | --- | --- |
-| `0` | Successful command completion or handled graceful shutdown. Cancellation may produce no import result. This status alone does not prove a round was imported or that the journal has no unresolved attempt. |
+| `0` | Successful command completion or graceful daemon shutdown. |
 | `1` | Application failure or an explicit launcher validation failure. |
 | `2` | CLI output failure; the operation may already have succeeded. |
 | `3` | One-shot import remains pending. A journaled transaction attempt remains unresolved. |
 | `4` | One-shot import was deferred because the signer is unavailable. |
+| `5` | One-shot import interrupted by SIGINT/SIGTERM without producing an import result. A signed attempt may remain in the journal for recovery. |
 | `9` | Node startup failure observed when a configured env file is missing. |
 | `75` | Another process holds the service lock; this may have no diagnostic output. |
 
-For `import` and `import-when-available`, status `0` means the round was
-imported or was already stored. Incomplete work uses separate statuses:
+For one-shot commands, a shutdown signal does not override an import
+outcome returned by active work. Completed, pending, and deferred results
+retain their normal exit codes; unrelated failures remain failures.
+Exit code `5` does not prove that no transaction was signed or broadcast.
+
+Exit code `5` applies to cancellation handled after the command installs
+its shutdown handlers. Signals received earlier during process startup
+may terminate the process with the platform's default signal status.
+
+For `import` and `import-when-available`, status `0` after executing the
+import means the round was imported or was already stored. Help requests
+also exit `0` without performing an import.
+
+Incomplete work uses separate statuses:
 
 - `3` (`pending`): a journaled transaction was not acknowledged by the RPC,
   or receipt waiting timed out. Output includes the attempt ID,
   locally computed transaction hash, and pending reason.
 - `4` (`deferred`): fresh signer recovery left the gate closed, so this
   submission prepared no new attempt. Output includes the signer blocker.
+- `5` (`interrupted`): the command handled cancellation before producing
+  an import result. No result is printed; retained journal state may
+  still require recovery.
 
-Neither outcome proves that the beacon is absent on-chain. Pending
-transactions remain available for journal recovery. The one-shot command
-exits rather than continuing recovery in the background.
+None of these outcomes proves that the beacon is absent on-chain.
+Retained transaction attempts remain available for journal recovery.
+The one-shot command exits rather than continuing recovery in the
+background.
 
 If rendering or writing the result fails, status `2` takes precedence
 over statuses `3` and `4`. Service ownership is released when the process

@@ -14,7 +14,7 @@ import {
   resolve,
 } from 'node:path';
 
-const LOCK_FILENAME = 'relayer.flock';
+export const LOCK_FILENAME = 'relayer.flock';
 
 const REASONS = [
   'platform',

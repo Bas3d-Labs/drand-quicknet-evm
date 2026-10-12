@@ -625,7 +625,7 @@ describe('main', () => {
 
       await expect(
         main(['daemon', '--network', PRESET], output),
-      ).resolves.toBeUndefined();
+      ).resolves.toBe('success');
 
       expect(output).not.toHaveBeenCalled();
       expect(
@@ -1053,7 +1053,7 @@ describe('main', () => {
         PRESET,
         '--round',
         ROUND.toString(),
-      ], output, { onImportFailure })).resolves.toBeUndefined();
+      ], output, { onImportFailure })).resolves.toBe('interrupted');
 
       expect(importQuicknetRound).toHaveBeenCalledOnce();
       expect(output).not.toHaveBeenCalled();
@@ -1099,7 +1099,7 @@ describe('main', () => {
         PRESET,
         '--round',
         ROUND.toString(),
-      ], output)).resolves.toBeUndefined();
+      ], output)).resolves.toBe('interrupted');
 
       if (stage === 'configuration') {
         expect(createRelayerClients).not.toHaveBeenCalled();
@@ -1158,7 +1158,7 @@ describe('main', () => {
         PRESET,
         '--round',
         ROUND.toString(),
-      ], output, { onImportFailure })).resolves.toBeUndefined();
+      ], output, { onImportFailure })).resolves.toBe('interrupted');
 
       expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledOnce();
       expect(importQuicknetRound).not.toHaveBeenCalled();
@@ -1205,7 +1205,7 @@ describe('main', () => {
         PRESET,
         '--round',
         ROUND.toString(),
-      ], output)).resolves.toBeUndefined();
+      ], output)).resolves.toBe('interrupted');
 
       if (stage === 'configuration') {
         expect(createRelayerClients).not.toHaveBeenCalled();

@@ -23,6 +23,7 @@ const EXIT_CODE = {
   OUTPUT_FAILURE: 2,
   IMPORT_PENDING: 3,
   IMPORT_DEFERRED: 4,
+  IMPORT_INTERRUPTED: 5,
 } as const;
 
 const WRITE_BUDGET_MS = 250;
@@ -199,17 +200,9 @@ try {
 
   const { main } = await import('./cli/cli.js');
 
-  await main(process.argv.slice(2), (record) => {
+  const outcome = await main(process.argv.slice(2), (record) => {
     try {
       writeLine(1, renderCliOutput(record));
-
-      if (record.type === 'import-result') {
-        if (record.result.status === 'pending') {
-          process.exitCode = EXIT_CODE.IMPORT_PENDING;
-        } else if (record.result.status === 'deferred') {
-          process.exitCode = EXIT_CODE.IMPORT_DEFERRED;
-        }
-      }
     } catch (error) {
       try {
         writeLine(2, renderOutputFailure(record, error, errorSummary));
@@ -227,6 +220,17 @@ try {
       importFailure = { error, progress };
     },
   });
+
+  // Command status applies only after output and cleanup succeed.
+  // Output failures throw and are assigned OUTPUT_FAILURE below.
+  const outcomeExitCodes = {
+    success: EXIT_CODE.SUCCESS,
+    pending: EXIT_CODE.IMPORT_PENDING,
+    deferred: EXIT_CODE.IMPORT_DEFERRED,
+    interrupted: EXIT_CODE.IMPORT_INTERRUPTED,
+  } satisfies Record<typeof outcome, number>;
+
+  process.exitCode = outcomeExitCodes[outcome];
 } catch (error) {
   if (error === outputFailure) {
     process.exitCode = EXIT_CODE.OUTPUT_FAILURE;
