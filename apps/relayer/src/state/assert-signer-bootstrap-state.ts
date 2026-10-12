@@ -12,11 +12,10 @@ import {
 } from '../diagnostics/signer-journal-errors.js';
 
 import {
+  LOCK_FILENAME,
   ServiceLockNotHeldError,
   type VerifiedServiceLock,
 } from './service-lock.js';
-
-const LOCK_FILENAME = 'relayer.flock';
 
 /**
  * Checks first-use eligibility before the journal store can clean up
