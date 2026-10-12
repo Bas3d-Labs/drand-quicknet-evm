@@ -77,6 +77,11 @@ export interface CliOptions {
   ) => void;
 }
 
+export type CliOutcome =
+  | 'success'
+  | 'pending'
+  | 'deferred';
+
 interface ImportCommandArguments {
   command: 'import';
   source: NetworkSource;
@@ -113,36 +118,38 @@ export async function main(
   args: readonly string[],
   output: CliOutputHandler,
   options: CliOptions = {},
-): Promise<void> {
+): Promise<CliOutcome> {
   const normalizedArgs = normalizeArguments(args);
   const command = parseCommandArguments(normalizedArgs);
 
   switch (command.command) {
     case 'import':
       assertServiceLockHeld();
-      await runWithShutdownSignal(async (signal) => {
-        await runImportCommand(command, output, options, signal);
+      return runWithShutdownSignal((signal) => {
+        return runImportCommand(command, output, options, signal);
       });
-      return;
 
     case 'import-when-available':
       assertServiceLockHeld();
-      await runWithShutdownSignal(async (signal) => {
-        await runImportWhenAvailableCommand(command, output, options, signal);
+      return runWithShutdownSignal((signal) => {
+        return runImportWhenAvailableCommand(
+          command,
+          output,
+          options,
+          signal,
+        );
       });
-      return;
     
     case 'daemon':
-      await runDaemonCli(command.source, output, options);
-      return;    
+      return runDaemonCli(command.source, output, options);  
       
     case 'daemon-help':
       output({ type: 'daemon-help' });
-      return;
+      return 'success';
 
     case 'help':
       output({ type: 'help' });
-      return;
+      return 'success';
   }
 }
 
@@ -151,7 +158,7 @@ async function runImportCommand(
   output: CliOutputHandler,
   options: CliOptions,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<CliOutcome> {
   signal.throwIfAborted();
 
   const config = await loadRelayerConfig({
@@ -159,7 +166,7 @@ async function runImportCommand(
     ...(options.onDiagnostics !== undefined
       ? { onDiagnostics: options.onDiagnostics }
       : {}),
-  })
+  });
 
   signal.throwIfAborted();
 
@@ -218,6 +225,8 @@ async function runImportCommand(
     round: command.round,
     result,
   });
+
+  return importOutcome(result);
 }
 
 async function runImportWhenAvailableCommand(
@@ -225,7 +234,7 @@ async function runImportWhenAvailableCommand(
   output: CliOutputHandler,
   options: CliOptions,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<CliOutcome> {
   signal.throwIfAborted();
 
   const config = await loadRelayerConfig({
@@ -292,11 +301,13 @@ async function runImportWhenAvailableCommand(
     round: command.round,
     result,
   });
+
+  return importOutcome(result);
 }
 
 async function runWithShutdownSignal(
-  run: (signal: AbortSignal) => Promise<void>,
-): Promise<void> {
+  run: (signal: AbortSignal) => Promise<CliOutcome>,
+): Promise<CliOutcome> {
   const controller = new AbortController();
 
   const handleShutdown = (): void => {
@@ -307,7 +318,7 @@ async function runWithShutdownSignal(
   process.on('SIGTERM', handleShutdown);
 
   try {
-    await run(controller.signal);
+    return await run(controller.signal);
   } catch (error) {
     if (
       !controller.signal.aborted ||
@@ -317,6 +328,7 @@ async function runWithShutdownSignal(
     }
 
     // Requested shutdown completed after active work unwound.
+    return 'success';
   } finally {
     process.removeListener('SIGINT', handleShutdown);
     process.removeListener('SIGTERM', handleShutdown);
@@ -327,8 +339,8 @@ async function runDaemonCli(
   source: NetworkSource,
   output: CliOutputHandler,
   options: CliOptions,
-): Promise<void> {
-  await runWithShutdownSignal(async (signal) => {
+): Promise<CliOutcome> {
+  return runWithShutdownSignal(async (signal) => {
     await runDaemonCommand({
       source,
       signal,
@@ -342,7 +354,25 @@ async function runDaemonCli(
         options.onDiagnostics?.(policy);
       },
     });
+
+    return 'success';
   });
+}
+
+function importOutcome(
+  result: ImportQuicknetRoundResult,
+): CliOutcome {
+  switch (result.status) {
+    case 'imported':
+    case 'already-stored':
+      return 'success';
+
+    case 'pending':
+      return 'pending';
+
+    case 'deferred':
+      return 'deferred';
+  }
 }
 
 export function parseCommandArguments(
