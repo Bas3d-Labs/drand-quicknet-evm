@@ -95,6 +95,19 @@ export class FileTransactionJournalStore
   }
 
   /**
+   * Reads and validates journal state without cleanup or persistence.
+   * 
+   * Requires exclusive signer ownership and an existing, trusted state
+   * directory, just like the writeable store.
+   */
+  static async read(
+    options: FileTransactionJournalStoreOptions,
+  ): Promise<TransactionJournalRead> {
+    const store = new FileTransactionJournalStore(options);
+    return store.load();
+  }
+
+  /**
    * Validates existing state, removes owned orphaned temporary files,
    * and durably rewrites any existing snapshot before returning.
    */

@@ -1,9 +1,11 @@
 import {
   link,
   mkdtemp,
+  readdir,
   readFile,
   rename,
   rm,
+  stat,
   symlink,
   writeFile,
 } from 'node:fs/promises';
@@ -416,5 +418,95 @@ describe('file transaction journal store', () => {
 
     expect(durableReplace).not.toHaveBeenCalled();
     expect(await readFile(target, 'utf8')).toBe(contents);
+  });
+
+  it.each(['missing', 'present'] as const)(
+    'reads a %s journal without cleanup or replacement',
+    async (kind) => {
+      const snapshot = fixture();
+      const contents = await encodeJournalSnapshot(snapshot, IDENTITY);
+
+      const orphan =
+        `${filePath}.123.11111111-1111-4111-8111-111111111111.tmp`;
+      const unrelated = join(directory, 'unrelated.tmp');
+
+      await writeFile(orphan, 'retained recovery evidence');
+      await writeFile(unrelated, 'keep');
+
+      if (kind === 'present') {
+        await writeFile(filePath, contents);
+      }
+
+      const entriesBefore = (await readdir(directory)).sort();
+      const identityBefore = kind === 'present'
+        ? await stat(filePath, { bigint: true })
+        : undefined;
+
+      const result = await FileTransactionJournalStore.read({
+        filePath,
+        identity: IDENTITY,
+      });
+
+      expect(result).toEqual(
+        kind === 'present'
+          ? { kind: 'present', snapshot }
+          : { kind: 'missing' },
+      );
+
+      expect(durableReplace).not.toHaveBeenCalled();
+
+      expect((await readdir(directory)).sort()).toEqual(entriesBefore);
+      expect(await readFile(orphan, 'utf8'))
+        .toBe('retained recovery evidence');
+      expect(await readFile(unrelated, 'utf8')).toBe('keep');
+
+      if (identityBefore !== undefined) {
+        expect(await readFile(filePath, 'utf8')).toBe(contents);
+
+        const identityAfter = await stat(filePath, { bigint: true });
+
+        expect(identityAfter.dev).toBe(identityBefore.dev);
+        expect(identityAfter.ino).toBe(identityBefore.ino);
+        expect(identityAfter.mtimeNs).toBe(identityBefore.mtimeNs);
+      } else {
+        await expect(readFile(filePath))
+          .rejects.toHaveProperty('code', 'ENOENT');
+      }
+    },
+  );
+
+  it('rejects corrupt state through read without altering evidence', async () => {
+    const contents = '{"broken":';
+    const orphan =
+      `${filePath}.123.11111111-1111-4111-8111-111111111111.tmp`;
+
+    await writeFile(filePath, contents);
+    await writeFile(orphan, 'retain');
+
+    await expect(FileTransactionJournalStore.read({
+      filePath,
+      identity: IDENTITY,
+    })).rejects.toThrow('Transaction journal could not be decoded.');
+
+    expect(await readFile(filePath, 'utf8')).toBe(contents);
+    expect(await readFile(orphan, 'utf8')).toBe('retain');
+    expect(durableReplace).not.toHaveBeenCalled();
+  });
+
+  it('checks expected identity through the read-only entry point', async () => {
+    const contents = await encodeJournalSnapshot(fixture(), IDENTITY);
+
+    await writeFile(filePath, contents);
+
+    await expect(FileTransactionJournalStore.read({
+      filePath,
+      identity: {
+        ...IDENTITY,
+        chainId: 1,
+      },
+    })).rejects.toThrow('Transaction journal could not be decoded.');
+
+    expect(await readFile(filePath, 'utf8')).toBe(contents);
+    expect(durableReplace).not.toHaveBeenCalled();
   });
 });
