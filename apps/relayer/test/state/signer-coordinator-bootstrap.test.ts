@@ -153,6 +153,7 @@ describe('signer bootstrap during recovery', () => {
         },
         nextNonce: BigInt(nonce),
         durableNextNonce: BigInt(nonce),
+        repairs: [],
         attempts: [],
       });
 

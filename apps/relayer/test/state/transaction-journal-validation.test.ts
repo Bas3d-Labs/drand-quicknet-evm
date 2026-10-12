@@ -68,6 +68,22 @@ function attempt(nonce = 4n) {
   };
 }
 
+function repair(previousNextNonce = 4n, nextNonce = 6n) {
+  return {
+    kind: 'sync-nonce' as const,
+    at: '2026-10-12T00:00:00.000Z',
+    previousNextNonce,
+    nextNonce,
+    observation: {
+      anchor: {
+        blockNumber: 120n,
+        blockHash: HASH,
+      },
+      nonce: nextNonce,
+    },
+  };
+}
+
 function fixture() {
   return {
     version: 1,
@@ -88,6 +104,7 @@ function fixture() {
     },
     nextNonce: 5n,
     durableNextNonce: 4n,
+    repairs: [],
     attempts: [attempt()],
   };
 }
@@ -344,6 +361,130 @@ describe('journal snapshot structure', () => {
     mutate(input);
 
     expectInvalid(input);
+  });
+
+  it('accepts repair history with zero attempts and preserves the baseline', () => {
+    const original = fixture();
+
+    const input = {
+      ...original,
+      nextNonce: 6n,
+      durableNextNonce: 6n,
+      lastObservation: repair().observation,
+      repairs: [repair()],
+      attempts: [],
+    };
+
+    const snapshot = validate(input);
+
+    expect(snapshot.baseline).toEqual(original.baseline);
+    expect(snapshot.repairs).toEqual(input.repairs);
+    expect(snapshot.attempts).toEqual([]);
+
+    input.repairs[0]!.observation.nonce = 99n;
+
+    expect(snapshot.repairs[0]!.observation.nonce).toBe(6n);
+
+    for (const value of [
+      snapshot.repairs,
+      snapshot.repairs[0],
+      snapshot.repairs[0]!.observation,
+      snapshot.repairs[0]!.observation.anchor,
+    ]) {
+      expect(Object.isFrozen(value)).toBe(true);
+    }
+  });
+
+  it('rejects a repair beyond durableNextNonce independently of attempt count', () => {
+    expect(() => validate({
+      ...fixture(),
+      nextNonce: 6n,
+      durableNextNonce: 6n,
+      attempts: [],
+      repairs: [repair(4n, 7n)],
+    })).toThrow('Invalid transaction journal repairs.');
+  });
+
+  it('accepts repair insertion order despite a backward wall-clock timestamp', () => {
+    const repairs = [
+      repair(4n, 6n),
+      {
+        ...repair(6n, 8n),
+        at: '2026-10-11T23:59:00.000Z',
+      },
+    ];
+
+    expect(validate({
+      ...fixture(),
+      nextNonce: 8n,
+      durableNextNonce: 8n,
+      attempts: [],
+      repairs,
+    }).repairs).toEqual(repairs);
+  });
+
+  it.each([
+    {
+      name: 'unknown repair kind',
+      value: [{ ...repair(), kind: 'reset' }],
+    },
+    {
+      name: 'invalid timestamp',
+      value: [{ ...repair(), at: 'not-a-timestamp' }],
+    },
+    {
+      name: 'non-forward repair',
+      value: [repair(6n, 6n)],
+    },
+    {
+      name: 'observation nonce mismatch',
+      value: [{
+        ...repair(),
+        observation: {
+          ...repair().observation,
+          nonce: 5n,
+        },
+      }],
+    },
+    {
+      name: 'invalid observation anchor',
+      value: [{
+        ...repair(),
+        observation: {
+          ...repair().observation,
+          anchor: {
+            blockNumber: 120n,
+            blockHash: '0x1234',
+          },
+        },
+      }],
+    },
+    {
+      name: 'overlapping repair progression',
+      value: [repair(4n, 6n), repair(5n, 8n)],
+    },
+    {
+      name: 'more than eight repairs',
+      value: Array.from(
+        { length: 9 },
+        (_, index) => repair(BigInt(index + 4), BigInt(index + 5)),
+      ),
+    },
+  ])('rejects $name', ({ value }) => {
+    expect(() => validate({
+      ...fixture(),
+      nextNonce: 20n,
+      durableNextNonce: 20n,
+      attempts: [],
+      repairs: value,
+    })).toThrow('Invalid transaction journal repairs.');
+  });
+
+  it('rejects snapshots without the required repairs field', () => {
+    const input = { ...fixture() };
+    Reflect.deleteProperty(input, 'repairs');
+
+    expect(() => validate(input)).toThrow(TypeError);
   });
 });
 

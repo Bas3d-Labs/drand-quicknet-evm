@@ -71,6 +71,7 @@ describe('coordinator replacement inclusions', () => {
         lastObservation: baseline,
         nextNonce: 5n,
         durableNextNonce: 4n,
+        repairs: [],
         attempts: [{
           attemptId: '11111111-1111-4111-8111-111111111111',
           nonce: 4n,

@@ -71,6 +71,7 @@ async function fixture(): Promise<TransactionJournalSnapshot> {
     lastObservation: observation,
     nextNonce: 5n,
     durableNextNonce: 4n,
+    repairs: [],
     attempts: [{
       attemptId: '11111111-1111-4111-8111-111111111111',
       nonce: 4n,
@@ -137,6 +138,7 @@ describe('transaction journal serialization', () => {
       },
       nextNonce: '5',
       durableNextNonce: '4',
+      repairs: [],
       attempts: [{
         attemptId: input.attempts[0]!.attemptId,
         nonce: '4',
@@ -519,5 +521,54 @@ describe('transaction journal serialization', () => {
 
     await expect(encodeJournalSnapshot(oversized, IDENTITY))
       .rejects.toThrow(FAILURE);
+  });
+
+  it('round-trips retained repair evidence', async () => {
+    const input = await emptyFixture();
+
+    const observation = {
+      anchor: {
+        blockNumber: LARGE_BLOCK,
+        blockHash: HASH,
+      },
+      nonce: 6n,
+    };
+
+    const { contents } = await expectRoundTrip({
+      ...input,
+      nextNonce: 6n,
+      durableNextNonce: 6n,
+      lastObservation: observation,
+      repairs: [{
+        kind: 'sync-nonce',
+        at: '2026-10-12T00:00:00.000Z',
+        previousNextNonce: 4n,
+        nextNonce: 6n,
+        observation,
+      }],
+    });
+
+    expect(JSON.parse(contents).repairs).toEqual([{
+      kind: 'sync-nonce',
+      at: '2026-10-12T00:00:00.000Z',
+      previousNextNonce: '4',
+      nextNonce: '6',
+      observation: {
+        anchor: {
+          blockNumber: LARGE_BLOCK.toString(),
+          blockHash: HASH,
+        },
+        nonce: '6',
+      },
+    }]);
+  });
+
+  it('rejects v1 encoding without repairs', async () => {
+    const raw = await encodedFixture();
+    delete raw.repairs;
+
+    await expect(
+      decodeJournalSnapshot(JSON.stringify(raw), IDENTITY),
+    ).rejects.toThrow(FAILURE);
   });
 });

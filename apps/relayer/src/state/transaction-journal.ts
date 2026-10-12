@@ -24,6 +24,16 @@ export interface AnchoredNonceObservation {
   readonly nonce: bigint;
 }
 
+export const MAX_RETAINED_NONCE_REPAIRS = 8;
+
+export interface JournalNonceRepair {
+  readonly kind: 'sync-nonce';
+  readonly at: string;
+  readonly previousNextNonce: bigint;
+  readonly nextNonce: bigint;
+  readonly observation: AnchoredNonceObservation;
+}
+
 export interface ReplacementSearch {
   /**
    * Preserved observation establishing that the recorded nonce had
@@ -136,6 +146,12 @@ export interface TransactionJournalSnapshot {
    * durably resolved prefix is removed.
    */
   readonly durableNextNonce: bigint;
+
+  /**
+   * Retained operator repairs, oldest to newest by insertion order.
+   * Wall-clock timestamps need not increase.
+   */
+  readonly repairs: readonly JournalNonceRepair[];
 
   /** Retained attempts ordered by increasing nonce. */
   readonly attempts: readonly JournalAttempt[];
