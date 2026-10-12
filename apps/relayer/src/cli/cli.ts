@@ -334,7 +334,7 @@ async function runImportWhenAvailableCommand(
 
 async function runWithShutdownSignal(
   run: (signal: AbortSignal) => Promise<CliOutcome>,
-  interruptedOutcome: 'success' | 'interrupted' = 'interrupted',
+  interruptedOutcome: 'success' | 'interrupted',
 ): Promise<CliOutcome> {
   const controller = new AbortController();
 

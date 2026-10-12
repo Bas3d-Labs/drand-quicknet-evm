@@ -55,7 +55,6 @@ export function planNonceSync(
     options.identity,
   );
 
-  // Reuse the existing observation validator through snapshot validator.
   const observation = readObservation(options.observation);
 
   requireNonce(options.latestNonce);
