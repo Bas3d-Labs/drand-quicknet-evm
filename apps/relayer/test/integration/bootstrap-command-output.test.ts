@@ -43,11 +43,13 @@ const MODULE_PATHS = {
   config: 'config/config.js',
   clients: 'chain/clients.js',
   daemon: 'daemon/daemon.js',
+  'daemon-command': 'cli/daemon-command.js',
   'daemon-config': 'config/daemon-config.js',
   'daemon-startup': 'daemon/daemon-startup.js',
   'import-round': 'rounds/import-round.js',
   'import-round-when-available':
     'rounds/import-round-when-available.js',
+  'inspect-nonce-sync': 'chain/inspect-nonce-sync.js',
   'open-beacon-submitter': 'cli/open-beacon-submitter.js',
   'service-lock': 'state/service-lock.js',
   'validate-consumers': 'consumers/validate-consumers.js',
@@ -596,5 +598,440 @@ it.skipIf(process.platform !== 'linux').each(COMMAND_OUTPUT_CASES)(
         }
       }
     }
+  },
+);
+
+const NONCE_SYNC_CASES = [
+  ...([
+    'preview',
+    'already-synchronized',
+    'applied',
+    'deferred',
+    'refused',
+  ] as const).flatMap((outcome) =>
+    [false, true].map((outputFails) => ({
+      outcome,
+      outputFails,
+    })),
+  ),
+  {
+    outcome: 'interrupted' as const,
+    outputFails: false,
+  },
+];
+
+it.skipIf(process.platform !== 'linux').each(NONCE_SYNC_CASES)(
+  'sync-nonce reports $outcome (output fails: $outputFails)',
+  ({ outcome, outputFails }) => {
+    const directory = mkdtempSync(
+      join(fixture, 'nonce-sync-'),
+    );
+
+    const signer = '0x' + '11'.repeat(20);
+    const hash = '0x' + 'aa'.repeat(32);
+    const chainId = 46630;
+
+    const journalFile = join(
+      directory,
+      `transaction-journal-${chainId}-${signer}.json`,
+    );
+
+    const lockFile = join(directory, 'relayer.flock');
+    const preload = join(directory, 'preload.mjs');
+
+    const apply = outcome !== 'preview';
+
+    const initial = {
+      version: 1,
+      identity: {
+        chainId,
+        signer,
+      },
+      baseline: {
+        anchor: {
+          blockNumber: '90',
+          blockHash: hash,
+        },
+        nonce: '4',
+      },
+      lastObservation: {
+        anchor: {
+          blockNumber: '100',
+          blockHash: hash,
+        },
+        nonce: '8',
+      },
+      nextNonce: outcome === 'already-synchronized' ? '8' : '4',
+      durableNextNonce:
+        outcome === 'already-synchronized' ? '8' : '4',
+      repairs: [],
+      attempts: [],
+    };
+
+    const originalContents = JSON.stringify(initial) + '\n';
+
+    if (outcome !== 'refused') {
+      writeFileSync(journalFile, originalContents);
+    }
+
+    const renderer = compiledModuleUrl('cli-output');
+
+    const replacements = new Map<ModuleName, string>([
+      [
+        'config',
+        `
+          export function parseRelayerNetworkPreset() {
+            return 'robinhood-testnet';
+          }
+
+          export async function loadRelayerConfig() {
+            return {
+              account: {
+                address: ${JSON.stringify(signer)},
+              },
+              chain: {
+                id: ${chainId},
+              },
+              finality: {
+                type: 'safe',
+              },
+            };
+          }
+        `,
+      ],
+      [
+        'clients',
+        `
+          export function createRelayerClients() {
+            return {
+              publicClient: {},
+              walletClient: {},
+            };
+          }
+        `,
+      ],
+      [
+        'inspect-nonce-sync',
+        `
+          export async function inspectNonceSync({ signal }) {
+            if (${JSON.stringify(outcome)} === 'refused') {
+              throw new Error('Unexpected RPC inspection for missing journal.');
+            }
+
+            if (${JSON.stringify(outcome)} === 'interrupted') {
+              if (!(signal instanceof AbortSignal)) {
+                throw new Error('Expected shutdown signal.');
+              }
+
+              // CLI handlers are installed before this operation begins.
+              process.emit('SIGTERM');
+              signal.throwIfAborted();
+
+              throw new Error('Expected cancellation.');
+            }
+
+            return {
+              status: 'observed',
+              observation: {
+                anchor: {
+                  blockNumber: 110n,
+                  blockHash: ${JSON.stringify(hash)},
+                },
+                nonce: 8n,
+              },
+              latestNonce: 8n,
+              pendingNonce: ${
+                outcome === 'deferred' ? '9n' : '8n'
+              },
+            };
+          }
+        `,
+      ],
+      [
+        'cli-output',
+        `
+          import { closeSync } from 'node:fs';
+
+          import {
+            renderCliOutput as actualRender,
+          } from ${JSON.stringify(renderer + '?nonce-sync-test')};
+
+          export {
+            renderOutputFailure,
+          } from ${JSON.stringify(renderer + '?nonce-sync-test')};
+
+          export function renderCliOutput(record) {
+            const rendered = actualRender(record);
+
+            if (
+              record.type === 'nonce-sync-result' &&
+              ${outputFails}
+            ) {
+              // Rendering succeeded. Fail the actual bootstrap write
+              // after the command has produced its result.
+              closeSync(1);
+            }
+
+            return rendered;
+          }
+        `,
+      ],
+
+      // Prevent unrelated command dependencies from doing any work.
+      [
+        'daemon-command',
+        `
+          export async function runDaemonCommand() {
+            throw new Error('Unexpected daemon command.');
+          }
+        `,
+      ],
+      [
+        'open-beacon-submitter',
+        `
+          export async function openBeaconSubmitter() {
+            throw new Error('Unexpected signer runtime.');
+          }
+        `,
+      ],
+      [
+        'import-round',
+        `
+          export async function importQuicknetRound() {
+            throw new Error('Unexpected round import.');
+          }
+        `,
+      ],
+      [
+        'import-round-when-available',
+        `
+          export async function importQuicknetRoundWhenAvailable() {
+            throw new Error('Unexpected round import.');
+          }
+        `,
+      ],
+    ]);
+
+    const modules = [...replacements].map(([name, source]) => [
+      compiledModuleUrl(name),
+      source,
+    ]);
+
+    writeFileSync(preload, `
+      import { registerHooks } from 'node:module';
+
+      const modules = new Map(${JSON.stringify(modules)});
+
+      registerHooks({
+        load(url, context, nextLoad) {
+          if (modules.has(url)) {
+            return {
+              format: 'module',
+              source: modules.get(url),
+              shortCircuit: true,
+            };
+          }
+
+          return nextLoad(url, context);
+        },
+      });
+    `);
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      NODE_ENV: 'production',
+      QUICKNET_LOG_LEVEL: 'info',
+      QUICKNET_STATE_DIR: directory,
+      PRIVATE_KEY: '',
+      QUICKNET_RPC_URL: '',
+      ROBINHOOD_TESTNET_RPC_URL: '',
+    };
+
+    delete env.NODE_OPTIONS;
+    delete env.QUICKNET_ENV_FILE;
+
+    const args = [
+      '--import',
+      preload,
+      join(compiledApplication, 'dist', MODULE_PATHS.bootstrap),
+      'sync-nonce',
+      '--network',
+      'robinhood-testnet',
+      ...(apply ? ['--apply'] : []),
+    ];
+
+    const child = spawnSync('flock', [
+      '--exclusive',
+      '--nonblock',
+      '--no-fork',
+      '--conflict-exit-code',
+      '75',
+      lockFile,
+      process.execPath,
+      ...args,
+    ], {
+      cwd: APP,
+      env,
+      encoding: 'utf8',
+      timeout: 5_000,
+      maxBuffer: 1_048_576,
+    });
+
+    const normalExitCodes = {
+      preview: 0,
+      'already-synchronized': 0,
+      applied: 0,
+      deferred: 4,
+      refused: 1,
+      interrupted: 5,
+    } as const;
+
+    expect(child.error).toBeUndefined();
+    expect(child.signal).toBeNull();
+    expect(child.status, child.stderr).toBe(
+      outputFails ? 2 : normalExitCodes[outcome],
+    );
+
+    const records: Record<string, unknown>[] =
+      child.stderr.trim().length === 0
+        ? []
+        : child.stderr.trimEnd().split('\n').map(
+            (line) => JSON.parse(line),
+          );
+
+    const expectedEvents = [
+      ...(outcome === 'applied' ? ['signer_nonce_synced'] : []),
+      ...(outputFails ? ['output_failed'] : []),
+    ];
+
+    expect(records.map((record) => record.event))
+      .toEqual(expectedEvents);
+
+    if (outcome === 'interrupted') {
+      expect(child.stdout).toBe('');
+    } else {
+      const status = outcome === 'preview'
+        ? 'repair-available'
+        : outcome;
+
+      if (outputFails) {
+        expect(child.stdout).toBe('');
+
+        const failure = records.find(
+          (record) => record.event === 'output_failed',
+        );
+
+        expect(failure).toMatchObject({
+          code: 'CLI_OUTPUT_FAILED',
+          output: 'nonce-sync-result',
+          chainId,
+          signer,
+          mode: apply ? 'apply' : 'preview',
+          status,
+        });
+
+        expect(failure).not.toHaveProperty('snapshot');
+
+        if (outcome === 'applied' || outcome === 'preview') {
+          expect(failure).toMatchObject({
+            previousNextNonce: '4',
+            nextNonce: '8',
+            durableBlock: '110',
+            durableBlockHash: hash,
+          });
+        }
+
+        if (outcome === 'refused') {
+          expect(failure).toHaveProperty('reason', 'journal-missing');
+        }
+
+        if (outcome === 'deferred') {
+          expect(failure).toHaveProperty('reason', 'nonce-count-mismatch');
+        }
+      } else {
+        expect(child.stdout).toContain('Nonce sync: ' + status);
+        expect(child.stdout.endsWith('\n')).toBe(true);
+      }
+    }
+
+    if (outcome === 'applied') {
+      const persisted = JSON.parse(readFileSync(journalFile, 'utf8'));
+
+      expect(persisted).toMatchObject({
+        identity: initial.identity,
+        baseline: initial.baseline,
+        lastObservation: {
+          anchor: {
+            blockNumber: '110',
+            blockHash: hash,
+          },
+          nonce: '8',
+        },
+        nextNonce: '8',
+        durableNextNonce: '8',
+        attempts: [],
+      });
+
+      expect(persisted.repairs).toHaveLength(1);
+
+      const repair = persisted.repairs[0];
+
+      expect(repair).toMatchObject({
+        kind: 'sync-nonce',
+        previousNextNonce: '4',
+        nextNonce: '8',
+        observation: persisted.lastObservation,
+      });
+
+      expect(new Date(repair.at).toISOString()).toBe(repair.at);
+
+      expect(records[0]).toMatchObject({
+        event: 'signer_nonce_synced',
+        level: 40,
+        chainId,
+        signer,
+        previousNextNonce: '4',
+        nextNonce: '8',
+        durableBlock: '110',
+        durableBlockHash: hash,
+        durableNonce: '8',
+        repairAt: repair.at,
+      });
+
+      if (outputFails) {
+        expect(records[1]).toMatchObject({
+          event: 'output_failed',
+          status: 'applied',
+          repairAt: repair.at,
+        });
+      }
+    } else if (outcome === 'refused') {
+      expect(existsSync(journalFile)).toBe(false);
+    } else {
+      expect(readFileSync(journalFile, 'utf8')).toBe(originalContents);
+    }
+
+    // Reacquisition must succeed after bootstrap exits.
+    const reacquired = spawnSync('flock', [
+      '--exclusive',
+      '--nonblock',
+      '--no-fork',
+      '--conflict-exit-code',
+      '75',
+      lockFile,
+      process.execPath,
+      '-e',
+      '',
+    ], {
+      cwd: APP,
+      env,
+      encoding: 'utf8',
+      timeout: 5_000,
+      maxBuffer: 1_048_576,
+    });
+
+    expect(reacquired.error).toBeUndefined();
+    expect(reacquired.signal).toBeNull();
+    expect(reacquired.status, reacquired.stderr).toBe(0);
   },
 );
