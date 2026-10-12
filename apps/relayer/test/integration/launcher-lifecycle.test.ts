@@ -7,6 +7,7 @@ import {
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -131,6 +132,7 @@ function writePreload(
   applicationDirectory: string = compiledApplication,
   startupRecovery = false,
   command: 'daemon' | 'import' | 'import-when-available' = 'daemon',
+  interrupted = false,
 ): string {
   const preload = join(directory, 'preload.mjs');
 
@@ -591,8 +593,110 @@ function writePreload(
     `);
   }
 
+  if (interrupted) {
+    if (command === 'daemon') {
+      throw new Error('Interruption fixture requires a one-shot command.');
+    }
+
+    const modulePath = command === 'import'
+      ? 'rounds/import-round.js'
+      : 'rounds/import-round-when-available.js';
+
+    // A query bypasses this fixture's exact-URL replacement so the
+    // actual import implementation executes.
+    replace(modulePath, `
+      export * from ${JSON.stringify(
+        compiledModuleUrl(modulePath, applicationDirectory) +
+          '?interruption-test',
+      )};
+    `);
+
+    // Stop before simulation or submission if cancellation is broken.
+    replace('rounds/simulate-beacon-submission.js', `
+      export async function simulateBeaconSubmission() {
+        throw new Error('Unexpected simulation after cancellation.');
+      }
+    `);
+
+    if (command === 'import-when-available') {
+      replace('rounds/wait-for-round.js', `
+        import { writeFileSync } from 'node:fs';
+        import { setTimeout as delay } from 'node:timers/promises';
+
+        import {
+          waitForQuicknetRound as actualWait,
+        } from ${JSON.stringify(
+          compiledModuleUrl(
+            'rounds/wait-for-round.js',
+            applicationDirectory,
+          ) + '?interruption-test',
+        )};
+
+        export async function waitForQuicknetRound(options) {
+          return actualWait({
+            ...options,
+            async sleep(milliseconds, signal) {
+              signal.throwIfAborted();
+
+              // delay registers its abort listener before readiness.
+              const pending = delay(milliseconds, undefined, { signal });
+
+              writeFileSync(
+                ${JSON.stringify(join(runtimeDirectory, 'ready'))},
+                String(process.pid),
+              );
+
+              try {
+                await pending;
+              } catch (error) {
+                signal.throwIfAborted();
+                throw error;
+              }
+            },
+          });
+        }
+      `);
+    }
+  }
+
   writeFileSync(preload, `
     import { registerHooks } from 'node:module';
+    import { writeFileSync } from 'node:fs';
+
+    if (${interrupted}) {
+      globalThis.fetch = (_url, init) => {
+        if (${JSON.stringify(command)} !== 'import') {
+          throw new Error('Unexpected fetch before round wait completed.');
+        }
+
+        const signal = init?.signal;
+
+        if (!(signal instanceof AbortSignal)) {
+          throw new Error('Expected a forwarded fetch signal.');
+        }
+
+        signal.throwIfAborted();
+
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            signal.removeEventListener('abort', onAbort);
+            reject(new Error('Test fetch was not cancelled.'));
+          }, 15_000);
+
+          function onAbort() {
+            clearTimeout(timer);
+            reject(signal.reason);
+          }
+
+          signal.addEventListener('abort', onAbort, { once: true });
+
+          writeFileSync(
+            ${JSON.stringify(join(runtimeDirectory, 'ready'))},
+            String(process.pid),
+          );
+        });
+      };
+    }
 
     const replacements = new Map(
       ${JSON.stringify([...replacements])},
@@ -614,8 +718,19 @@ function writePreload(
         if (url === 'relayer-lifecycle:registry') {
           return {
             format: 'module',
-            source:
-              'export async function verifyRegistryDeployment() {}',
+            source: \`
+              export async function verifyRegistryDeployment() {}
+
+              export function createRegistryReader() {
+                return {
+                  async verifyDeployment() {},
+                  async isStored() { return false; },
+                  async getBeacon() {
+                    throw new Error('Unexpected stored-beacon read.');
+                  },
+                };
+              }
+            \`,
             shortCircuit: true,
           };
         }
@@ -1447,4 +1562,187 @@ it.skipIf(
     }
   },
   90_000,
+);
+
+it.skipIf(process.platform !== 'linux').each([
+  { command: 'import', signal: 'SIGINT' },
+  { command: 'import', signal: 'SIGTERM' },
+  { command: 'import-when-available', signal: 'SIGINT' },
+  { command: 'import-when-available', signal: 'SIGTERM' },
+] as const)(
+  '$command exits 5 when interrupted by $signal before submission',
+  async ({ command, signal }) => {
+    const directory = mkdtempSync(
+      join(fixture, `interrupted-${command}-${signal}-`),
+    );
+
+    const preload = writePreload(
+      directory,
+      signal,
+      directory,
+      compiledApplication,
+      false,
+      command,
+      true,
+    );
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: fixture + delimiter + (process.env.PATH ?? ''),
+      NODE_ENV: 'production',
+      NODE_OPTIONS: '--import=' + pathToFileURL(preload).href,
+      QUICKNET_STATE_DIR: directory,
+      QUICKNET_LOG_LEVEL: 'info',
+      PRIVATE_KEY: '',
+      QUICKNET_RPC_URL: '',
+      ROBINHOOD_TESTNET_RPC_URL: '',
+    };
+
+    delete env.QUICKNET_ENV_FILE;
+
+    // Use the SDK's actual schedule to select a round about a minute away.
+    const {
+      QUICKNET_GENESIS_TIMESTAMP,
+      QUICKNET_PERIOD_SECONDS,
+      roundScheduledTime,
+    } = await import('@based-labs/drand-quicknet');
+
+    const targetSeconds = BigInt(Math.floor(Date.now() / 1000)) + 60n;
+
+    const round = 1n +
+      (targetSeconds - QUICKNET_GENESIS_TIMESTAMP) /
+      QUICKNET_PERIOD_SECONDS;
+
+    expect(roundScheduledTime(round)).toBeGreaterThan(
+      BigInt(Math.floor(Date.now() / 1000)),
+    );
+
+    const owner = spawn('sh', [
+      launcher,
+      command,
+      '--network',
+      'robinhood-testnet',
+      '--round',
+      command === 'import' ? '1' : round.toString(),
+    ], {
+      cwd: APP,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let spawnError: Error | undefined;
+    let outcome: ExitResult | undefined;
+    let closed = false;
+
+    owner.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    owner.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    owner.once('error', (error) => {
+      spawnError = error;
+    });
+
+    owner.once('exit', (code, exitSignal) => {
+      outcome = { code, signal: exitSignal };
+    });
+
+    owner.once('close', () => {
+      closed = true;
+    });
+
+    const detail = () => JSON.stringify({
+      stdout,
+      stderr,
+      outcome,
+      spawnError: spawnError?.message,
+    });
+
+    try {
+      await waitUntil(() => {
+        if (spawnError !== undefined) {
+          throw spawnError;
+        }
+
+        if (outcome !== undefined) {
+          throw new Error(`Exited before readiness. ${detail()}`);
+        }
+
+        const readyFile = join(directory, 'ready');
+
+        return existsSync(readyFile) &&
+          readFileSync(readyFile, 'utf8') === String(owner.pid);
+      }, 'interruptible operation readiness', detail);
+
+      expect(
+        Number(readFileSync(join(directory, 'ready'), 'utf8')),
+      ).toBe(owner.pid);
+
+      const before = readdirSync(directory).sort();
+
+      expect(owner.kill(signal)).toBe(true);
+
+      await waitUntil(
+        () => closed,
+        'interrupted command exit and output closure',
+        detail,
+      );
+
+      expect(spawnError).toBeUndefined();
+      expect(outcome, detail()).toEqual({
+        code: 5,
+        signal: null,
+      });
+      expect(stdout).toBe('');
+      expect(stderr).toBe('');
+
+      // Setup is mocked and cancellation precedes signing. No journal
+      // or temporary write evidence should be created by this operation.
+      expect(before).toEqual([
+        'preload.mjs',
+        'ready',
+        'relayer.flock',
+      ]);
+      expect(readdirSync(directory).sort()).toEqual(before);
+
+      const probeEnv = { ...env };
+      delete probeEnv.NODE_OPTIONS;
+
+      const reacquired = spawnSync('flock', [
+        '--exclusive',
+        '--nonblock',
+        '--no-fork',
+        '--conflict-exit-code',
+        '75',
+        join(directory, 'relayer.flock'),
+        process.execPath,
+        '-e',
+        '',
+      ], {
+        env: probeEnv,
+        encoding: 'utf8',
+        timeout: WAIT_TIMEOUT_MS,
+      });
+
+      expect(reacquired.error).toBeUndefined();
+      expect(reacquired.signal).toBeNull();
+      expect(reacquired.status, reacquired.stderr).toBe(0);
+    } finally {
+      if (!closed) {
+        owner.kill('SIGKILL');
+
+        await waitUntil(
+          () => closed,
+          'interruption fixture cleanup',
+          detail,
+        );
+      }
+    }
+  },
+  20_000,
 );

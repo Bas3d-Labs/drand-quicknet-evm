@@ -23,6 +23,7 @@ const EXIT_CODE = {
   OUTPUT_FAILURE: 2,
   IMPORT_PENDING: 3,
   IMPORT_DEFERRED: 4,
+  IMPORT_INTERRUPTED: 5,
 } as const;
 
 const WRITE_BUDGET_MS = 250;
@@ -226,6 +227,7 @@ try {
     success: EXIT_CODE.SUCCESS,
     pending: EXIT_CODE.IMPORT_PENDING,
     deferred: EXIT_CODE.IMPORT_DEFERRED,
+    interrupted: EXIT_CODE.IMPORT_INTERRUPTED,
   } satisfies Record<typeof outcome, number>;
 
   process.exitCode = outcomeExitCodes[outcome];

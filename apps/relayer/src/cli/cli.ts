@@ -80,7 +80,8 @@ export interface CliOptions {
 export type CliOutcome =
   | 'success'
   | 'pending'
-  | 'deferred';
+  | 'deferred'
+  | 'interrupted';
 
 interface ImportCommandArguments {
   command: 'import';
@@ -125,20 +126,22 @@ export async function main(
   switch (command.command) {
     case 'import':
       assertServiceLockHeld();
-      return runWithShutdownSignal((signal) => {
-        return runImportCommand(command, output, options, signal);
-      });
+      return runWithShutdownSignal(
+        (signal) => runImportCommand(command, output, options, signal),
+        'interrupted',
+      );
 
     case 'import-when-available':
       assertServiceLockHeld();
-      return runWithShutdownSignal((signal) => {
-        return runImportWhenAvailableCommand(
+      return runWithShutdownSignal((signal) =>
+        runImportWhenAvailableCommand(
           command,
           output,
           options,
           signal,
-        );
-      });
+        ),
+        'interrupted',
+      );
     
     case 'daemon':
       return runDaemonCli(command.source, output, options);  
@@ -307,6 +310,7 @@ async function runImportWhenAvailableCommand(
 
 async function runWithShutdownSignal(
   run: (signal: AbortSignal) => Promise<CliOutcome>,
+  interruptedOutcome: 'success' | 'interrupted',
 ): Promise<CliOutcome> {
   const controller = new AbortController();
 
@@ -327,8 +331,7 @@ async function runWithShutdownSignal(
       throw error;
     }
 
-    // Requested shutdown completed after active work unwound.
-    return 'success';
+    return interruptedOutcome;
   } finally {
     process.removeListener('SIGINT', handleShutdown);
     process.removeListener('SIGTERM', handleShutdown);
@@ -356,7 +359,7 @@ async function runDaemonCli(
     });
 
     return 'success';
-  });
+  }, 'success');
 }
 
 function importOutcome(
