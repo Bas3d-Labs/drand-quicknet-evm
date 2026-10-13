@@ -17,8 +17,14 @@ import type {
 
 import {
   createBeaconSubmitter,
+  type BeaconRecoveryObservation,
   type BeaconSubmitter,
 } from '../rounds/create-beacon-submitter.js';
+
+import {
+  readSignerRuntimeObservation,
+  type SignerRuntimeObservation,
+} from '../state/read-signer-runtime-observation.js';
 
 import {
   openSignerRuntime,
@@ -39,6 +45,26 @@ export interface OpenBeaconSubmitterOptions {
 
   /** Wait for first-use journal initialization before returning. */
   readonly startupPollIntervalMs?: number | undefined;
+
+  /** 
+   * Synchronous diagnostic observer, including startup recovery.
+   * Notification does not itself authorize snapshot publication.
+   */
+  readonly onRecoveryCompleted?: (
+    observation: BeaconRecoveryObservation,
+  ) => void;
+
+  /**
+   * Called once during opening if the journal is initialized.
+   * When startup polling is enabled, called after that wait succeeds.
+   * 
+   * The supplied function reads public runtime state without advancing it.
+   * The callback is synchronous and must not perform transaction work.
+   */
+  readonly onInitialized?: (
+    readObservation: () => SignerRuntimeObservation,
+  ) => void;
+
   readonly signal?: AbortSignal | undefined;
   readonly env?: NodeJS.ProcessEnv | undefined;
 }
@@ -93,6 +119,9 @@ export async function openBeaconSubmitter(
     readChainHeads,
     maxBlockRange,
     signal,
+    ...(options.onRecoveryCompleted === undefined
+      ? {}
+      : { onRecoveryCompleted: options.onRecoveryCompleted }),
   });
 
   if (options.startupPollIntervalMs !== undefined) {
@@ -102,6 +131,19 @@ export async function openBeaconSubmitter(
       pollIntervalMs: options.startupPollIntervalMs,
       signal,
     });
+  }
+
+  if (
+    options.onInitialized !== undefined &&
+    runtime.coordinator.journalInitialized
+  ) {
+    try {
+      options.onInitialized(
+        () => readSignerRuntimeObservation(runtime.coordinator),
+      );
+    } catch {
+      // Diagnostic setup must not replace successful signer startup.
+    }
   }
 
   return submitter;

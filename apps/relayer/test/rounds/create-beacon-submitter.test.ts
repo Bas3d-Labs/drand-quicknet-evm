@@ -325,4 +325,119 @@ describe('beacon submitter', () => {
 
     expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
   });
+
+  it.each(['recover', 'submit'] as const)(
+    'reports completed recovery through %s',
+    async (operation) => {
+      const t = setup();
+      const onRecoveryCompleted = vi.fn();
+
+      const submitter = createBeaconSubmitter({
+        ...t.options,
+        onRecoveryCompleted,
+      });
+
+      if (operation === 'recover') {
+        expect(await submitter.recover(7)).toBe(t.recoveryResult);
+      } else {
+        expect(await submitter.submit(t.request, 7))
+          .toBe(t.submissionResult);
+      }
+
+      expect(onRecoveryCompleted).toHaveBeenCalledExactlyOnceWith({
+        retryDelayMs: null,
+      });
+
+      const observed = onRecoveryCompleted.mock.calls[0]![0];
+
+      expect(Object.isFrozen(observed)).toBe(true);
+      expect(Object.keys(observed)).toEqual(['retryDelayMs']);
+
+      if (operation === 'submit') {
+        expect(
+          onRecoveryCompleted.mock.invocationCallOrder[0]!,
+        ).toBeLessThan(
+          mocks.submitBeaconTransaction.mock.invocationCallOrder[0]!,
+        );
+      }
+    },
+  );
+
+  it('reports the delay only after recovery finishes', async () => {
+    const t = setup();
+    const onRecoveryCompleted = vi.fn();
+
+    let finish!: (result: SignerRecoveryCycleResult) => void;
+
+    mocks.recoverSignerAtHeads.mockReturnValueOnce(
+      new Promise<SignerRecoveryCycleResult>((resolve) => {
+        finish = resolve;
+      }),
+    );
+
+    const submitter = createBeaconSubmitter({
+      ...t.options,
+      onRecoveryCompleted,
+    });
+
+    const pending = submitter.recover();
+
+    try {
+      expect(onRecoveryCompleted).not.toHaveBeenCalled();
+    } finally {
+      finish({
+        ...t.recoveryResult,
+        retryDelayMs: 5_000,
+      });
+      await pending;
+    }
+
+    expect(onRecoveryCompleted).toHaveBeenCalledExactlyOnceWith({
+      retryDelayMs: 5_000,
+    });
+  });
+
+  it('does not report completed recovery when recovery fails', async () => {
+    const t = setup();
+    const failure = new Error('Recovery failed');
+    const onRecoveryCompleted = vi.fn();
+
+    mocks.recoverSignerAtHeads.mockRejectedValueOnce(failure);
+
+    const submitter = createBeaconSubmitter({
+      ...t.options,
+      onRecoveryCompleted,
+    });
+
+    await expect(submitter.submit(t.request)).rejects.toBe(failure);
+
+    expect(onRecoveryCompleted).not.toHaveBeenCalled();
+    expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each(['recover', 'submit'] as const)(
+    'preserves %s when the recovery observer throws',
+    async (operation) => {
+      const t = setup();
+
+      const submitter = createBeaconSubmitter({
+        ...t.options,
+        onRecoveryCompleted() {
+          throw new Error('Diagnostic observer failed');
+        },
+      });
+
+      if (operation === 'recover') {
+        await expect(submitter.recover())
+          .resolves.toBe(t.recoveryResult);
+      } else {
+        await expect(submitter.submit(t.request))
+          .resolves.toBe(t.submissionResult);
+
+        expect(mocks.submitBeaconTransaction).toHaveBeenCalledOnce();
+      }
+
+      expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
+    },
+  );
 });

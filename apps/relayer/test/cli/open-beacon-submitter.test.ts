@@ -326,4 +326,171 @@ describe('openBeaconSubmitter', () => {
 
     expect(t.submitter.submit).not.toHaveBeenCalled();
   });
+
+  it('forwards the recovery observer to the bound submitter', async () => {
+    const t = fixture();
+    const onRecoveryCompleted = vi.fn();
+
+    await openBeaconSubmitter({
+      ...t.options,
+      onRecoveryCompleted,
+    });
+
+    expect(createBeaconSubmitter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onRecoveryCompleted,
+      }),
+    );
+  });
+
+  it('does not expose an initialized reader for a missing journal', async () => {
+    const t = fixture();
+    const onInitialized = vi.fn();
+
+    Object.defineProperty(t.runtime.coordinator, 'journalInitialized', {
+      value: false,
+    });
+
+    await expect(openBeaconSubmitter({
+      ...t.options,
+      onInitialized,
+    })).resolves.toBe(t.submitter);
+
+    expect(onInitialized).not.toHaveBeenCalled();
+  });
+
+  it('provides a live read-only observation after initialization', async () => {
+    const t = fixture();
+
+    let open = true;
+
+    Object.defineProperties(t.runtime.coordinator, {
+      journalInitialized: {
+        get: () => true,
+      },
+      status: {
+        get: () => ({
+          open,
+          primaryReason: null,
+          blockers: [],
+          recoveryComplete: true,
+          inclusionChecksComplete: true,
+          persistenceState: 'idle',
+          blockedSince: null,
+        }),
+      },
+      attempts: {
+        get: () => [],
+      },
+    });
+
+    const onInitialized = vi.fn<
+      NonNullable<OpenBeaconSubmitterOptions['onInitialized']>
+    >();
+
+    await openBeaconSubmitter({
+      ...t.options,
+      onInitialized,
+    });
+
+    expect(onInitialized).toHaveBeenCalledOnce();
+
+    const readObservation = onInitialized.mock.calls[0]![0];
+    const first = readObservation();
+
+    expect(first.journalInitialized).toBe(true);
+    expect(first.status.open).toBe(true);
+    expect(first.attempts).toEqual([]);
+
+    open = false;
+
+    const second = readObservation();
+
+    expect(second.status.open).toBe(false);
+    expect(first.status.open).toBe(true);
+    expect(Object.isFrozen(second)).toBe(true);
+
+    expect(t.readChainHeads).not.toHaveBeenCalled();
+    expect(t.submitter.recover).not.toHaveBeenCalled();
+    expect(t.submitter.submit).not.toHaveBeenCalled();
+  });
+
+  it('provides the reader only after startup initialization finishes', async () => {
+    const t = fixture();
+    let initialized = false;
+
+    Object.defineProperty(t.runtime.coordinator, 'journalInitialized', {
+      get: () => initialized,
+    });
+
+    let finish!: () => void;
+
+    vi.mocked(waitForSignerJournal).mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finish = () => {
+          initialized = true;
+          resolve();
+        };
+      }),
+    );
+
+    const onInitialized = vi.fn();
+
+    const pending = openBeaconSubmitter({
+      ...t.options,
+      startupPollIntervalMs: 100,
+      onInitialized,
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(waitForSignerJournal).toHaveBeenCalledOnce();
+      });
+
+      expect(onInitialized).not.toHaveBeenCalled();
+    } finally {
+      finish();
+      await pending;
+    }
+
+    expect(onInitialized).toHaveBeenCalledExactlyOnceWith(
+      expect.any(Function),
+    );
+
+    expect(await pending).toBe(t.submitter);
+  });
+
+  it('does not provide a reader when startup initialization fails', async () => {
+    const t = fixture();
+    const failure = new Error('Initialization failed');
+    const onInitialized = vi.fn();
+
+    vi.mocked(waitForSignerJournal).mockRejectedValueOnce(failure);
+
+    await expect(openBeaconSubmitter({
+      ...t.options,
+      startupPollIntervalMs: 100,
+      onInitialized,
+    })).rejects.toBe(failure);
+
+    expect(onInitialized).not.toHaveBeenCalled();
+  });
+
+  it('preserves successful opening when the initialization observer throws', async () => {
+    const t = fixture();
+
+    Object.defineProperty(t.runtime.coordinator, 'journalInitialized', {
+      value: true,
+    });
+
+    await expect(openBeaconSubmitter({
+      ...t.options,
+      onInitialized() {
+        throw new Error('Diagnostic setup failed');
+      },
+    })).resolves.toBe(t.submitter);
+
+    expect(t.submitter.recover).not.toHaveBeenCalled();
+    expect(t.submitter.submit).not.toHaveBeenCalled();
+  });
 });

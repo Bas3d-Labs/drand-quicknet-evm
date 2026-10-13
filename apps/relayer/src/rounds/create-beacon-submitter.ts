@@ -54,6 +54,10 @@ export interface BeaconSubmitter {
   ): Promise<BeaconSubmissionResult>;
 }
 
+export interface BeaconRecoveryObservation {
+  readonly retryDelayMs: number | null;
+}
+
 export interface CreateBeaconSubmitterOptions {
   readonly publicClient: PublicClient;
   readonly walletClient: WalletClient;
@@ -62,6 +66,15 @@ export interface CreateBeaconSubmitterOptions {
   readonly recovery: SignerRecoveryCycle;
   readonly readChainHeads: () => Promise<ChainHeads>;
   readonly maxBlockRange: bigint;
+
+  /**
+   * Synchronous diagnostic observer called after successful recovery.
+   * Also observes recovery performed internally before submission.
+   * Must not perform transaction work.
+   */
+  readonly onRecoveryCompleted?: (
+    observation: BeaconRecoveryObservation,
+  ) => void;
   readonly signal?: AbortSignal | undefined;
 }
 
@@ -86,13 +99,23 @@ export function createBeaconSubmitter(
   async function recover(
     cycle?: number,
   ): Promise<SignerRecoveryCycleResult> {
-    return recoverSignerAtHeads({
+    const result = await recoverSignerAtHeads({
       publicClient,
       recovery: recoveryCycle,
       readChainHeads,
       maxBlockRange,
       signal,
     }, cycle);
+
+    try {
+      options.onRecoveryCompleted?.(Object.freeze({
+        retryDelayMs: result.retryDelayMs,
+      }));
+    } catch {
+      // Diagnostic observers must not replace a recovery outcome.
+    }
+
+    return result;
   }
 
   async function submit(
