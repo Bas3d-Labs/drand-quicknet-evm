@@ -316,8 +316,9 @@ also records the chain ID and registry address; mismatches with the
 configured deployment are rejected.
 
 The checkpoint must be a direct child of the canonical
-`QUICKNET_STATE_DIR`. Nested directories and paths outside that directory
-are rejected. The filename `relayer.flock` is reserved.
+`QUICKNET_STATE_DIR`. Nested directories and paths outside that 
+directory are rejected. The filename `relayer.flock` and 
+`daemon-status.json` is reserved.
 
 An existing checkpoint must be a regular file with one hard link.
 Checkpoint symlinks and hard-link aliases are rejected. The state

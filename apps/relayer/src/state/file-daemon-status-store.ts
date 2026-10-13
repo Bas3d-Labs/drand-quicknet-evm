@@ -30,6 +30,7 @@ import {
 
 import {
   assertServiceLockHeld,
+  DAEMON_STATUS_FILENAME,
   ServiceLockNotHeldError,
 } from './service-lock.js';
 
@@ -41,7 +42,6 @@ import {
   isFixedHex,
 } from '../shared/hex.js';
 
-export const DAEMON_STATUS_FILENAME = 'daemon-status.json';
 export const MAX_DAEMON_STATUS_BYTES = 16_384;
 
 export interface ReadDaemonStatusFileOptions {

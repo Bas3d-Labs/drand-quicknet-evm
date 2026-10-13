@@ -31,7 +31,6 @@ import type {
 } from '../../src/state/daemon-status-snapshot.js';
 
 import {
-  DAEMON_STATUS_FILENAME,
   MAX_DAEMON_STATUS_BYTES,
   readDaemonStatusFile,
   writeDaemonStatusFile,
@@ -39,6 +38,7 @@ import {
 
 import {
   assertServiceLockHeld,
+  DAEMON_STATUS_FILENAME,
   ServiceLockNotHeldError,
 } from '../../src/state/service-lock.js';
 

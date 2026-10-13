@@ -557,6 +557,36 @@ try {
       });
     });
 
+    it('rejects the daemon status filename before the file exists', async () => {
+      const stateDirectory = await createStateDirectory();
+
+      expect(await probe(stateDirectory, {
+        lock: 'exclusive',
+        checkpointFile: join(stateDirectory, 'daemon-status.json'),
+      })).toMatchObject({
+        status: 'refused',
+        reason: 'state-directory',
+      });
+    });
+
+    it('rejects an existing daemon status file as a checkpoint without changing it', async () => {
+      const stateDirectory = await createStateDirectory();
+      const statusFile = join(stateDirectory, 'daemon-status.json');
+      const contents = '{"existing":"status snapshot"}\n';
+
+      await writeFile(statusFile, contents);
+
+      expect(await probe(stateDirectory, {
+        lock: 'exclusive',
+        checkpointFile: statusFile,
+      })).toMatchObject({
+        status: 'refused',
+        reason: 'state-directory',
+      });
+
+      expect(await readFile(statusFile, 'utf8')).toBe(contents);
+    });
+
     it('rejects checkpoint symlinks and hard-link aliases', async () => {
       const stateDirectory = await createStateDirectory();
       const target = join(stateDirectory, 'target.json');

@@ -83,7 +83,8 @@ export function readDaemonStatusSnapshot(
     throw new TypeError(INVALID);
   }
 
-  // open:false with no blockers is valid while the coordinator is busy.
+  // A closed gate without reported blockers is valid.
+  // These fields alone do not establish why the gate is closed.
   return Object.freeze({
     version: 1,
     identity: Object.freeze({
