@@ -25,6 +25,7 @@ import {
 
 import {
   durableReplace,
+  type PersistenceBoundaryHook,
 } from './durable-replace.js';
 
 import type {
@@ -47,6 +48,7 @@ import {
 export interface FileTransactionJournalStoreOptions {
   readonly filePath: string;
   readonly identity: JournalIdentity;
+  readonly onPersistenceBoundary?: PersistenceBoundaryHook;
 }
 
 /**
@@ -65,6 +67,8 @@ export class FileTransactionJournalStore
 {
   private readonly filePath: string;
   private readonly identity: JournalIdentity;
+  private readonly onPersistenceBoundary:
+    PersistenceBoundaryHook | undefined;
   private operations: Promise<void> = Promise.resolve();
 
   private constructor(
@@ -88,6 +92,7 @@ export class FileTransactionJournalStore
     }
 
     this.filePath = resolve(options.filePath);
+    this.onPersistenceBoundary = options.onPersistenceBoundary;
     this.identity = Object.freeze({
       chainId,
       signer,
@@ -188,7 +193,15 @@ export class FileTransactionJournalStore
 
         // No equality shortcut and no cached "already saved" state.
         // Retrying always creates a fresh durable replacement.
-        await durableReplace(this.filePath, contents);
+        if (this.onPersistenceBoundary === undefined) {
+          await durableReplace(this.filePath, contents);
+        } else {
+          await durableReplace(
+            this.filePath,
+            contents,
+            this.onPersistenceBoundary,
+          );
+        }
       });
     } catch {
       throw new Error(

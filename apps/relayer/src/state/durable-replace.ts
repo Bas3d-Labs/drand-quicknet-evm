@@ -13,9 +13,22 @@ import {
   dirname,
 } from 'node:path';
 
+export type PersistenceBoundary =
+  | 'temp-synced'
+  | 'renamed';
+
+/**
+ * Awaited inside persistence. Rejection follows normal write-failure
+ * handling. A callback may suspend the write for fault injection.
+ */
+export type PersistenceBoundaryHook = (
+  boundary: PersistenceBoundary,
+) => Promise<void>;
+
 export async function durableReplace(
   filePath: string,
   contents: string,
+  onPersistenceBoundary?: PersistenceBoundaryHook,
 ): Promise<void> {
   const tempPath =
     `${filePath}.${process.pid}.${randomUUID()}.tmp`;
@@ -37,8 +50,16 @@ export async function durableReplace(
     file = undefined;
     await completedFile.close();
 
+    if (onPersistenceBoundary !== undefined) {
+      await onPersistenceBoundary('temp-synced');
+    }
+
     await rename(tempPath, filePath);
     ownsTemp = false;
+
+    if (onPersistenceBoundary !== undefined) {
+      await onPersistenceBoundary('renamed');
+    }
 
     await directory.sync();
 
