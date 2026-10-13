@@ -44,6 +44,7 @@ function attempt(nonce = 4n) {
     attemptId: nonce === 4n
       ? '11111111-1111-4111-8111-111111111111'
       : '22222222-2222-4222-8222-222222222222',
+    workId: `test-work:${nonce}`,
     nonce,
     createdAt: '2026-10-04T00:00:00.000Z',
     phase: 'broadcast-may-have-occurred',
@@ -485,6 +486,124 @@ describe('journal snapshot structure', () => {
     Reflect.deleteProperty(input, 'repairs');
 
     expect(() => validate(input)).toThrow(TypeError);
+  });
+});
+
+describe('journal work identities', () => {
+  it('requires a work identity on every retained attempt', () => {
+    const input = fixture();
+    Reflect.deleteProperty(input.attempts[0]!, 'workId');
+
+    expectInvalid(input);
+  });
+
+  it.each([
+    { name: 'undefined', value: undefined },
+    { name: 'null', value: null },
+    { name: 'number', value: 123 },
+    { name: 'empty string', value: '' },
+    { name: 'overlong string', value: 'x'.repeat(257) },
+    { name: 'C0 control', value: 'work\nother' },
+    { name: 'C1 control', value: 'work\u0085other' },
+  ])('rejects an invalid work identity: $name', ({ value }) => {
+    const input = fixture();
+    Object.assign(input.attempts[0]!, { workId: value });
+
+    expectInvalid(input);
+  });
+
+  it('accepts a work identity at the 256-code-unit limit', () => {
+    const input = fixture();
+    const workId = 'x'.repeat(256);
+    input.attempts[0]!.workId = workId;
+
+    expect(validate(input).attempts[0]!.workId).toBe(workId);
+  });
+
+  it.each([
+    'signed',
+    'broadcast-may-have-occurred',
+    'included',
+  ])('preserves the exact work identity in phase %s', (phase) => {
+    const input = phase === 'included'
+      ? includedFixture()
+      : fixture();
+
+    const recorded = input.attempts[0]!;
+    recorded.phase = phase;
+    recorded.workId = ' Work:Example ';
+
+    const snapshot = validate(input);
+    recorded.workId = 'changed';
+
+    expect(snapshot.attempts[0]!.workId).toBe(' Work:Example ');
+  });
+
+  it.each([
+    'signed',
+    'broadcast-may-have-occurred',
+    'included',
+  ])('rejects duplicate work identities in phase %s', (phase) => {
+    const input = fixture();
+    input.attempts.push(attempt(5n));
+    input.nextNonce = 6n;
+
+    for (const recorded of input.attempts) {
+      recorded.phase = phase;
+      recorded.inclusion = phase === 'included'
+        ? {
+            ...inclusion(),
+            transactionHash:
+              recorded.signedTransactions[0]!.transactionHash,
+          }
+        : null;
+    }
+
+    // Establish that all other fields form a valid snapshot.
+    expect(validate(input).attempts).toHaveLength(2);
+
+    input.attempts[1]!.workId = input.attempts[0]!.workId;
+
+    expectInvalid(input);
+  });
+
+  it.each([
+    { name: 'case', first: 'work:A', second: 'work:a' },
+    { name: 'spacing', first: 'work:a', second: ' work:a ' },
+    {
+      name: 'Unicode representation',
+      first: 'work:\u00e9',
+      second: 'work:e\u0301',
+    },
+  ])('keeps identities distinct by $name', ({ first, second }) => {
+    const input = fixture();
+    input.attempts.push(attempt(5n));
+    input.nextNonce = 6n;
+    input.attempts[0]!.workId = first;
+    input.attempts[1]!.workId = second;
+
+    expect(validate(input).attempts.map(({ workId }) => workId))
+      .toEqual([first, second]);
+  });
+
+  it('does not invoke a work identity getter', () => {
+    const input = fixture();
+    const get = vi.fn(() => 'test-work:4');
+
+    Object.defineProperty(input.attempts[0]!, 'workId', { get });
+
+    expectInvalid(input);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('rejects an inherited work identity', () => {
+    const input = fixture();
+    const recorded = input.attempts[0]!;
+
+    Reflect.deleteProperty(recorded, 'workId');
+    Object.setPrototypeOf(recorded, { workId: 'test-work:4' });
+
+    expectInvalid(input);
   });
 });
 

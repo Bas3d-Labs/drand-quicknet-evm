@@ -55,6 +55,10 @@ import {
 } from '../diagnostics/resolution-validation.js';
 
 import {
+  isWorkId,
+} from '../execution/work-identity.js';
+
+import {
   isFixedHex,
 } from '../shared/hex.js';
 
@@ -139,6 +143,7 @@ type PendingWrite =
 export interface PrepareAttemptOptions {
   readonly account: LocalAccount;
   readonly transaction: PreparedRelayerTransaction;
+  readonly workId: string;
 }
 
 export interface PreparedAttempt {
@@ -146,6 +151,20 @@ export interface PreparedAttempt {
   readonly transactionHash: Hash;
   readonly nonce: bigint;
 }
+
+export type PrepareAttemptResult =
+  | (PreparedAttempt & {
+      readonly status: 'prepared';
+    })
+  | {
+      /**
+       * Existing retained work. No new nonce was allocated or transaction
+       * signed. This result grants no broadcast authorization.
+       */
+      readonly status: 'already-retained';
+      readonly attemptId: string;
+      readonly workId: string;
+    };
 
 type SignerEventOperation =
   | 'prepare-attempt'
@@ -375,7 +394,7 @@ export class SignerCoordinator {
   async prepareAttempt(
     options: PrepareAttemptOptions,
     cycle?: number,
-  ): Promise<PreparedAttempt> {
+  ): Promise<PrepareAttemptResult> {
     this.assertAvailable();
 
     if (
@@ -394,6 +413,25 @@ export class SignerCoordinator {
       throw new Error(
         'The signer gate must be open before preparing an attempt.'
       );
+    }
+
+    const workId = options.workId;
+    if (!isWorkId(workId)) {
+      throw new TypeError('Invalid work identity.');
+    }
+
+    const retained = current.snapshot.attempts.find(
+      (attempt) => attempt.workId === workId,
+    );
+
+    if (retained !== undefined) {
+      // No state changed. This result neither grants nor consumes
+      // broadcast authorization.
+      return Object.freeze({
+        status: 'already-retained',
+        attemptId: retained.attemptId,
+        workId,
+      });
     }
 
     const previousAttemptLog = this.attemptLog;
@@ -435,6 +473,7 @@ export class SignerCoordinator {
 
       const attempt: JournalAttempt = {
         attemptId,
+        workId,
         nonce: signed.nonce,
         createdAt,
         signedTransactions: [{
@@ -468,6 +507,7 @@ export class SignerCoordinator {
       this.broadcastPermit = attemptId;
 
       return Object.freeze({
+        status: 'prepared',
         attemptId,
         transactionHash: signed.transactionHash,
         nonce: signed.nonce,

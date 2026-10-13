@@ -125,6 +125,7 @@ function decodeAttempt(input: unknown) {
 
   return {
     attemptId: value.attemptId,
+    workId: value.workId,
     nonce: decimal(value.nonce),
     createdAt: value.createdAt,
     phase: value.phase,
