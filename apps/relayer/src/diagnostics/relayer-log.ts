@@ -237,6 +237,15 @@ const EVENTS = {
       consumers: 'consumers',
     },
   ],
+  statusPublicationFailed: [
+    'warn',
+    'status_publication_failed',
+    'Daemon status publication failed. The snapshot may be stale',
+    {
+      signer: 'address',
+      error: 'error',
+    },
+  ],
   loggingFailed: [
     'error',
     'logging_failed',
@@ -391,6 +400,7 @@ export interface LogDestination {
 
 export interface CreateRelayerLogOptions {
   chainId: number;
+  runId?: string;
   level?: string;
   destination?: LogDestination;
   errorSummary?: SummarizeErrorOptions | undefined;
@@ -428,6 +438,15 @@ export function createRelayerLog(
     chainId <= 0
   ) {
     throw new TypeError('Invalid logging chain ID.');
+  }
+
+  const configuredRunId = own(options, 'runId');
+  const runId = configuredRunId === undefined
+    ? RUN_ID
+    : configuredRunId;
+
+  if (!isUuidV4(runId)) {
+    throw new TypeError('Invalid logging run ID.');
   }
 
   const requested = own(options, 'level') ?? 'info';
@@ -481,7 +500,7 @@ export function createRelayerLog(
         time: Date.now(),
         component: 'daemon',
         chainId,
-        runId: RUN_ID,
+        runId,
         event: 'logging_failed',
         code,
         rejected,
@@ -516,7 +535,7 @@ export function createRelayerLog(
     base: {
       component: 'daemon',
       chainId,
-      runId: RUN_ID,
+      runId,
     },
     timestamp: pino.stdTimeFunctions.isoTime,
     // Projection already produced fresh summaries, preserve their structure.

@@ -61,6 +61,15 @@ import {
 } from './open-beacon-submitter.js';
 
 import {
+  parseStatusArguments,
+  type StatusCommandArguments,
+} from './parse-status-arguments.js';
+
+import {
+  readRelayerStatus,
+} from './read-relayer-status.js';
+
+import {
   syncNonce,
 } from './sync-nonce.js';
 
@@ -124,6 +133,7 @@ type CommandArguments =
   | ImportWhenAvailableCommandArguments
   | DaemonCommandArguments
   | SyncNonceCommandArguments
+  | StatusCommandArguments
   | DaemonHelpCommandArguments
   | HelpCommandArguments;
 
@@ -173,6 +183,21 @@ export async function main(
         ),
         'interrupted',
       );
+
+    case 'status':
+      return runWithShutdownSignal(async (signal) => {
+        const result = await readRelayerStatus({
+          ...command.config,
+          signal,
+        });
+
+        output({
+          type: 'relayer-status',
+          result,
+        });
+
+        return 'success';
+      }, 'interrupted');
 
     case 'help':
       output({ type: 'help' });
@@ -510,6 +535,9 @@ export function parseCommandArguments(
       
     case 'sync-nonce':
       return parseSyncNonceArguments(commandArgs);
+    
+    case 'status':
+      return parseStatusArguments(commandArgs);
 
     default:
       throw new UsageError('UNKNOWN_COMMAND');

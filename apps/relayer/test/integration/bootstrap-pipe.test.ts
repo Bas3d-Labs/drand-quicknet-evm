@@ -56,11 +56,15 @@ const MODULE_PATHS = {
   cli: 'cli/cli.js',
   'cli-output': 'cli/cli-output.js',
   'config-errors': 'diagnostics/config-errors.js',
+  'daemon-snapshot-status-output': 'cli/daemon-snapshot-status-output.js',
+  'daemon-status-snapshot': 'state/daemon-status-snapshot.js',
+  decimal: 'shared/decimal.js',
   diagnostics: 'diagnostics/diagnostics.js',
   'diagnostic-messages': 'diagnostics/diagnostic-messages.js',
   'error-output': 'diagnostics/error-output.js',
   'error-summary': 'diagnostics/error-summary.js',
   hex: 'shared/hex.js',
+  'journal-status-output': 'cli/journal-status-output.js',
   'mismatch-errors': 'diagnostics/mismatch-errors.js',
   'network-presets': 'config/network-presets.js',
   'operation-context': 'diagnostics/operation-context.js',
@@ -177,6 +181,7 @@ describe.skipIf(process.platform !== 'linux')(
           export async function main(args, output) {
             output({ type: 'help' });
             process.send({ event: 'output_completed' });
+            return 'success';
           }
         `,
       );

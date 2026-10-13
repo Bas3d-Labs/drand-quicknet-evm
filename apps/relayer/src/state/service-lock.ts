@@ -15,6 +15,7 @@ import {
 } from 'node:path';
 
 export const LOCK_FILENAME = 'relayer.flock';
+export const DAEMON_STATUS_FILENAME = 'daemon-status.json';
 
 const REASONS = [
   'platform',
@@ -182,12 +183,14 @@ function assertCheckpointPlacement(
   }
 
   const checkpointFile = resolve(value);
+  const filename = basename(checkpointFile);
 
   // Containment alone is insufficient: overlapping state roots could
   // otherwise protect the same checkpoint with different service locks.
   if (
     realpathSync(dirname(checkpointFile)) !== stateDirectory ||
-    basename(checkpointFile) === LOCK_FILENAME
+    filename === LOCK_FILENAME ||
+    filename === DAEMON_STATUS_FILENAME
   ) {
     throw new ServiceLockNotHeldError('state-directory');
   }

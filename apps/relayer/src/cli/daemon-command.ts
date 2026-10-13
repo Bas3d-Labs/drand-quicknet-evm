@@ -1,4 +1,8 @@
 import {
+  randomUUID,
+} from 'node:crypto';
+
+import {
   basename,
   join,
   resolve,
@@ -25,6 +29,10 @@ import {
 } from '../chain/clients.js';
 
 import {
+  runDaemon,
+} from '../daemon/daemon.js';
+
+import {
   createDaemonLogger,
 } from '../daemon/daemon-logging.js';
 
@@ -38,8 +46,8 @@ import {
 } from '../daemon/daemon-startup.js';
 
 import {
-  runDaemon,
-} from '../daemon/daemon.js';
+  createDaemonStatusPublisher,
+} from '../daemon/daemon-status-publisher.js';
 
 import type {
   SummarizeErrorOptions,
@@ -113,10 +121,31 @@ export async function runDaemonCommand(
 
   const errorSummary = config.errorSummary;
 
+  const runId = randomUUID();
+
   const logger = createRelayerLog({
     chainId: config.chain.id,
+    runId,
     level: (options.env ?? process.env).QUICKNET_LOG_LEVEL ?? 'info',
     errorSummary,
+  });
+
+  const statusPublisher = createDaemonStatusPublisher({
+    identity: {
+      chainId: config.chain.id,
+      signer: config.account.address,
+    },
+    runId,
+    env: {
+      ...env,
+      QUICKNET_STATE_DIR: stateDirectory,
+    },
+    onFailure(error) {
+      logger.statusPublicationFailed({
+        signer: config.account.address,
+        error,
+      });
+    },
   });
 
   const daemonLogger = createDaemonLogger({
@@ -155,6 +184,8 @@ export async function runDaemonCommand(
     maxBlockRange: config.maxBlockRange,
     checkpointFile: config.checkpointFile,
     startupPollIntervalMs: config.pollIntervalMs,
+    onInitialized: statusPublisher.onInitialized,
+    onRecoveryCompleted: statusPublisher.onRecoveryCompleted,
     signal: options.signal,
     env,
   });
@@ -191,6 +222,10 @@ export async function runDaemonCommand(
 
   options.signal?.throwIfAborted();
 
+  await statusPublisher.publish();
+
+  options.signal?.throwIfAborted();
+
   await runDaemon({
     publicClient: clients.publicClient,
     walletClient: clients.walletClient,
@@ -207,13 +242,19 @@ export async function runDaemonCommand(
       ? { receiptTimeoutMs: config.receiptTimeoutMs }
       : {}),
     readChainHeads,
-    onCycle(result, context) {
-      const cycleLogger = logger.withContext({
-        cycle: context.cycle,
-        signer: config.account.address,
-      });
+    async onCycle(result, context) {
+      statusPublisher.onCycleCompleted(context.cycle);
 
-      daemonLogger.onCycle(result, cycleLogger);
+      try {
+        const cycleLogger = logger.withContext({
+          cycle: context.cycle,
+          signer: config.account.address,
+        });
+
+        daemonLogger.onCycle(result, cycleLogger);
+      } finally {
+        await statusPublisher.publish();
+      }
     },
     ...(options.signal !== undefined
       ? { signal: options.signal }

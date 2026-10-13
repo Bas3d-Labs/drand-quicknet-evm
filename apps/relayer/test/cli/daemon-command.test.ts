@@ -1,12 +1,35 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Address, Hex, PublicClient, WalletClient } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
-import { robinhoodTestnet } from 'viem/chains';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi
+} from 'vitest';
+
+import type {
+  Address,
+  Hex,
+  PublicClient,
+  WalletClient
+} from 'viem';
+
+import {
+  privateKeyToAccount
+} from 'viem/accounts';
+
+import {
+  robinhoodTestnet
+} from 'viem/chains';
 
 import {
   verifyRegistryDeployment,
   type RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
+
+import type {
+  OpenBeaconSubmitterOptions,
+} from '../../src/cli/open-beacon-submitter.js';
 
 import type {
   ScopedRelayerLog
@@ -15,6 +38,18 @@ import type {
 import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
+
+import {
+  isUuidV4,
+} from '../../src/shared/uuid.js';
+
+import type {
+  SignerRuntimeObservation,
+} from '../../src/state/read-signer-runtime-observation.js';
+
+import {
+  writeDaemonStatusFile,
+} from '../../src/state/file-daemon-status-store.js';
 
 const signerRuntimeMocks = vi.hoisted(() => ({
   openBeaconSubmitter: vi.fn(),
@@ -50,6 +85,7 @@ const relayerLogMocks = vi.hoisted(() => ({
   signerBootstrapDeferred: vi.fn(),
   signerGateReleased: vi.fn(),
   signerNonceSynced: vi.fn(),
+  statusPublicationFailed: vi.fn(),
 
   withContext: 
     vi.fn<ScopedRelayerLog['withContext']>(),
@@ -109,6 +145,10 @@ vi.mock('../../src/state/file-checkpoint-store.js', () => ({
   FileCheckpointStore: {
     open: vi.fn(async () => checkpointStoreMocks),
   },
+}));
+
+vi.mock('../../src/state/file-daemon-status-store.js', () => ({
+  writeDaemonStatusFile: vi.fn(),
 }));
 
 import {
@@ -289,6 +329,34 @@ function expectNotCalled(...mocks: RecordedCalls[]): void {
 describe('runDaemonCommand', () => {
   let submitter: BeaconSubmitter;
 
+  function enableStatusObservation(): void {
+    const observation: SignerRuntimeObservation = {
+      journalInitialized: true,
+      status: {
+        open: true,
+        primaryReason: null,
+        blockers: [],
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+        persistenceState: 'idle',
+        blockedSince: null,
+      },
+      attempts: [],
+    };
+
+    signerRuntimeMocks.openBeaconSubmitter.mockImplementationOnce(
+      async (options: OpenBeaconSubmitterOptions) => {
+        options.onRecoveryCompleted?.({
+          retryDelayMs: null,
+        });
+
+        options.onInitialized?.(() => observation);
+
+        return submitter;
+      },
+    );
+  }
+
   beforeEach(() => {
     vi.stubEnv('QUICKNET_LOG_LEVEL', undefined);
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -338,6 +406,10 @@ describe('runDaemonCommand', () => {
       });
 
     vi.mocked(FileCheckpointStore.open).mockClear();
+
+    vi.mocked(writeDaemonStatusFile)
+      .mockReset()
+      .mockResolvedValue(undefined);
 
     checkpointStoreMocks.load
       .mockReset()
@@ -425,6 +497,7 @@ describe('runDaemonCommand', () => {
 
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
+      runId: expect.any(String),
       level: 'info',
       errorSummary: undefined,
     });
@@ -440,6 +513,7 @@ describe('runDaemonCommand', () => {
 
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
+      runId: expect.any(String),
       level: 'debug',
       errorSummary: undefined,
     });
@@ -452,6 +526,7 @@ describe('runDaemonCommand', () => {
 
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
+      runId: expect.any(String),
       level: 'warn',
       errorSummary: undefined,
     });
@@ -467,6 +542,7 @@ describe('runDaemonCommand', () => {
 
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
+      runId: expect.any(String),
       level: 'info',
       errorSummary: undefined,
     });
@@ -480,6 +556,7 @@ describe('runDaemonCommand', () => {
 
     expect(createRelayerLog).toHaveBeenCalledExactlyOnceWith({
       chainId: robinhoodTestnet.id,
+      runId: expect.any(String),
       level: 'invalid-level',
       errorSummary: undefined,
     });
@@ -556,6 +633,8 @@ describe('runDaemonCommand', () => {
         maxBlockRange: 2_000n,
         checkpointFile: VERIFIED_DAEMON_CONFIG.checkpointFile,
         startupPollIntervalMs: VERIFIED_DAEMON_CONFIG.pollIntervalMs,
+        onInitialized: expect.any(Function),
+        onRecoveryCompleted: expect.any(Function),
         signal: undefined,
         env: process.env,
       });
@@ -1435,4 +1514,176 @@ describe('runDaemonCommand', () => {
       vi.mocked(runDaemon),
     );
   });
+
+  it('publishes startup and cycle snapshots with the logger run ID', async () => {
+    enableStatusObservation();
+
+    vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
+      await onCycle?.({ consumers: [] }, { cycle: 1 });
+    });
+
+    await runDaemonCommand({ source: SOURCE });
+
+    expect(writeDaemonStatusFile).toHaveBeenCalledTimes(2);
+
+    const calls = vi.mocked(writeDaemonStatusFile).mock.calls;
+    const startup = calls[0]![0];
+    const completed = calls[1]![0];
+
+    const loggerOptions =
+      vi.mocked(createRelayerLog).mock.calls[0]![0];
+
+    expect(isUuidV4(loggerOptions.runId)).toBe(true);
+    expect(startup.snapshot.runId).toBe(loggerOptions.runId);
+    expect(completed.snapshot.runId).toBe(loggerOptions.runId);
+
+    expect(startup.identity).toEqual({
+      chainId: DAEMON_CONFIG.chain.id,
+      signer: ACCOUNT.address,
+    });
+
+    expect(startup.env?.QUICKNET_STATE_DIR)
+      .toBe(VERIFIED_STATE_DIRECTORY);
+
+    expect(startup.snapshot.lastCompletedCycle).toBeNull();
+
+    expect(startup.snapshot.lastRetryObservation).toEqual({
+      observedAt: expect.any(String),
+      retryDelayMs: null,
+    });
+
+    expect(completed.snapshot.lastCompletedCycle).toEqual({
+      cycle: 1,
+      completedAt: expect.any(String),
+    });
+
+    // No further recovery ran in this mocked cycle.
+    expect(completed.snapshot.lastRetryObservation)
+      .toEqual(startup.snapshot.lastRetryObservation);
+
+    expect(
+      firstInvocationOrder(signerRuntimeMocks.openBeaconSubmitter),
+    ).toBeLessThan(
+      firstInvocationOrder(vi.mocked(writeDaemonStatusFile)),
+    );
+
+    expect(
+      firstInvocationOrder(vi.mocked(writeDaemonStatusFile)),
+    ).toBeLessThan(
+      firstInvocationOrder(vi.mocked(runDaemon)),
+    );
+  });
+
+  it('does not publish when signer initialization fails', async () => {
+    const failure = new Error('Signer initialization failed');
+
+    signerRuntimeMocks.openBeaconSubmitter
+      .mockRejectedValueOnce(failure);
+
+    await expect(runDaemonCommand({
+      source: SOURCE,
+    })).rejects.toBe(failure);
+
+    expect(writeDaemonStatusFile).not.toHaveBeenCalled();
+  });
+
+  it('awaits startup publication before entering the daemon', async () => {
+    enableStatusObservation();
+
+    let release!: () => void;
+
+    vi.mocked(writeDaemonStatusFile).mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    const pending = runDaemonCommand({ source: SOURCE });
+
+    try {
+      await vi.waitFor(() => {
+        expect(writeDaemonStatusFile).toHaveBeenCalledOnce();
+      });
+
+      expect(runDaemon).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await pending;
+    }
+
+    expect(runDaemon).toHaveBeenCalledOnce();
+  });
+
+  it('awaits cycle publication before returning from the cycle callback', async () => {
+    enableStatusObservation();
+
+    // The first publication is startup; hold the second publication.
+    vi.mocked(writeDaemonStatusFile).mockResolvedValueOnce(undefined);
+
+    let release!: () => void;
+
+    vi.mocked(writeDaemonStatusFile).mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    let cycleReturned = false;
+
+    vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
+      await onCycle?.({ consumers: [] }, { cycle: 1 });
+      cycleReturned = true;
+    });
+
+    const pending = runDaemonCommand({ source: SOURCE });
+
+    try {
+      await vi.waitFor(() => {
+        expect(writeDaemonStatusFile).toHaveBeenCalledTimes(2);
+      });
+
+      expect(cycleReturned).toBe(false);
+    } finally {
+      release();
+      await pending;
+    }
+
+    expect(cycleReturned).toBe(true);
+  });
+
+  it.each([false, true])(
+    'continues after publication failure when diagnostic delivery throws: %s',
+    async (loggingThrows) => {
+      enableStatusObservation();
+
+      const failure = new Error('Status write failed');
+
+      vi.mocked(writeDaemonStatusFile).mockRejectedValueOnce(failure);
+
+      if (loggingThrows) {
+        relayerLogMocks.statusPublicationFailed.mockImplementationOnce(
+          () => {
+            throw new Error('Diagnostic delivery failed');
+          },
+        );
+      }
+
+      vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
+        await onCycle?.({ consumers: [] }, { cycle: 1 });
+      });
+
+      await expect(runDaemonCommand({
+        source: SOURCE,
+      })).resolves.toBeUndefined();
+
+      expect(relayerLogMocks.statusPublicationFailed)
+        .toHaveBeenCalledExactlyOnceWith({
+          signer: ACCOUNT.address,
+          error: failure,
+        });
+
+      expect(runDaemon).toHaveBeenCalledOnce();
+      expect(writeDaemonStatusFile).toHaveBeenCalledTimes(2);
+    },
+  );
 });

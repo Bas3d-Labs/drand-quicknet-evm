@@ -67,9 +67,11 @@ Multiple relayers may independently service the same request.
 
 ## Commands
 
-The examples assume you have created `network.json` in the repository root
-using the custom network descriptor format below. Replace its example
-values with trusted deployment and chain configuration for your network.
+The import, daemon, and nonce-sync examples assume you have created
+`network.json` in the repository root using the custom network descriptor
+format below. Replace its example values with trusted deployment and
+chain configuration for your network. Status examples use public chain
+and signer identity instead.
 
 Build the TypeScript packages first:
 
@@ -125,11 +127,13 @@ pnpm --filter @based-labs/drand-quicknet-relayer start \
   --network-config "$PWD/network.json"
 ```
 
-Every command accepts either `--network` for a built-in preset or
-`--network-config` for a custom descriptor, never both.
+`import`, `import-when-available`, `daemon`, and `sync-nonce` accept
+either `--network` for a built-in preset or `--network-config` for a
+custom descriptor, never both. `status` instead requires `--chain-id`
+and `--signer`.
 
-The daemon requires the additional consumer/checkpoint environment variables
-described below.
+The daemon requires the additional consumer/checkpoint environment
+variables described below.
 
 ### `sync-nonce`
 
@@ -196,10 +200,113 @@ Exit statuses are:
 The command does not sign or broadcast transactions, create a missing
 journal, or modify checkpoints.
 
+### `status`
+
+Reads local signer diagnostics using public identity:
+
+```bash
+QUICKNET_STATE_DIR=/srv/quicknet/robinhood-mainnet \
+pnpm --filter @based-labs/drand-quicknet-relayer start \
+  status \
+  --chain-id 4663 \
+  --signer 0xYourSignerAddress
+```
+
+Replace the signer placeholder with the signing account's address.
+
+Status requires no private key, RPC URL, or network descriptor. It does
+not load the application's env file. Set `QUICKNET_STATE_DIR` in the
+launching environment; otherwise the default is `./state`, relative to
+the process's working directory.
+
+Without `--source`, the launcher selects the diagnostic source:
+
+| Lock outcome | Selected source |
+| --- | --- |
+| Exclusive ownership acquired | `journal` |
+| Contention, exit status `75` | `daemon-snapshot` |
+| Any other acquisition failure | Command fails without fallback |
+
+Contention does not identify the process holding ownership. It may be
+another command rather than the daemon.
+
+Automatic selection and explicit journal inspection require an existing
+state directory and regular service lock file. Status does not create
+either. A missing directory or lock is an error in these modes; it does
+not trigger snapshot fallback.
+
+Select a source explicitly for predictable script behavior:
+
+```bash
+QUICKNET_STATE_DIR=/srv/quicknet/robinhood-mainnet \
+pnpm --filter @based-labs/drand-quicknet-relayer start \
+  status \
+  --chain-id 4663 \
+  --signer 0xYourSignerAddress \
+  --source daemon-snapshot \
+  --max-age-ms 120000
+```
+
+The supported sources are:
+
+- `journal`: requires verified exclusive ownership and reads the
+  persisted signer journal. Reports allocation, accepted observations,
+  retained attempts with every candidate transaction hash, and retained
+  nonce repairs. Explicit journal mode exits `75` on contention.
+- `daemon-snapshot`: reads the last published `daemon-status.json`
+  without acquiring ownership. Reports historical gate observations,
+  retained attempts, cycle completion, and retry observations. It can
+  report a missing snapshot even when the state directory is absent.
+
+A read or validation failure never causes fallback to the other source.
+Signer identity comparisons are case-insensitive.
+
+`--max-age-ms` applies only to snapshot mode and defaults to `120000`.
+It accepts a positive decimal safe integer. Specify
+`--source daemon-snapshot` when supplying it: if automatic selection
+chooses journal mode, the age option is rejected.
+
+Choose an age threshold that accommodates the daemon's poll interval
+plus the work of a cycle. An age equal to the threshold is fresh; an
+older observation is stale. A future observation is reported as clock
+skew. “Stale” describes the published snapshot's age, not daemon health.
+
+Both sources report current signing authorization as unknown. A
+snapshot's last observed open gate does not authorize a new transaction.
+A closed gate without reported blockers does not establish why it was
+closed.
+
+Cycle completion and retry observation timestamps remain separate from
+snapshot publication time. A completed cycle may contain consumer
+failures. Retry delays are historical observations, not countdowns or
+permission to send.
+
+Status does not initialize or rewrite the journal, remove temporary
+files, modify checkpoints, perform recovery, make RPC calls, sign, or
+broadcast. Signed transaction bytes are excluded from output.
+
+Exit statuses are:
+
+- `0`: the selected diagnostic source was read and reported successfully,
+  including a missing journal, missing snapshot, or stale snapshot.
+- `1`: invalid arguments, invalid or unreadable state, ownership
+  verification failure, or another operational failure.
+- `2`: command output failed.
+- `5`: handled cancellation before a result was returned.
+- `75`: explicit journal inspection encountered ownership contention.
+
+Other launcher failures may preserve the failing tool's exit status.
+Exit status `0` does not establish daemon health or signer readiness.
+
 ## Configuration
 
-The package `start` script requires the repository root `.env` and loads
-it through Node. A missing file stops startup.
+For `import`, `import-when-available`, `daemon`, and `sync-nonce`, the
+package `start` script requires the repository root `.env` and loads it
+through Node. A missing file stops startup.
+
+`status` and help bypass application env-file loading. Status uses public
+command-line identity and `QUICKNET_STATE_DIR` from the launching
+environment.
 
 The `start:container` script uses the existing environment without
 automatically loading a file. It can also be used outside containers.
@@ -316,8 +423,9 @@ also records the chain ID and registry address; mismatches with the
 configured deployment are rejected.
 
 The checkpoint must be a direct child of the canonical
-`QUICKNET_STATE_DIR`. Nested directories and paths outside that directory
-are rejected. The filename `relayer.flock` is reserved.
+`QUICKNET_STATE_DIR`. Nested directories and paths outside that 
+directory are rejected. The filenames `relayer.flock` and 
+`daemon-status.json` are reserved.
 
 An existing checkpoint must be a regular file with one hard link.
 Checkpoint symlinks and hard-link aliases are rejected. The state
@@ -476,18 +584,25 @@ Protected commands require Linux and util-linux `flock`:
 - `daemon`
 - `sync-nonce`
 
+`status` acquires ownership when inspecting the journal. Snapshot mode
+does not require ownership. Automatic source selection attempts ownership
+and selects snapshot mode only on contention; see [`status`](#status).
+
 Use the package scripts or installed `relayer` executable. They enter
-through `scripts/relayer.sh`, which acquires an exclusive, nonblocking
-lock on:
+through `scripts/relayer.sh`. Commands requiring ownership acquire an
+exclusive, nonblocking lock on:
 
     QUICKNET_STATE_DIR/relayer.flock
 
 The default state directory is `./state` when `QUICKNET_STATE_DIR` is
 unset. An explicitly empty value is invalid.
 
-The launcher creates a missing directory and canonicalizes its path.
+For `import`, `import-when-available`, `daemon`, and `sync-nonce`, the
+launcher creates a missing directory and canonicalizes its path.
 Check configured paths carefully: a typo can create a new state
 directory with no existing checkpoint.
+
+`status` never creates the state directory or lock file.
 
 The launcher uses `umask 077`. Newly created state directories and lock
 files normally have permissions `0700` and `0600`. Existing permissions
@@ -560,6 +675,11 @@ For `daemon`, `import`, `import-when-available`, and `sync-nonce`, SIGINT
 and SIGTERM request cooperative shutdown. Round waits, beacon fetching,
 and cancellable retry delays receive the shutdown signal. Other active
 operations finish before cancellation is checked at operation boundaries.
+
+`status` also handles SIGINT and SIGTERM cooperatively. It checks
+cancellation around reads; an active filesystem read may finish before
+cancellation is observed. The command performs no journal recovery or
+persistence.
 
 Signing and journal persistence are allowed to finish once started.
 If cancellation prevents broadcasting a recorded signed attempt, that
@@ -866,10 +986,10 @@ recovery and inclusion checks.
 Before opening a missing signer journal, startup inspects the state
 directory while holding verified service ownership. Automatic
 initialization is allowed only when the directory contains the verified
-`relayer.flock` entry and nothing else. Checkpoints, journal temporary
-files, other signers' journals, and unrelated entries block initialization
-with `prior-state-present`, regardless of whether a checkpoint path was
-configured.
+`relayer.flock` entry and nothing else. Checkpoints, daemon status snapshots,
+journal temporary files, other signers' journals, and unrelated entries
+block initialization with `prior-state-present`, regardless of whether a
+checkpoint path was configured.
 
 Verify the configured directory and restore the matching journal if
 available. Remove entries only after establishing they are unrelated to
@@ -1065,6 +1185,7 @@ round_already_stored
 round_imported
 signer_bootstrap_deferred
 signer_nonce_synced
+status_publication_failed
 ```
 
 `checkpoint_advanced` and `round_already_stored` are debug-level routine
@@ -1085,7 +1206,51 @@ succeeds. It includes `signer`, `previousNextNonce`, `nextNonce`, `durableBlock`
 `durableBlockHash`, `durableNonce`, and `repairAt`, alongside the logger’s
 chain identity. Nonces and block numbers are decimal strings.
 
+`status_publication_failed` is a warning emitted when daemon status
+observation or publication fails. It includes the signer and a scrubbed
+error summary. The daemon continues; the previous snapshot may remain
+on disk, and a failed write may have an uncertain on-disk outcome.
+
 Logging failures are isolated so logging itself does not stop the daemon.
+
+### Daemon status snapshot
+
+The daemon attempts to publish `daemon-status.json` in the canonical
+`QUICKNET_STATE_DIR` after successful startup and after each completed
+cycle. Publication starts only after signer journal initialization.
+Writes are serialized and awaited.
+
+Publication is independent of the configured log level. There is no
+separate publication timer; long-running cycles can leave an older
+snapshot on disk. Publication failures are reported through
+`status_publication_failed`, subject to the configured log level.
+
+The snapshot contains the chain and signer identity, the daemon's log
+run ID, the observation timestamp, journal initialization state, and
+the last observed signer gate. Gate diagnostics include blockers,
+recovery and inclusion-check completion, persistence state, and
+the coordinator-reported `blockedSince`.
+
+`blockedSince` identifies the coordinator-reported blocking episode.
+A change in the primary blocker does not itself reset it. After restart,
+it may originate from a retained attempt's creation time.
+
+Retained attempts include their IDs, decimal nonces, phases, and every
+recorded candidate transaction hash. Signed transaction bytes are
+excluded.
+
+Cycle completion and retry observations carry separate timestamps.
+Publishing another snapshot does not refresh those timestamps.
+A completed cycle may include consumer failures. A recorded retry
+delay is historical; it is neither a live countdown nor permission
+to broadcast.
+
+The snapshot is diagnostic state. It does not replace the signer
+journal or checkpoints and is not used to authorize transaction work.
+It can remain on disk after shutdown or a failed restart.
+
+A fresh snapshot does not authorize signing. A held service lock does
+not establish daemon health; another command may own it.
 
 ### Error diagnostics
 
@@ -1188,6 +1353,10 @@ hash, and reason. Deferred results include the reason and signer blocker.
 
 An output failure does not change the underlying import outcome.
 
+For status, `output_failed` retains only the validated source, whether the
+journal or snapshot was present, and `gate: unknown`. It does not copy the
+journal, snapshot, or signed transaction bytes into the diagnostic.
+
 ### Submission reporting
 
 Successful CLI imports include the selected submission method:
@@ -1240,6 +1409,9 @@ At minimum, operators should monitor:
 - uncertain submissions and pending signer transactions
 - daemon startup remaining deferred on mismatched signer nonce counts.
   Unchanged counts do not produce repeated log events
+- `status_publication_failed`
+- snapshot observation age and last completed cycle time, accounting
+  for expected cycle duration
 
 For chain profiles that rely on sequencer timestamp freshness, the configured
 skew warning may intentionally sit close to normal timestamp truncation plus
@@ -1355,6 +1527,17 @@ Coverage includes:
 - consumer failure isolation
 - durable-head regression handling
 - structured logging and heartbeat behavior
+- daemon status snapshot validation and exclusion of signed bytes
+- reserved snapshot filename and filesystem safety checks
+- snapshot publication after initialization and cycle completion
+- shared run IDs across daemon logs and snapshots
+- serialized publications and publication-failure isolation
+- historical cycle and retry timestamps
+- public-identity status configuration without signing credentials
+- automatic and explicit status source selection
+- snapshot age classification and historical gate reporting
+- status reads preserving journals, checkpoints, and temporary files
+- status output validation and output-failure exit codes
 
 ## Operational assumptions
 
