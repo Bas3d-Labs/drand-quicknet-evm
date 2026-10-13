@@ -25,6 +25,7 @@ function snapshot() {
     runId: RUN_ID,
     observedAt: AT,
     journalInitialized: true,
+    attempts: [],
     lastObservedGate: {
       open: false,
       primaryReason: 'unresolved-attempt',

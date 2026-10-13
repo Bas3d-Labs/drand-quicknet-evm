@@ -65,6 +65,7 @@ function snapshot(): DaemonStatusSnapshot {
     runId: '11111111-1111-4111-8111-111111111111',
     observedAt: '2026-10-12T12:00:00.000Z',
     journalInitialized: true,
+    attempts: [],
     lastObservedGate: {
       open: false,
       primaryReason: 'recovery-incomplete',
@@ -133,6 +134,7 @@ describe('daemon status file storage', () => {
       ...first,
       observedAt: '2026-10-12T12:01:00.000Z',
       journalInitialized: true,
+      attempts: [],
       lastObservedGate: {
         open: true,
         primaryReason: null,

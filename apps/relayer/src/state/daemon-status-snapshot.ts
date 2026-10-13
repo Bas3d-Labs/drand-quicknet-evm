@@ -1,3 +1,11 @@
+import type {
+  Hash,
+} from 'viem';
+
+import {
+  isDecimalInteger,
+} from '../shared/decimal.js';
+
 import {
   isFixedHex,
 } from '../shared/hex.js';
@@ -16,8 +24,21 @@ import {
 } from './signer-gate.js';
 
 import type {
+  JournalAttempt,
   JournalIdentity,
 } from './transaction-journal.js';
+
+export interface DaemonStatusAttempt {
+  readonly attemptId: string;
+
+  /** Canonical unsigned decimal representation. */
+  readonly nonce: string;
+
+  readonly phase: JournalAttempt['phase'];
+
+  /** Original transaction hash followed by fee replacement hashes. */
+  readonly transactionHashes: readonly [Hash, ...Hash[]];
+}
 
 export interface DaemonStatusSnapshot {
   readonly version: 1;
@@ -25,6 +46,7 @@ export interface DaemonStatusSnapshot {
   readonly runId: string;
   readonly observedAt: string;
   readonly journalInitialized: boolean;
+  readonly attempts: readonly DaemonStatusAttempt[];
   readonly lastObservedGate: {
     readonly open: boolean;
     readonly primaryReason: SignerBlocker | null;
@@ -53,6 +75,8 @@ export type SnapshotAge =
     };
 
 const INVALID = 'Invalid daemon status snapshot.';
+
+const MAX_UINT256 = (1n << 256n) - 1n;
 
 /**
  * Validates and projects public snapshot fields.
@@ -121,6 +145,12 @@ export function readDaemonStatusSnapshot(
     throw new TypeError(INVALID);
   }
 
+  const attempts = readAttempts(root.attempts);
+
+  if (!root.journalInitialized && attempts.length !== 0) {
+    throw new TypeError(INVALID);
+  }
+
   // A closed gate without reported blockers is valid.
   // These fields alone do not establish why the gate is closed.
   return Object.freeze({
@@ -132,6 +162,7 @@ export function readDaemonStatusSnapshot(
     runId: root.runId,
     observedAt: root.observedAt as string,
     journalInitialized: root.journalInitialized,
+    attempts,
     lastObservedGate: Object.freeze({
       open: gate.open,
       primaryReason: blockers[0] ?? null,
@@ -215,6 +246,121 @@ function readBlocker(input: unknown): SignerBlocker {
   }
 
   throw new TypeError(INVALID);
+}
+
+function readAttempts(
+  input: unknown,
+): readonly DaemonStatusAttempt[] {
+  if (!Array.isArray(input)) {
+    throw new TypeError(INVALID);
+  }
+
+  const attemptIds = new Set<string>();
+  const attempts: DaemonStatusAttempt[] = [];
+  let previousNonce: bigint | undefined;
+
+  for (const item of input) {
+    const attempt = readAttempt(item);
+    const nonce = BigInt(attempt.nonce);
+
+    if (
+      attemptIds.has(attempt.attemptId) ||
+      (previousNonce !== undefined && nonce <= previousNonce)
+    ) {
+      throw new TypeError(INVALID);
+    }
+
+    attemptIds.add(attempt.attemptId);
+    previousNonce = nonce;
+    attempts.push(attempt);
+  }
+
+  return Object.freeze(attempts);
+}
+
+function readAttempt(
+  input: unknown,
+): DaemonStatusAttempt {
+  const value = object(input);
+
+  if (!isUuidV4(value.attemptId)) {
+    throw new TypeError(INVALID);
+  }
+
+  return Object.freeze({
+    attemptId: value.attemptId,
+    nonce: readNonce(value.nonce),
+    phase: readAttemptPhase(value.phase),
+    transactionHashes: readTransactionHashes(value.transactionHashes),
+  });
+}
+
+function readNonce(
+  input: unknown,
+): string {
+  if (
+    typeof input !== 'string' ||
+    input.length === 0 ||
+    input.length > 78 ||
+    !isDecimalInteger(input) ||
+    (input.length > 1 && input[0] === '0') ||
+    BigInt(input) > MAX_UINT256
+  ) {
+    throw new TypeError(INVALID);
+  }
+
+  return input;
+}
+
+function readAttemptPhase(
+  input: unknown,
+): JournalAttempt['phase'] {
+  switch (input) {
+    case 'signed':
+    case 'broadcast-may-have-occurred':
+    case 'included':
+      return input;
+
+    default:
+      throw new TypeError(INVALID);
+  }
+}
+
+function readTransactionHashes(
+  input: unknown,
+): readonly [Hash, ...Hash[]] {
+  if (!Array.isArray(input) || input.length === 0) {
+    throw new TypeError(INVALID);
+  }
+
+  const seen = new Set<string>();
+
+  function readHash(value: unknown): Hash {
+    if (!isFixedHex(value, 32)) {
+      throw new TypeError(INVALID);
+    }
+
+    const hash = value as Hash;
+    const normalized = hash.toLowerCase();
+
+    if (seen.has(normalized)) {
+      throw new TypeError(INVALID);
+    }
+
+    seen.add(normalized);
+    return hash;
+  }
+
+  const first = readHash(input[0]);
+  const remaining: Hash[] = [];
+
+  for (let index = 1; index < input.length; index += 1) {
+    remaining.push(readHash(input[index]));
+  }
+
+  const hashes: [Hash, ...Hash[]] = [first, ...remaining];
+
+  return Object.freeze(hashes);
 }
 
 function readPersistenceState(
