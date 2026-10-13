@@ -93,7 +93,8 @@ export function writeSignerCrashPreload(
         mode === 'restored-signed' ||
         mode === 'resolve-crash' ||
         mode === 'resolve-restart' ||
-        mode === 'reorg-restart',
+        mode === 'reorg-restart' ||
+        mode === 'replaced',
       );
 
       assert.ok(
@@ -226,6 +227,29 @@ export function writeSignerCrashPreload(
                 transactionHash: result.broadcast.transactionHash,
               },
               retryDelayMs: result.retryDelayMs,
+              replacementResolution:
+                result.inspection.status === 'resolution-available' &&
+                result.inspection.evidence.outcome === 'replaced'
+                  ? {
+                      outcome: 'replaced',
+                      replacementTransactionHash:
+                        result.inspection.evidence.replacementTransactionHash,
+                      nonceAtAnchor:
+                        result.inspection.evidence.nonceAtAnchor,
+                      anchor: {
+                        blockNumber:
+                          result.inspection.evidence.anchor.blockNumber,
+                        blockHash:
+                          result.inspection.evidence.anchor.blockHash,
+                      },
+                      inclusion: {
+                        blockNumber:
+                          result.inspection.evidence.inclusion.blockNumber,
+                        blockHash:
+                          result.inspection.evidence.inclusion.blockHash,
+                      },
+                    }
+                  : null,
             },
           }, (_key, value) => (
             typeof value === 'bigint' ? value.toString() : value
@@ -379,7 +403,11 @@ export function writeSignerCrashPreload(
         // fresh recovery can authorize its first broadcast.
         const due = await submitter.recover();
         await checkpoint('rebroadcast', due);
-      } else if (mode === 'included' || mode === 'resolve-crash') {
+      } else if (
+        mode === 'included' ||
+        mode === 'resolve-crash' ||
+        mode === 'replaced'
+      ) {
         const included = await submitter.recover();
         await checkpoint('included', included);
 

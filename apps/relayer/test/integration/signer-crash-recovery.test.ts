@@ -84,6 +84,7 @@ const IDENTITY = {
 const RUN_ID = '11111111-1111-4111-8111-111111111111';
 const OBSERVED_AT = '2000-01-01T00:00:00.000Z';
 const REORG_BLOCK_HASH: Hex = `0x${'bb'.repeat(32)}`;
+const REPLACEMENT_HASH: Hex = `0x${'cc'.repeat(32)}`;
 
 const NONCE = 4n;
 const INITIAL_DELAY_MS = 5_000;
@@ -96,7 +97,8 @@ type ChainMode =
   | 'initial'
   | 'included'
   | 'dropped'
-  | 'reorged';
+  | 'reorged'
+  | 'replaced';
 
 type ChildMode =
   | ChainMode
@@ -179,6 +181,7 @@ async function startRpcFixture() {
   let expectedTransactionHash: Hex | undefined;
 
   const receiptRequests: Hex[] = [];
+  const fullBlockRequests: bigint[] = [];
   const sends: SendRecord[] = [];
   const queued: Boundary[] = [];
 
@@ -263,7 +266,37 @@ async function startRpcFixture() {
       : blockHash(number);
   }
 
-  function block(number: bigint) {
+  function block(
+    number: bigint,
+    includeTransactions: boolean,
+  ) {
+    // Synthetic RPC evidence for an external transaction. Its hash is
+    // deliberately outside the retained attempt's signed candidates.
+    const transactions = mode === 'replaced' && number === 101n
+      ? [{
+          hash: REPLACEMENT_HASH,
+          from: SIGNER,
+          to: SIGNER,
+          nonce: quantity(NONCE),
+          blockNumber: quantity(number),
+          blockHash: canonicalBlockHash(number),
+          transactionIndex: '0x0',
+          chainId: quantity(BigInt(CHAIN_ID)),
+          type: '0x2',
+          gas: '0x186a0',
+          gasPrice: '0x3',
+          maxFeePerGas: '0x3',
+          maxPriorityFeePerGas: '0x1',
+          value: '0x0',
+          input: '0x5678',
+          accessList: [],
+          r: `0x${'01'.repeat(32)}`,
+          s: `0x${'02'.repeat(32)}`,
+          v: '0x0',
+          yParity: '0x0',
+        }]
+      : [];
+
     return {
       number: quantity(number),
       hash: canonicalBlockHash(number),
@@ -283,7 +316,9 @@ async function startRpcFixture() {
       gasUsed: '0x0',
       timestamp: quantity(1_000n + number),
       baseFeePerGas: '0x1',
-      transactions: [],
+      transactions: includeTransactions
+        ? transactions
+        : transactions.map((transaction) => transaction.hash),
       uncles: [],
     };
   }
@@ -325,9 +360,21 @@ async function startRpcFixture() {
       }
 
       switch (rpc.method) {
-        case 'eth_getBlockByNumber':
-          reply(block(blockNumber(rpc.params[0])));
+        case 'eth_getBlockByNumber': {
+          // Pin the current client's explicit full-transaction selector.
+          // Revisit this fixture expectation if a client upgrade changes it.
+          expect(typeof rpc.params[1]).toBe('boolean');
+
+          const number = blockNumber(rpc.params[0]);
+          const includeTransactions = rpc.params[1] === true;
+
+          if (includeTransactions) {
+            fullBlockRequests.push(number);
+          }
+
+          reply(block(number, includeTransactions));
           return;
+        }
 
         case 'eth_getTransactionCount': {
           expect(String(rpc.params[0]).toLowerCase())
@@ -336,7 +383,7 @@ async function startRpcFixture() {
           const at = blockNumber(rpc.params[1]);
 
           reply(quantity(
-            mode === 'included' && at >= 101n
+            (mode === 'included' || mode === 'replaced') && at >= 101n
               ? NONCE + 1n
               : NONCE,
           ));
@@ -439,16 +486,22 @@ async function startRpcFixture() {
     url: `http://127.0.0.1:${address.port}`,
     sends,
     receiptRequests,
+    fullBlockRequests,
     next,
 
-    restartAs(branch: 'included' | 'dropped'): void {
+    restartAs(branch: 'included' | 'dropped' | 'replaced'): void {
       mode = branch;
-      latest = branch === 'included' ? 101n : 100n;
+      latest = branch === 'dropped' ? 100n : 101n;
       durable = 100n;
+
+      if (branch === 'replaced') {
+        expect(expectedTransactionHash).toBeDefined();
+        expect(expectedTransactionHash).not.toBe(REPLACEMENT_HASH);
+      }
     },
 
     makeInclusionDurable(): void {
-      expect(mode).toBe('included');
+      expect(mode === 'included' || mode === 'replaced').toBe(true);
       durable = 101n;
     },
 
@@ -1919,6 +1972,267 @@ describe.skipIf(process.platform !== 'linux')(
           ]);
 
           expect(await journal(directory)).toEqual(unresolvedSnapshot);
+          expect(readFileSync(snapshotPath)).toEqual(snapshotBytes);
+
+          expect(readdirSync(directory).sort()).toEqual([
+            'daemon-status.json',
+            JOURNAL_FILENAME,
+            'relayer.flock',
+          ].sort());
+        } finally {
+          try {
+            await Promise.all(children.map((child) => child.stop()));
+          } finally {
+            await rpc.close();
+          }
+        }
+      },
+      40_000,
+    );
+
+    it(
+      'resolves external nonce consumption as replaced after restart',
+      async () => {
+        const directory = join(
+          mkdtempSync(join(fixture, 'replacement-')),
+          'state',
+        );
+
+        const rpc = await startRpcFixture();
+        const children: ReturnType<typeof launch>[] = [];
+
+        const checkpoint = (
+          owner: ReturnType<typeof launch>,
+          name: string,
+        ) => nextCheckpoint(rpc, owner, name);
+
+        try {
+          const original = launch(directory, rpc.url, 'initial');
+          children.push(original);
+
+          const prepared = await checkpoint(original, 'prepared');
+          expect(prepared.body.signCalls).toBe(1);
+          prepared.reply();
+
+          const accepted = await nextBoundary(rpc, original);
+
+          if (accepted.kind !== 'send') {
+            throw new Error('Expected initial transaction acceptance.');
+          }
+
+          expect(original.child.kill('SIGKILL')).toBe(true);
+
+          expect(await bounded(
+            original.exit,
+            'initial broadcast SIGKILL exit',
+          ), original.detail()).toEqual({
+            code: null,
+            signal: 'SIGKILL',
+          });
+
+          const persisted = await journal(directory);
+          expect(persisted.attempts).toHaveLength(1);
+
+          const attempt = persisted.attempts[0]!;
+          const candidate = attempt.signedTransactions[0];
+
+          expect(attempt.phase).toBe('broadcast-may-have-occurred');
+          expect(attempt.nonce).toBe(NONCE);
+          expect(attempt.signedTransactions).toHaveLength(1);
+
+          expect(candidate.signedTransaction).toBe(accepted.record.raw);
+          expect(candidate.transactionHash).toBe(accepted.record.hash);
+          expect(candidate.transactionHash).not.toBe(REPLACEMENT_HASH);
+
+          expect(attempt.replacementSearch).toEqual({
+            lowerBound: {
+              anchor: {
+                blockNumber: 100n,
+                blockHash: blockHash(100n),
+              },
+              nonce: NONCE,
+            },
+            searchedThrough: null,
+          });
+
+          expect(persisted.nextNonce).toBe(NONCE + 1n);
+          expect(persisted.durableNextNonce).toBe(NONCE);
+          expect(rpc.sends).toEqual([accepted.record]);
+          expect(rpc.fullBlockRequests).toEqual([]);
+
+          const journalPath = join(directory, JOURNAL_FILENAME);
+          const snapshotPath = join(directory, 'daemon-status.json');
+
+          const journalBytes = readFileSync(journalPath);
+          const snapshotBytes = readFileSync(snapshotPath);
+
+          const before = status(directory, 'journal');
+
+          expect(before).toContain('Retained attempts: 1');
+          expect(before).toContain('Phase: broadcast-may-have-occurred');
+          expect(before).toContain(candidate.transactionHash);
+          expect(readFileSync(journalPath)).toEqual(journalBytes);
+
+          rpc.restartAs('replaced');
+
+          const restarted = launch(directory, rpc.url, 'replaced');
+          children.push(restarted);
+
+          const opened = await checkpoint(restarted, 'opened');
+
+          expect(opened.body).toMatchObject({
+            signCalls: 0,
+            canBroadcast: false,
+            status: {
+              open: false,
+              recoveryComplete: false,
+              inclusionChecksComplete: false,
+              persistenceState: 'idle',
+            },
+          });
+
+          expect(await journal(directory)).toEqual(persisted);
+          expect(rpc.sends).toEqual([accepted.record]);
+          expect(rpc.fullBlockRequests).toEqual([]);
+
+          opened.reply();
+
+          const included = await checkpoint(restarted, 'included');
+
+          expect(included.body).toMatchObject({
+            signCalls: 0,
+            canBroadcast: false,
+            status: {
+              open: false,
+              recoveryComplete: true,
+              inclusionChecksComplete: true,
+              persistenceState: 'idle',
+            },
+            result: {
+              broadcast: null,
+              retryDelayMs: null,
+              replacementResolution: null,
+            },
+          });
+
+          const inclusion = {
+            blockNumber: 101n,
+            blockHash: blockHash(101n),
+          };
+
+          const includedSnapshot = {
+            ...persisted,
+            lastObservation: {
+              anchor: inclusion,
+              nonce: NONCE + 1n,
+            },
+            attempts: [{
+              ...attempt,
+              phase: 'included' as const,
+              inclusion: {
+                outcome: 'replaced' as const,
+                replacementTransactionHash: REPLACEMENT_HASH,
+                nonceAtAnchor: NONCE + 1n,
+                inclusion,
+                observedAt: inclusion,
+              },
+            }],
+          };
+
+          // Full-block evidence identifies a different hash belonging
+          // to the same signer and nonce. It is not a signed candidate
+          // generated or adopted by this relayer.
+          expect(await journal(directory)).toEqual(includedSnapshot);
+          expect(rpc.fullBlockRequests).toEqual([101n]);
+          expect(rpc.sends).toEqual([accepted.record]);
+
+          const current = await journal(directory);
+
+          expect(current.attempts).toHaveLength(1);
+          expect(current.attempts[0]!.signedTransactions)
+            .toEqual(attempt.signedTransactions);
+
+          // Non-durable replacement inclusion retains journal capacity.
+          expect(current.nextNonce).toBe(NONCE + 1n);
+          expect(current.durableNextNonce).toBe(NONCE);
+
+          rpc.makeInclusionDurable();
+          included.reply();
+
+          const resolved = await checkpoint(restarted, 'resolved');
+
+          expect(resolved.body).toMatchObject({
+            signCalls: 0,
+            canBroadcast: false,
+            status: {
+              open: true,
+              recoveryComplete: true,
+              inclusionChecksComplete: true,
+              persistenceState: 'idle',
+            },
+            result: {
+              broadcast: null,
+              retryDelayMs: null,
+              replacementResolution: {
+                outcome: 'replaced',
+                replacementTransactionHash: REPLACEMENT_HASH,
+                nonceAtAnchor: String(NONCE + 1n),
+                anchor: {
+                  blockNumber: '101',
+                  blockHash: blockHash(101n),
+                },
+                inclusion: {
+                  blockNumber: '101',
+                  blockHash: blockHash(101n),
+                },
+              },
+            },
+          });
+
+          const resolvedSnapshot = {
+            ...persisted,
+            lastObservation: {
+              anchor: inclusion,
+              nonce: NONCE + 1n,
+            },
+            durableNextNonce: NONCE + 1n,
+            attempts: [],
+          };
+
+          expect(await journal(directory)).toEqual(resolvedSnapshot);
+
+          // Durable recovery independently searches canonical evidence
+          // before removing the attempt.
+          expect(rpc.fullBlockRequests).toEqual([101n, 101n]);
+
+          expect(rpc.receiptRequests.length).toBeGreaterThan(0);
+          expect(new Set(rpc.receiptRequests)).toEqual(
+            new Set([candidate.transactionHash]),
+          );
+
+          expect(rpc.sends).toEqual([accepted.record]);
+          resolved.reply();
+
+          expect(await bounded(
+            restarted.exit,
+            'replacement recovery exit',
+          ), restarted.detail()).toEqual({
+            code: 0,
+            signal: null,
+          });
+
+          const resolvedBytes = readFileSync(journalPath);
+          const after = status(directory, 'journal');
+
+          expect(after).toContain('Next nonce: 5');
+          expect(after).toContain('Durable next nonce: 5');
+          expect(after).toContain('Retained attempts: 0');
+          expect(after)
+            .toContain('Current signing authorization: unknown');
+
+          expect(readFileSync(journalPath)).toEqual(resolvedBytes);
+          expect(await journal(directory)).toEqual(resolvedSnapshot);
+          expect(rpc.sends).toEqual([accepted.record]);
           expect(readFileSync(snapshotPath)).toEqual(snapshotBytes);
 
           expect(readdirSync(directory).sort()).toEqual([
