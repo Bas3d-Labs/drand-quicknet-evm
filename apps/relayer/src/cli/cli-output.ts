@@ -111,6 +111,7 @@ const HELP = [
   '  import-when-available   Wait for and import an exact Quicknet round.',
   '  daemon                  Watch consumers and relay requested rounds.',
   '  sync-nonce              Preview or apply a forward signer nonce repair.',
+  '  status                  Inspect journal or historical daemon status.',
   '',
   'Network selection:',
   '  --network <preset>       Use an official network preset.',
@@ -119,6 +120,20 @@ const HELP = [
   'Exactly one network selection option is required for import, ' +
     'import-when-available, and daemon.',
   '',
+  'Status:',
+  '  relayer status --chain-id <id> --signer <address>',
+  '  --source <journal|daemon-snapshot>  Override launcher source selection.',
+  '  --max-age-ms <milliseconds>         Snapshot age threshold; default 120000.',
+  '',
+  'Without --source, status selects journal when ownership is acquired',
+  'and daemon-snapshot only when lock acquisition reports contention.',
+  'Automatic and journal modes require an existing state directory and lock.',
+  'Use --source daemon-snapshot with --max-age-ms for deterministic selection.',
+  'Status uses QUICKNET_STATE_DIR from the launching environment.',
+  'It requires no private key, RPC URL, or application env file.',
+  'Snapshot freshness does not establish daemon health or signing authorization.',
+  '',
+  'Run relayer daemon --help for daemon-specific usage.',
   'Run relayer daemon --help for daemon-specific usage.',
 ].join('\n');
 
