@@ -92,7 +92,8 @@ export function writeSignerCrashPreload(
         mode === 'dropped' ||
         mode === 'restored-signed' ||
         mode === 'resolve-crash' ||
-        mode === 'resolve-restart',
+        mode === 'resolve-restart' ||
+        mode === 'reorg-restart',
       );
 
       assert.ok(
@@ -299,6 +300,53 @@ export function writeSignerCrashPreload(
 
         const resolved = await submitter.recover();
         await checkpoint('resolved', resolved);
+
+        assert.equal(signCalls, 0);
+        return 'success';
+      }
+
+      if (mode === 'reorg-restart') {
+        assert.equal(coordinator.journalInitialized, true);
+        assert.equal(coordinator.attempts.length, 1);
+        assert.equal(coordinator.attempts[0].phase, 'included');
+        assert.equal(coordinator.status.open, false);
+        assert.equal(coordinator.canBroadcast, false);
+
+        await assert.rejects(
+          coordinator.prepareAttempt({ account, transaction }),
+          /signer gate must be open/,
+        );
+
+        // Included attempts are not broadcast candidates, even before
+        // considering whether fresh recovery has completed.
+        await assert.rejects(
+          coordinator.broadcastAttempt({
+            publicClient,
+            attemptId: coordinator.attempts[0].attemptId,
+          }),
+          /Broadcast does not match a recorded attempt/,
+        );
+
+        await checkpoint('opened');
+
+        // This pass contradicts the saved inclusion and starts the
+        // restored attempt's retry schedule. It grants no send permit.
+        const invalidated = await submitter.recover();
+        await checkpoint('reorg-invalidated', invalidated);
+
+        // Inspect the now-unresolved attempt again, without advancing
+        // the clock. Fresh evidence can authorize broadcasting, but
+        // the retry delay must still prevent a send.
+        const authorized = await submitter.recover();
+        await checkpoint('reorg-authorized', authorized);
+
+        clock = INITIAL_DELAY_MS - 1;
+        const before = await submitter.recover();
+        await checkpoint('retry-before', before);
+
+        clock = INITIAL_DELAY_MS;
+        const due = await submitter.recover();
+        await checkpoint('rebroadcast', due);
 
         assert.equal(signCalls, 0);
         return 'success';

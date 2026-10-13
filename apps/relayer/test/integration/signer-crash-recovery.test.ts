@@ -83,6 +83,7 @@ const IDENTITY = {
 
 const RUN_ID = '11111111-1111-4111-8111-111111111111';
 const OBSERVED_AT = '2000-01-01T00:00:00.000Z';
+const REORG_BLOCK_HASH: Hex = `0x${'bb'.repeat(32)}`;
 
 const NONCE = 4n;
 const INITIAL_DELAY_MS = 5_000;
@@ -91,13 +92,18 @@ const WAIT_MS = 10_000;
 const JOURNAL_FILENAME =
   `transaction-journal-${CHAIN_ID}-${SIGNER.toLowerCase()}.json`;
 
-type ChainMode = 'initial' | 'included' | 'dropped';
+type ChainMode =
+  | 'initial'
+  | 'included'
+  | 'dropped'
+  | 'reorged';
 
 type ChildMode =
   | ChainMode
   | 'restored-signed'
   | 'resolve-crash'
-  | 'resolve-restart';
+  | 'resolve-restart'
+  | 'reorg-restart';
 
 interface RpcRequest {
   readonly jsonrpc: '2.0';
@@ -251,11 +257,17 @@ async function startRpcFixture() {
     return number;
   }
 
+  function canonicalBlockHash(number: bigint): Hex {
+    return mode === 'reorged' && number === 101n
+      ? REORG_BLOCK_HASH
+      : blockHash(number);
+  }
+
   function block(number: bigint) {
     return {
       number: quantity(number),
-      hash: blockHash(number),
-      parentHash: blockHash(number - 1n),
+      hash: canonicalBlockHash(number),
+      parentHash: canonicalBlockHash(number - 1n),
       nonce: '0x0000000000000000',
       sha3Uncles: blockHash(0n),
       logsBloom: `0x${'00'.repeat(256)}`,
@@ -438,6 +450,14 @@ async function startRpcFixture() {
     makeInclusionDurable(): void {
       expect(mode).toBe('included');
       durable = 101n;
+    },
+
+    reorgInclusion(): void {
+      expect(mode).toBe('included');
+      expect(durable).toBe(100n);
+      expect(latest).toBe(101n);
+
+      mode = 'reorged';
     },
 
     expectTransaction(hash: Hex): void {
@@ -1588,6 +1608,324 @@ describe.skipIf(process.platform !== 'linux')(
           expect(rpc.sends).toEqual([accepted.record]);
           expect(readFileSync(snapshotPath)).toEqual(snapshotBytes);
           expect(readdirSync(directory).sort()).toEqual(ordinaryEntries);
+        } finally {
+          try {
+            await Promise.all(children.map((child) => child.stop()));
+          } finally {
+            await rpc.close();
+          }
+        }
+      },
+      40_000,
+    );
+
+    it(
+      'invalidates reorged inclusion after restart before retrying recorded bytes',
+      async () => {
+        const directory = join(
+          mkdtempSync(join(fixture, 'reorg-')),
+          'state',
+        );
+
+        const rpc = await startRpcFixture();
+        const children: ReturnType<typeof launch>[] = [];
+
+        const checkpoint = (
+          owner: ReturnType<typeof launch>,
+          name: string,
+        ) => nextCheckpoint(rpc, owner, name);
+
+        try {
+          const original = launch(directory, rpc.url, 'initial');
+          children.push(original);
+
+          const prepared = await checkpoint(original, 'prepared');
+          expect(prepared.body.signCalls).toBe(1);
+          prepared.reply();
+
+          const accepted = await nextBoundary(rpc, original);
+
+          if (accepted.kind !== 'send') {
+            throw new Error('Expected initial transaction acceptance.');
+          }
+
+          expect(original.child.kill('SIGKILL')).toBe(true);
+
+          expect(await bounded(
+            original.exit,
+            'initial broadcast SIGKILL exit',
+          ), original.detail()).toEqual({
+            code: null,
+            signal: 'SIGKILL',
+          });
+
+          expect(rpc.sends).toHaveLength(1);
+
+          const broadcastSnapshot = await journal(directory);
+          expect(broadcastSnapshot.attempts).toHaveLength(1);
+
+          const attempt = broadcastSnapshot.attempts[0]!;
+          const candidate = attempt.signedTransactions[0];
+
+          expect(candidate.signedTransaction).toBe(accepted.record.raw);
+          expect(candidate.transactionHash).toBe(accepted.record.hash);
+
+          rpc.restartAs('included');
+
+          const observer = launch(directory, rpc.url, 'included');
+          children.push(observer);
+
+          const openedObserver = await checkpoint(observer, 'opened');
+          expect(openedObserver.body.signCalls).toBe(0);
+          openedObserver.reply();
+
+          const included = await checkpoint(observer, 'included');
+
+          expect(included.body).toMatchObject({
+            signCalls: 0,
+            status: { open: false },
+            result: {
+              broadcast: null,
+              retryDelayMs: null,
+            },
+          });
+
+          const includedSnapshot = await journal(directory);
+          expect(includedSnapshot.attempts).toHaveLength(1);
+
+          const retained = includedSnapshot.attempts[0]!;
+
+          expect(retained).toMatchObject({
+            attemptId: attempt.attemptId,
+            nonce: NONCE,
+            phase: 'included',
+            signedTransactions: attempt.signedTransactions,
+            inclusion: {
+              outcome: 'success',
+              transactionHash: candidate.transactionHash,
+              inclusion: {
+                blockNumber: 101n,
+                blockHash: blockHash(101n),
+              },
+            },
+          });
+
+          expect(includedSnapshot.nextNonce).toBe(NONCE + 1n);
+          expect(includedSnapshot.durableNextNonce).toBe(NONCE);
+          expect(rpc.sends).toHaveLength(1);
+
+          // Do not release the inclusion checkpoint or advance durability.
+          // The persisted inclusion remains above the durable head.
+          expect(observer.child.kill('SIGKILL')).toBe(true);
+
+          expect(await bounded(
+            observer.exit,
+            'included observer SIGKILL exit',
+          ), observer.detail()).toEqual({
+            code: null,
+            signal: 'SIGKILL',
+          });
+
+          rpc.reorgInclusion();
+
+          const journalPath = join(directory, JOURNAL_FILENAME);
+          const snapshotPath = join(directory, 'daemon-status.json');
+
+          const journalBytes = readFileSync(journalPath);
+          const snapshotBytes = readFileSync(snapshotPath);
+
+          // Local status still reports the persisted observation. It
+          // neither discovers the reorg nor performs reconciliation.
+          const output = status(directory, 'journal');
+
+          expect(output)
+            .toContain('Current signing authorization: unknown');
+
+          expect(output).toContain('Retained attempts: 1');
+          expect(output).toContain('Phase: included');
+          expect(output).toContain(candidate.transactionHash);
+          expect(readFileSync(journalPath)).toEqual(journalBytes);
+
+          const restarted = launch(
+            directory,
+            rpc.url,
+            'reorg-restart',
+          );
+
+          children.push(restarted);
+
+          const opened = await checkpoint(restarted, 'opened');
+
+          expect(opened.body).toMatchObject({
+            clock: 0,
+            signCalls: 0,
+            canBroadcast: false,
+            status: {
+              open: false,
+              recoveryComplete: false,
+              inclusionChecksComplete: false,
+              persistenceState: 'idle',
+            },
+          });
+
+          expect(await journal(directory)).toEqual(includedSnapshot);
+          expect(rpc.sends).toHaveLength(1);
+          opened.reply();
+
+          const invalidated = await checkpoint(
+            restarted,
+            'reorg-invalidated',
+          );
+
+          expect(invalidated.body).toMatchObject({
+            clock: 0,
+            signCalls: 0,
+            canBroadcast: false,
+            status: {
+              open: false,
+              recoveryComplete: true,
+              inclusionChecksComplete: false,
+              persistenceState: 'idle',
+            },
+            result: {
+              broadcast: null,
+              retryDelayMs: INITIAL_DELAY_MS,
+            },
+          });
+
+          const unresolvedSnapshot = {
+            ...includedSnapshot,
+            lastObservation: {
+              anchor: {
+                blockNumber: 101n,
+                blockHash: REORG_BLOCK_HASH,
+              },
+              nonce: NONCE,
+            },
+            attempts: [{
+              ...retained,
+              phase: 'broadcast-may-have-occurred' as const,
+              inclusion: null,
+              replacementSearch: retained.replacementSearch === null
+                ? null
+                : {
+                    ...retained.replacementSearch,
+                    searchedThrough: null,
+                  },
+            }],
+          };
+
+          const invalidatedSnapshot = await journal(directory);
+
+          expect(invalidatedSnapshot).toEqual(unresolvedSnapshot);
+          expect(invalidatedSnapshot.nextNonce).toBe(NONCE + 1n);
+          expect(invalidatedSnapshot.durableNextNonce).toBe(NONCE);
+          expect(rpc.sends).toHaveLength(1);
+
+          invalidated.reply();
+
+          const authorized = await checkpoint(
+            restarted,
+            'reorg-authorized',
+          );
+
+          expect(authorized.body).toMatchObject({
+            clock: 0,
+            signCalls: 0,
+            canBroadcast: true,
+            status: {
+              open: false,
+              recoveryComplete: true,
+              inclusionChecksComplete: false,
+              persistenceState: 'idle',
+            },
+            result: {
+              broadcast: null,
+              retryDelayMs: INITIAL_DELAY_MS,
+            },
+          });
+
+          expect(await journal(directory)).toEqual(unresolvedSnapshot);
+          expect(rpc.sends).toHaveLength(1);
+          authorized.reply();
+
+          const before = await checkpoint(restarted, 'retry-before');
+
+          expect(before.body).toMatchObject({
+            clock: INITIAL_DELAY_MS - 1,
+            signCalls: 0,
+            canBroadcast: true,
+            result: {
+              broadcast: null,
+              retryDelayMs: 1,
+            },
+          });
+
+          expect(await journal(directory)).toEqual(unresolvedSnapshot);
+          expect(rpc.sends).toHaveLength(1);
+          before.reply();
+
+          const retry = await nextBoundary(rpc, restarted);
+
+          if (retry.kind !== 'send') {
+            throw new Error('Expected recorded-byte retry after reorg.');
+          }
+
+          expect(rpc.sends).toHaveLength(2);
+          expect(retry.record).toEqual(accepted.record);
+          expect(await journal(directory)).toEqual(unresolvedSnapshot);
+
+          retry.reply();
+
+          const rebroadcast = await checkpoint(
+            restarted,
+            'rebroadcast',
+          );
+
+          expect(rebroadcast.body).toMatchObject({
+            clock: INITIAL_DELAY_MS,
+            signCalls: 0,
+            canBroadcast: false,
+            status: {
+              open: false,
+              recoveryComplete: false,
+              inclusionChecksComplete: false,
+              persistenceState: 'idle',
+            },
+            result: {
+              broadcast: {
+                status: 'acknowledged',
+                attemptId: attempt.attemptId,
+                transactionHash: candidate.transactionHash,
+              },
+              retryDelayMs: INITIAL_DELAY_MS,
+            },
+          });
+
+          expect(await journal(directory)).toEqual(unresolvedSnapshot);
+          rebroadcast.reply();
+
+          expect(await bounded(
+            restarted.exit,
+            'reorg recovery exit',
+          ), restarted.detail()).toEqual({
+            code: 0,
+            signal: null,
+          });
+
+          expect(rpc.sends).toEqual([
+            accepted.record,
+            accepted.record,
+          ]);
+
+          expect(await journal(directory)).toEqual(unresolvedSnapshot);
+          expect(readFileSync(snapshotPath)).toEqual(snapshotBytes);
+
+          expect(readdirSync(directory).sort()).toEqual([
+            'daemon-status.json',
+            JOURNAL_FILENAME,
+            'relayer.flock',
+          ].sort());
         } finally {
           try {
             await Promise.all(children.map((child) => child.stop()));
