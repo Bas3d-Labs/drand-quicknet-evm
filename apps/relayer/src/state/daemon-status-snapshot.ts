@@ -6,6 +6,10 @@ import {
   isUuidV4,
 } from '../shared/uuid.js';
 
+import type {
+  JournalPersistenceState,
+} from './journal-persistence.js';
+
 import {
   BLOCKER_PRECEDENCE,
   type SignerBlocker,
@@ -20,10 +24,21 @@ export interface DaemonStatusSnapshot {
   readonly identity: JournalIdentity;
   readonly runId: string;
   readonly observedAt: string;
+  readonly journalInitialized: boolean;
   readonly lastObservedGate: {
     readonly open: boolean;
     readonly primaryReason: SignerBlocker | null;
     readonly blockers: readonly SignerBlocker[];
+    readonly recoveryComplete: boolean;
+    readonly inclusionChecksComplete: boolean;
+    readonly persistenceState: JournalPersistenceState;
+
+    /**
+     * Coordinator-reported start of its blocking episode.
+     * May originate from a retained attempt's creation time on restart.
+     * A primary-blocker change does not itself reset it.
+     */
+    readonly blockedSince: string | null;
   };
 }
 
@@ -59,12 +74,23 @@ export function readDaemonStatusSnapshot(
     (identity.signer as string).toLowerCase() !==
       expectedIdentity.signer.toLowerCase() ||
     !isUuidV4(root.runId) ||
-    typeof gate.open !== 'boolean'
+    typeof root.journalInitialized !== 'boolean' ||
+    typeof gate.open !== 'boolean' ||
+    typeof gate.recoveryComplete !== 'boolean' ||
+    typeof gate.inclusionChecksComplete !== 'boolean'
   ) {
     throw new TypeError(INVALID);
   }
 
   readTimestamp(root.observedAt);
+
+  const persistenceState = readPersistenceState(
+    gate.persistenceState,
+  );
+
+  const blockedSince = readNullableTimestamp(
+    gate.blockedSince,
+  );
 
   if (
     !Array.isArray(gate.blockers) ||
@@ -77,8 +103,20 @@ export function readDaemonStatusSnapshot(
 
   if (
     new Set(blockers).size !== blockers.length ||
-    gate.primaryReason !== (blockers[0] ?? null) ||
-    (gate.open && blockers.length !== 0)
+    gate.primaryReason !== (blockers[0] ?? null)
+  ) {
+    throw new TypeError(INVALID);
+  }
+
+  if (
+    gate.open &&
+    (
+      blockers.length !== 0 ||
+      !root.journalInitialized ||
+      !gate.recoveryComplete ||
+      !gate.inclusionChecksComplete ||
+      persistenceState !== 'idle'
+    )
   ) {
     throw new TypeError(INVALID);
   }
@@ -93,10 +131,15 @@ export function readDaemonStatusSnapshot(
     }),
     runId: root.runId,
     observedAt: root.observedAt as string,
+    journalInitialized: root.journalInitialized,
     lastObservedGate: Object.freeze({
       open: gate.open,
       primaryReason: blockers[0] ?? null,
       blockers: Object.freeze(blockers),
+      recoveryComplete: gate.recoveryComplete,
+      inclusionChecksComplete: gate.inclusionChecksComplete,
+      persistenceState,
+      blockedSince,
     }),
   });
 }
@@ -172,6 +215,31 @@ function readBlocker(input: unknown): SignerBlocker {
   }
 
   throw new TypeError(INVALID);
+}
+
+function readPersistenceState(
+  input: unknown,
+): JournalPersistenceState {
+  switch (input) {
+    case 'idle':
+    case 'writing':
+    case 'failed':
+      return input;
+
+    default:
+      throw new TypeError(INVALID);
+  }
+}
+
+function readNullableTimestamp(
+  input: unknown,
+): string | null {
+  if (input === null) {
+    return null;
+  }
+
+  readTimestamp(input);
+  return input as string;
 }
 
 function readTimestamp(input: unknown): number {

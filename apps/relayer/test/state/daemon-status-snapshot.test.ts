@@ -24,10 +24,15 @@ function snapshot() {
     identity: { ...IDENTITY },
     runId: RUN_ID,
     observedAt: AT,
+    journalInitialized: true,
     lastObservedGate: {
       open: false,
       primaryReason: 'unresolved-attempt',
       blockers: ['unresolved-attempt'],
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      persistenceState: 'idle',
+      blockedSince: null,
     },
   };
 }
@@ -68,9 +73,12 @@ describe('readDaemonStatusSnapshot', () => {
   it.each([true, false])(
     'accepts an empty blocker list with open:%s',
     (open) => {
+      const base = snapshot();
+
       const input = {
-        ...snapshot(),
+        ...base,
         lastObservedGate: {
+          ...base.lastObservedGate,
           open,
           primaryReason: null,
           blockers: [],
@@ -144,10 +152,21 @@ describe('readDaemonStatusSnapshot', () => {
       },
     },
   ])('rejects $name', ({ patch }) => {
-    expect(() => readDaemonStatusSnapshot({
-      ...snapshot(),
+    const base = snapshot();
+
+    const input = {
+      ...base,
       ...patch,
-    }, IDENTITY)).toThrow('Invalid daemon status snapshot.');
+      lastObservedGate: {
+        ...base.lastObservedGate,
+        ...('lastObservedGate' in patch
+          ? patch.lastObservedGate
+          : {}),
+      },
+    };
+
+    expect(() => readDaemonStatusSnapshot(input, IDENTITY))
+      .toThrow('Invalid daemon status snapshot.');
   });
 });
 
