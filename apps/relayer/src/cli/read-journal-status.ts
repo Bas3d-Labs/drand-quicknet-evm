@@ -46,7 +46,7 @@ export async function readJournalStatus(
     identity.chainId <= 0 ||
     !isFixedHex(identity.signer, 20)
   ) {
-    throw new TypeError('Invalid journal identity');
+    throw new TypeError('Invalid journal identity.');
   }
 
   const env = { ...(options.env ?? process.env) };

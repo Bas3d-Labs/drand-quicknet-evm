@@ -1220,6 +1220,11 @@ The daemon attempts to publish `daemon-status.json` in the canonical
 cycle. Publication starts only after signer journal initialization.
 Writes are serialized and awaited.
 
+Publication is awaited before processing continues. A slow or stalled
+filesystem write can delay startup or the next daemon cycle even though
+publication errors are isolated. Use the persistent local storage
+required by the service-ownership model.
+
 Publication is independent of the configured log level. There is no
 separate publication timer; long-running cycles can leave an older
 snapshot on disk. Publication failures are reported through

@@ -1,4 +1,3 @@
-import { report } from 'node:process';
 import {
   readDaemonStatusSnapshot,
   type DaemonStatusCompletedCycle,
