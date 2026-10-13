@@ -75,6 +75,9 @@ const loggerMocks = {
   roundPending: vi.fn<RelayerLog['roundPending']>(),
   heartbeat: vi.fn<RelayerLog['heartbeat']>(),
   loggingFailed: vi.fn<RelayerLog['loggingFailed']>(),
+  statusPublicationFailed:
+    vi.fn<RelayerLog['statusPublicationFailed']>(),
+
   durableFulfillmentPending:
     vi.fn<RelayerLog['durableFulfillmentPending']>(),
   durableFulfillmentUnavailable:

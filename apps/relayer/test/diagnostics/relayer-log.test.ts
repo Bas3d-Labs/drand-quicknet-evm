@@ -179,6 +179,7 @@ describe('createRelayerLog', () => {
       'signerBootstrapDeferred',
       'signerGateReleased',
       'signerNonceSynced',
+      'statusPublicationFailed',
       'withContext',
       'withErrorSummary',
     ]);
@@ -1116,5 +1117,76 @@ describe('createRelayerLog', () => {
     });
 
     expect(writeSync).not.toHaveBeenCalled();
+  });
+
+  it('uses the supplied run ID for status publication warnings', () => {
+    const runId = '11111111-1111-4111-8111-111111111111';
+    const lines: string[] = [];
+
+    const log = createRelayerLog({
+      chainId: CHAIN_ID,
+      runId,
+      destination: {
+        write(line) {
+          lines.push(line);
+        },
+      },
+    });
+
+    log.statusPublicationFailed({
+      signer: CONSUMER,
+      error: new Error(SECRET),
+    });
+
+    expect(recordAt(lines)).toMatchObject({
+      level: 40,
+      chainId: CHAIN_ID,
+      runId,
+      event: 'status_publication_failed',
+      signer: CONSUMER,
+      msg: 'Daemon status publication failed. The snapshot may be stale',
+    });
+
+    expect(lines.join('')).not.toContain(SECRET);
+  });
+
+  it('uses the supplied run ID in fallback diagnostics', () => {
+    const runId = '22222222-2222-4222-8222-222222222222';
+
+    const log = createRelayerLog({
+      chainId: CHAIN_ID,
+      runId,
+      destination: {
+        write() {
+          throw new Error('Destination failed');
+        },
+      },
+    });
+
+    log.statusPublicationFailed({
+      signer: CONSUMER,
+      error: new Error('Publication failed'),
+    });
+
+    expect(fallbackRecords()).toEqual([
+      expect.objectContaining({
+        runId,
+        event: 'logging_failed',
+        code: 'LOG_OUTPUT_FAILED',
+        rejected: 'status_publication_failed',
+      }),
+    ]);
+  });
+
+  it('rejects an invalid supplied run ID before writing', () => {
+    const write = vi.fn();
+
+    expect(() => createRelayerLog({
+      chainId: CHAIN_ID,
+      runId: 'invalid',
+      destination: { write },
+    })).toThrow('Invalid logging run ID.');
+
+    expect(write).not.toHaveBeenCalled();
   });
 });

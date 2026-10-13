@@ -317,8 +317,8 @@ configured deployment are rejected.
 
 The checkpoint must be a direct child of the canonical
 `QUICKNET_STATE_DIR`. Nested directories and paths outside that 
-directory are rejected. The filename `relayer.flock` and 
-`daemon-status.json` is reserved.
+directory are rejected. The filenames `relayer.flock` and 
+`daemon-status.json` are reserved.
 
 An existing checkpoint must be a regular file with one hard link.
 Checkpoint symlinks and hard-link aliases are rejected. The state
@@ -867,10 +867,11 @@ recovery and inclusion checks.
 Before opening a missing signer journal, startup inspects the state
 directory while holding verified service ownership. Automatic
 initialization is allowed only when the directory contains the verified
-`relayer.flock` entry and nothing else. Checkpoints, journal temporary
-files, other signers' journals, and unrelated entries block initialization
-with `prior-state-present`, regardless of whether a checkpoint path was
-configured.
+`relayer.flock` entry and nothing else. Checkpoints, daemon status snapshots,
+journal temporary files, other signers' journals, and unrelated entries block
+initialization files, other signers' journals, and unrelated entries block
+initialization with `prior-state-present`, regardless of whether a checkpoint
+path was configured.
 
 Verify the configured directory and restore the matching journal if
 available. Remove entries only after establishing they are unrelated to
@@ -1066,6 +1067,7 @@ round_already_stored
 round_imported
 signer_bootstrap_deferred
 signer_nonce_synced
+status_publication_failed
 ```
 
 `checkpoint_advanced` and `round_already_stored` are debug-level routine
@@ -1086,7 +1088,47 @@ succeeds. It includes `signer`, `previousNextNonce`, `nextNonce`, `durableBlock`
 `durableBlockHash`, `durableNonce`, and `repairAt`, alongside the logger’s
 chain identity. Nonces and block numbers are decimal strings.
 
+`status_publication_failed` is a warning emitted when daemon status
+observation or publication fails. It includes the signer and a scrubbed
+error summary. The daemon continues; the previous snapshot may remain
+on disk, and a failed write may have an uncertain on-disk outcome.
+
 Logging failures are isolated so logging itself does not stop the daemon.
+
+### Daemon status snapshot
+
+The daemon attempts to publish `daemon-status.json` in the canonical
+`QUICKNET_STATE_DIR` after successful startup and after each completed
+cycle. Publication starts only after signer journal initialization.
+Writes are serialized and awaited.
+
+Publication is independent of the configured log level. There is no
+separate publication timer; long-running cycles can leave an older
+snapshot on disk. Publication failures are reported through
+`status_publication_failed`, subject to the configured log level.
+
+The snapshot contains the chain and signer identity, the daemon's log
+run ID, the observation timestamp, journal initialization state, and
+the last observed signer gate. Gate diagnostics include blockers,
+recovery and inclusion-check completion, persistence state, and
+the coordinator-reported `blockedSince`.
+
+Retained attempts include their IDs, decimal nonces, phases, and every
+recorded candidate transaction hash. Signed transaction bytes are
+excluded.
+
+Cycle completion and retry observations carry separate timestamps.
+Publishing another snapshot does not refresh those timestamps.
+A completed cycle may include consumer failures. A recorded retry
+delay is historical; it is neither a live countdown nor permission
+to broadcast.
+
+The snapshot is diagnostic state. It does not replace the signer
+journal or checkpoints and is not used to authorize transaction work.
+It can remain on disk after shutdown or a failed restart.
+
+A fresh snapshot does not authorize signing. A held service lock does
+not establish daemon health; another command may own it.
 
 ### Error diagnostics
 
@@ -1241,6 +1283,9 @@ At minimum, operators should monitor:
 - uncertain submissions and pending signer transactions
 - daemon startup remaining deferred on mismatched signer nonce counts.
   Unchanged counts do not produce repeated log events
+- `status_publication_failed`
+- snapshot observation age and last completed cycle time, accounting
+  for expected cycle duration
 
 For chain profiles that rely on sequencer timestamp freshness, the configured
 skew warning may intentionally sit close to normal timestamp truncation plus
@@ -1356,6 +1401,12 @@ Coverage includes:
 - consumer failure isolation
 - durable-head regression handling
 - structured logging and heartbeat behavior
+- daemon status snapshot validation and exclusion of signed bytes
+- reserved snapshot filename and filesystem safety checks
+- snapshot publication after initialization and cycle completion
+- shared run IDs across daemon logs and snapshots
+- serialized publications and publication-failure isolation
+- historical cycle and retry timestamps
 
 ## Operational assumptions
 
