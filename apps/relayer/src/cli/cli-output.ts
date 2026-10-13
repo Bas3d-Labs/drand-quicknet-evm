@@ -30,6 +30,18 @@ import type {
   JournalIdentity,
 } from '../state/transaction-journal.js';
 
+import {
+  renderDaemonSnapshotStatusOutput,
+} from './daemon-snapshot-status-output.js';
+
+import {
+  renderJournalStatusOutput,
+} from './journal-status-output.js';
+
+import type {
+  RelayerStatus,
+} from './read-relayer-status.js';
+
 import type {
   SyncNonceResult,
 } from './sync-nonce.js';
@@ -43,6 +55,10 @@ export type CliOutput =
       identity: JournalIdentity;
       mode: 'preview' | 'apply';
       result: SyncNonceResult;
+    }
+  | {
+      type: 'relayer-status';
+      result: RelayerStatus;
     }
   | {
       type: 'import-result';
@@ -399,6 +415,45 @@ function renderNonceSyncOutput(
   return lines.join('\n');
 }
 
+function renderRelayerStatus(
+  result: unknown,
+): string {
+  switch (own(result, 'source')) {
+    case 'journal':
+      return renderJournalStatusOutput(result);
+
+    case 'daemon-snapshot':
+      return renderDaemonSnapshotStatusOutput(result);
+
+    default:
+      throw new TypeError('Invalid relayer status source.');
+  }
+}
+
+function statusFailureFields(
+  result: unknown,
+): Record<string, unknown> {
+  // Validate the entire result before preserving any diagnostic context.
+  // The rendered text is deliberately not included in the arguments.
+  renderRelayerStatus(result);
+
+  const source = own(result, 'source');
+
+  if (source === 'journal') {
+    return {
+      source,
+      journal: own(result, 'journal'),
+      gate: 'unknown',
+    };
+  }
+
+  return {
+    source,
+    snapshot: own(result, 'snapshot'),
+    gate: 'unknown',
+  };
+}
+
 // Construct and validate the complete output before any writer receives it.
 export function renderCliOutput(
   output: CliOutput,
@@ -536,6 +591,10 @@ export function renderCliOutput(
     return renderNonceSyncOutput(output);
   }
 
+  if (type === 'relayer-status') {
+    return renderRelayerStatus(own(output, 'result'));
+  }
+
   throw new TypeError('Invalid CLI output type.');
 }
 
@@ -552,7 +611,12 @@ export function renderOutputFailure(
   try {
     const type = own(output, 'type');
 
-    if (type === 'nonce-sync-result') {
+    if (type === 'relayer-status') {
+      context = {
+        output: type,
+        ...statusFailureFields(own(output, 'result')),
+      };
+    } else if (type === 'nonce-sync-result') {
       context = {
         output: type,
         ...nonceSyncFields(output),
