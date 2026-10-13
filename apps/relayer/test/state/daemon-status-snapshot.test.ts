@@ -26,6 +26,8 @@ function snapshot() {
     observedAt: AT,
     journalInitialized: true,
     attempts: [],
+    lastCompletedCycle: null,
+    lastRetryObservation: null,
     lastObservedGate: {
       open: false,
       primaryReason: 'unresolved-attempt',

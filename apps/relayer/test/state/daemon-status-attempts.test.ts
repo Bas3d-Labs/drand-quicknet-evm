@@ -43,6 +43,8 @@ function snapshot(): DaemonStatusSnapshot {
     observedAt: '2026-10-12T12:00:00.000Z',
     journalInitialized: true,
     attempts: [attempt()],
+    lastCompletedCycle: null,
+    lastRetryObservation: null,
     lastObservedGate: {
       open: false,
       primaryReason: 'unresolved-attempt',

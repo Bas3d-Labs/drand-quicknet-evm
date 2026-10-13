@@ -40,11 +40,29 @@ export interface DaemonStatusAttempt {
   readonly transactionHashes: readonly [Hash, ...Hash[]];
 }
 
+export interface DaemonStatusCompletedCycle {
+  readonly cycle: number;
+  readonly completedAt: string;
+}
+
+export interface DaemonStatusRetryObservation {
+  readonly observedAt: string;
+
+  /**
+   * Historical delay reported by recovery at observedAt.
+   * Null means recovery reported no scheduled retry.
+   * Zero does not authorize broadcasting.
+   */
+  readonly retryDelayMs: number | null;
+}
+
 export interface DaemonStatusSnapshot {
   readonly version: 1;
   readonly identity: JournalIdentity;
   readonly runId: string;
   readonly observedAt: string;
+  readonly lastCompletedCycle: DaemonStatusCompletedCycle | null;
+  readonly lastRetryObservation: DaemonStatusRetryObservation | null;
   readonly journalInitialized: boolean;
   readonly attempts: readonly DaemonStatusAttempt[];
   readonly lastObservedGate: {
@@ -108,6 +126,14 @@ export function readDaemonStatusSnapshot(
 
   readTimestamp(root.observedAt);
 
+  const lastCompletedCycle = readCompletedCycle(
+    root.lastCompletedCycle,
+  );
+
+  const lastRetryObservation = readRetryObservation(
+    root.lastRetryObservation,
+  );
+
   const persistenceState = readPersistenceState(
     gate.persistenceState,
   );
@@ -161,6 +187,8 @@ export function readDaemonStatusSnapshot(
     }),
     runId: root.runId,
     observedAt: root.observedAt as string,
+    lastCompletedCycle,
+    lastRetryObservation,
     journalInitialized: root.journalInitialized,
     attempts,
     lastObservedGate: Object.freeze({
@@ -246,6 +274,61 @@ function readBlocker(input: unknown): SignerBlocker {
   }
 
   throw new TypeError(INVALID);
+}
+
+function readCompletedCycle(
+  input: unknown,
+): DaemonStatusCompletedCycle | null {
+  if (input === null) {
+    return null;
+  }
+
+  const value = object(input);
+
+  if (
+    typeof value.cycle !== 'number' ||
+    !Number.isSafeInteger(value.cycle) ||
+    value.cycle <= 0
+  ) {
+    throw new TypeError(INVALID);
+  }
+
+  readTimestamp(value.completedAt);
+
+  return Object.freeze({
+    cycle: value.cycle,
+    completedAt: value.completedAt as string,
+  });
+}
+
+function readRetryObservation(
+  input: unknown,
+): DaemonStatusRetryObservation | null {
+  if (input === null) {
+    return null;
+  }
+
+  const value = object(input);
+
+  readTimestamp(value.observedAt);
+
+  const retryDelayMs = value.retryDelayMs;
+
+  if (
+    retryDelayMs !== null &&
+    (
+      typeof retryDelayMs !== 'number' ||
+      !Number.isSafeInteger(retryDelayMs) ||
+      retryDelayMs < 0
+    )
+  ) {
+    throw new TypeError(INVALID);
+  }
+
+  return Object.freeze({
+    observedAt: value.observedAt as string,
+    retryDelayMs,
+  });
 }
 
 function readAttempts(
