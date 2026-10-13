@@ -90,7 +90,9 @@ export function writeSignerCrashPreload(
         mode === 'initial' ||
         mode === 'included' ||
         mode === 'dropped' ||
-        mode === 'restored-signed',
+        mode === 'restored-signed' ||
+        mode === 'resolve-crash' ||
+        mode === 'resolve-restart',
       );
 
       assert.ok(
@@ -100,7 +102,7 @@ export function writeSignerCrashPreload(
       );
 
       if (killBoundary !== undefined) {
-        assert.equal(mode, 'initial');
+        assert.ok(mode === 'initial' || mode === 'resolve-crash');
       }
 
       let clock = 0;
@@ -280,6 +282,28 @@ export function writeSignerCrashPreload(
         throw new Error('Initial broadcast unexpectedly returned.');
       }
 
+      if (mode === 'resolve-restart') {
+        assert.equal(coordinator.journalInitialized, true);
+        assert.equal(coordinator.status.open, false);
+        assert.equal(coordinator.canBroadcast, false);
+
+        // Even an already-cleared journal must establish fresh recovery
+        // and inclusion checks before preparation is authorized.
+        await assert.rejects(
+          coordinator.prepareAttempt({ account, transaction }),
+          /signer gate must be open/,
+        );
+
+        assert.equal(signCalls, 0);
+        await checkpoint('opened');
+
+        const resolved = await submitter.recover();
+        await checkpoint('resolved', resolved);
+
+        assert.equal(signCalls, 0);
+        return 'success';
+      }
+
       assert.equal(coordinator.journalInitialized, true);
       assert.equal(coordinator.attempts.length, 1);
       assert.equal(coordinator.status.open, false);
@@ -307,13 +331,22 @@ export function writeSignerCrashPreload(
         // fresh recovery can authorize its first broadcast.
         const due = await submitter.recover();
         await checkpoint('rebroadcast', due);
-      } else if (mode === 'included') {
+      } else if (mode === 'included' || mode === 'resolve-crash') {
         const included = await submitter.recover();
         await checkpoint('included', included);
 
-        // The parent advances the durable head while this checkpoint
-        // is held, preserving consistent nonce observations at each block.
+        // Opening and non-durable inclusion persistence have completed.
+        // The parent now exposes the receipt block as durable.
+        if (mode === 'resolve-crash') {
+          persistenceArmed = true;
+        }
+
         const resolved = await submitter.recover();
+
+        if (mode === 'resolve-crash') {
+          throw new Error('Resolution unexpectedly passed the kill boundary.');
+        }
+
         await checkpoint('resolved', resolved);
       } else {
         const start = await submitter.recover();

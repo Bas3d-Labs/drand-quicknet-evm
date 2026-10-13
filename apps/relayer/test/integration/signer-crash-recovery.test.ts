@@ -93,7 +93,11 @@ const JOURNAL_FILENAME =
 
 type ChainMode = 'initial' | 'included' | 'dropped';
 
-type ChildMode = ChainMode | 'restored-signed';
+type ChildMode =
+  | ChainMode
+  | 'restored-signed'
+  | 'resolve-crash'
+  | 'resolve-restart';
 
 interface RpcRequest {
   readonly jsonrpc: '2.0';
@@ -168,6 +172,7 @@ async function startRpcFixture() {
   let latest = 100n;
   let expectedTransactionHash: Hex | undefined;
 
+  const receiptRequests: Hex[] = [];
   const sends: SendRecord[] = [];
   const queued: Boundary[] = [];
 
@@ -331,6 +336,8 @@ async function startRpcFixture() {
           expect(expectedTransactionHash).toBeDefined();
           expect(rpc.params[0]).toBe(expectedTransactionHash);
 
+          receiptRequests.push(rpc.params[0] as Hex);
+
           if (mode !== 'included') {
             reply(null);
             return;
@@ -378,8 +385,8 @@ async function startRpcFixture() {
 
           sends.push(record);
 
-          // This is the acceptance boundary. The first response is
-          // deliberately never sent, including during child shutdown.
+          // This is the acceptance boundary. The parent controls whether
+          // to acknowledge the request or kill the child without replying.
           publish({
             kind: 'send',
             record,
@@ -419,6 +426,7 @@ async function startRpcFixture() {
   return {
     url: `http://127.0.0.1:${address.port}`,
     sends,
+    receiptRequests,
     next,
 
     restartAs(branch: 'included' | 'dropped'): void {
@@ -576,6 +584,8 @@ describe.skipIf(process.platform !== 'linux')(
       expect(result.error).toBeUndefined();
       expect(result.signal).toBeNull();
       expect(result.status, result.stderr).toBe(0);
+
+      // Successful status inspection intentionally emits no diagnostics.
       expect(result.stderr).toBe('');
 
       return result.stdout;
@@ -1228,6 +1238,356 @@ describe.skipIf(process.platform !== 'linux')(
           expect(new Set(rpc.sends.map(({ raw }) => raw)).size).toBe(1);
           expect(readdirSync(directory).sort()).toEqual(ordinaryEntries);
           expect(readFileSync(snapshotPath)).toEqual(snapshotBytes);
+        } finally {
+          try {
+            await Promise.all(children.map((child) => child.stop()));
+          } finally {
+            await rpc.close();
+          }
+        }
+      },
+      40_000,
+    );
+
+    it.each([
+      'temp-synced',
+      'renamed',
+    ] as const)(
+      'recovers durable resolution after SIGKILL at %s',
+      async (killBoundary) => {
+        const directory = join(
+          mkdtempSync(join(fixture, 'resolution-' + killBoundary + '-')),
+          'state',
+        );
+
+        const rpc = await startRpcFixture();
+        const children: ReturnType<typeof launch>[] = [];
+
+        const checkpoint = (
+          owner: ReturnType<typeof launch>,
+          name: string,
+        ) => nextCheckpoint(rpc, owner, name);
+
+        try {
+          // Establish a real uncertain broadcast using the same
+          // parent-owned acceptance boundary as the original cases.
+          const original = launch(directory, rpc.url, 'initial');
+          children.push(original);
+
+          const prepared = await checkpoint(original, 'prepared');
+          expect(prepared.body.signCalls).toBe(1);
+          prepared.reply();
+
+          const accepted = await nextBoundary(rpc, original);
+
+          if (accepted.kind !== 'send') {
+            throw new Error('Expected initial transaction acceptance.');
+          }
+
+          expect(original.child.kill('SIGKILL')).toBe(true);
+
+          expect(await bounded(
+            original.exit,
+            'initial broadcast SIGKILL exit',
+          ), original.detail()).toEqual({
+            code: null,
+            signal: 'SIGKILL',
+          });
+
+          expect(rpc.sends).toHaveLength(1);
+
+          const broadcastSnapshot = await journal(directory);
+          expect(broadcastSnapshot.attempts).toHaveLength(1);
+
+          const attempt = broadcastSnapshot.attempts[0]!;
+          const candidate = attempt.signedTransactions[0];
+
+          expect(attempt.phase).toBe('broadcast-may-have-occurred');
+          expect(candidate.signedTransaction).toBe(accepted.record.raw);
+          expect(candidate.transactionHash).toBe(accepted.record.hash);
+          expect(broadcastSnapshot.nextNonce).toBe(NONCE + 1n);
+          expect(broadcastSnapshot.durableNextNonce).toBe(NONCE);
+
+          const journalPath = join(directory, JOURNAL_FILENAME);
+          const snapshotPath = join(directory, 'daemon-status.json');
+          const snapshotBytes = readFileSync(snapshotPath);
+
+          rpc.restartAs('included');
+
+          // The hook exists but remains disarmed through writable opening
+          // and the first recovery pass.
+          const resolver = launch(
+            directory,
+            rpc.url,
+            'resolve-crash',
+            killBoundary,
+          );
+
+          children.push(resolver);
+
+          const openedResolver = await checkpoint(resolver, 'opened');
+
+          expect(openedResolver.body).toMatchObject({
+            signCalls: 0,
+            canBroadcast: false,
+            status: {
+              open: false,
+              recoveryComplete: false,
+              inclusionChecksComplete: false,
+              persistenceState: 'idle',
+            },
+          });
+
+          expect(await journal(directory)).toEqual(broadcastSnapshot);
+          expect(rpc.sends).toHaveLength(1);
+
+          openedResolver.reply();
+
+          const included = await checkpoint(resolver, 'included');
+
+          expect(included.body).toMatchObject({
+            signCalls: 0,
+            status: { open: false },
+            result: {
+              broadcast: null,
+              retryDelayMs: null,
+            },
+          });
+
+          const includedSnapshot = await journal(directory);
+
+          expect(includedSnapshot.attempts).toHaveLength(1);
+          expect(includedSnapshot.nextNonce).toBe(NONCE + 1n);
+          expect(includedSnapshot.durableNextNonce).toBe(NONCE);
+
+          expect(includedSnapshot.attempts[0]).toMatchObject({
+            attemptId: attempt.attemptId,
+            nonce: NONCE,
+            phase: 'included',
+            signedTransactions: attempt.signedTransactions,
+            inclusion: {
+              outcome: 'success',
+              transactionHash: candidate.transactionHash,
+              inclusion: {
+                blockNumber: 101n,
+                blockHash: blockHash(101n),
+              },
+            },
+          });
+
+          const includedBytes = readFileSync(journalPath);
+
+          const resolvedSnapshot = {
+            ...includedSnapshot,
+            lastObservation: {
+              anchor: {
+                blockNumber: 101n,
+                blockHash: blockHash(101n),
+              },
+              nonce: NONCE + 1n,
+            },
+            durableNextNonce: NONCE + 1n,
+            attempts: [],
+          };
+
+          expect(rpc.sends).toHaveLength(1);
+
+          // The child arms only after this checkpoint is released.
+          rpc.makeInclusionDurable();
+          included.reply();
+
+          const held = await checkpoint(
+            resolver,
+            'persistence-' + killBoundary,
+          );
+
+          expect(held.body).toMatchObject({
+            signCalls: 0,
+            canBroadcast: false,
+            status: {
+              open: false,
+              persistenceState: 'writing',
+            },
+          });
+
+          expect(await journal(directory)).toEqual(
+            killBoundary === 'temp-synced'
+              ? includedSnapshot
+              : resolvedSnapshot,
+          );
+
+          if (killBoundary === 'temp-synced') {
+            expect(readFileSync(journalPath)).toEqual(includedBytes);
+          } else {
+            expect(readFileSync(journalPath)).not.toEqual(includedBytes);
+          }
+
+          expect(rpc.sends).toHaveLength(1);
+
+          expect(resolver.child.kill('SIGKILL')).toBe(true);
+
+          expect(await bounded(
+            resolver.exit,
+            'resolution persistence SIGKILL exit',
+          ), resolver.detail()).toEqual({
+            code: null,
+            signal: 'SIGKILL',
+          });
+
+          const expectedSnapshot = killBoundary === 'temp-synced'
+            ? includedSnapshot
+            : resolvedSnapshot;
+
+          expect(await journal(directory)).toEqual(expectedSnapshot);
+          expect(rpc.sends).toHaveLength(1);
+
+          const ordinaryEntries = [
+            'daemon-status.json',
+            JOURNAL_FILENAME,
+            'relayer.flock',
+          ].sort();
+
+          const entries = readdirSync(directory).sort();
+
+          const tempFiles = entries.filter((name) => (
+            name.startsWith(JOURNAL_FILENAME + '.') &&
+            name.endsWith('.tmp')
+          ));
+
+          if (killBoundary === 'temp-synced') {
+            expect(tempFiles).toHaveLength(1);
+
+            expect(entries).toEqual([
+              ...ordinaryEntries,
+              tempFiles[0]!,
+            ].sort());
+
+            expect(readFileSync(journalPath)).toEqual(includedBytes);
+
+            // Resolution is fully encoded in the orphan, but has not
+            // replaced the committed journal.
+            expect(await journal(directory, tempFiles[0]!))
+              .toEqual(resolvedSnapshot);
+          } else {
+            expect(tempFiles).toHaveLength(0);
+            expect(entries).toEqual(ordinaryEntries);
+            expect(readFileSync(journalPath)).not.toEqual(includedBytes);
+          }
+
+          const beforeStatus = entries.map((name) => ({
+            name,
+            bytes: readFileSync(join(directory, name)),
+          }));
+
+          // Real status reacquires ownership and observes the committed
+          // state without adopting or sweeping the orphan.
+          const output = status(directory, 'journal');
+
+          expect(output).toContain('Journal: present');
+          expect(output).toContain('Next nonce: 5');
+
+          if (killBoundary === 'temp-synced') {
+            expect(output).toContain('Durable next nonce: 4');
+            expect(output).toContain('Retained attempts: 1');
+            expect(output).toContain('Phase: included');
+            expect(output).toContain(candidate.transactionHash);
+          } else {
+            expect(output).toContain('Durable next nonce: 5');
+            expect(output).toContain('Retained attempts: 0');
+            expect(output).not.toContain(attempt.attemptId);
+          }
+
+          expect(output).not.toContain(candidate.signedTransaction);
+          expect(readdirSync(directory).sort()).toEqual(entries);
+
+          for (const file of beforeStatus) {
+            expect(readFileSync(join(directory, file.name)))
+              .toEqual(file.bytes);
+          }
+
+          const receiptCount = rpc.receiptRequests.length;
+
+          // No hook is supplied to this process.
+          const restarted = launch(
+            directory,
+            rpc.url,
+            'resolve-restart',
+          );
+
+          children.push(restarted);
+
+          const opened = await checkpoint(restarted, 'opened');
+
+          expect(opened.body).toMatchObject({
+            signCalls: 0,
+            canBroadcast: false,
+            status: {
+              open: false,
+              recoveryComplete: false,
+              inclusionChecksComplete: false,
+              persistenceState: 'idle',
+            },
+          });
+
+          // Writable opening sweeps the orphan and durably rewrites
+          // precisely the committed snapshot.
+          expect(readdirSync(directory).sort()).toEqual(ordinaryEntries);
+          expect(await journal(directory)).toEqual(expectedSnapshot);
+          expect(readFileSync(snapshotPath)).toEqual(snapshotBytes);
+          expect(rpc.receiptRequests).toHaveLength(receiptCount);
+          expect(rpc.sends).toHaveLength(1);
+
+          opened.reply();
+
+          const resolved = await checkpoint(restarted, 'resolved');
+
+          expect(resolved.body).toMatchObject({
+            signCalls: 0,
+            canBroadcast: false,
+            status: {
+              open: true,
+              recoveryComplete: true,
+              inclusionChecksComplete: true,
+              persistenceState: 'idle',
+            },
+            result: {
+              broadcast: null,
+              retryDelayMs: null,
+            },
+          });
+
+          expect(await journal(directory)).toEqual(resolvedSnapshot);
+
+          if (killBoundary === 'temp-synced') {
+            // This single-candidate resolution needs exactly one fresh
+            // receipt lookup. The subsequent empty-journal check needs none.
+            expect(rpc.receiptRequests.slice(receiptCount)).toEqual([
+              candidate.transactionHash,
+            ]);
+
+            expect(rpc.receiptRequests.slice(receiptCount))
+              .toContain(candidate.transactionHash);
+          } else {
+            // Resolution was already committed. Recovery must not
+            // resurrect the removed attempt or look up its receipt.
+            expect(rpc.receiptRequests).toHaveLength(receiptCount);
+          }
+
+          expect(rpc.sends).toHaveLength(1);
+          resolved.reply();
+
+          expect(await bounded(
+            restarted.exit,
+            'resolution recovery exit',
+          ), restarted.detail()).toEqual({
+            code: 0,
+            signal: null,
+          });
+
+          expect(await journal(directory)).toEqual(resolvedSnapshot);
+          expect(rpc.sends).toEqual([accepted.record]);
+          expect(readFileSync(snapshotPath)).toEqual(snapshotBytes);
+          expect(readdirSync(directory).sort()).toEqual(ordinaryEntries);
         } finally {
           try {
             await Promise.all(children.map((child) => child.stop()));
