@@ -347,4 +347,71 @@ describe('durableReplace', () => {
       await expectOnlyCheckpoint();
     },
   );
+
+  it.each([
+    'temp-synced',
+    'renamed',
+  ] as const)(
+    'preserves normal failure cleanup when the %s hook rejects',
+    async (boundary) => {
+      const failure = new Error('Injected boundary failure.');
+      const visited: string[] = [];
+
+      await expect(
+        durableReplace(filePath, UPDATED, async (step) => {
+          visited.push(step);
+
+          if (step !== boundary) {
+            return;
+          }
+
+          expect(faults.tempPaths).toHaveLength(1);
+          const tempPath = faults.tempPaths[0]!;
+
+          // Neither boundary has completed directory synchronization.
+          expect(faults.events).not.toContain('directory:sync');
+
+          if (step === 'temp-synced') {
+            expect(faults.events).toContain('file:sync');
+            expect(faults.events).toContain('file:close');
+            expect(faults.events).not.toContain('rename');
+
+            expect(await readFile(filePath, 'utf8')).toBe(ORIGINAL);
+            expect(await readFile(tempPath, 'utf8')).toBe(UPDATED);
+
+            expect((await readdir(directory)).sort()).toEqual([
+              basename(filePath),
+              basename(tempPath),
+            ].sort());
+          } else {
+            expect(faults.events).toContain('rename');
+            expect(await readFile(filePath, 'utf8')).toBe(UPDATED);
+
+            await expectOnlyCheckpoint();
+          }
+
+          throw failure;
+        }),
+      ).rejects.toMatchObject({
+        cause: failure,
+      });
+
+      expect(visited).toEqual(
+        boundary === 'temp-synced'
+          ? ['temp-synced']
+          : ['temp-synced', 'renamed'],
+      );
+
+      expect(await readFile(filePath, 'utf8')).toBe(
+        boundary === 'temp-synced' ? ORIGINAL : UPDATED,
+      );
+
+      expect(faults.events).not.toContain('directory:sync');
+      expect(faults.events).toContain('directory:close');
+
+      // Rejection executes cleanup. SIGKILL at the same pre-rename
+      // boundary bypasses this cleanup and leaves the temporary file.
+      await expectOnlyCheckpoint();
+    },
+  );
 });

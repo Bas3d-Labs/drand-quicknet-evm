@@ -24,6 +24,10 @@ import {
   type BroadcastRetryScheduleOptions,
 } from '../state/broadcast-retry-schedule.js';
 
+import type {
+  PersistenceBoundaryHook,
+} from '../state/durable-replace.js';
+
 import {
   FileTransactionJournalStore,
 } from '../state/file-transaction-journal-store.js';
@@ -53,6 +57,7 @@ export interface OpenSignerRuntimeOptions {
   readonly log: ScopedRelayerLog;
   readonly createErrorSummary: ErrorSummaryFactory;
   readonly retry: BroadcastRetryScheduleOptions;
+  readonly onPersistenceBoundary?: PersistenceBoundaryHook;
   readonly checkpointFile?: string | undefined;
   readonly env?: NodeJS.ProcessEnv;
 }
@@ -129,6 +134,9 @@ export async function openSignerRuntime(
   const store = await FileTransactionJournalStore.open({
     filePath,
     identity,
+    ...(options.onPersistenceBoundary === undefined
+      ? {}
+      : { onPersistenceBoundary: options.onPersistenceBoundary }),
   });
 
   const coordinator = await SignerCoordinator.create({
