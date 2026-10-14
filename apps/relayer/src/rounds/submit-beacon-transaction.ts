@@ -5,13 +5,17 @@ import type {
 } from 'viem';
 
 import {
-  prepareRelayerTransaction,
-} from '../chain/prepare-relayer-transaction.js';
+  submitTransaction,
+  type SubmitTransactionResult,
+} from '../execution/submit-transaction.js';
 
 import type {
-  BroadcastAttemptResult,
   SignerCoordinator,
 } from '../state/signer-coordinator.js';
+
+import {
+  createBeaconWorkId,
+} from './beacon-work-identity.js';
 
 import {
   encodeBeaconSubmission,
@@ -30,16 +34,16 @@ export interface SubmitBeaconTransactionOptions {
 }
 
 /**
- * Prepare fees, durably records the signed transaction, then broadcasts
- * through the coordinator.
+ * Compose the exact-round work identity, encode the selected beacon call,
+ * and delegate transaction execution.
  * 
- * Cancellation is checked between operations. A recorded attempt remains
- * in the journal if cancellation prevents starting the broadcast.
+ * A retained-work result does not establish beacon fulfillment or
+ * authorize broadcasting the retained attempt.
  */
 export async function submitBeaconTransaction(
   options: SubmitBeaconTransactionOptions,
   cycle?: number,
-): Promise<BroadcastAttemptResult> {
+): Promise<SubmitTransactionResult> {
   const {
     publicClient,
     walletClient,
@@ -55,27 +59,24 @@ export async function submitBeaconTransaction(
     throw new Error('The signer gate must be open before submitting a beacon.');
   }
 
-  const call = encodeBeaconSubmission(request);
-
-  const transaction = await prepareRelayerTransaction({
-    walletClient,
-    signer: account.address,
-    ...call,
-    gas: request.gas,
+  const workId = createBeaconWorkId({
+    chainId: coordinator.chainId,
+    registry: request.address,
+    round: request.args[0],
   });
 
-  signal?.throwIfAborted();
+  const call = encodeBeaconSubmission(request);
 
-  // Rechecks the gate after asynchronous gas and fee preparation.
-  const attempt = await coordinator.prepareAttempt({
-    account,
-    transaction,
-  }, cycle);
-
-  signal?.throwIfAborted();
-
-  return coordinator.broadcastAttempt({
+  return submitTransaction({
     publicClient,
-    attemptId: attempt.attemptId,
+    walletClient,
+    account,
+    coordinator,
+    call: {
+      ...call,
+      gas: request.gas,
+    },
+    workId,
+    signal,
   }, cycle);
 }

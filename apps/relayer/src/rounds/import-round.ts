@@ -82,12 +82,24 @@ export interface PendingImportResult {
     | 'receipt-timeout';
 }
 
-export interface DeferredImportResult {
+export type DeferredImportResult = {
   readonly status: 'deferred';
   readonly round: bigint;
-  readonly reason: 'signer-unavailable';
-  readonly blocker: SignerBlocker;
-}
+} & (
+  | {
+      readonly reason: 'signer-unavailable';
+      readonly blocker: SignerBlocker;
+    }
+  | {
+      /**
+       * This work has a retained attempt. No new attempt was prepared.
+       * This outcome does not establish fulfillment.
+       */
+      readonly reason: 'already-retained';
+      readonly attemptId: string;
+      readonly workId: string;
+  }
+);
 
 export type CompletedImportResult = Extract<
   ImportQuicknetRoundResult,
@@ -205,6 +217,16 @@ export async function importQuicknetRound(
   options.signal?.throwIfAborted();
   
   const submitted = await options.submitter.submit(request);
+
+  if (submitted.status === 'already-retained') {
+    return {
+      status: 'deferred',
+      round,
+      reason: 'already-retained',
+      attemptId: submitted.attemptId,
+      workId: submitted.workId,
+    }
+  }
 
   if (submitted.status === 'signer-unavailable') {
     return {

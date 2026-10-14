@@ -8,12 +8,15 @@ import type {
   ChainHeads,
 } from '../chain/chain-heads.js';
 
+import type {
+  SubmitTransactionResult,
+} from '../execution/submit-transaction.js';
+
 import {
   recoverSignerAtHeads,
 } from '../state/recover-signer-at-heads.js';
 
 import type {
-  BroadcastAttemptResult,
   SignerCoordinator,
 } from '../state/signer-coordinator.js';
 
@@ -35,7 +38,7 @@ export type BeaconSubmissionRequest =
   SubmitBeaconTransactionOptions['request'];
 
 export type BeaconSubmissionResult =
-  | BroadcastAttemptResult
+  | SubmitTransactionResult
   | {
       /**
        * Fresh recovery completed, but the signer gate remained closed.

@@ -408,6 +408,38 @@ describe('importQuicknetRound', () => {
     expect(getBeacon).not.toHaveBeenCalled();
   });
 
+  it('defers already-retained work without receipt waiting or fulfillment reads', async () => {
+    const attemptId = '11111111-1111-4111-8111-111111111111';
+    const workId =
+      'quicknet-round:v1:46630:' +
+      '0x1111111111111111111111111111111111111111:20791007';
+
+    submitTransaction.mockResolvedValueOnce({
+      status: 'already-retained',
+      attemptId,
+      workId,
+    });
+
+    await expect(importRound()).resolves.toEqual({
+      status: 'deferred',
+      round: ROUND,
+      reason: 'already-retained',
+      attemptId,
+      workId,
+    });
+
+    expect(verifyDeployment).toHaveBeenCalledOnce();
+    expect(isStored).toHaveBeenCalledExactlyOnceWith(ROUND);
+    expect(submissionMocks.simulateBeaconSubmission)
+      .toHaveBeenCalledOnce();
+    expect(submitTransaction).toHaveBeenCalledExactlyOnceWith(
+      SIMULATED_REQUEST,
+    );
+
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+    expect(getBeacon).not.toHaveBeenCalled();
+  });
+
   it('returns pending for an unacknowledged broadcast without retrying or waiting for a receipt', async () => {
     const attemptId = '11111111-1111-4111-8111-111111111111';
 

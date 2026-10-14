@@ -220,6 +220,43 @@ describe('beacon submitter', () => {
       .toBe(t.request);
   });
 
+  it('forwards already-retained unchanged after recovery and an open-gate check', async () => {
+    const t = setup();
+
+    const retained = Object.freeze({
+      status: 'already-retained' as const,
+      attemptId: '11111111-1111-4111-8111-111111111111',
+      workId:
+        'quicknet-round:v1:4663:' +
+        '0x2222222222222222222222222222222222222222:20791007',
+    });
+
+    mocks.submitBeaconTransaction.mockImplementationOnce(async () => {
+      t.events.push('submit');
+
+      expect(t.readStatus).toHaveBeenCalledOnce();
+
+      return retained;
+    });
+
+    const result = await t.submitter.submit(t.request, 7);
+
+    expect(result).toBe(retained);
+    expect(t.events).toEqual(['recover', 'submit']);
+    expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
+    expect(t.readStatus).toHaveBeenCalledOnce();
+
+    expect(mocks.submitBeaconTransaction)
+      .toHaveBeenCalledExactlyOnceWith({
+        publicClient: t.options.publicClient,
+        walletClient: t.options.walletClient,
+        account: ACCOUNT,
+        coordinator: t.options.coordinator,
+        request: t.request,
+        signal: t.controller.signal,
+      }, 7);
+  });
+
   it('does not submit when recovery fails', async () => {
     const t = setup();
     const error = new Error('Recovery failed');

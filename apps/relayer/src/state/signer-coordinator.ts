@@ -304,6 +304,13 @@ export class SignerCoordinator {
     return coordinator;
   }
 
+  /**
+   * Chain identity used by the signer journal and transaction signing.
+   */
+  get chainId(): number {
+    return this.identity.chainId;
+  }
+
   get attempts(): readonly AttemptSummary[] {
     const current = this.persistence.current;
 

@@ -52,7 +52,7 @@ export function createBeaconWorkId(
   }
 
   const workId =
-    `quicknet-round:v1${chainId}:${registry.toLowerCase()}:${round}`;
+    `quicknet-round:v1:${chainId}:${registry.toLowerCase()}:${round}`;
 
   if (!isWorkId(workId)) {
     throw new TypeError('Invalid beacon work identity.');
