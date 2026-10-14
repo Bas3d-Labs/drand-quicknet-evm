@@ -10,6 +10,10 @@ import type {
   DaemonStartupSummary,
 } from '../daemon/daemon-startup.js';
 
+import {
+  isWorkId,
+} from '../execution/work-identity.js';
+
 import type {
   ImportQuicknetRoundResult,
 } from '../rounds/import-round.js';
@@ -472,6 +476,49 @@ function statusFailureFields(
   };
 }
 
+function deferredImportFields(
+  result: unknown,
+) {
+  const reason = own(result, 'reason');
+
+  if (reason === 'signer-unavailable') {
+    const blocker = own(result, 'blocker');
+
+    if (
+      typeof blocker !== 'string' ||
+      !BLOCKER_PRECEDENCE.some((allowed) => allowed === blocker)
+    ) {
+      throw new TypeError('Invalid signer blocker.');
+    }
+
+    return {
+      reason: 'signer-unavailable' as const,
+      blocker,
+    };
+  }
+
+  if (reason === 'already-retained') {
+    const attemptId = own(result, 'attemptId');
+    const workId = own(result, 'workId');
+
+    if (!isUuidV4(attemptId)) {
+      throw new TypeError('Invalid CLI attempt ID.');
+    }
+
+    if (!isWorkId(workId)) {
+      throw new TypeError('Invalid work identity.');
+    }
+
+    return {
+      reason: 'already-retained' as const,
+      attemptId,
+      workId,
+    };
+  }
+
+  throw new TypeError('Invalid deferral reason.');
+}
+
 // Construct and validate the complete output before any writer receives it.
 export function renderCliOutput(
   output: CliOutput,
@@ -516,25 +563,23 @@ export function renderCliOutput(
     }
 
     if (status === 'deferred') {
-      const reason = own(result, 'reason');
-      const blocker = own(result, 'blocker');
+      const fields = deferredImportFields(result);
 
-      if (reason !== 'signer-unavailable') {
-        throw new TypeError('Invalid deferral reason.');
-      }
-
-      if (
-        typeof blocker !== 'string' ||
-        !BLOCKER_PRECEDENCE.some((allowed) => allowed === blocker)
-      ) {
-        throw new TypeError('Invalid signer blocker.');
-      }
-
-      return [
+      const lines = [
         'Quicknet round ' + round + ' import is deferred.',
-        'Reason: ' + reason,
-        'Signer blocker: ' + blocker,
-      ].join('\n');
+        'Reason: ' + fields.reason,
+      ];
+
+      if (fields.reason === 'signer-unavailable') {
+        lines.push('Signer blocker: ' + fields.blocker);
+      } else {
+        lines.push(
+          'Retained attempt: ' + fields.attemptId,
+          'Work identity: ' + fields.workId,
+        );
+      }
+
+      return lines.join('\n');
     }
 
     const randomness = hex(own(result, 'randomness'), 32);
@@ -675,26 +720,13 @@ export function renderOutputFailure(
           reason,
         };
       } else if (status === 'deferred') {
-        const reason = own(result, 'reason');
-        const blocker = own(result, 'blocker');
-
-        if (reason !== 'signer-unavailable') {
-          throw new TypeError('Invalid deferral reason.');
-        }
-
-        if (
-          typeof blocker !== 'string' ||
-          !BLOCKER_PRECEDENCE.some((allowed) => allowed === blocker)
-        ) {
-          throw new TypeError('Invalid signer blocker.');
-        }
+        const fields = deferredImportFields(result);
 
         context = {
           output: type,
           round,
           status,
-          reason,
-          blocker,
+          ...fields,
         };
       } else if (status === 'imported') {
         const randomness = hex(own(result, 'randomness'), 32);

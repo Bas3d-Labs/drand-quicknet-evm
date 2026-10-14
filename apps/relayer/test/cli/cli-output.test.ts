@@ -119,6 +119,16 @@ describe('incomplete import output', () => {
     blocker: 'unresolved-attempt',
   } as const;
 
+  const WORK_ID = ' work:e\u0301 ';
+
+  const retained = {
+    status: 'deferred',
+    round: ROUND,
+    reason: 'already-retained',
+    attemptId: ATTEMPT_ID,
+    workId: WORK_ID,
+  } as const;
+
   it.each([
     'broadcast-not-acknowledged',
     'receipt-timeout',
@@ -177,6 +187,111 @@ describe('incomplete import output', () => {
       reason: 'signer-unavailable',
       blocker: 'unresolved-attempt',
       err: expect.any(Object),
+    });
+  });
+
+  it('renders retained work and preserves its exact output-failure context', () => {
+    const output: CliOutput = {
+      type: 'import-result',
+      round: ROUND,
+      result: retained,
+    };
+
+    expect(renderCliOutput(output)).toBe([
+      'Quicknet round 1000 import is deferred.',
+      'Reason: already-retained',
+      'Retained attempt: ' + ATTEMPT_ID,
+      'Work identity: ' + WORK_ID,
+    ].join('\n'));
+
+    expect(JSON.parse(renderOutputFailure(
+      output,
+      new Error('Writer failed.'),
+    ))).toEqual({
+      event: 'output_failed',
+      code: 'CLI_OUTPUT_FAILED',
+      output: 'import-result',
+      round: '1000',
+      status: 'deferred',
+      reason: 'already-retained',
+      attemptId: ATTEMPT_ID,
+      workId: WORK_ID,
+      err: expect.any(Object),
+    });
+  });
+
+  it.each([
+    { name: 'missing attempt ID', field: 'attemptId', remove: true },
+    { name: 'missing work identity', field: 'workId', remove: true },
+    {
+      name: 'invalid attempt ID',
+      field: 'attemptId',
+      value: 'not-a-uuid',
+    },
+    { name: 'undefined work identity', field: 'workId', value: undefined },
+    { name: 'null work identity', field: 'workId', value: null },
+    { name: 'numeric work identity', field: 'workId', value: 42 },
+    { name: 'empty work identity', field: 'workId', value: '' },
+    {
+      name: 'overlong work identity',
+      field: 'workId',
+      value: 'x'.repeat(257),
+    },
+    { name: 'C0 control', field: 'workId', value: 'work\nforged' },
+    { name: 'C1 control', field: 'workId', value: 'work\u0085forged' },
+  ])('rejects $name without retaining partial context', (testCase) => {
+    const result: Record<string, unknown> = { ...retained };
+
+    if (testCase.remove === true) {
+      delete result[testCase.field];
+    } else {
+      result[testCase.field] = testCase.value;
+    }
+
+    // Deliberately bypass typing to exercise the public validation boundary.
+    const output = {
+      type: 'import-result',
+      round: ROUND,
+      result,
+    } as unknown as CliOutput;
+
+    expect(() => renderCliOutput(output)).toThrow(TypeError);
+
+    expect(JSON.parse(renderOutputFailure(
+      output,
+      new Error('Writer failed.'),
+    ))).toEqual({
+      event: 'output_failed',
+      code: 'CLI_OUTPUT_FAILED',
+      output: 'unknown',
+      err: expect.any(Object),
+    });
+  });
+
+  it('accepts a work identity at the maximum length in both output paths', () => {
+    const workId = 'x'.repeat(256);
+
+    const output: CliOutput = {
+      type: 'import-result',
+      round: ROUND,
+      result: { ...retained, workId },
+    };
+
+    expect(renderCliOutput(output)).toBe([
+      'Quicknet round 1000 import is deferred.',
+      'Reason: already-retained',
+      'Retained attempt: ' + ATTEMPT_ID,
+      'Work identity: ' + workId,
+    ].join('\n'));
+
+    expect(JSON.parse(renderOutputFailure(
+      output,
+      new Error('Writer failed.'),
+    ))).toMatchObject({
+      output: 'import-result',
+      reason: 'already-retained',
+      attemptId: ATTEMPT_ID,
+      workId,
     });
   });
 

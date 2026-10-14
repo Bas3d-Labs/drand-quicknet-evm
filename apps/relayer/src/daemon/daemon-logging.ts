@@ -94,13 +94,24 @@ function logCycle(
         continue;
       }
 
-      logger.roundDeferred({
-        consumer: consumer.consumer.address,
-        scanType,
-        round: outcome.round,
-        reason: outcome.reason,
-        blocker: outcome.blocker,
-      });
+      if (outcome.reason === 'signer-unavailable') {
+        logger.roundDeferred({
+          consumer: consumer.consumer.address,
+          scanType,
+          round: outcome.round,
+          reason: outcome.reason,
+          blocker: outcome.blocker,
+        });
+      } else {
+        logger.roundDeferred({
+          consumer: consumer.consumer.address,
+          scanType,
+          round: outcome.round,
+          reason: outcome.reason,
+          attemptId: outcome.attemptId,
+          workId: outcome.workId,
+        });
+      }
     }
 
     if (consumer.status === 'failed') {

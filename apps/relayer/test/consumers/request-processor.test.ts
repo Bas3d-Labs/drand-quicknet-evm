@@ -712,6 +712,93 @@ describe('processQuicknetRequests', () => {
     expect(onCompleted).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    'continues after retained work (incomplete observer throws: %s)',
+    async (callbackThrows) => {
+      const attemptId = '11111111-1111-4111-8111-111111111111';
+      const workId =
+        'quicknet-round:v1:12345:' +
+        '0x3333333333333333333333333333333333333333:1000';
+
+      const completed = importedResult(
+        1_001n,
+        RANDOMNESS_B,
+        TRANSACTION_HASH_B,
+      );
+
+      vi.mocked(importQuicknetRoundWhenAvailable)
+        .mockResolvedValueOnce({
+          status: 'deferred',
+          round: 1_000n,
+          reason: 'already-retained',
+          attemptId,
+          workId,
+        })
+        .mockResolvedValueOnce(completed);
+
+      const reported: string[] = [];
+
+      const onIncomplete = vi.fn(() => {
+        reported.push('incomplete');
+
+        if (callbackThrows) {
+          throw new Error('Reporting failed.');
+        }
+      });
+
+      const onCompleted = vi.fn(() => {
+        reported.push('completed');
+      });
+
+      const outcomes = await processQuicknetRequestsWithOutcomes({
+        publicClient: PUBLIC_CLIENT,
+        walletClient: WALLET_CLIENT,
+        account: ACCOUNT,
+        submitter,
+        deployment: DEPLOYMENT,
+        requests: [
+          createRequest(1_000n, CONSUMER_A, 2_000n),
+          createRequest(1_001n, CONSUMER_A, 2_001n),
+        ],
+        onIncomplete,
+        onCompleted,
+      });
+
+      expect(outcomes).toEqual([
+        {
+          round: 1_000n,
+          firstRequestBlock: 2_000n,
+          status: 'deferred',
+          reason: 'already-retained',
+          attemptId,
+          workId,
+        },
+        {
+          round: 1_001n,
+          firstRequestBlock: 2_001n,
+          status: 'completed',
+          result: completed,
+        },
+      ]);
+
+      expect(onIncomplete).toHaveBeenCalledExactlyOnceWith(outcomes[0]);
+      expect(onCompleted).toHaveBeenCalledExactlyOnceWith({
+        round: 1_001n,
+        result: completed,
+      });
+      expect(reported).toEqual(['incomplete', 'completed']);
+
+      const calls = vi.mocked(importQuicknetRoundWhenAvailable).mock.calls;
+
+      expect(calls.map(([options]) => options.round))
+        .toEqual([1_000n, 1_001n]);
+
+      for (const [options] of calls) {
+        expect(options.submitter).toBe(submitter);
+      }
+    },
+  );
+
   it('excludes pending and deferred work from the completed-round collection', async () => {
     const onCompleted = vi.fn();
     const completed = alreadyStoredResult(1_200n, RANDOMNESS_A);

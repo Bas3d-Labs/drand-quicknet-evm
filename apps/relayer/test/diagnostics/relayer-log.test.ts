@@ -23,6 +23,7 @@ import {
   createRelayerLog,
   type ConsumerHealth,
   type RelayerLog,
+  type RoundDeferredContext,
 } from '../../src/diagnostics/relayer-log.js';
 
 // Keep real Pino; intercept only the emergency stderr writer.
@@ -1084,6 +1085,160 @@ describe('createRelayerLog', () => {
         code: 'LOG_RECORD_REJECTED',
         rejected: 'round_imported',
       });
+  });
+
+  describe('round deferral context', () => {
+    const attemptId = '11111111-1111-4111-8111-111111111111';
+    const otherAttemptId = '22222222-2222-4222-8222-222222222222';
+    const workId = ' work:e\u0301 ';
+
+    const unavailable = {
+      consumer: CONSUMER,
+      scanType: 'soft',
+      round: 40n,
+      reason: 'signer-unavailable',
+      blocker: 'unresolved-attempt',
+    } satisfies RoundDeferredContext;
+
+    const retained = {
+      consumer: CONSUMER,
+      scanType: 'soft',
+      round: 40n,
+      reason: 'already-retained',
+      attemptId,
+      workId,
+    } satisfies RoundDeferredContext;
+
+    function expectRejected(context: unknown): void {
+      const { log, lines } = capture();
+
+      expect(() => {
+        // Deliberately bypass typing to exercise runtime validation.
+        log.roundDeferred(context as RoundDeferredContext);
+      }).not.toThrow();
+
+      expect(lines).toHaveLength(0);
+      expect(fallbackRecords()).toEqual([
+        expect.objectContaining({
+          code: 'LOG_RECORD_REJECTED',
+          rejected: 'round_deferred',
+        }),
+      ]);
+    }
+
+    it.each([
+      { name: 'signer unavailable', context: unavailable },
+      { name: 'already retained', context: retained },
+    ])('reports $name with exact context', ({ context }) => {
+      const { log, lines } = capture();
+
+      log.roundDeferred(context);
+
+      expect(lines).toHaveLength(1);
+      expect(recordAt(lines)).toEqual({
+        level: 30,
+        time: expect.any(String),
+        component: 'daemon',
+        chainId: CHAIN_ID,
+        runId: expect.any(String),
+        event: 'round_deferred',
+        msg: 'Quicknet round import deferred',
+        ...context,
+        round: '40',
+      });
+
+      expect(writeSync).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { name: 'blocker', context: unavailable, field: 'blocker' },
+      { name: 'attempt ID', context: retained, field: 'attemptId' },
+      { name: 'work identity', context: retained, field: 'workId' },
+    ])('rejects a missing $name', ({ context, field }) => {
+      const input: Record<string, unknown> = { ...context };
+      delete input[field];
+
+      expectRejected(input);
+    });
+
+    it.each([
+      {
+        name: 'blocker on retained work',
+        context: { ...retained, blocker: 'unresolved-attempt' },
+      },
+      {
+        name: 'undefined blocker on retained work',
+        context: { ...retained, blocker: undefined },
+      },
+      {
+        name: 'attempt ID on signer unavailability',
+        context: { ...unavailable, attemptId },
+      },
+      {
+        name: 'undefined attempt ID on signer unavailability',
+        context: { ...unavailable, attemptId: undefined },
+      },
+      {
+        name: 'work identity on signer unavailability',
+        context: { ...unavailable, workId },
+      },
+      {
+        name: 'undefined work identity on signer unavailability',
+        context: { ...unavailable, workId: undefined },
+      },
+    ])('rejects $name', ({ context }) => {
+      expectRejected(context);
+    });
+
+    it.each([
+      { name: 'undefined', value: undefined },
+      { name: 'null', value: null },
+      { name: 'number', value: 42 },
+      { name: 'empty string', value: '' },
+      { name: 'overlong string', value: 'x'.repeat(257) },
+      { name: 'C0 control', value: 'work\nforged' },
+      { name: 'C1 control', value: 'work\u0085forged' },
+    ])('rejects an invalid work identity: $name', ({ value }) => {
+      expectRejected({ ...retained, workId: value });
+    });
+
+    it('rejects an invalid retained attempt ID', () => {
+      expectRejected({ ...retained, attemptId: 'not-a-uuid' });
+    });
+
+    it('accepts a matching scoped attempt identity', () => {
+      const { log, lines } = capture();
+
+      log.withContext({ attemptId }).roundDeferred(retained);
+
+      expect(lines).toHaveLength(1);
+      expect(recordAt(lines)).toMatchObject({
+        event: 'round_deferred',
+        reason: 'already-retained',
+        attemptId,
+        workId,
+      });
+
+      expect(writeSync).not.toHaveBeenCalled();
+    });
+
+    it('rejects a conflicting scoped attempt identity', () => {
+      const { log, lines } = capture();
+
+      expect(() => {
+        log.withContext({
+          attemptId: otherAttemptId,
+        }).roundDeferred(retained);
+      }).not.toThrow();
+
+      expect(lines).toHaveLength(0);
+      expect(fallbackRecords()).toEqual([
+        expect.objectContaining({
+          code: 'LOG_RECORD_REJECTED',
+          rejected: 'round_deferred',
+        }),
+      ]);
+    });
   });
 
   it('reports deferred signer initialization with exact nonce counts', () => {

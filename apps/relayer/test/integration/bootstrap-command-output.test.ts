@@ -110,7 +110,7 @@ const COMMAND_OUTPUT_CASES = [
   ),
   ...(['import', 'import-when-available'] as const).flatMap(
     (command) =>
-      (['pending', 'deferred'] as const).flatMap((outcome) =>
+      (['pending', 'deferred', 'already-retained'] as const).flatMap((outcome) =>
         [false, true].map((outputFails) => ({
           command,
           outcome,
@@ -163,13 +163,21 @@ it.skipIf(process.platform !== 'linux').each(COMMAND_OUTPUT_CASES)(
             reason: 'signer-unavailable',
             blocker: 'unresolved-attempt',
           }`
-        : `{
-            status: 'imported',
-            submission: 'witness',
-            round: 100n,
-            randomness: '0x' + '33'.repeat(32),
-            transactionHash: '0x' + '44'.repeat(32),
-          }`;
+        : outcome === 'already-retained'
+          ? `{
+              status: 'deferred',
+              round: 100n,
+              reason: 'already-retained',
+              attemptId: '11111111-1111-4111-8111-111111111111',
+              workId: 'quicknet-round:v1:46630:0x2222222222222222222222222222222222222222:100',
+            }`
+          : `{
+              status: 'imported',
+              submission: 'witness',
+              round: 100n,
+              randomness: '0x' + '33'.repeat(32),
+              transactionHash: '0x' + '44'.repeat(32),
+            }`;
 
     // Stub configuration, network work, and signer-runtime opening.
     // Bootstrap, CLI dispatch, runDaemonCommand, output rendering,
@@ -510,11 +518,18 @@ it.skipIf(process.platform !== 'linux').each(COMMAND_OUTPUT_CASES)(
             'Attempt: 11111111-1111-4111-8111-111111111111',
             'Transaction: ' + '0x' + '44'.repeat(32),
           ]
-        : [
-            'Quicknet round 100 import is deferred.',
-            'Reason: signer-unavailable',
-            'Signer blocker: unresolved-attempt',
-          ];
+        : outcome === 'already-retained'
+          ? [
+              'Quicknet round 100 import is deferred.',
+              'Reason: already-retained',
+              'Retained attempt: 11111111-1111-4111-8111-111111111111',
+              'Work identity: quicknet-round:v1:46630:0x2222222222222222222222222222222222222222:100',
+            ]
+          : [
+              'Quicknet round 100 import is deferred.',
+              'Reason: signer-unavailable',
+              'Signer blocker: unresolved-attempt',
+            ];
 
       expect(child.stdout).toBe(expected.join('\n') + '\n');
     }
@@ -570,7 +585,7 @@ it.skipIf(process.platform !== 'linux').each(COMMAND_OUTPUT_CASES)(
       if (outputFails) {
         expect(failure).toMatchObject({
           output: 'import-result',
-          status: outcome,
+          status: outcome === 'already-retained' ? 'deferred' : outcome,
           round: '100',
         });
 
@@ -580,6 +595,16 @@ it.skipIf(process.platform !== 'linux').each(COMMAND_OUTPUT_CASES)(
             blocker: 'unresolved-attempt',
           });
           expect(failure).not.toHaveProperty('attemptId');
+          expect(failure).not.toHaveProperty('transactionHash');
+        } else if (outcome === 'already-retained') {
+          expect(failure).toMatchObject({
+            reason: 'already-retained',
+            attemptId: '11111111-1111-4111-8111-111111111111',
+            workId:
+              'quicknet-round:v1:46630:0x2222222222222222222222222222222222222222:100',
+          });
+
+          expect(failure).not.toHaveProperty('blocker');
           expect(failure).not.toHaveProperty('transactionHash');
         } else {
           expect(failure.transactionHash)

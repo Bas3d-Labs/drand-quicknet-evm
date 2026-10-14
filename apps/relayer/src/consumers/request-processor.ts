@@ -86,6 +86,12 @@ export type QuicknetRoundOutcome = {
       reason: 'signer-unavailable';
       blocker: SignerBlocker;
     }
+  | {
+      status: 'deferred';
+      reason: 'already-retained';
+      attemptId: string;
+      workId: string;
+    }
 );
 
 export type IncompleteQuicknetRoundOutcome = Extract<
@@ -95,7 +101,7 @@ export type IncompleteQuicknetRoundOutcome = Extract<
     }
   | { 
       status: 'deferred';
-      reason: 'signer-unavailable';
+      reason: 'signer-unavailable' | 'already-retained';
     }
 >;
 
@@ -189,15 +195,26 @@ export async function processQuicknetRequestsWithOutcomes(
       }
 
       if (result.status === 'deferred') {
-        signerUnavailable = result.blocker;
+        if (result.reason === 'signer-unavailable') {
+          signerUnavailable = result.blocker;
 
-        recordIncomplete({
-          round,
-          firstRequestBlock,
-          status: 'deferred',
-          reason: result.reason,
-          blocker: result.blocker,
-        });
+          recordIncomplete({
+            round,
+            firstRequestBlock,
+            status: 'deferred',
+            reason: 'signer-unavailable',
+            blocker: result.blocker,
+          });
+        } else {
+          recordIncomplete({
+            round,
+            firstRequestBlock,
+            status: 'deferred',
+            reason: 'already-retained',
+            attemptId: result.attemptId,
+            workId: result.workId,
+          });
+        }
 
         continue;
       }
