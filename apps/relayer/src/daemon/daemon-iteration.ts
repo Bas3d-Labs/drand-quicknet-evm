@@ -1,5 +1,4 @@
 import type {
-  Account,
   Address,
   PublicClient,
 } from 'viem';
@@ -12,10 +11,6 @@ import {
   getChainHeads,
   type ChainHeads,
 } from '../chain/chain-heads.js';
-
-import type {
-  CheckpointStore,
-} from '../state/checkpoint.js';
 
 import type {
   FinalityPolicy,
@@ -47,6 +42,14 @@ import type {
   BeaconSubmitter,
 } from '../rounds/create-beacon-submitter.js';
 
+import type {
+  RoundImporterBinder,
+} from '../rounds/create-round-importer.js';
+
+import type {
+  CheckpointStore,
+} from '../state/checkpoint.js';
+
 export interface SoftScanCursor {
   nextBlock: bigint;
 }
@@ -61,8 +64,8 @@ export interface ProcessedDaemonScan {
 
 export interface RunDaemonIterationOptions {
   publicClient: PublicClient;
-  account: Account;
   submitter: BeaconSubmitter;
+  bindRoundImporter: RoundImporterBinder;
   deployment: RegistryDeployment;
   checkpointStore: CheckpointStore;
   consumer: Address;
@@ -70,7 +73,6 @@ export interface RunDaemonIterationOptions {
   maxBlockRange: bigint;
   finality: FinalityPolicy;
   softCursor?: SoftScanCursor;
-  receiptTimeoutMs?: number;
   readChainHeads?: () => Promise<ChainHeads>;
   onOperation?: (operation: OperationContext) => void;
   onCompleted?: (
@@ -182,17 +184,32 @@ export async function runDaemonIteration(
 
     const reconciliationOptions: ReconcileDurableRequestsOptions = {
       publicClient: options.publicClient,
-      account: options.account,
-      submitter: options.submitter,
       deployment: options.deployment,
       consumer: options.consumer,
       nextBlock: durableNextBlock,
       durableBlock: heads.durableBlock,
       maxBlockRange: options.maxBlockRange,
 
-      ...(options.receiptTimeoutMs !== undefined
-        ? { receiptTimeoutMs: options.receiptTimeoutMs }
-        : {}),
+      importRound: options.bindRoundImporter({
+        submitter: options.submitter,
+
+        ...(options.signal !== undefined
+          ? { signal: options.signal }
+          : {}),
+        
+        onProgress(progress) {
+          reportOperation({
+            name: 'import-round',
+            scanType: 'durable',
+            fromBlock: durableNextBlock,
+            toBlock: minimum(
+              durableNextBlock + options.maxBlockRange - 1n,
+              heads.durableBlock,
+            ),
+            ...progress,
+          });
+        },
+      }),
 
       onCompleted(result) {
         reportCompleted('durable', result);
@@ -200,19 +217,6 @@ export async function runDaemonIteration(
 
       onIncomplete(outcome) {
         reportIncomplete('durable', outcome);
-      },
-
-      onProgress(progress) {
-        reportOperation({
-          name: 'import-round',
-          scanType: 'durable',
-          fromBlock: durableNextBlock,
-          toBlock: minimum(
-            durableNextBlock + options.maxBlockRange - 1n,
-            heads.durableBlock,
-          ),
-          ...progress,
-        });
       },
     };
 
@@ -339,25 +343,25 @@ export async function runDaemonIteration(
     });
 
     const processingOptions: ProcessQuicknetRequestsOptions = {
-      publicClient: options.publicClient,
-      account: options.account,
-      submitter: options.submitter,
-      deployment: options.deployment,
       requests: softResult.requests,
 
-      ...(options.receiptTimeoutMs !== undefined
-        ? { receiptTimeoutMs: options.receiptTimeoutMs }
-        : {}),
+      importRound: options.bindRoundImporter({
+        submitter: options.submitter,
 
-      onProgress(progress) {
-        reportOperation({
-          name: 'import-round',
-          scanType: 'soft',
-          fromBlock: softResult.fromBlock,
-          toBlock: softResult.toBlock,
-          ...progress,
-        });
-      },
+        ...(options.signal !== undefined
+          ? { signal: options.signal }
+          : {}),
+
+        onProgress(progress) {
+          reportOperation({
+            name: 'import-round',
+            scanType: 'soft',
+            fromBlock: softResult.fromBlock,
+            toBlock: softResult.toBlock,
+            ...progress,
+          });
+        },
+      }),
 
       onCompleted(result) {
         reportCompleted('soft', result);

@@ -20,10 +20,6 @@ import type {
   FinalityPolicy,
 } from '../chain/finality-policy.js';
 
-import {
-  validateReceiptTimeoutMs,
-} from '../config/receipt-config.js';
-
 import type {
   ValidatedQuicknetConsumer,
 } from '../consumers/consumer.js';
@@ -31,6 +27,10 @@ import type {
 import type {
   BeaconSubmitter,
 } from '../rounds/create-beacon-submitter.js';
+
+import {
+  createRoundImporter,
+} from '../rounds/create-round-importer.js';
 
 import type {
   CheckpointStore,
@@ -83,9 +83,15 @@ export async function runDaemon(
     throw new Error('pollIntervalMs must be a positive safe integer.');
   }
 
-  if (options.receiptTimeoutMs !== undefined) {
-    validateReceiptTimeoutMs(options.receiptTimeoutMs);
-  }
+  const bindRoundImporter = createRoundImporter({
+    publicClient: options.publicClient,
+    account: options.account,
+    deployment: options.deployment,
+
+    ...(options.receiptTimeoutMs !== undefined
+      ? { receiptTimeoutMs: options.receiptTimeoutMs }
+      : {}),
+  });
 
   const sleep = options.sleep ?? sleepUntilTimeoutOrAbort;
   const softCursors = new Map<Address, SoftScanCursor>();
@@ -122,7 +128,7 @@ export async function runDaemon(
 
     const cycleOptions: RunDaemonCycleOptions = {
       publicClient: options.publicClient,
-      account: options.account,
+      bindRoundImporter,
       submitter,
       deployment: options.deployment,
       checkpointStore: options.checkpointStore,
@@ -131,9 +137,6 @@ export async function runDaemon(
       maxBlockRange: options.maxBlockRange,
       finality: options.finality,
       softCursors,
-      ...(options.receiptTimeoutMs !== undefined
-        ? { receiptTimeoutMs: options.receiptTimeoutMs }
-        : {}),
       readChainHeads,
     };
 

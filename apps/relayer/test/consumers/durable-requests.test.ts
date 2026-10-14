@@ -7,7 +7,6 @@ import {
 } from 'vitest';
 
 import type {
-  Account,
   Address,
   Hex,
   PublicClient,
@@ -16,10 +15,6 @@ import type {
 import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
-
-import type {
-  BeaconSubmitter,
-} from '../../src/rounds/create-beacon-submitter.js';
 
 const registryMocks = vi.hoisted(() => ({
   isStored: vi.fn<
@@ -33,10 +28,6 @@ vi.mock('@based-labs/drand-quicknet-registry', () => ({
 
 vi.mock('../../src/consumers/request-scanner.js', () => ({
   scanQuicknetRequests: vi.fn(),
-}));
-
-vi.mock('../../src/rounds/import-round-when-available.js', () => ({
-  importQuicknetRoundWhenAvailable: vi.fn(),
 }));
 
 import {
@@ -57,12 +48,12 @@ import {
 } from '../../src/consumers/request-scanner.js';
 
 import type {
+  RoundImporter,
+} from '../../src/rounds/create-round-importer.js';
+
+import type {
   ImportQuicknetRoundResult,
 } from '../../src/rounds/import-round.js';
-
-import {
-  importQuicknetRoundWhenAvailable,
-} from '../../src/rounds/import-round-when-available.js';
 
 const CONSUMER: Address =
   '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -113,17 +104,14 @@ const PUBLIC_CLIENT = {
   getBlock,
 } as unknown as PublicClient;
 
-const ACCOUNT = {} as Account;
-
-let submitter: BeaconSubmitter;
+let importRound: ReturnType<typeof vi.fn<RoundImporter>>;
 
 function options(
   overrides: Partial<ReconcileDurableRequestsOptions> = {},
 ): ReconcileDurableRequestsOptions {
   return {
     publicClient: PUBLIC_CLIENT,
-    account: ACCOUNT,
-    submitter,
+    importRound,
     deployment: DEPLOYMENT,
     consumer: CONSUMER,
     nextBlock: FROM_BLOCK,
@@ -173,10 +161,8 @@ function setScan(
 
 describe('reconcileDurableRequests', () => {
   beforeEach(() => {
-    submitter = {
-      recover: vi.fn<BeaconSubmitter['recover']>(),
-      submit: vi.fn<BeaconSubmitter['submit']>(),
-    };
+    importRound = vi.fn<RoundImporter>()
+      .mockImplementation(async (round) => imported(round));
 
     getBlock.mockReset().mockResolvedValue({
       number: DURABLE_BLOCK,
@@ -188,10 +174,6 @@ describe('reconcileDurableRequests', () => {
 
     vi.mocked(scanQuicknetRequests).mockReset();
     setScan([]);
-
-    vi.mocked(importQuicknetRoundWhenAvailable)
-      .mockReset()
-      .mockImplementation(async ({ round }) => imported(round));
   });
 
   it.each([
@@ -218,7 +200,7 @@ describe('reconcileDurableRequests', () => {
 
     expect(getBlock).not.toHaveBeenCalled();
     expect(scanQuicknetRequests).not.toHaveBeenCalled();
-    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(importRound).not.toHaveBeenCalled();
     expect(createRegistryReader).not.toHaveBeenCalled();
   });
 
@@ -239,7 +221,7 @@ describe('reconcileDurableRequests', () => {
 
     expect(getBlock).not.toHaveBeenCalled();
     expect(scanQuicknetRequests).not.toHaveBeenCalled();
-    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(importRound).not.toHaveBeenCalled();
     expect(createRegistryReader).not.toHaveBeenCalled();
   });
 
@@ -268,7 +250,7 @@ describe('reconcileDurableRequests', () => {
     expect(result.checkpoint).not.toHaveProperty('nextBlock');
     expect(getBlock).toHaveBeenCalledTimes(1);
     expect(scanQuicknetRequests).not.toHaveBeenCalled();
-    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(importRound).not.toHaveBeenCalled();
     expect(createRegistryReader).not.toHaveBeenCalled();
   });
 
@@ -304,7 +286,7 @@ describe('reconcileDurableRequests', () => {
       },
     });
 
-    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(importRound).not.toHaveBeenCalled();
     expect(registryMocks.isStored).not.toHaveBeenCalled();
   });
 
@@ -340,19 +322,10 @@ describe('reconcileDurableRequests', () => {
 
     const result = await reconcileDurableRequests(options());
 
-    const importCalls =
-      vi.mocked(importQuicknetRoundWhenAvailable).mock.calls;
-
-    expect(importCalls).toHaveLength(2);
-
-    expect(importCalls.map(([call]) => call.round)).toEqual([
-      ROUND_A,
-      ROUND_B,
+    expect(importRound.mock.calls).toEqual([
+      [ROUND_A],
+      [ROUND_B],
     ]);
-
-    for (const [call] of importCalls) {
-      expect(call.submitter).toBe(submitter);
-    }
 
     expect(createRegistryReader).toHaveBeenCalledExactlyOnceWith({
       client: PUBLIC_CLIENT,
@@ -453,7 +426,7 @@ describe('reconcileDurableRequests', () => {
 
     const result = await reconcileDurableRequests(options());
 
-    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
+    expect(importRound).toHaveBeenCalledTimes(2);
     expect(registryMocks.isStored).toHaveBeenCalledTimes(2);
 
     expect(result.imports).toEqual([
@@ -672,7 +645,7 @@ describe('reconcileDurableRequests', () => {
         request(ROUND_C, 1_030n),
       ]);
 
-      vi.mocked(importQuicknetRoundWhenAvailable)
+      importRound
         .mockResolvedValueOnce(imported(ROUND_A))
         .mockRejectedValueOnce(failure);
 
@@ -687,7 +660,7 @@ describe('reconcileDurableRequests', () => {
         onCompleted,
       }));
 
-      expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
+      expect(importRound).toHaveBeenCalledTimes(2);
 
       expect(result.imports).toEqual([
         {
@@ -776,8 +749,8 @@ describe('reconcileDurableRequests', () => {
       };
     });
 
-    vi.mocked(importQuicknetRoundWhenAvailable)
-      .mockImplementation(async ({ round }) => {
+    importRound
+      .mockImplementation(async (round) => {
         calls.push(`import:${round}`);
         return imported(round);
       });
@@ -811,7 +784,7 @@ describe('reconcileDurableRequests', () => {
     ).rejects.toBe(failure);
 
     expect(getBlock).toHaveBeenCalledTimes(1);
-    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(importRound).not.toHaveBeenCalled();
     expect(createRegistryReader).not.toHaveBeenCalled();
   });
 
@@ -837,7 +810,7 @@ describe('reconcileDurableRequests', () => {
       reconcileDurableRequests(options()),
     ).rejects.toThrow('Request log is outside the durable scan.');
 
-    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(importRound).not.toHaveBeenCalled();
     expect(createRegistryReader).not.toHaveBeenCalled();
   });
 
@@ -854,7 +827,7 @@ describe('reconcileDurableRequests', () => {
       status: 'verified',
       nextBlock: TO_BLOCK + 1n,
     });
-    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledOnce();
+    expect(importRound).toHaveBeenCalledOnce();
   });
 
   it('preserves block zero in anchor and fulfillment reads', async () => {
@@ -912,7 +885,7 @@ describe('reconcileDurableRequests', () => {
     }));
 
     expect(onCompleted).toHaveBeenCalledTimes(2);
-    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
+    expect(importRound).toHaveBeenCalledTimes(2);
     expect(registryMocks.isStored).toHaveBeenCalledTimes(2);
 
     expect(result.imports.map(outcome => outcome.status)).toEqual([
@@ -938,7 +911,7 @@ describe('reconcileDurableRequests', () => {
 
     expect(getBlock).not.toHaveBeenCalled();
     expect(scanQuicknetRequests).not.toHaveBeenCalled();
-    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(importRound).not.toHaveBeenCalled();
     expect(createRegistryReader).not.toHaveBeenCalled();
   });
 
@@ -961,7 +934,7 @@ describe('reconcileDurableRequests', () => {
 
     expect(getBlock).toHaveBeenCalledOnce();
     expect(scanQuicknetRequests).not.toHaveBeenCalled();
-    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(importRound).not.toHaveBeenCalled();
     expect(createRegistryReader).not.toHaveBeenCalled();
   });
 
@@ -981,7 +954,7 @@ describe('reconcileDurableRequests', () => {
     }))).rejects.toBe(reason);
 
     expect(scanQuicknetRequests).toHaveBeenCalledOnce();
-    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledOnce();
+    expect(importRound).toHaveBeenCalledOnce();
 
     expect(onCompleted).toHaveBeenCalledExactlyOnceWith({
       round: ROUND_A,
@@ -1022,7 +995,7 @@ describe('reconcileDurableRequests', () => {
         onCompleted,
       }))).rejects.toBe(reason);
 
-      expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
+      expect(importRound).toHaveBeenCalledTimes(2);
       expect(onCompleted).toHaveBeenCalledTimes(2);
 
       expect(registryMocks.isStored).toHaveBeenCalledExactlyOnceWith(
@@ -1068,7 +1041,7 @@ describe('reconcileDurableRequests', () => {
         onCompleted,
       }))).rejects.toBe(reason);
 
-      expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledOnce();
+      expect(importRound).toHaveBeenCalledOnce();
       expect(onCompleted).toHaveBeenCalledExactlyOnceWith({
         round: ROUND_A,
         result: imported(ROUND_A),
@@ -1099,7 +1072,7 @@ describe('reconcileDurableRequests', () => {
 
     expect(getBlock).toHaveBeenCalledOnce();
     expect(scanQuicknetRequests).not.toHaveBeenCalled();
-    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(importRound).not.toHaveBeenCalled();
     expect(createRegistryReader).not.toHaveBeenCalled();
     expect(registryMocks.isStored).not.toHaveBeenCalled();
   });

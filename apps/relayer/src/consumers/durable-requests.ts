@@ -1,9 +1,11 @@
 import type {
   Address,
+  PublicClient,
 } from 'viem';
 
 import {
   createRegistryReader,
+  type RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
 import {
@@ -84,6 +86,8 @@ export type DurableRequestResult = {
 
 export interface ReconcileDurableRequestsOptions
   extends Omit<ProcessQuicknetRequestsOptions, 'requests'> {
+  publicClient: PublicClient;
+  deployment: RegistryDeployment;
   consumer: Address;
   nextBlock: bigint;
   durableBlock: bigint;

@@ -11,7 +11,6 @@ import type {
   Address,
   Hash,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import type {
@@ -29,6 +28,10 @@ import {
 import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
+
+import {
+  createRoundImporter,
+} from '../../src/rounds/create-round-importer.js';
 
 const mocks = vi.hoisted(() => ({
   createRegistryReader: vi.fn(),
@@ -126,8 +129,6 @@ function fixture() {
     fallbackReason: 'witness-decode-failed',
   });
 
-  const writeContract = vi.fn().mockResolvedValue(HASH);
-
   const submitTransaction = vi.fn<BeaconSubmitter['submit']>()
     .mockResolvedValue({
       status: 'acknowledged',
@@ -182,16 +183,13 @@ function fixture() {
     throw new Error('Unexpected block request in test.');
   });
 
-  const options = {
+  const baseOptions = {
     publicClient: {
       getBlock,
       getBlockNumber: vi.fn().mockResolvedValue(1200n),
       getLogs,
       waitForTransactionReceipt,
     } as unknown as PublicClient,
-    walletClient: {
-      writeContract,
-    } as unknown as WalletClient,
     account: {} as Account,
     submitter,
     deployment: {
@@ -210,11 +208,19 @@ function fixture() {
     softCursors: new Map<Address, SoftScanCursor>(),
   };
 
+  const options = {
+    ...baseOptions,
+    bindRoundImporter: createRoundImporter({
+      publicClient: baseOptions.publicClient,
+      account: baseOptions.account,
+      deployment: baseOptions.deployment,
+    }),
+  };
+
   return {
     options,
     getBlock,
     getLogs,
-    writeContract,
     submitTransaction,
     waitForTransactionReceipt,
     verifyDeployment,
@@ -330,8 +336,6 @@ describe('round import diagnostic context', () => {
         expect(fixtureState.submitTransaction).not.toHaveBeenCalled();
       }
 
-      expect(fixtureState.writeContract).not.toHaveBeenCalled();
-
       const lines: string[] = [];
 
       const logger = createRelayerLog({
@@ -404,8 +408,7 @@ describe('round import diagnostic context', () => {
     });
 
     expect(fixtureState.save).not.toHaveBeenCalled();
-  expect(fixtureState.submitTransaction).toHaveBeenCalledOnce();
-  expect(fixtureState.writeContract).not.toHaveBeenCalled();
+    expect(fixtureState.submitTransaction).toHaveBeenCalledOnce();
   });
 
   it('reports direct-import phases and preserves successful behavior', async () => {
@@ -435,7 +438,6 @@ describe('round import diagnostic context', () => {
     expect(progress.every((entry) => entry.round === ROUND))
       .toBe(true);
     expect(fixtureState.submitTransaction).toHaveBeenCalledOnce();
-    expect(fixtureState.writeContract).not.toHaveBeenCalled();
   });
 
   it('does not let a throwing observer interrupt the transaction flow', async () => {
@@ -454,7 +456,6 @@ describe('round import diagnostic context', () => {
     expect(result.status).toBe('imported');
     expect(onProgress).toHaveBeenCalled();
     expect(fixtureState.submitTransaction).toHaveBeenCalledOnce();
-    expect(fixtureState.writeContract).not.toHaveBeenCalled();
     expect(fixtureState.waitForTransactionReceipt)
       .toHaveBeenCalledTimes(1);
   });
