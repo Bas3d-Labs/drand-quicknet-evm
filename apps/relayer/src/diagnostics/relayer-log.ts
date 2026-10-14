@@ -21,6 +21,10 @@ import {
 } from '../shared/hex.js';
 
 import {
+  MAX_UINT256,
+} from '../shared/uint.js';
+
+import {
   type SummarizeErrorOptions,
 } from './error-summary.js';
 
@@ -411,7 +415,6 @@ type FallbackCode =
   | 'LOG_OUTPUT_FAILED';
 
 const RUN_ID = randomUUID();
-const MAX_UINT256 = (1n << 256n) - 1n;
 const MAX_HEARTBEAT_CONSUMERS = 25;
 
 const MAX_RECORD_BYTES = 16_384 - 1_024;

@@ -19,6 +19,10 @@ import {
 } from '../shared/hex.js';
 
 import {
+  MAX_UINT256,
+} from '../shared/uint.js';
+
+import {
   isUuidV4,
 } from '../shared/uuid.js';
 
@@ -90,7 +94,6 @@ interface NonceSyncFields {
   repairAt?: string;
 }
 
-const MAX_UINT256 = (1n << 256n) - 1n;
 const MAX_STARTUP_CONSUMERS = 25;
 
 const NONCE_SYNC_REFUSAL_REASONS = [

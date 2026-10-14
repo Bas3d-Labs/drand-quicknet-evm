@@ -17,6 +17,14 @@ import {
 } from '../shared/hex.js';
 
 import {
+  MAX_UINT256,
+} from '../shared/uint.js';
+
+import {
+  isUuidV4
+} from '../shared/uuid.js';
+
+import {
   MAX_RETAINED_NONCE_REPAIRS,
 } from './transaction-journal.js';
 
@@ -30,12 +38,6 @@ import type {
   ReplacementSearch,
   TransactionJournalSnapshot,
 } from './transaction-journal.js';
-
-import {
-  isUuidV4
-} from '../shared/uuid.js';
-
-const MAX_UINT256 = (1n << 256n) - 1n;
 
 /**
  * Validates the in-memory snapshot structure and returns a detached,

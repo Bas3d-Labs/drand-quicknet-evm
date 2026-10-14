@@ -44,6 +44,10 @@ import {
 } from '../shared/decimal.js';
 
 import {
+  MAX_UINT64,
+} from '../shared/uint.js';
+
+import {
   assertServiceLockHeld,
 } from '../state/service-lock.js';
 
@@ -75,8 +79,6 @@ import {
 
 // Maximum replacement-search blocks per retained attempt in one pass.
 const IMPORT_REPLACEMENT_BLOCK_RANGE = 1_000n;
-
-const MAX_UINT64 = (1n << 64n) - 1n;
 
 type CliOutputHandler = (output: CliOutput) => void;
 

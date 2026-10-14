@@ -11,6 +11,10 @@ import {
 } from '../shared/hex.js';
 
 import {
+  MAX_UINT256,
+} from '../shared/uint.js';
+
+import {
   isUuidV4,
 } from '../shared/uuid.js';
 
@@ -93,8 +97,6 @@ export type SnapshotAge =
     };
 
 const INVALID = 'Invalid daemon status snapshot.';
-
-const MAX_UINT256 = (1n << 256n) - 1n;
 
 /**
  * Validates and projects public snapshot fields.
