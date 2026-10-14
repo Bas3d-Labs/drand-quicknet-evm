@@ -149,16 +149,10 @@ export async function main(
 
   switch (command.command) {
     case 'import':
-      assertServiceLockHeld();
-      return runWithShutdownSignal(
-        (signal) => runImportCommand(command, output, options, signal),
-        'interrupted',
-      );
-
     case 'import-when-available':
       assertServiceLockHeld();
-      return runWithShutdownSignal((signal) =>
-        runImportWhenAvailableCommand(
+      return runWithShutdownSignal(
+        (signal) => runRoundImportCommand(
           command,
           output,
           options,
@@ -207,8 +201,10 @@ export async function main(
   }
 }
 
-async function runImportCommand(
-  command: ImportCommandArguments,
+async function runRoundImportCommand(
+  command: 
+    | ImportCommandArguments
+    | ImportWhenAvailableCommandArguments,
   output: CliOutputHandler,
   options: CliOptions,
   signal: AbortSignal,
@@ -252,95 +248,33 @@ async function runImportCommand(
   let result: ImportQuicknetRoundResult;
 
   try {
-    result = await importQuicknetRound({
-      publicClient: clients.publicClient,
-      walletClient: clients.walletClient,
-      account: config.account,
-      submitter,
-      deployment: config.deployment,
-      round: command.round,
-      receiptTimeoutMs: config.receiptTimeoutMs,
-      onProgress(current) {
-        progress = current;
-      },
-      signal,
-    });
-  } catch (error) {
-    if (signal.aborted && error === signal.reason) {
-      throw error;
+    if (command.command === 'import') {
+      result = await importQuicknetRound({
+        publicClient: clients.publicClient,
+        account: config.account,
+        submitter,
+        deployment: config.deployment,
+        round: command.round,
+        receiptTimeoutMs: config.receiptTimeoutMs,
+        onProgress(current) {
+          progress = current;
+        },
+        signal,
+      });
+    } else {
+      result = await importQuicknetRoundWhenAvailable({
+        publicClient: clients.publicClient,
+        account: config.account,
+        submitter,
+        deployment: config.deployment,
+        round: command.round,
+        receiptTimeoutMs: config.receiptTimeoutMs,
+        onProgress(current) {
+          progress = current;
+        },
+        signal,
+      });
     }
-
-    reportImportFailure(options, error, progress);
-    throw error;
-  }
-
-  output({
-    type: 'import-result',
-    round: command.round,
-    result,
-  });
-
-  return importOutcome(result);
-}
-
-async function runImportWhenAvailableCommand(
-  command: ImportWhenAvailableCommandArguments,
-  output: CliOutputHandler,
-  options: CliOptions,
-  signal: AbortSignal,
-): Promise<CliOutcome> {
-  signal.throwIfAborted();
-
-  const config = await loadRelayerConfig({
-    source: command.source,
-    ...(options.onDiagnostics !== undefined
-      ? { onDiagnostics: options.onDiagnostics }
-      : {}),
-  });
-
-  signal.throwIfAborted();
-
-  const clients = createRelayerClients(config);
-
-  const logger = createRelayerLog({
-    chainId: config.chain.id,
-    level: process.env.QUICKNET_LOG_LEVEL ?? 'info',
-    errorSummary: config.errorSummary,
-    destination: process.stderr,
-  });
-
-  const submitter = await openBeaconSubmitter({
-    config,
-    publicClient: clients.publicClient,
-    walletClient: clients.walletClient,
-    log: logger,
-    readChainHeads: () => getChainHeads({
-      publicClient: clients.publicClient,
-      finality: config.finality,
-    }),
-    maxBlockRange: IMPORT_REPLACEMENT_BLOCK_RANGE,
-    signal,
-  });
-
-  signal.throwIfAborted();
-
-  let progress: RoundImportProgress | undefined;
-  let result: ImportQuicknetRoundResult;
-
-  try {
-    result = await importQuicknetRoundWhenAvailable({
-      publicClient: clients.publicClient,
-      walletClient: clients.walletClient,
-      account: config.account,
-      submitter,
-      deployment: config.deployment,
-      round: command.round,
-      receiptTimeoutMs: config.receiptTimeoutMs,
-      onProgress(current) {
-        progress = current;
-      },
-      signal,
-    });
   } catch (error) {
     if (signal.aborted && error === signal.reason) {
       throw error;

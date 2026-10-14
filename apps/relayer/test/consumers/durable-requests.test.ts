@@ -11,7 +11,6 @@ import type {
   Address,
   Hex,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import type {
@@ -114,7 +113,6 @@ const PUBLIC_CLIENT = {
   getBlock,
 } as unknown as PublicClient;
 
-const WALLET_CLIENT = {} as WalletClient;
 const ACCOUNT = {} as Account;
 
 let submitter: BeaconSubmitter;
@@ -124,7 +122,6 @@ function options(
 ): ReconcileDurableRequestsOptions {
   return {
     publicClient: PUBLIC_CLIENT,
-    walletClient: WALLET_CLIENT,
     account: ACCOUNT,
     submitter,
     deployment: DEPLOYMENT,

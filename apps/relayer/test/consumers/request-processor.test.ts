@@ -11,7 +11,6 @@ import type {
   Address,
   Hex,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import type {
@@ -85,9 +84,6 @@ const VERIFIER_RUNTIME_CODEHASH: Hex =
 const PUBLIC_CLIENT =
   {} as PublicClient;
 
-const WALLET_CLIENT =
-  {} as WalletClient;
-
 const ACCOUNT =
   {} as Account;
 
@@ -154,7 +150,6 @@ describe('processQuicknetRequests', () => {
   it('returns no processed rounds for an empty request list', async () => {
     const result = await processQuicknetRequests({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -183,7 +178,6 @@ describe('processQuicknetRequests', () => {
 
     const result = await processQuicknetRequests({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -209,7 +203,6 @@ describe('processQuicknetRequests', () => {
       importQuicknetRoundWhenAvailable,
     ).toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -230,7 +223,6 @@ describe('processQuicknetRequests', () => {
 
     const result = await processQuicknetRequests({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -268,7 +260,6 @@ describe('processQuicknetRequests', () => {
 
     await processQuicknetRequests({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -286,7 +277,6 @@ describe('processQuicknetRequests', () => {
       importQuicknetRoundWhenAvailable,
     ).toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -321,7 +311,6 @@ describe('processQuicknetRequests', () => {
 
     const result = await processQuicknetRequests({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -356,7 +345,6 @@ describe('processQuicknetRequests', () => {
       1,
       {
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -370,7 +358,6 @@ describe('processQuicknetRequests', () => {
       2,
       {
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -384,7 +371,6 @@ describe('processQuicknetRequests', () => {
       3,
       {
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -413,7 +399,6 @@ describe('processQuicknetRequests', () => {
 
     const result = await processQuicknetRequests({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -462,7 +447,6 @@ describe('processQuicknetRequests', () => {
 
     const processing = processQuicknetRequests({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -514,7 +498,6 @@ describe('processQuicknetRequests', () => {
     await expect(
       processQuicknetRequests({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -543,7 +526,6 @@ describe('processQuicknetRequests', () => {
     await expect(
       processQuicknetRequests({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -565,7 +547,6 @@ describe('processQuicknetRequests', () => {
       1,
       {
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -579,7 +560,6 @@ describe('processQuicknetRequests', () => {
       2,
       {
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -591,7 +571,6 @@ describe('processQuicknetRequests', () => {
       importQuicknetRoundWhenAvailable,
     ).not.toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -618,7 +597,6 @@ describe('processQuicknetRequests', () => {
 
     const outcomes = await processQuicknetRequestsWithOutcomes({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -673,7 +651,6 @@ describe('processQuicknetRequests', () => {
 
     const outcomes = await processQuicknetRequestsWithOutcomes({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -752,7 +729,6 @@ describe('processQuicknetRequests', () => {
 
       const outcomes = await processQuicknetRequestsWithOutcomes({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -821,7 +797,6 @@ describe('processQuicknetRequests', () => {
 
     const result = await processQuicknetRequests({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -874,7 +849,6 @@ describe('processQuicknetRequests', () => {
 
       const outcomes = await processQuicknetRequestsWithOutcomes({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -925,7 +899,6 @@ describe('processQuicknetRequests', () => {
 
       const outcomes = await processQuicknetRequestsWithOutcomes({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -988,7 +961,6 @@ describe('processQuicknetRequests', () => {
     await expect(
       processQuicknetRequests({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -1022,7 +994,6 @@ describe('processQuicknetRequests', () => {
 
     await expect(processQuicknetRequestsWithOutcomes({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -1045,7 +1016,6 @@ describe('processQuicknetRequests', () => {
 
     await expect(processQuicknetRequestsWithOutcomes({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -1072,7 +1042,6 @@ describe('processQuicknetRequests', () => {
 
     const outcomes = await processQuicknetRequestsWithOutcomes({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -1097,7 +1066,6 @@ describe('processQuicknetRequests', () => {
 
     await processQuicknetRequests({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -1109,7 +1077,6 @@ describe('processQuicknetRequests', () => {
     expect(importQuicknetRoundWhenAvailable)
       .toHaveBeenCalledExactlyOnceWith({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,

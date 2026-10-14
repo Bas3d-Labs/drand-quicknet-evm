@@ -12,7 +12,6 @@ import type {
   Account,
   Address,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import type {
@@ -136,7 +135,6 @@ describe('daemon chain-head polling', () => {
 
     await runDaemon({
       publicClient,
-      walletClient: {} as WalletClient,
       account: {} as Account,
       submitter,
       deployment: {} as RegistryDeployment,

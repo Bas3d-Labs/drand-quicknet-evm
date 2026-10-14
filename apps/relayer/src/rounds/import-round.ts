@@ -8,7 +8,6 @@ import type {
   Hex,
   PublicClient,
   TransactionReceipt,
-  WalletClient,
 } from 'viem';
 
 import {
@@ -46,7 +45,6 @@ import type {
 
 export interface ImportQuicknetRoundOptions {
   publicClient: PublicClient;
-  walletClient: WalletClient;
   account: Account;
   deployment: RegistryDeployment;
   round: bigint;

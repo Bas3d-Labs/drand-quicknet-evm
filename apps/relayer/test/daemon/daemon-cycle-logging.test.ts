@@ -11,7 +11,6 @@ import type {
   Address,
   Hex,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import type {
@@ -84,7 +83,6 @@ const RANDOMNESS: Hex = `0x${'cc'.repeat(32)}`;
 const ROUND = 31_250_000n;
 
 const PUBLIC_CLIENT = {} as PublicClient;
-const WALLET_CLIENT = {} as WalletClient;
 const ACCOUNT = {} as Account;
 const CHECKPOINT_STORE = {} as CheckpointStore;
 
@@ -253,7 +251,6 @@ function cycle(
 ) {
   return runDaemonCycle({
     publicClient: PUBLIC_CLIENT,
-    walletClient: WALLET_CLIENT,
     account: ACCOUNT,
     submitter,
     deployment: DEPLOYMENT,

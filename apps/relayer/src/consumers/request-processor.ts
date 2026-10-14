@@ -1,7 +1,6 @@
 import type {
   Account,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import type {
@@ -36,7 +35,6 @@ import type {
 
 export interface ProcessQuicknetRequestsOptions {
   publicClient: PublicClient;
-  walletClient: WalletClient;
   account: Account;
   submitter: BeaconSubmitter;
   deployment: RegistryDeployment;
@@ -165,7 +163,6 @@ export async function processQuicknetRequestsWithOutcomes(
     try {
       const importOptions: ImportQuicknetRoundWhenAvailableOptions = {
         publicClient: options.publicClient,
-        walletClient: options.walletClient,
         account: options.account,
         submitter: options.submitter,
         deployment: options.deployment,

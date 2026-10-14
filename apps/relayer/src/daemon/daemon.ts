@@ -2,7 +2,6 @@ import type {
   Account,
   Address,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import type {
@@ -55,7 +54,6 @@ export interface DaemonCycleContext {
 
 export interface RunDaemonOptions {
   publicClient: PublicClient;
-  walletClient: WalletClient;
   account: Account;
   submitter: BeaconSubmitter;
   deployment: RegistryDeployment;
@@ -124,7 +122,6 @@ export async function runDaemon(
 
     const cycleOptions: RunDaemonCycleOptions = {
       publicClient: options.publicClient,
-      walletClient: options.walletClient,
       account: options.account,
       submitter,
       deployment: options.deployment,

@@ -11,7 +11,6 @@ import type {
   Address,
   Hex,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import type {
@@ -94,7 +93,6 @@ const HASH_B: Hex = `0x${'bb'.repeat(32)}`;
 const RANDOMNESS: Hex = `0x${'cc'.repeat(32)}`;
 
 const PUBLIC_CLIENT = {} as PublicClient;
-const WALLET_CLIENT = {} as WalletClient;
 const ACCOUNT = {} as Account;
 
 const FINALITY: FinalityPolicy = {
@@ -260,7 +258,6 @@ describe('runDaemonIteration', () => {
   ) {
     return runDaemonIteration({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -640,7 +637,6 @@ describe('runDaemonIteration', () => {
 
     expect(reconcileDurableRequests).toHaveBeenCalledExactlyOnceWith({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -1183,7 +1179,6 @@ describe('runDaemonIteration', () => {
 
     expect(processQuicknetRequests).toHaveBeenCalledExactlyOnceWith({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
