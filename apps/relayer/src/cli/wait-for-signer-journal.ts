@@ -1,14 +1,14 @@
+import type {
+  BeaconSubmitter,
+} from '../rounds/create-beacon-submitter.js';
+
 import {
-  setTimeout as delay,
-} from 'node:timers/promises';
+  sleepFor,
+} from '../shared/sleep-for.js';
 
 import type {
   SignerCoordinator,
 } from '../state/signer-coordinator.js';
-
-import type {
-  BeaconSubmitter,
-} from '../rounds/create-beacon-submitter.js';
 
 export interface WaitForSignerJournalOptions {
   readonly coordinator: Pick<
@@ -49,20 +49,7 @@ export async function waitForSignerJournal(
     throw new TypeError('Invalid signer startup polling interval.');
   }
 
-  const sleep = options.sleep ?? (
-    async (milliseconds: number, abortSignal?: AbortSignal) => {
-      try {
-        await delay(milliseconds, undefined, {
-          signal: abortSignal,
-        });
-      } catch (error) {
-        // Timer cancellation rejects with a wrapper error. Propagate
-        // the signal's reason consistently with throwIfAborted().
-        abortSignal?.throwIfAborted();
-        throw error;
-      }
-    }
-  );
+  const sleep = options.sleep ?? sleepFor;
 
   signal?.throwIfAborted();
 

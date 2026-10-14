@@ -4,8 +4,8 @@ import {
 } from '@based-labs/drand-quicknet';
 
 import {
-  setTimeout as delay,
-} from 'node:timers/promises';
+  sleepFor,
+} from '../shared/sleep-for.js';
 
 const DEFAULT_MAX_ATTEMPTS = 8;
 const DEFAULT_RETRY_DELAY_MS = 250;
@@ -97,17 +97,5 @@ function validateMaxAttempts(value: number): void {
 function validateRetryDelay(value: number): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new RangeError('retryDelayMs must be a non-negative safe integer.');
-  }
-}
-
-async function sleepFor(
-  milliseconds: number,
-  signal?: AbortSignal,
-): Promise<void> {
-  try {
-    await delay(milliseconds, undefined, { signal });
-  } catch (error) {
-    signal?.throwIfAborted();
-    throw error;
   }
 }
