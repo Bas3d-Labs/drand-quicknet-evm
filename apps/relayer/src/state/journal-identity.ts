@@ -27,3 +27,9 @@ export function captureJournalIdentity(
     signer,
   });
 }
+
+export function journalFilename(
+  identity: JournalIdentity,
+): string {
+  return `transaction-journal-${identity.chainId}-${identity.signer.toLowerCase()}.json`;
+}

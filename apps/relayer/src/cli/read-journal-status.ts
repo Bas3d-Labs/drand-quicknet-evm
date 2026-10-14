@@ -8,6 +8,7 @@ import {
 
 import {
   captureJournalIdentity,
+  journalFilename,
 } from '../state/journal-identity.js';
 
 import {
@@ -48,7 +49,7 @@ export async function readJournalStatus(
 
   const filePath = join(
     ownership.stateDirectory,
-    `transaction-journal-${identity.chainId}-${identity.signer.toLowerCase()}.json`,
+    journalFilename(identity),
   );
 
   const read = await FileTransactionJournalStore.read({

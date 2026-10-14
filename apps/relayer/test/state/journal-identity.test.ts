@@ -10,6 +10,7 @@ import type {
 
 import {
   captureJournalIdentity,
+  journalFilename,
 } from '../../src/state/journal-identity.js';
 
 const CHAIN_ID = 46_630;
@@ -100,5 +101,36 @@ describe('captureJournalIdentity', () => {
 
     expect(capture).toThrow(TypeError);
     expect(capture).toThrow('Invalid journal identity.');
+  });
+});
+
+describe('journalFilename', () => {
+  it('formats a captured identity using the chain ID and lowercase signer', () => {
+    const identity = captureJournalIdentity({
+      chainId: CHAIN_ID,
+      signer: MIXED_CASE_SIGNER,
+    });
+
+    expect(journalFilename(identity)).toBe(
+      `transaction-journal-46630-${LOWERCASE_SIGNER}.json`,
+    );
+    expect(identity.signer).toBe(MIXED_CASE_SIGNER);
+  });
+
+  it('normalizes an uncaptured mixed-case signer without mutating it', () => {
+    const identity = {
+      chainId: CHAIN_ID,
+      signer: MIXED_CASE_SIGNER,
+    };
+
+    expect(journalFilename(identity)).toBe(
+      `transaction-journal-46630-${LOWERCASE_SIGNER}.json`,
+    );
+    expect(identity.signer).toBe(MIXED_CASE_SIGNER);
+
+    expect(journalFilename({
+      chainId: CHAIN_ID,
+      signer: LOWERCASE_SIGNER,
+    })).toBe(journalFilename(identity));
   });
 });

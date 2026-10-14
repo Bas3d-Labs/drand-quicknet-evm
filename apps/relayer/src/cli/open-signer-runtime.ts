@@ -30,6 +30,7 @@ import {
 
 import {
   captureJournalIdentity,
+  journalFilename,
 } from '../state/journal-identity.js';
 
 import {
@@ -115,7 +116,7 @@ export async function openSignerRuntime(
 
   const filePath = join(
     stateDirectory,
-    `transaction-journal-${identity.chainId}-${identity.signer.toLowerCase()}.json`,
+    journalFilename(identity),
   );
 
   await assertSignerBootstrapState(filePath, ownership);
