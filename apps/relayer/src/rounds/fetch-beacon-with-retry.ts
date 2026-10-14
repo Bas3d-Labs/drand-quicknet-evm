@@ -4,6 +4,10 @@ import {
 } from '@based-labs/drand-quicknet';
 
 import {
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
+import {
   sleepFor,
 } from '../shared/sleep-for.js';
 
@@ -89,7 +93,7 @@ export async function fetchQuicknetBeaconWithRetry(
 }
 
 function validateMaxAttempts(value: number): void {
-  if (!Number.isSafeInteger(value) || value <= 0) {
+  if (!isPositiveSafeInteger(value)) {
     throw new RangeError('maxAttempts must be a positive safe integer.');
   }
 }

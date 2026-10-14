@@ -3,6 +3,10 @@ import type {
 } from '../rounds/create-beacon-submitter.js';
 
 import {
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
+import {
   sleepFor,
 } from '../shared/sleep-for.js';
 
@@ -42,8 +46,7 @@ export async function waitForSignerJournal(
   } = options;
 
   if (
-    !Number.isSafeInteger(pollIntervalMs) ||
-    pollIntervalMs <= 0 ||
+    !isPositiveSafeInteger(pollIntervalMs) ||
     pollIntervalMs > 2_147_483_647
   ) {
     throw new TypeError('Invalid signer startup polling interval.');
