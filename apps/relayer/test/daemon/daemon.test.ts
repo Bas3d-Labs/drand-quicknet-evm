@@ -22,10 +22,21 @@ import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
 
+import {
+  importQuicknetRoundWhenAvailable,
+} from '../../src/rounds/import-round-when-available.js';
+
 vi.mock(
   '../../src/daemon/daemon-cycle.js',
   () => ({
     runDaemonCycle: vi.fn(),
+  }),
+);
+
+vi.mock(
+  '../../src/rounds/import-round-when-available.js',
+  () => ({
+    importQuicknetRoundWhenAvailable: vi.fn(),
   }),
 );
 
@@ -170,6 +181,7 @@ let submitter: BeaconSubmitter;
 
 beforeEach(() => {
   vi.mocked(runDaemonCycle).mockReset();
+  vi.mocked(importQuicknetRoundWhenAvailable).mockReset();
 
   submitter = {
     recover: vi.fn<BeaconSubmitter['recover']>(),
@@ -328,7 +340,7 @@ describe('runDaemon', () => {
       runDaemonCycle,
     ).toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter: expect.any(Function),
       submitter: {
         recover: expect.any(Function),
         submit: expect.any(Function),
@@ -1222,6 +1234,7 @@ describe('daemon cycle correlation', () => {
       maxBlockRange: 100n,
       finality: FINALITY,
       pollIntervalMs: 1_000,
+      receiptTimeoutMs: 45_000,
       signal: controller.signal,
       sleep: async () => {},
       onCycle(_result, context) {
@@ -1241,20 +1254,59 @@ describe('daemon cycle correlation', () => {
     // Opaque request: this test only checks forwarding, not encoding.
     const request = Object.freeze({}) as BeaconSubmissionRequest;
 
+    expect(first.bindRoundImporter).toBe(second.bindRoundImporter);
+
+    const onProgress = vi.fn();
+
+    vi.mocked(importQuicknetRoundWhenAvailable)
+      .mockImplementation(async (options) => {
+        expect(options.publicClient).toBe(PUBLIC_CLIENT);
+        expect(options.account).toBe(ACCOUNT);
+        expect(options.deployment).toBe(DEPLOYMENT);
+        expect(options.receiptTimeoutMs).toBe(45_000);
+        expect(options.onProgress).toBe(onProgress);
+        expect(options.signal).toBe(controller.signal);
+
+        await options.submitter.submit(request);
+
+        return {
+          status: 'already-stored',
+          round: options.round,
+          randomness: `0x${'11'.repeat(32)}`,
+        };
+      });
+
+    const firstImport = first.bindRoundImporter({
+      submitter: first.submitter,
+      onProgress,
+      signal: controller.signal,
+    });
+
+    const secondImport = second.bindRoundImporter({
+      submitter: second.submitter,
+      onProgress,
+      signal: controller.signal,
+    });
+
     expect(first.submitter).not.toBe(submitter);
     expect(second.submitter).not.toBe(first.submitter);
     expect(Object.isFrozen(first.submitter)).toBe(true);
     expect(Object.isFrozen(second.submitter)).toBe(true);
 
     await first.submitter.recover();
-    await first.submitter.submit(request);
+    await firstImport(100n);
 
     await second.submitter.recover();
-    await second.submitter.submit(request);
+    await secondImport(101n);
 
-    // A retained wrapper must still use its original cycle number.
+    // A retained importer and wrapper must still use their original cycle.
     await first.submitter.recover();
-    await first.submitter.submit(request);
+    await firstImport(102n);
+
+    expect(
+      vi.mocked(importQuicknetRoundWhenAvailable)
+        .mock.calls.map(([options]) => options.round),
+    ).toEqual([100n, 101n, 102n]);
 
     expect(vi.mocked(submitter.recover).mock.calls).toEqual([
       [1],

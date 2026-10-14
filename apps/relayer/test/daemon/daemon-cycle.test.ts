@@ -7,7 +7,6 @@ import {
 } from 'vitest';
 
 import type {
-  Account,
   Address,
   Hex,
   PublicClient,
@@ -20,6 +19,10 @@ import type {
 import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
+
+import type {
+  RoundImporterBinder,
+} from '../../src/rounds/create-round-importer.js';
 
 vi.mock(
   '../../src/daemon/daemon-iteration.js',
@@ -69,7 +72,6 @@ const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 const PUBLIC_CLIENT = {} as PublicClient;
-const ACCOUNT = {} as Account;
 const CHECKPOINT_STORE = {} as CheckpointStore;
 
 const FINALITY: FinalityPolicy = {
@@ -146,9 +148,11 @@ function processedResult(
 
 describe('runDaemonCycle', () => {
   let submitter: BeaconSubmitter;
+  let bindRoundImporter: ReturnType<typeof vi.fn<RoundImporterBinder>>;
 
   beforeEach(() => {
     vi.mocked(runDaemonIteration).mockReset();
+    bindRoundImporter = vi.fn<RoundImporterBinder>();
 
     submitter = {
       recover: vi.fn<BeaconSubmitter['recover']>(),
@@ -163,7 +167,7 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
+        bindRoundImporter,
         submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
@@ -208,7 +212,7 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
+        bindRoundImporter,
         submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
@@ -229,7 +233,7 @@ describe('runDaemonCycle', () => {
       runDaemonIteration,
     ).toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
@@ -281,7 +285,7 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
@@ -298,7 +302,7 @@ describe('runDaemonCycle', () => {
       runDaemonIteration,
     ).toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
@@ -332,7 +336,7 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
@@ -376,7 +380,7 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
@@ -420,7 +424,7 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
@@ -440,7 +444,7 @@ describe('runDaemonCycle', () => {
       1,
       {
         publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
+        bindRoundImporter,
         submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
@@ -461,7 +465,7 @@ describe('runDaemonCycle', () => {
       2,
       {
         publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
+        bindRoundImporter,
         submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
@@ -475,6 +479,16 @@ describe('runDaemonCycle', () => {
         onReconciliation: expect.any(Function),
       },
     );
+
+    const calls = vi.mocked(runDaemonIteration).mock.calls;
+
+    expect(calls).toHaveLength(2);
+
+    for (const [options] of calls) {
+      expect(options.bindRoundImporter).toBe(bindRoundImporter);
+    }
+
+    expect(bindRoundImporter).not.toHaveBeenCalled();
 
     expect(submitter.recover).toHaveBeenCalledExactlyOnceWith();
   });
@@ -518,7 +532,7 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
@@ -582,7 +596,7 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
+        bindRoundImporter,
         submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
@@ -623,7 +637,7 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
+        bindRoundImporter,
         submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
@@ -664,7 +678,7 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
+        bindRoundImporter,
         submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
@@ -704,7 +718,7 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
+        bindRoundImporter,
         submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
@@ -744,7 +758,7 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
+        bindRoundImporter,
         submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
@@ -795,7 +809,7 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
@@ -840,7 +854,7 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
@@ -899,7 +913,7 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
+        bindRoundImporter,
         submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
@@ -1001,7 +1015,7 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
@@ -1079,7 +1093,7 @@ describe('runDaemonCycle', () => {
     const cycle =
       runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
+        bindRoundImporter,
         submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
@@ -1170,7 +1184,7 @@ describe('runDaemonCycle', () => {
     const cycle =
       runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
+        bindRoundImporter,
         submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
@@ -1239,7 +1253,7 @@ describe('runDaemonCycle', () => {
 
     const result = await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
@@ -1284,7 +1298,7 @@ describe('runDaemonCycle', () => {
 
     await expect(runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
@@ -1320,7 +1334,7 @@ describe('runDaemonCycle', () => {
 
       await expect(runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
+        bindRoundImporter,
         submitter,
         deployment: DEPLOYMENT,
         checkpointStore: CHECKPOINT_STORE,
@@ -1372,7 +1386,7 @@ describe('runDaemonCycle', () => {
 
     const result = await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,
@@ -1405,7 +1419,7 @@ describe('runDaemonCycle', () => {
 
     const result = await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore: CHECKPOINT_STORE,

@@ -1,29 +1,11 @@
 import type {
-  Account,
-  PublicClient,
-} from 'viem';
-
-import type {
-  RegistryDeployment,
-} from '@based-labs/drand-quicknet-registry';
-
-import type {
-  RoundImportProgress,
-} from '../diagnostics/operation-context.js';
-
-import type {
-  BeaconSubmitter,
-} from '../rounds/create-beacon-submitter.js';
+  RoundImporter,
+} from '../rounds/create-round-importer.js';
 
 import type {
   CompletedImportResult,
   PendingImportResult,
 } from '../rounds/import-round.js';
-
-import {
-  importQuicknetRoundWhenAvailable,
-  type ImportQuicknetRoundWhenAvailableOptions,
-} from '../rounds/import-round-when-available.js';
 
 import type {
   SignerBlocker,
@@ -34,13 +16,8 @@ import type {
 } from './request-events.js';
 
 export interface ProcessQuicknetRequestsOptions {
-  publicClient: PublicClient;
-  account: Account;
-  submitter: BeaconSubmitter;
-  deployment: RegistryDeployment;
+  importRound: RoundImporter;
   requests: readonly QuicknetRandomnessRequest[];
-  receiptTimeoutMs?: number;
-  onProgress?: ((progress: RoundImportProgress) => void) | undefined;
   onCompleted?:
     | ((result: ProcessedQuicknetRound) => void)
     | undefined;
@@ -161,24 +138,7 @@ export async function processQuicknetRequestsWithOutcomes(
     }
 
     try {
-      const importOptions: ImportQuicknetRoundWhenAvailableOptions = {
-        publicClient: options.publicClient,
-        account: options.account,
-        submitter: options.submitter,
-        deployment: options.deployment,
-        round,
-        onProgress: options.onProgress,
-      };
-
-      if (options.receiptTimeoutMs !== undefined) {
-        importOptions.receiptTimeoutMs = options.receiptTimeoutMs;
-      }
-
-      if (options.signal !== undefined) {
-        importOptions.signal = options.signal;
-      }
-
-      const result = await importQuicknetRoundWhenAvailable(importOptions);
+      const result = await options.importRound(round);
 
       if (result.status === 'pending') {
         recordIncomplete({

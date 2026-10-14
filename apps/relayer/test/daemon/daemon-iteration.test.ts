@@ -7,7 +7,6 @@ import {
 } from 'vitest';
 
 import type {
-  Account,
   Address,
   Hex,
   PublicClient,
@@ -20,6 +19,12 @@ import type {
 import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
+
+import type {
+  BindRoundImporterOptions,
+  RoundImporter,
+  RoundImporterBinder,
+} from '../../src/rounds/create-round-importer.js';
 
 vi.mock('../../src/chain/chain-heads.js', () => ({
   getChainHeads: vi.fn(),
@@ -93,7 +98,6 @@ const HASH_B: Hex = `0x${'bb'.repeat(32)}`;
 const RANDOMNESS: Hex = `0x${'cc'.repeat(32)}`;
 
 const PUBLIC_CLIENT = {} as PublicClient;
-const ACCOUNT = {} as Account;
 
 const FINALITY: FinalityPolicy = {
   type: 'safe',
@@ -253,12 +257,26 @@ describe('runDaemonIteration', () => {
 
   let submitter: BeaconSubmitter;
 
+  let bindRoundImporter: ReturnType<typeof vi.fn<RoundImporterBinder>>;
+
+  const bindings = new Map<RoundImporter, BindRoundImporterOptions>();
+
+  function bindingFor(importRound: RoundImporter): BindRoundImporterOptions {
+    const binding = bindings.get(importRound);
+
+    if (binding === undefined) {
+      throw new Error('Expected an importer created by the scan binder.');
+    }
+
+    return binding;
+  }
+
   function run(
     overrides: Partial<RunDaemonIterationOptions> = {},
   ) {
     return runDaemonIteration({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
+      bindRoundImporter,
       submitter,
       deployment: DEPLOYMENT,
       checkpointStore,
@@ -277,10 +295,10 @@ describe('runDaemonIteration', () => {
     const reconciliation = failedResult(error, nextBlock);
 
     vi.mocked(reconcileDurableRequests).mockImplementation(
-      async ({ onCompleted, onProgress }) => {
+      async ({ importRound, onCompleted }) => {
         onCompleted?.(COMPLETED);
 
-        onProgress?.({
+        bindingFor(importRound).onProgress?.({
           round: FAILED_ROUND,
           phase: 'submit-transaction',
         });
@@ -293,6 +311,17 @@ describe('runDaemonIteration', () => {
   }
 
   beforeEach(() => {
+    bindings.clear();
+
+    bindRoundImporter = vi.fn<RoundImporterBinder>()
+      .mockImplementation((binding) => {
+        const importRound = vi.fn<RoundImporter>();
+
+        bindings.set(importRound, binding);
+
+        return importRound;
+      });
+
     submitter = {
       recover: vi.fn<BeaconSubmitter['recover']>(),
       submit: vi.fn<BeaconSubmitter['submit']>(),
@@ -637,17 +666,30 @@ describe('runDaemonIteration', () => {
 
     expect(reconcileDurableRequests).toHaveBeenCalledExactlyOnceWith({
       publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
       deployment: DEPLOYMENT,
       consumer: CONSUMER,
       nextBlock: expected,
       durableBlock: 1_200n,
       maxBlockRange: 100n,
+      importRound: expect.any(Function),
       onCompleted: expect.any(Function),
       onIncomplete: expect.any(Function),
+    });
+
+    const call = vi.mocked(reconcileDurableRequests).mock.calls[0];
+
+    if (call === undefined) {
+      throw new Error('Expected durable reconciliation.');
+    }
+
+    const binding = bindingFor(call[0].importRound);
+
+    expect(binding).toEqual({
+      submitter,
       onProgress: expect.any(Function),
     });
+    expect(binding.submitter).toBe(submitter);
+    expect(Object.hasOwn(binding, 'signal')).toBe(false);
   });
 
   it('includes the durable block when it equals the cursor', async () => {
@@ -1161,8 +1203,8 @@ describe('runDaemonIteration', () => {
     });
 
     vi.mocked(processQuicknetRequests).mockImplementation(
-      async ({ onProgress, onCompleted }) => {
-        onProgress?.({
+      async ({ importRound, onCompleted }) => {
+        bindingFor(importRound).onProgress?.({
           round: COMPLETED.round,
           phase: 'submit-transaction',
         });
@@ -1178,15 +1220,26 @@ describe('runDaemonIteration', () => {
     const result = await run({ onOperation, onCompleted });
 
     expect(processQuicknetRequests).toHaveBeenCalledExactlyOnceWith({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
       requests: [SOFT_REQUEST],
-      onProgress: expect.any(Function),
+      importRound: expect.any(Function),
       onCompleted: expect.any(Function),
       onIncomplete: expect.any(Function),
     });
+
+    const call = vi.mocked(processQuicknetRequests).mock.calls[0];
+
+    if (call === undefined) {
+      throw new Error('Expected soft request processing.');
+    }
+
+    const binding = bindingFor(call[0].importRound);
+
+    expect(binding).toEqual({
+      submitter,
+      onProgress: expect.any(Function),
+    });
+    expect(binding.submitter).toBe(submitter);
+    expect(Object.hasOwn(binding, 'signal')).toBe(false);
 
     expect(onOperation).toHaveBeenCalledWith({
       name: 'import-round',
@@ -1433,8 +1486,8 @@ describe('runDaemonIteration', () => {
     });
 
     vi.mocked(reconcileDurableRequests).mockImplementation(
-      async ({ onProgress, onCompleted }) => {
-        onProgress?.({
+      async ({ importRound, onCompleted }) => {
+        bindingFor(importRound).onProgress?.({
           round: COMPLETED.round,
           phase: 'submit-transaction',
         });
@@ -1445,8 +1498,8 @@ describe('runDaemonIteration', () => {
     );
 
     vi.mocked(processQuicknetRequests).mockImplementation(
-      async ({ onProgress, onCompleted }) => {
-        onProgress?.({
+      async ({ importRound, onCompleted }) => {
+        bindingFor(importRound).onProgress?.({
           round: COMPLETED.round,
           phase: 'check-stored',
         });
@@ -1543,6 +1596,12 @@ describe('runDaemonIteration', () => {
       async (options) => {
         expect(options.signal).toBe(controller.signal);
 
+        const binding = bindingFor(options.importRound);
+
+        expect(Object.hasOwn(binding, 'signal')).toBe(true);
+        expect(binding.signal).toBe(controller.signal);
+        expect(binding.submitter).toBe(submitter);
+
         controller.abort(reason);
         throw reason;
       },
@@ -1569,6 +1628,12 @@ describe('runDaemonIteration', () => {
     vi.mocked(processQuicknetRequests).mockImplementationOnce(
       async (options) => {
         expect(options.signal).toBe(controller.signal);
+
+        const binding = bindingFor(options.importRound);
+
+        expect(Object.hasOwn(binding, 'signal')).toBe(true);
+        expect(binding.signal).toBe(controller.signal);
+        expect(binding.submitter).toBe(submitter);
 
         controller.abort(reason);
         throw reason;

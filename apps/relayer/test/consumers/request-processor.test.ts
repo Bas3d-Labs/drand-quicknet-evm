@@ -7,15 +7,9 @@ import {
 } from 'vitest';
 
 import type {
-  Account,
   Address,
   Hex,
-  PublicClient,
 } from 'viem';
-
-import type {
-  RegistryDeployment,
-} from '@based-labs/drand-quicknet-registry';
 
 import type {
   QuicknetRandomnessRequest,
@@ -27,24 +21,13 @@ import {
 } from '../../src/consumers/request-processor.js';
 
 import type {
-  BeaconSubmitter,
-} from '../../src/rounds/create-beacon-submitter.js';
+  RoundImporter,
+} from '../../src/rounds/create-round-importer.js';
 
 import type {
   ImportQuicknetRoundResult,
   PendingImportResult,
 } from '../../src/rounds/import-round.js';
-
-import {
-  importQuicknetRoundWhenAvailable,
-} from '../../src/rounds/import-round-when-available.js';
-
-vi.mock(
-  '../../src/rounds/import-round-when-available.js',
-  () => ({
-    importQuicknetRoundWhenAvailable: vi.fn(),
-  }),
-);
 
 const CONSUMER_A: Address = '0x1111111111111111111111111111111111111111';
 const CONSUMER_B: Address = '0x2222222222222222222222222222222222222222';
@@ -66,34 +49,6 @@ const TRANSACTION_HASH_B: Hex =
 
 const REQUEST_TRANSACTION_HASH: Hex =
   '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
-
-const CHAIN_ID = 12345;
-
-const REGISTRY_ADDRESS: Address =
-  '0x3333333333333333333333333333333333333333';
-
-const REGISTRY_RUNTIME_CODEHASH: Hex =
-  '0x9999999999999999999999999999999999999999999999999999999999999999';
-  
-const VERIFIER_ADDRESS: Address =
-  '0x5555555555555555555555555555555555555555';
-
-const VERIFIER_RUNTIME_CODEHASH: Hex =
-  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-
-const PUBLIC_CLIENT =
-  {} as PublicClient;
-
-const ACCOUNT =
-  {} as Account;
-
-const DEPLOYMENT: RegistryDeployment = {
-  chainId: CHAIN_ID,
-  address: REGISTRY_ADDRESS,
-  runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
-  verifierAddress: VERIFIER_ADDRESS,
-  verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
-};
 
 function createRequest(
   round: bigint,
@@ -136,23 +91,15 @@ function alreadyStoredResult(
 }
 
 describe('processQuicknetRequests', () => {
-  let submitter: BeaconSubmitter;
+  let importRound: ReturnType<typeof vi.fn<RoundImporter>>;
 
   beforeEach(() => {
-    vi.mocked(importQuicknetRoundWhenAvailable).mockReset();
-
-    submitter = {
-      recover: vi.fn<BeaconSubmitter['recover']>(),
-      submit: vi.fn<BeaconSubmitter['submit']>(),
-    };
+    importRound = vi.fn<RoundImporter>();
   });
 
   it('returns no processed rounds for an empty request list', async () => {
     const result = await processQuicknetRequests({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [],
     });
 
@@ -161,7 +108,7 @@ describe('processQuicknetRequests', () => {
     });
 
     expect(
-      importQuicknetRoundWhenAvailable,
+      importRound,
     ).not.toHaveBeenCalled();
   });
 
@@ -172,15 +119,10 @@ describe('processQuicknetRequests', () => {
       TRANSACTION_HASH_A,
     );
 
-    vi.mocked(
-      importQuicknetRoundWhenAvailable,
-    ).mockResolvedValue(importResult);
+    importRound.mockResolvedValue(importResult);
 
     const result = await processQuicknetRequests({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [
         createRequest(100n),
       ],
@@ -195,19 +137,8 @@ describe('processQuicknetRequests', () => {
       ],
     });
 
-    expect(
-      importQuicknetRoundWhenAvailable,
-    ).toHaveBeenCalledOnce();
-
-    expect(
-      importQuicknetRoundWhenAvailable,
-    ).toHaveBeenCalledWith({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      round: 100n,
-    });
+    expect(importRound).toHaveBeenCalledOnce();
+    expect(importRound).toHaveBeenCalledWith(100n);
   });
 
   it('deduplicates repeated requests for the same round', async () => {
@@ -217,15 +148,10 @@ describe('processQuicknetRequests', () => {
       TRANSACTION_HASH_A,
     );
 
-    vi.mocked(
-      importQuicknetRoundWhenAvailable,
-    ).mockResolvedValue(importResult);
+    importRound.mockResolvedValue(importResult);
 
     const result = await processQuicknetRequests({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [
         createRequest(200n, CONSUMER_A, 1_000n, 0),
         createRequest(200n, CONSUMER_A, 1_001n, 1),
@@ -243,7 +169,7 @@ describe('processQuicknetRequests', () => {
     });
 
     expect(
-      importQuicknetRoundWhenAvailable,
+      importRound,
     ).toHaveBeenCalledOnce();
   });
 
@@ -254,34 +180,18 @@ describe('processQuicknetRequests', () => {
       TRANSACTION_HASH_A,
     );
 
-    vi.mocked(
-      importQuicknetRoundWhenAvailable,
-    ).mockResolvedValue(importResult);
+    importRound.mockResolvedValue(importResult);
 
     await processQuicknetRequests({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [
         createRequest(300n, CONSUMER_A, 1_000n, 0),
         createRequest(300n, CONSUMER_B, 1_001n, 0),
       ],
     });
 
-    expect(
-      importQuicknetRoundWhenAvailable,
-    ).toHaveBeenCalledOnce();
-
-    expect(
-      importQuicknetRoundWhenAvailable,
-    ).toHaveBeenCalledWith({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      round: 300n,
-    });
+    expect(importRound).toHaveBeenCalledOnce();
+    expect(importRound).toHaveBeenCalledWith(300n);
   });
 
   it('processes multiple unique rounds in first-seen order', async () => {
@@ -302,18 +212,13 @@ describe('processQuicknetRequests', () => {
       RANDOMNESS_C,
     );
 
-    vi.mocked(
-      importQuicknetRoundWhenAvailable,
-    )
+    importRound
       .mockResolvedValueOnce(result500)
       .mockResolvedValueOnce(result502)
       .mockResolvedValueOnce(result501);
 
     const result = await processQuicknetRequests({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [
         createRequest(500n, CONSUMER_A, 1_000n, 0),
         createRequest(502n, CONSUMER_A, 1_001n, 0),
@@ -339,52 +244,11 @@ describe('processQuicknetRequests', () => {
       ],
     });
 
-    expect(
-      importQuicknetRoundWhenAvailable,
-    ).toHaveBeenNthCalledWith(
-      1,
-      {
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        round: 500n,
-      },
-    );
-
-    expect(
-      importQuicknetRoundWhenAvailable,
-    ).toHaveBeenNthCalledWith(
-      2,
-      {
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        round: 502n,
-      },
-    );
-
-    expect(
-      importQuicknetRoundWhenAvailable,
-    ).toHaveBeenNthCalledWith(
-      3,
-      {
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        round: 501n,
-      },
-    );
-
-    const calls = vi.mocked(importQuicknetRoundWhenAvailable).mock.calls;
-
-    expect(calls).toHaveLength(3);
-
-    for (const [options] of calls) {
-      expect(options.submitter).toBe(submitter);
-    }
+    expect(importRound.mock.calls).toEqual([
+      [500n],
+      [502n],
+      [501n],
+    ]);
   });
 
   it('treats an already-stored round as successful', async () => {
@@ -393,15 +257,10 @@ describe('processQuicknetRequests', () => {
       RANDOMNESS_A,
     );
 
-    vi.mocked(
-      importQuicknetRoundWhenAvailable,
-    ).mockResolvedValue(importResult);
+    importRound.mockResolvedValue(importResult);
 
     const result = await processQuicknetRequests({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [
         createRequest(600n),
       ],
@@ -439,17 +298,12 @@ describe('processQuicknetRequests', () => {
         resolveFirst = resolve;
       });
 
-    vi.mocked(
-      importQuicknetRoundWhenAvailable,
-    )
+    importRound
       .mockReturnValueOnce(firstPromise)
       .mockResolvedValueOnce(secondResult);
 
     const processing = processQuicknetRequests({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [
         createRequest(700n),
         createRequest(701n),
@@ -458,9 +312,7 @@ describe('processQuicknetRequests', () => {
 
     await Promise.resolve();
 
-    expect(
-      importQuicknetRoundWhenAvailable,
-    ).toHaveBeenCalledTimes(1);
+    expect(importRound).toHaveBeenCalledTimes(1);
 
     if (resolveFirst === undefined) {
       throw new Error('Expected first round resolver to be initialized.');
@@ -470,9 +322,7 @@ describe('processQuicknetRequests', () => {
 
     const result = await processing;
 
-    expect(
-      importQuicknetRoundWhenAvailable,
-    ).toHaveBeenCalledTimes(2);
+    expect(importRound).toHaveBeenCalledTimes(2);
 
     expect(result).toEqual({
       rounds: [
@@ -491,16 +341,11 @@ describe('processQuicknetRequests', () => {
   it('propagates a round processing failure', async () => {
     const failure = new Error('Quicknet round import failed.');
 
-    vi.mocked(
-      importQuicknetRoundWhenAvailable,
-    ).mockRejectedValue(failure);
+    importRound.mockRejectedValue(failure);
 
     await expect(
       processQuicknetRequests({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
+        importRound,
         requests: [
           createRequest(800n),
         ],
@@ -517,18 +362,13 @@ describe('processQuicknetRequests', () => {
 
     const failure = new Error('Failed to import round 901.');
 
-    vi.mocked(
-      importQuicknetRoundWhenAvailable,
-    )
+    importRound
       .mockResolvedValueOnce(firstResult)
       .mockRejectedValueOnce(failure);
 
     await expect(
       processQuicknetRequests({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
+        importRound,
         requests: [
           createRequest(900n),
           createRequest(901n),
@@ -537,45 +377,10 @@ describe('processQuicknetRequests', () => {
       }),
     ).rejects.toBe(failure);
 
-    expect(
-      importQuicknetRoundWhenAvailable,
-    ).toHaveBeenCalledTimes(2);
-
-    expect(
-      importQuicknetRoundWhenAvailable,
-    ).toHaveBeenNthCalledWith(
-      1,
-      {
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        round: 900n,
-      },
-    );
-
-    expect(
-      importQuicknetRoundWhenAvailable,
-    ).toHaveBeenNthCalledWith(
-      2,
-      {
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        round: 901n,
-      },
-    );
-
-    expect(
-      importQuicknetRoundWhenAvailable,
-    ).not.toHaveBeenCalledWith({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      round: 902n,
-    });
+    expect(importRound).toHaveBeenCalledTimes(2);
+    expect(importRound).toHaveBeenNthCalledWith(1, 900n);
+    expect(importRound).toHaveBeenNthCalledWith(2, 901n);
+    expect(importRound).not.toHaveBeenCalledWith(902n);
   });
 
   it('retains a pending outcome and continues to the next round', async () => {
@@ -591,15 +396,12 @@ describe('processQuicknetRequests', () => {
 
     const completed = alreadyStoredResult(1_001n, RANDOMNESS_B);
 
-    vi.mocked(importQuicknetRoundWhenAvailable)
+    importRound
       .mockResolvedValueOnce(pending)
       .mockResolvedValueOnce(completed);
 
     const outcomes = await processQuicknetRequestsWithOutcomes({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [
         createRequest(1_000n, CONSUMER_A, 2_000n),
         createRequest(1_001n, CONSUMER_A, 2_001n),
@@ -622,7 +424,7 @@ describe('processQuicknetRequests', () => {
       },
     ]);
 
-    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
+    expect(importRound).toHaveBeenCalledTimes(2);
     expect(onCompleted).toHaveBeenCalledExactlyOnceWith({
       round: 1_001n,
       result: completed,
@@ -640,7 +442,7 @@ describe('processQuicknetRequests', () => {
       reason: 'receipt-timeout',
     } as const;
 
-    vi.mocked(importQuicknetRoundWhenAvailable)
+    importRound
       .mockResolvedValueOnce(pending)
       .mockResolvedValueOnce({
         status: 'deferred',
@@ -650,10 +452,7 @@ describe('processQuicknetRequests', () => {
       });
 
     const outcomes = await processQuicknetRequestsWithOutcomes({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [
         createRequest(1_100n, CONSUMER_A, 2_100n),
         createRequest(1_101n, CONSUMER_A, 2_101n),
@@ -685,7 +484,7 @@ describe('processQuicknetRequests', () => {
       },
     ]);
 
-    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
+    expect(importRound).toHaveBeenCalledTimes(2);
     expect(onCompleted).not.toHaveBeenCalled();
   });
 
@@ -703,7 +502,7 @@ describe('processQuicknetRequests', () => {
         TRANSACTION_HASH_B,
       );
 
-      vi.mocked(importQuicknetRoundWhenAvailable)
+      importRound
         .mockResolvedValueOnce({
           status: 'deferred',
           round: 1_000n,
@@ -728,10 +527,7 @@ describe('processQuicknetRequests', () => {
       });
 
       const outcomes = await processQuicknetRequestsWithOutcomes({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
+        importRound,
         requests: [
           createRequest(1_000n, CONSUMER_A, 2_000n),
           createRequest(1_001n, CONSUMER_A, 2_001n),
@@ -764,14 +560,10 @@ describe('processQuicknetRequests', () => {
       });
       expect(reported).toEqual(['incomplete', 'completed']);
 
-      const calls = vi.mocked(importQuicknetRoundWhenAvailable).mock.calls;
-
-      expect(calls.map(([options]) => options.round))
-        .toEqual([1_000n, 1_001n]);
-
-      for (const [options] of calls) {
-        expect(options.submitter).toBe(submitter);
-      }
+      expect(importRound.mock.calls).toEqual([
+        [1_000n],
+        [1_001n],
+      ]);
     },
   );
 
@@ -779,7 +571,7 @@ describe('processQuicknetRequests', () => {
     const onCompleted = vi.fn();
     const completed = alreadyStoredResult(1_200n, RANDOMNESS_A);
 
-    vi.mocked(importQuicknetRoundWhenAvailable)
+    importRound
       .mockResolvedValueOnce(completed)
       .mockResolvedValueOnce({
         status: 'pending',
@@ -796,10 +588,7 @@ describe('processQuicknetRequests', () => {
       });
 
     const result = await processQuicknetRequests({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [
         createRequest(1_200n),
         createRequest(1_201n),
@@ -813,7 +602,7 @@ describe('processQuicknetRequests', () => {
       rounds: [{ round: 1_200n, result: completed }],
     });
 
-    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(3);
+    expect(importRound).toHaveBeenCalledTimes(3);
     expect(onCompleted).toHaveBeenCalledExactlyOnceWith({
       round: 1_200n,
       result: completed,
@@ -843,15 +632,12 @@ describe('processQuicknetRequests', () => {
         reported.push('completed');
       });
 
-      vi.mocked(importQuicknetRoundWhenAvailable)
+      importRound
         .mockResolvedValueOnce(pending)
         .mockResolvedValueOnce(stored);
 
       const outcomes = await processQuicknetRequestsWithOutcomes({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
+        importRound,
         requests: [createRequest(100n), createRequest(101n)],
         onIncomplete,
         onCompleted,
@@ -876,7 +662,7 @@ describe('processQuicknetRequests', () => {
         [{ round: 101n, result: stored }],
       ]);
       expect(reported).toEqual(['pending', 'completed']);
-      expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
+      expect(importRound).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -890,7 +676,7 @@ describe('processQuicknetRequests', () => {
       });
       const onCompleted = vi.fn();
 
-      vi.mocked(importQuicknetRoundWhenAvailable).mockResolvedValueOnce({
+      importRound.mockResolvedValueOnce({
         status: 'deferred',
         round: 200n,
         reason: 'signer-unavailable',
@@ -898,10 +684,7 @@ describe('processQuicknetRequests', () => {
       });
 
       const outcomes = await processQuicknetRequestsWithOutcomes({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
+        importRound,
         requests: [
           createRequest(200n, CONSUMER_A, 1_000n),
           createRequest(201n, CONSUMER_A, 1_001n),
@@ -938,7 +721,7 @@ describe('processQuicknetRequests', () => {
         outcomes.map((outcome) => [outcome]),
       );
       expect(onCompleted).not.toHaveBeenCalled();
-      expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledOnce();
+      expect(importRound).toHaveBeenCalledOnce();
     },
   );
 
@@ -954,16 +737,13 @@ describe('processQuicknetRequests', () => {
     const onIncomplete = vi.fn();
     const onCompleted = vi.fn();
 
-    vi.mocked(importQuicknetRoundWhenAvailable)
+    importRound
       .mockResolvedValueOnce(pending)
       .mockRejectedValueOnce(failure);
 
     await expect(
       processQuicknetRequests({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
+        importRound,
         requests: [
           createRequest(300n),
           createRequest(301n),
@@ -983,7 +763,7 @@ describe('processQuicknetRequests', () => {
       }],
     ]);
     expect(onCompleted).not.toHaveBeenCalled();
-    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(2);
+    expect(importRound).toHaveBeenCalledTimes(2);
   });
 
   it('rejects cancellation before processing requests', async () => {
@@ -993,32 +773,26 @@ describe('processQuicknetRequests', () => {
     controller.abort(reason);
 
     await expect(processQuicknetRequestsWithOutcomes({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [createRequest(100n)],
       signal: controller.signal,
     })).rejects.toBe(reason);
 
-    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(importRound).not.toHaveBeenCalled();
   });
 
   it('propagates cancellation without processing another round', async () => {
     const controller = new AbortController();
     const reason = new Error('Shutdown requested.');
 
-    vi.mocked(importQuicknetRoundWhenAvailable)
+    importRound
       .mockImplementationOnce(async () => {
         controller.abort(reason);
         throw reason;
       });
 
     await expect(processQuicknetRequestsWithOutcomes({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [
         createRequest(100n),
         createRequest(101n),
@@ -1026,7 +800,7 @@ describe('processQuicknetRequests', () => {
       signal: controller.signal,
     })).rejects.toBe(reason);
 
-    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledOnce();
+    expect(importRound).toHaveBeenCalledOnce();
   });
 
   it('preserves an unrelated import failure after cancellation', async () => {
@@ -1034,17 +808,14 @@ describe('processQuicknetRequests', () => {
     const reason = new Error('Shutdown requested.');
     const failure = new Error('RPC failed.');
 
-    vi.mocked(importQuicknetRoundWhenAvailable)
+    importRound
       .mockImplementationOnce(async () => {
         controller.abort(reason);
         throw failure;
       });
 
     const outcomes = await processQuicknetRequestsWithOutcomes({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [createRequest(100n)],
       signal: controller.signal,
     });
@@ -1057,33 +828,19 @@ describe('processQuicknetRequests', () => {
     expect(outcomes[0]).toHaveProperty('error', failure);
   });
 
-  it('forwards the same abort signal to the import wrapper', async () => {
+  it('passes only the round to the bound importer', async () => {
     const controller = new AbortController();
 
-    vi.mocked(importQuicknetRoundWhenAvailable).mockResolvedValueOnce(
+    importRound.mockResolvedValueOnce(
       alreadyStoredResult(100n, RANDOMNESS_A),
     );
 
     await processQuicknetRequests({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
+      importRound,
       requests: [createRequest(100n)],
-      receiptTimeoutMs: 45_000,
       signal: controller.signal,
     });
 
-    expect(importQuicknetRoundWhenAvailable)
-      .toHaveBeenCalledExactlyOnceWith({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        round: 100n,
-        onProgress: undefined,
-        receiptTimeoutMs: 45_000,
-        signal: controller.signal,
-      });
+    expect(importRound).toHaveBeenCalledExactlyOnceWith(100n);
   });
 });

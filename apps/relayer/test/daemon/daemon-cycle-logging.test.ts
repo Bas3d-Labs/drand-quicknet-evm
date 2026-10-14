@@ -7,7 +7,6 @@ import {
 } from 'vitest';
 
 import type {
-  Account,
   Address,
   Hex,
   PublicClient,
@@ -20,6 +19,10 @@ import type {
 import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
+
+import type {
+  RoundImporterBinder,
+} from '../../src/rounds/create-round-importer.js';
 
 vi.mock('../../src/daemon/daemon-iteration.js', () => ({
   runDaemonIteration: vi.fn(),
@@ -83,7 +86,6 @@ const RANDOMNESS: Hex = `0x${'cc'.repeat(32)}`;
 const ROUND = 31_250_000n;
 
 const PUBLIC_CLIENT = {} as PublicClient;
-const ACCOUNT = {} as Account;
 const CHECKPOINT_STORE = {} as CheckpointStore;
 
 const DEPLOYMENT: RegistryDeployment = {
@@ -245,13 +247,14 @@ function processed(
 }
 
 let submitter: BeaconSubmitter;
+let bindRoundImporter: ReturnType<typeof vi.fn<RoundImporterBinder>>;
 
 function cycle(
   softCursors = new Map<Address, SoftScanCursor>(),
 ) {
   return runDaemonCycle({
     publicClient: PUBLIC_CLIENT,
-    account: ACCOUNT,
+    bindRoundImporter,
     submitter,
     deployment: DEPLOYMENT,
     checkpointStore: CHECKPOINT_STORE,
@@ -279,6 +282,8 @@ describe('daemon cycle diagnostic reporting', () => {
       .mockImplementation(async ({ consumer }) => {
         return caughtUp(consumer);
       });
+
+    bindRoundImporter = vi.fn<RoundImporterBinder>();
 
     submitter = {
       recover: vi.fn<BeaconSubmitter['recover']>(),

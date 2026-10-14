@@ -10,7 +10,6 @@ import {
   type Account,
   type Address,
   type PublicClient,
-  type WalletClient,
 } from 'viem';
 
 import type {
@@ -41,6 +40,10 @@ import {
 import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
+
+import {
+  createRoundImporter,
+} from '../../src/rounds/create-round-importer.js';
 
 const CONSUMER_A: Address =
   '0x1111111111111111111111111111111111111111';
@@ -88,18 +91,27 @@ function fixture() {
     submit: vi.fn<BeaconSubmitter['submit']>(),
   };
 
-  const options = {
-    publicClient: {
-      getBlock,
-      getBlockNumber,
-      getLogs,
-    } as unknown as PublicClient,
-    walletClient: {} as WalletClient,
+  const publicClient = {
+    getBlock,
+    getBlockNumber,
+    getLogs,
+  } as unknown as PublicClient;
+
+  const deployment = {
+    address: REGISTRY,
+  } as RegistryDeployment;
+
+  const bindRoundImporter = createRoundImporter({
+    publicClient,
     account: {} as Account,
+    deployment,
+  });
+
+  const options = {
+    publicClient,
+    bindRoundImporter,
     submitter,
-    deployment: {
-      address: REGISTRY,
-    } as RegistryDeployment,
+    deployment,
     checkpointStore: { load, save },
     consumers: [
       { address: CONSUMER_A, registry: REGISTRY },

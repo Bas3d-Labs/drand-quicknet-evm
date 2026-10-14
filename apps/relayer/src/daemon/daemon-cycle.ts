@@ -1,5 +1,4 @@
 import type {
-  Account,
   Address,
   PublicClient,
 } from 'viem';
@@ -48,10 +47,14 @@ import type {
   BeaconSubmitter,
 } from '../rounds/create-beacon-submitter.js';
 
+import type {
+  RoundImporterBinder,
+} from '../rounds/create-round-importer.js';
+
 export interface RunDaemonCycleOptions {
   publicClient: PublicClient;
-  account: Account;
   submitter: BeaconSubmitter;
+  bindRoundImporter: RoundImporterBinder;
   deployment: RegistryDeployment;
   checkpointStore: CheckpointStore;
   consumers: readonly ValidatedQuicknetConsumer[];
@@ -59,7 +62,6 @@ export interface RunDaemonCycleOptions {
   maxBlockRange: bigint;
   finality: FinalityPolicy;
   softCursors: Map<Address, SoftScanCursor>;
-  receiptTimeoutMs?: number;
   readChainHeads?: () => Promise<ChainHeads>;
   signal?: AbortSignal;
 }
@@ -140,7 +142,7 @@ export async function runDaemonCycle(
       const softCursor = options.softCursors.get(consumer.address);
       const iterationOptions: RunDaemonIterationOptions = {
         publicClient: options.publicClient,
-        account: options.account,
+        bindRoundImporter: options.bindRoundImporter,
         submitter: options.submitter,
         deployment: options.deployment,
         checkpointStore: options.checkpointStore,
@@ -170,10 +172,6 @@ export async function runDaemonCycle(
           : {
               softCursor,
             }),
-
-        ...(options.receiptTimeoutMs !== undefined
-          ? { receiptTimeoutMs: options.receiptTimeoutMs }
-          : {}),
           
         ...(options.readChainHeads !== undefined
           ? { readChainHeads: options.readChainHeads }
