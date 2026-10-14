@@ -251,7 +251,6 @@ async function runRoundImportCommand(
     if (command.command === 'import') {
       result = await importQuicknetRound({
         publicClient: clients.publicClient,
-        walletClient: clients.walletClient,
         account: config.account,
         submitter,
         deployment: config.deployment,
@@ -265,7 +264,6 @@ async function runRoundImportCommand(
     } else {
       result = await importQuicknetRoundWhenAvailable({
         publicClient: clients.publicClient,
-        walletClient: clients.walletClient,
         account: config.account,
         submitter,
         deployment: config.deployment,

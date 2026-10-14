@@ -1,7 +1,6 @@
 import {
   type Account,
   type PublicClient,
-  type WalletClient,
 } from 'viem';
 
 import {
@@ -40,7 +39,6 @@ import {
 
 export interface ImportQuicknetRoundWhenAvailableOptions {
   publicClient: PublicClient;
-  walletClient: WalletClient;
   account: Account;
   submitter: BeaconSubmitter;
   deployment: RegistryDeployment;
@@ -57,7 +55,6 @@ export async function importQuicknetRoundWhenAvailable(
 ): Promise<ImportQuicknetRoundResult> {
   const {
     publicClient,
-    walletClient,
     account,
     deployment,
     round,
@@ -149,7 +146,6 @@ export async function importQuicknetRoundWhenAvailable(
 
   const importOptions: ImportQuicknetRoundOptions = {
     publicClient,
-    walletClient,
     account,
     submitter: options.submitter,
     deployment,

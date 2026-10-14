@@ -2,7 +2,6 @@ import type {
   Account,
   Address,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import type {
@@ -51,7 +50,6 @@ import type {
 
 export interface RunDaemonCycleOptions {
   publicClient: PublicClient;
-  walletClient: WalletClient;
   account: Account;
   submitter: BeaconSubmitter;
   deployment: RegistryDeployment;
@@ -142,7 +140,6 @@ export async function runDaemonCycle(
       const softCursor = options.softCursors.get(consumer.address);
       const iterationOptions: RunDaemonIterationOptions = {
         publicClient: options.publicClient,
-        walletClient: options.walletClient,
         account: options.account,
         submitter: options.submitter,
         deployment: options.deployment,

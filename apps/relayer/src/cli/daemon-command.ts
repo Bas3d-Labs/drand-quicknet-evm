@@ -228,7 +228,6 @@ export async function runDaemonCommand(
 
   await runDaemon({
     publicClient: clients.publicClient,
-    walletClient: clients.walletClient,
     account: config.account,
     submitter,
     deployment: config.deployment,

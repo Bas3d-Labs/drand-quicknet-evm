@@ -16,7 +16,6 @@ import type {
   Address,
   Hex,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import type {
@@ -117,10 +116,8 @@ describe('importQuicknetRound', () => {
   let isStored: ReturnType<typeof vi.fn>;
   let getBeacon: ReturnType<typeof vi.fn>;
   let waitForTransactionReceipt: ReturnType<typeof vi.fn>;
-  let writeContract: ReturnType<typeof vi.fn>;
 
   let publicClient: PublicClient;
-  let walletClient: WalletClient;
   let account: Account;
   let submitter: BeaconSubmitter;
   let submitTransaction: ReturnType<
@@ -162,14 +159,6 @@ describe('importQuicknetRound', () => {
       waitForTransactionReceipt,
     } as unknown as PublicClient;
 
-    writeContract = vi.fn().mockResolvedValue(
-      SUBMITTED_TRANSACTION_HASH,
-    );
-
-    walletClient = {
-      writeContract,
-    } as unknown as WalletClient;
-
     submitTransaction = vi.fn<BeaconSubmitter['submit']>()
       .mockResolvedValue({
         status: 'acknowledged',
@@ -188,16 +177,11 @@ describe('importQuicknetRound', () => {
     } as unknown as Account;
   });
 
-  afterEach(() => {
-    expect(writeContract).not.toHaveBeenCalled();
-  });
-
   function importRound(
     round = ROUND,
   ) {
     return importQuicknetRound({
       publicClient,
-      walletClient,
       account,
       submitter,
       deployment: DEPLOYMENT,
@@ -703,7 +687,6 @@ describe('importQuicknetRound', () => {
 
     const result = await importQuicknetRound({
       publicClient,
-      walletClient,
       account,
       submitter,
       deployment: DEPLOYMENT,
@@ -733,7 +716,6 @@ describe('importQuicknetRound', () => {
     await expect(
       importQuicknetRound({
         publicClient,
-        walletClient,
         account,
         submitter,
         deployment: DEPLOYMENT,
@@ -785,7 +767,6 @@ describe('importQuicknetRound', () => {
   it('uses a custom receipt timeout', async () => {
     await importQuicknetRound({
       publicClient,
-      walletClient,
       account,
       submitter,
       deployment: DEPLOYMENT,
@@ -802,7 +783,6 @@ describe('importQuicknetRound', () => {
   it('rejects an invalid receipt timeout before performing work', async () => {
     await expect(importQuicknetRound({
       publicClient,
-      walletClient,
       account,
       submitter,
       deployment: DEPLOYMENT,
@@ -824,7 +804,6 @@ describe('importQuicknetRound', () => {
 
     await expect(importQuicknetRound({
       publicClient,
-      walletClient,
       account,
       submitter,
       deployment: DEPLOYMENT,
@@ -845,7 +824,6 @@ describe('importQuicknetRound', () => {
 
     await expect(importQuicknetRound({
       publicClient,
-      walletClient,
       account,
       submitter,
       deployment: DEPLOYMENT,
@@ -874,7 +852,6 @@ describe('importQuicknetRound', () => {
 
     await expect(importQuicknetRound({
       publicClient,
-      walletClient,
       account,
       submitter,
       deployment: DEPLOYMENT,
@@ -908,7 +885,6 @@ describe('importQuicknetRound', () => {
 
     await expect(importQuicknetRound({
       publicClient,
-      walletClient,
       account,
       submitter,
       deployment: DEPLOYMENT,
@@ -940,7 +916,6 @@ describe('importQuicknetRound', () => {
 
       await expect(importQuicknetRound({
         publicClient,
-        walletClient,
         account,
         submitter,
         deployment: DEPLOYMENT,
@@ -993,7 +968,6 @@ describe('importQuicknetRound', () => {
 
       const pending = importQuicknetRound({
         publicClient,
-        walletClient,
         account,
         submitter,
         deployment: DEPLOYMENT,

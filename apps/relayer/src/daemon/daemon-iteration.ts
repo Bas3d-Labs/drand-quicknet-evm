@@ -2,7 +2,6 @@ import type {
   Account,
   Address,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import type {
@@ -62,7 +61,6 @@ export interface ProcessedDaemonScan {
 
 export interface RunDaemonIterationOptions {
   publicClient: PublicClient;
-  walletClient: WalletClient;
   account: Account;
   submitter: BeaconSubmitter;
   deployment: RegistryDeployment;
@@ -184,7 +182,6 @@ export async function runDaemonIteration(
 
     const reconciliationOptions: ReconcileDurableRequestsOptions = {
       publicClient: options.publicClient,
-      walletClient: options.walletClient,
       account: options.account,
       submitter: options.submitter,
       deployment: options.deployment,
@@ -343,7 +340,6 @@ export async function runDaemonIteration(
 
     const processingOptions: ProcessQuicknetRequestsOptions = {
       publicClient: options.publicClient,
-      walletClient: options.walletClient,
       account: options.account,
       submitter: options.submitter,
       deployment: options.deployment,

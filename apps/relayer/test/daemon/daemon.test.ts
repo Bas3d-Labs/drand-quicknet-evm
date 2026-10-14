@@ -11,7 +11,6 @@ import type {
   Address,
   Hex,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import type {
@@ -73,7 +72,6 @@ const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 const PUBLIC_CLIENT = {} as PublicClient;
-const WALLET_CLIENT = {} as WalletClient;
 const ACCOUNT = {} as Account;
 const CHECKPOINT_STORE = {} as CheckpointStore;
 
@@ -184,7 +182,6 @@ describe('runDaemon', () => {
     await expect(
       runDaemon({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -208,7 +205,6 @@ describe('runDaemon', () => {
     await expect(
       runDaemon({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -228,7 +224,6 @@ describe('runDaemon', () => {
     await expect(
       runDaemon({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -248,7 +243,6 @@ describe('runDaemon', () => {
     await expect(
       runDaemon({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -275,7 +269,6 @@ describe('runDaemon', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -309,7 +302,6 @@ describe('runDaemon', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -336,7 +328,6 @@ describe('runDaemon', () => {
       runDaemonCycle,
     ).toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter: {
         recover: expect.any(Function),
@@ -378,7 +369,6 @@ describe('runDaemon', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -424,7 +414,6 @@ describe('runDaemon', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -524,7 +513,6 @@ describe('runDaemon', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -572,7 +560,6 @@ describe('runDaemon', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -620,7 +607,6 @@ describe('runDaemon', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -707,7 +693,6 @@ describe('runDaemon', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -758,7 +743,6 @@ describe('runDaemon', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -805,7 +789,6 @@ describe('runDaemon', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -880,7 +863,6 @@ describe('runDaemon', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -920,7 +902,6 @@ describe('runDaemon', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -965,7 +946,6 @@ describe('runDaemon', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -1018,7 +998,6 @@ describe('runDaemon', () => {
     await expect(
       runDaemon({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -1062,7 +1041,6 @@ describe('runDaemon', () => {
     await expect(
       runDaemon({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -1101,7 +1079,6 @@ describe('runDaemon', () => {
     await expect(
       runDaemon({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -1125,7 +1102,6 @@ describe('runDaemon', () => {
 
     await expect(runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -1159,7 +1135,6 @@ describe('runDaemon', () => {
 
     await expect(runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -1203,7 +1178,6 @@ describe('daemon cycle correlation', () => {
 
       await runDaemon({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -1239,7 +1213,6 @@ describe('daemon cycle correlation', () => {
 
     await runDaemon({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,

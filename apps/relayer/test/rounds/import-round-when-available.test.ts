@@ -11,7 +11,6 @@ import type {
   Address,
   Hex,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import {
@@ -115,7 +114,6 @@ describe(
     let isStored: ReturnType<typeof vi.fn>;
     let getBeacon: ReturnType<typeof vi.fn>;
     let publicClient: PublicClient;
-    let walletClient: WalletClient;
     let account: Account;
     let submitter: BeaconSubmitter;
 
@@ -171,9 +169,6 @@ describe(
       publicClient =
         {} as unknown as PublicClient;
 
-      walletClient =
-        {} as unknown as WalletClient;
-
       account = {
         address: ACCOUNT_ADDRESS,
       } as unknown as Account;
@@ -197,7 +192,6 @@ describe(
 
       const importOptions = {
         publicClient,
-        walletClient,
         account,
         submitter,
         deployment: DEPLOYMENT,
@@ -595,7 +589,6 @@ describe(
       expect(importMocks.importQuicknetRound)
         .toHaveBeenCalledExactlyOnceWith({
           publicClient,
-          walletClient,
           account,
           submitter,
           deployment: DEPLOYMENT,
@@ -762,7 +755,6 @@ describe(
     it('forwards a custom receipt timeout', async () => {
       await importQuicknetRoundWhenAvailable({
         publicClient,
-        walletClient,
         account,
         submitter,
         deployment: DEPLOYMENT,
@@ -780,7 +772,6 @@ describe(
     it('rejects an invalid timeout before waiting or fetching', async () => {
       await expect(importQuicknetRoundWhenAvailable({
         publicClient,
-        walletClient,
         account,
         submitter,
         deployment: DEPLOYMENT,
@@ -802,7 +793,6 @@ describe(
 
       await expect(importQuicknetRoundWhenAvailable({
         publicClient,
-        walletClient,
         account,
         submitter,
         deployment: DEPLOYMENT,
@@ -827,7 +817,6 @@ describe(
 
       await expect(importQuicknetRoundWhenAvailable({
         publicClient,
-        walletClient,
         account,
         submitter,
         deployment: DEPLOYMENT,
@@ -858,7 +847,6 @@ describe(
 
       await expect(importQuicknetRoundWhenAvailable({
         publicClient,
-        walletClient,
         account,
         submitter,
         deployment: DEPLOYMENT,
@@ -888,7 +876,6 @@ describe(
 
       await expect(importQuicknetRoundWhenAvailable({
         publicClient,
-        walletClient,
         account,
         submitter,
         deployment: DEPLOYMENT,
@@ -904,7 +891,6 @@ describe(
 
       await importQuicknetRoundWhenAvailable({
         publicClient,
-        walletClient,
         account,
         submitter,
         deployment: DEPLOYMENT,
@@ -915,7 +901,6 @@ describe(
       expect(importMocks.importQuicknetRound)
         .toHaveBeenCalledExactlyOnceWith({
           publicClient,
-          walletClient,
           account,
           submitter,
           deployment: DEPLOYMENT,
@@ -946,7 +931,6 @@ describe(
 
         await expect(importQuicknetRoundWhenAvailable({
           publicClient,
-          walletClient,
           account,
           submitter,
           deployment: DEPLOYMENT,

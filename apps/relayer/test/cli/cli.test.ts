@@ -680,7 +680,6 @@ describe('main', () => {
 
         expect(operation()).toHaveBeenCalledExactlyOnceWith({
           publicClient: PUBLIC_CLIENT,
-          walletClient: WALLET_CLIENT,
           account: ACCOUNT,
           submitter,
           deployment: CONFIG.deployment,

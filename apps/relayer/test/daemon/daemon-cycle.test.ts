@@ -11,7 +11,6 @@ import type {
   Address,
   Hex,
   PublicClient,
-  WalletClient,
 } from 'viem';
 
 import type {
@@ -70,7 +69,6 @@ const VERIFIER_RUNTIME_CODEHASH: Hex =
   '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 const PUBLIC_CLIENT = {} as PublicClient;
-const WALLET_CLIENT = {} as WalletClient;
 const ACCOUNT = {} as Account;
 const CHECKPOINT_STORE = {} as CheckpointStore;
 
@@ -165,7 +163,6 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -211,7 +208,6 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -233,7 +229,6 @@ describe('runDaemonCycle', () => {
       runDaemonIteration,
     ).toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -286,7 +281,6 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -304,7 +298,6 @@ describe('runDaemonCycle', () => {
       runDaemonIteration,
     ).toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -339,7 +332,6 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -384,7 +376,6 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -429,7 +420,6 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -450,7 +440,6 @@ describe('runDaemonCycle', () => {
       1,
       {
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -472,7 +461,6 @@ describe('runDaemonCycle', () => {
       2,
       {
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -530,7 +518,6 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -595,7 +582,6 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -637,7 +623,6 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -679,7 +664,6 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -720,7 +704,6 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -761,7 +744,6 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -813,7 +795,6 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -859,7 +840,6 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -919,7 +899,6 @@ describe('runDaemonCycle', () => {
     const result =
       await runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -1022,7 +1001,6 @@ describe('runDaemonCycle', () => {
 
     await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -1101,7 +1079,6 @@ describe('runDaemonCycle', () => {
     const cycle =
       runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -1193,7 +1170,6 @@ describe('runDaemonCycle', () => {
     const cycle =
       runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -1263,7 +1239,6 @@ describe('runDaemonCycle', () => {
 
     const result = await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -1309,7 +1284,6 @@ describe('runDaemonCycle', () => {
 
     await expect(runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -1346,7 +1320,6 @@ describe('runDaemonCycle', () => {
 
       await expect(runDaemonCycle({
         publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
         account: ACCOUNT,
         submitter,
         deployment: DEPLOYMENT,
@@ -1399,7 +1372,6 @@ describe('runDaemonCycle', () => {
 
     const result = await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
@@ -1433,7 +1405,6 @@ describe('runDaemonCycle', () => {
 
     const result = await runDaemonCycle({
       publicClient: PUBLIC_CLIENT,
-      walletClient: WALLET_CLIENT,
       account: ACCOUNT,
       submitter,
       deployment: DEPLOYMENT,
