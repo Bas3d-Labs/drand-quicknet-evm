@@ -154,6 +154,7 @@ export function createDaemonStatusPublisher(
         lastObservedGate: runtime.status,
         attempts: runtime.attempts.map((attempt) => ({
           attemptId: attempt.attemptId,
+          workId: attempt.workId,
           nonce: attempt.nonce.toString(),
           phase: attempt.phase,
           transactionHashes: attempt.transactionHashes,

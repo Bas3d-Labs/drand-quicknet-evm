@@ -14,6 +14,7 @@ const HASH = `0x${'aa'.repeat(32)}`;
 const SECOND_HASH = `0x${'bb'.repeat(32)}`;
 const RUN_ID = '11111111-1111-4111-8111-111111111111';
 const ATTEMPT_ID = '22222222-2222-4222-8222-222222222222';
+const WORK_ID = ' work:e\u0301 ';
 const AT = '2026-10-12T12:00:00.000Z';
 const EARLIER = '2026-10-12T11:59:00.000Z';
 const SECRET = 'signed-bytes-canary';
@@ -47,6 +48,7 @@ function status() {
       },
       attempts: [{
         attemptId: ATTEMPT_ID,
+        workId: WORK_ID,
         nonce: '8',
         phase: 'signed',
         transactionHashes: [HASH, SECOND_HASH],
@@ -92,9 +94,40 @@ describe('renderDaemonSnapshotStatusOutput', () => {
       'Coordinator-reported blocking episode start: ' + EARLIER,
     );
     expect(output).toContain('Attempt: ' + ATTEMPT_ID);
+    expect(output.split('\n')).toContain('    Work identity: ' + WORK_ID);
     expect(output).toContain('      ' + HASH);
     expect(output).toContain('      ' + SECOND_HASH);
     expect(output).toContain('Current signing authorization: unknown');
+  });
+
+  it('rejects a missing work identity', () => {
+    const input = status();
+    Reflect.deleteProperty(input.observation.attempts[0]!, 'workId');
+
+    expect(() => renderDaemonSnapshotStatusOutput(input))
+      .toThrow('Invalid daemon snapshot status output.');
+  });
+
+  it('passes work identity through shared snapshot validation', () => {
+    const input = status();
+    input.observation.attempts[0]!.workId = 'work\nforged';
+
+    expect(() => renderDaemonSnapshotStatusOutput(input))
+      .toThrow('Invalid daemon status snapshot.');
+  });
+
+  it('rejects a work identity getter without invoking it', () => {
+    const input = status();
+    const getter = vi.fn(() => WORK_ID);
+
+    Object.defineProperty(input.observation.attempts[0]!, 'workId', {
+      get: getter,
+    });
+
+    expect(() => renderDaemonSnapshotStatusOutput(input))
+      .toThrow('Invalid daemon snapshot status output.');
+
+    expect(getter).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -1,4 +1,8 @@
 import {
+  isWorkId,
+} from '../execution/work-identity.js';
+
+import {
   isFixedHex,
 } from '../shared/hex.js';
 
@@ -75,10 +79,12 @@ export function renderJournalStatusOutput(
   for (let index = 0; index < attempts.length; index += 1) {
     const attempt = own(attempts, String(index));
     const attemptId = own(attempt, 'attemptId');
+    const workId = own(attempt, 'workId');
     const phase = own(attempt, 'phase');
 
     if (
       !isUuidV4(attemptId) ||
+      !isWorkId(workId) ||
       (
         phase !== 'signed' &&
         phase !== 'broadcast-may-have-occurred' &&
@@ -96,6 +102,7 @@ export function renderJournalStatusOutput(
 
     lines.push(
       '  Attempt: ' + attemptId,
+      '    Work identity: ' + workId,
       '    Nonce: ' + decimal(own(attempt, 'nonce')),
       '    Created at: ' + timestamp(own(attempt, 'createdAt')),
       '    Phase: ' + phase,

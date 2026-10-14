@@ -87,6 +87,7 @@ async function setup() {
     repairs: [],
     attempts: [{
       attemptId: '11111111-1111-4111-8111-111111111111',
+      workId: 'test-work:4',
       nonce: 4n,
       signedTransactions: [{
         transactionHash: hash,
@@ -614,6 +615,7 @@ describe('signer recovery inspection', () => {
         {
           ...first,
           attemptId: '22222222-2222-4222-8222-222222222222',
+          workId: 'test-work:5',
           nonce: 5n,
           signedTransactions: [secondTransaction],
         },

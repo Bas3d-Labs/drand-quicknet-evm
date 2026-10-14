@@ -196,6 +196,7 @@ export type BroadcastAttemptResult = PreparedAttempt & (
 
 export interface AttemptSummary {
   readonly attemptId: string;
+  readonly workId: string;
   readonly nonce: bigint;
   readonly phase: JournalAttempt['phase'];
 
@@ -328,6 +329,7 @@ export class SignerCoordinator {
 
       return Object.freeze({
         attemptId: attempt.attemptId,
+        workId: attempt.workId,
         nonce: attempt.nonce,
         phase: attempt.phase,
         transactionHashes,

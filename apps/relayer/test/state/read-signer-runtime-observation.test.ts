@@ -22,6 +22,7 @@ const SECOND_HASH: Hash = `0x${'bb'.repeat(32)}`;
 const THIRD_HASH: Hash = `0x${'cc'.repeat(32)}`;
 
 const ATTEMPT_ID = '12345678-1234-4123-8123-123456789abc';
+const WORK_ID = ' work:e\u0301 ';
 const BLOCKED_SINCE = '2026-10-12T12:00:00.000Z';
 
 function fixture() {
@@ -46,6 +47,7 @@ function fixture() {
     },
     attempts: [{
       attemptId: ATTEMPT_ID,
+      workId: WORK_ID,
       nonce: 4n,
       phase: 'signed' as const,
       transactionHashes,
@@ -85,6 +87,7 @@ describe('readSignerRuntimeObservation', () => {
       },
       attempts: [{
         attemptId: ATTEMPT_ID,
+        workId: WORK_ID,
         nonce: 4n,
         phase: 'signed',
         transactionHashes: [
@@ -125,12 +128,14 @@ describe('readSignerRuntimeObservation', () => {
     blockers.push('journal-capacity-reached');
     transactionHashes.push(THIRD_HASH);
     source.attempts[0]!.nonce = 99n;
+    source.attempts[0]!.workId = 'different-work';
     source.status.blockedSince = '2026-10-12T13:00:00.000Z';
 
     expect(observation.status.blockers)
       .toEqual(['unresolved-attempt']);
     expect(observation.status.blockedSince).toBe(BLOCKED_SINCE);
     expect(observation.attempts[0]!.nonce).toBe(4n);
+    expect(observation.attempts[0]!.workId).toBe(WORK_ID);
     expect(observation.attempts[0]!.transactionHashes).toEqual([
       FIRST_HASH,
       SECOND_HASH,

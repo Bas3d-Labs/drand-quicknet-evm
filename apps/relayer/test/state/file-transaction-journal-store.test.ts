@@ -338,6 +338,7 @@ describe('file transaction journal store', () => {
       attempts: [
         {
           attemptId: '11111111-1111-4111-8111-111111111111',
+          workId: 'test-work:4',
           nonce: 4n,
           createdAt: '2026-10-04T00:00:00.000Z',
           signedTransactions: [original, replacement],
@@ -355,6 +356,7 @@ describe('file transaction journal store', () => {
         },
         {
           attemptId: '22222222-2222-4222-8222-222222222222',
+          workId: 'test-work:5',
           nonce: 5n,
           createdAt: '2026-10-04T00:01:00.000Z',
           signedTransactions: [next],

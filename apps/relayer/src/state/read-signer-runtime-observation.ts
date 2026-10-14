@@ -47,6 +47,7 @@ export function readSignerRuntimeObservation(
 
         return Object.freeze({
           attemptId: attempt.attemptId,
+          workId: attempt.workId,
           nonce: attempt.nonce,
           phase: attempt.phase,
           transactionHashes,

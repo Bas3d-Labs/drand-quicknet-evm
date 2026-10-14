@@ -99,6 +99,7 @@ async function fixture(type: FixtureType = 'eip1559') {
     repairs: [],
     attempts: [{
       attemptId: '11111111-1111-4111-8111-111111111111',
+      workId: 'test-work:4',
       nonce: 4n,
       signedTransactions,
       createdAt: '2026-10-04T00:00:00.000Z',
@@ -437,6 +438,7 @@ describe('journal attempt signed transactions', () => {
     const second = {
       ...input.attempts[0]!,
       attemptId: '22222222-2222-4222-8222-222222222222',
+      workId: 'test-work:5',
       nonce: 5n,
       signedTransactions: secondTransactions,
     };

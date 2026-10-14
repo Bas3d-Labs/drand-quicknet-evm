@@ -55,6 +55,7 @@ async function setup() {
 
     return {
       attemptId,
+      workId: `test-work:${nonce}`,
       nonce: BigInt(nonce),
       createdAt: '2026-10-04T00:00:00.000Z',
       signedTransactions: [{

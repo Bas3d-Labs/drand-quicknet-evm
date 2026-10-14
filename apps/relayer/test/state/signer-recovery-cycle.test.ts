@@ -132,7 +132,8 @@ async function setup(options: {
     });
 
     if (!options.empty) {
-      await coordinator.prepareAttempt({
+      const prepared = await coordinator.prepareAttempt({
+        workId: 'test-work:first',
         account: {
           ...ACCOUNT,
           signTransaction,
@@ -147,6 +148,10 @@ async function setup(options: {
           maxPriorityFeePerGas: 1n,
         },
       });
+
+      if (prepared.status !== 'prepared') {
+        throw new Error('Expected the first recovery-cycle attempt.');
+      }
     }
   }
 
@@ -251,6 +256,7 @@ async function setupTwoAttempts() {
   });
 
   const second = await t.coordinator.prepareAttempt({
+    workId: 'test-work:second',
     account: {
       ...ACCOUNT,
       signTransaction: t.signTransaction,
@@ -265,6 +271,10 @@ async function setupTwoAttempts() {
       maxPriorityFeePerGas: 1n,
     },
   });
+
+  if (second.status !== 'prepared') {
+    throw new Error('Expected the second recovery-cycle attempt.');
+  }
 
   t.save.mockClear();
   t.getTransactionReceipt.mockClear();
@@ -804,6 +814,7 @@ describe('signer recovery cycle', () => {
       'nonce',
       'phase',
       'transactionHashes',
+      'workId',
     ]);
 
     expect(Object.isFrozen(attempts)).toBe(true);

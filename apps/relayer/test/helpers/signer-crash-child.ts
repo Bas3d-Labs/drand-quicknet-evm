@@ -65,6 +65,7 @@ export function writeSignerCrashPreload(
     )};
 
     const CHAIN_ID = 4663;
+    const WORK_ID = 'test-work:crash-recovery';
     const RUN_ID = '11111111-1111-4111-8111-111111111111';
     const OBSERVED_AT = '2000-01-01T00:00:00.000Z';
     const INITIAL_DELAY_MS = 5_000;
@@ -273,7 +274,11 @@ export function writeSignerCrashPreload(
         const prepared = await coordinator.prepareAttempt({
           account,
           transaction,
+          workId: WORK_ID,
         });
+
+        assert.equal(prepared.status, 'prepared');
+        assert.equal(coordinator.attempts[0].workId, WORK_ID);
 
         const publicationFailures = [];
 
@@ -315,7 +320,11 @@ export function writeSignerCrashPreload(
         // Even an already-cleared journal must establish fresh recovery
         // and inclusion checks before preparation is authorized.
         await assert.rejects(
-          coordinator.prepareAttempt({ account, transaction }),
+          coordinator.prepareAttempt({
+            account,
+            transaction,
+            workId: WORK_ID,
+          }),
           /signer gate must be open/,
         );
 
@@ -332,12 +341,17 @@ export function writeSignerCrashPreload(
       if (mode === 'reorg-restart') {
         assert.equal(coordinator.journalInitialized, true);
         assert.equal(coordinator.attempts.length, 1);
+        assert.equal(coordinator.attempts[0].workId, WORK_ID);
         assert.equal(coordinator.attempts[0].phase, 'included');
         assert.equal(coordinator.status.open, false);
         assert.equal(coordinator.canBroadcast, false);
 
         await assert.rejects(
-          coordinator.prepareAttempt({ account, transaction }),
+          coordinator.prepareAttempt({
+            account,
+            transaction,
+            workId: WORK_ID,
+          }),
           /signer gate must be open/,
         );
 
@@ -378,12 +392,17 @@ export function writeSignerCrashPreload(
 
       assert.equal(coordinator.journalInitialized, true);
       assert.equal(coordinator.attempts.length, 1);
+      assert.equal(coordinator.attempts[0].workId, WORK_ID);
       assert.equal(coordinator.status.open, false);
       assert.equal(coordinator.canBroadcast, false);
 
       // A restored journal does not inherit preparation or send authority.
       await assert.rejects(
-        coordinator.prepareAttempt({ account, transaction }),
+        coordinator.prepareAttempt({
+          account,
+          transaction,
+          workId: WORK_ID,
+        }),
         /signer gate must be open/,
       );
 

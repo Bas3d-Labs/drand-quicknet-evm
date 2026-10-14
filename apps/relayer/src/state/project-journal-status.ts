@@ -31,6 +31,7 @@ export function projectJournalStatus(read: TransactionJournalRead) {
     durableNextNonce: snapshot.durableNextNonce.toString(),
     attempts: snapshot.attempts.map((attempt) => ({
       attemptId: attempt.attemptId,
+      workId: attempt.workId,
       nonce: attempt.nonce.toString(),
       createdAt: attempt.createdAt,
       phase: attempt.phase,
