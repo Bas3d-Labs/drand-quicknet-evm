@@ -3,12 +3,12 @@ import {
 } from 'node:path';
 
 import {
-  isFixedHex,
-} from '../shared/hex.js';
-
-import {
   FileTransactionJournalStore,
 } from '../state/file-transaction-journal-store.js';
+
+import {
+  captureJournalIdentity,
+} from '../state/journal-identity.js';
 
 import {
   projectJournalStatus,
@@ -36,18 +36,7 @@ export interface ReadJournalStatusOptions {
 export async function readJournalStatus(
   options: ReadJournalStatusOptions,
 ): Promise<JournalStatus> {
-  const identity = Object.freeze({
-    chainId: options.identity.chainId,
-    signer: options.identity.signer,
-  });
-
-  if (
-    !Number.isSafeInteger(identity.chainId) ||
-    identity.chainId <= 0 ||
-    !isFixedHex(identity.signer, 20)
-  ) {
-    throw new TypeError('Invalid journal identity.');
-  }
+  const identity = captureJournalIdentity(options.identity);
 
   const env = { ...(options.env ?? process.env) };
   const { signal } = options;

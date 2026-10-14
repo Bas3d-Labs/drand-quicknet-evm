@@ -29,6 +29,10 @@ import {
 } from './durable-replace.js';
 
 import {
+  captureJournalIdentity,
+} from './journal-identity.js';
+
+import {
   assertServiceLockHeld,
   DAEMON_STATUS_FILENAME,
   ServiceLockNotHeldError,
@@ -37,10 +41,6 @@ import {
 import type {
   JournalIdentity,
 } from './transaction-journal.js';
-
-import {
-  isFixedHex,
-} from '../shared/hex.js';
 
 export const MAX_DAEMON_STATUS_BYTES = 16_384;
 
@@ -126,18 +126,7 @@ export async function writeDaemonStatusFile(
 export async function readDaemonStatusFile(
   options: ReadDaemonStatusFileOptions,
 ): Promise<DaemonStatusSnapshot | null> {
-  const identity = {
-    chainId: options.identity.chainId,
-    signer: options.identity.signer,
-  };
-
-  if (
-    !Number.isSafeInteger(identity.chainId) ||
-    identity.chainId <= 0 ||
-    !isFixedHex(identity.signer, 20)
-  ) {
-    throw new TypeError('Invalid journal identity.');
-  }
+  const identity = captureJournalIdentity(options.identity);
 
   const configuredDirectory =
     (options.env ?? process.env).QUICKNET_STATE_DIR ?? './state';

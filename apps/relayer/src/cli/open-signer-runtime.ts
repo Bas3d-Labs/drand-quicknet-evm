@@ -12,10 +12,6 @@ import type {
 } from '../diagnostics/relayer-log.js';
 
 import {
-  isFixedHex,
-} from '../shared/hex.js';
-
-import {
   assertSignerBootstrapState,
 } from '../state/assert-signer-bootstrap-state.js';
 
@@ -31,6 +27,10 @@ import type {
 import {
   FileTransactionJournalStore,
 } from '../state/file-transaction-journal-store.js';
+
+import {
+  captureJournalIdentity,
+} from '../state/journal-identity.js';
 
 import {
   assertServiceLockHeld,
@@ -78,23 +78,12 @@ export interface SignerRuntime {
 export async function openSignerRuntime(
   options: OpenSignerRuntimeOptions,
 ): Promise<SignerRuntime> {
-  const identity = Object.freeze({
-    chainId: options.identity.chainId,
-    signer: options.identity.signer,
-  });
+  const identity = captureJournalIdentity(options.identity);
 
   const {
     log,
     createErrorSummary,
   } = options;
-
-  if (
-    !Number.isSafeInteger(identity.chainId) ||
-    identity.chainId <= 0 ||
-    !isFixedHex(identity.signer, 20)
-  ) {
-    throw new TypeError('Invalid journal identity.');
-  }
 
   const schedule = new BroadcastRetrySchedule(options.retry);
 
