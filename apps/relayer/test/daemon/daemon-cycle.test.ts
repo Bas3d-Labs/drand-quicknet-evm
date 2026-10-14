@@ -41,6 +41,7 @@ import type {
 
 import {
   runDaemonCycle,
+  type RunDaemonCycleOptions,
 } from '../../src/daemon/daemon-cycle.js';
 
 import {
@@ -160,23 +161,31 @@ describe('runDaemonCycle', () => {
     };
   });
 
-  it('returns an empty result for an empty consumer list', async () => {
-    const softCursors =
-      new Map<Address, SoftScanCursor>();
+  function cycleOptions(
+    overrides: Partial<RunDaemonCycleOptions> = {},
+  ): RunDaemonCycleOptions {
+    return {
+      publicClient: PUBLIC_CLIENT,
+      bindRoundImporter,
+      submitter,
+      deployment: DEPLOYMENT,
+      checkpointStore: CHECKPOINT_STORE,
+      consumers: [VALIDATED_CONSUMER_A],
+      startBlock: 1_000n,
+      maxBlockRange: 100n,
+      finality: FINALITY,
+      softCursors: new Map<Address, SoftScanCursor>(),
+      ...overrides,
+    };
+  }
 
-    const result =
-      await runDaemonCycle({
-        publicClient: PUBLIC_CLIENT,
-        bindRoundImporter,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        softCursors,
-      });
+  it('returns an empty result for an empty consumer list', async () => {
+    const softCursors = new Map<Address, SoftScanCursor>();
+
+    const result = await runDaemonCycle(cycleOptions({
+      consumers: [],
+      softCursors,
+    }));
 
     expect(result).toEqual({
       consumers: [],
@@ -210,20 +219,7 @@ describe('runDaemonCycle', () => {
       new Map<Address, SoftScanCursor>();
 
     const result =
-      await runDaemonCycle({
-        publicClient: PUBLIC_CLIENT,
-        bindRoundImporter,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [
-          VALIDATED_CONSUMER_A,
-        ],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        softCursors,
-      });
+      await runDaemonCycle(cycleOptions({ softCursors }));
 
     expect(
       runDaemonIteration,
@@ -283,20 +279,7 @@ describe('runDaemonCycle', () => {
         ],
       ]);
 
-    await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      bindRoundImporter,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [
-        VALIDATED_CONSUMER_A,
-      ],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      softCursors,
-    });
+    await runDaemonCycle(cycleOptions({ softCursors }));
 
     expect(
       runDaemonIteration,
@@ -334,20 +317,7 @@ describe('runDaemonCycle', () => {
     const softCursors =
       new Map<Address, SoftScanCursor>();
 
-    await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      bindRoundImporter,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [
-        VALIDATED_CONSUMER_A,
-      ],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      softCursors,
-    });
+    await runDaemonCycle(cycleOptions({ softCursors }));
 
     expect(
       softCursors.get(
@@ -378,20 +348,7 @@ describe('runDaemonCycle', () => {
       )
     );
 
-    await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      bindRoundImporter,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [
-        VALIDATED_CONSUMER_A,
-      ],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      softCursors,
-    });
+    await runDaemonCycle(cycleOptions({ softCursors }));
 
     expect(
       softCursors.get(
@@ -422,21 +379,15 @@ describe('runDaemonCycle', () => {
     const softCursors =
       new Map<Address, SoftScanCursor>();
 
-    await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      bindRoundImporter,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
+    await runDaemonCycle(cycleOptions({
       consumers: [
         VALIDATED_CONSUMER_A,
         VALIDATED_CONSUMER_B,
       ],
       startBlock: 500n,
       maxBlockRange: 250n,
-      finality: FINALITY,
       softCursors,
-    });
+    }));
 
     expect(
       runDaemonIteration,
@@ -530,21 +481,14 @@ describe('runDaemonCycle', () => {
         )
       );
 
-    await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      bindRoundImporter,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
+    await runDaemonCycle(cycleOptions({
       consumers: [
         VALIDATED_CONSUMER_A,
         VALIDATED_CONSUMER_B,
       ],
       startBlock: 500n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
       softCursors,
-    });
+    }));
 
     expect(
       runDaemonIteration,
@@ -593,22 +537,13 @@ describe('runDaemonCycle', () => {
     const softCursors =
       new Map<Address, SoftScanCursor>();
 
-    const result =
-      await runDaemonCycle({
-        publicClient: PUBLIC_CLIENT,
-        bindRoundImporter,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [
-          VALIDATED_CONSUMER_B,
-          VALIDATED_CONSUMER_A,
-        ],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        softCursors,
-      });
+    const result = await runDaemonCycle(cycleOptions({
+      consumers: [
+        VALIDATED_CONSUMER_B,
+        VALIDATED_CONSUMER_A,
+      ],
+      softCursors,
+    }));
 
     expect(
       result.consumers.map(
@@ -634,22 +569,7 @@ describe('runDaemonCycle', () => {
       iteration
     );
 
-    const result =
-      await runDaemonCycle({
-        publicClient: PUBLIC_CLIENT,
-        bindRoundImporter,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [
-          VALIDATED_CONSUMER_A,
-        ],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        softCursors:
-          new Map<Address, SoftScanCursor>(),
-      });
+    const result = await runDaemonCycle(cycleOptions());
 
     expect(result).toEqual({
       consumers: [
@@ -675,22 +595,7 @@ describe('runDaemonCycle', () => {
       iteration
     );
 
-    const result =
-      await runDaemonCycle({
-        publicClient: PUBLIC_CLIENT,
-        bindRoundImporter,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [
-          VALIDATED_CONSUMER_A,
-        ],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        softCursors:
-          new Map<Address, SoftScanCursor>(),
-      });
+    const result = await runDaemonCycle(cycleOptions());
 
     expect(result).toEqual({
       consumers: [
@@ -715,22 +620,7 @@ describe('runDaemonCycle', () => {
       failure
     );
 
-    const result =
-      await runDaemonCycle({
-        publicClient: PUBLIC_CLIENT,
-        bindRoundImporter,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [
-          VALIDATED_CONSUMER_A,
-        ],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        softCursors:
-          new Map<Address, SoftScanCursor>(),
-      });
+    const result = await runDaemonCycle(cycleOptions());
 
     expect(result).toEqual({
       consumers: [
@@ -755,25 +645,8 @@ describe('runDaemonCycle', () => {
       failure
     );
 
-    const result =
-      await runDaemonCycle({
-        publicClient: PUBLIC_CLIENT,
-        bindRoundImporter,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [
-          VALIDATED_CONSUMER_A,
-        ],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        softCursors:
-          new Map<Address, SoftScanCursor>(),
-      });
-
-    const consumerResult =
-      result.consumers[0];
+    const result = await runDaemonCycle(cycleOptions());
+    const consumerResult = result.consumers[0];
 
     expect(
       consumerResult,
@@ -807,20 +680,7 @@ describe('runDaemonCycle', () => {
     const softCursors =
       new Map<Address, SoftScanCursor>();
 
-    await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      bindRoundImporter,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [
-        VALIDATED_CONSUMER_A,
-      ],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      softCursors,
-    });
+    await runDaemonCycle(cycleOptions({ softCursors }));
 
     expect(
       softCursors.has(
@@ -852,20 +712,7 @@ describe('runDaemonCycle', () => {
       )
     );
 
-    await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      bindRoundImporter,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [
-        VALIDATED_CONSUMER_A,
-      ],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      softCursors,
-    });
+    await runDaemonCycle(cycleOptions({ softCursors }));
 
     expect(
       softCursors.get(
@@ -907,26 +754,17 @@ describe('runDaemonCycle', () => {
         iterationC
       );
 
-    const softCursors =
-      new Map<Address, SoftScanCursor>();
+    const softCursors = new Map<Address, SoftScanCursor>();
 
     const result =
-      await runDaemonCycle({
-        publicClient: PUBLIC_CLIENT,
-        bindRoundImporter,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
+      await runDaemonCycle(cycleOptions({
         consumers: [
           VALIDATED_CONSUMER_A,
           VALIDATED_CONSUMER_B,
           VALIDATED_CONSUMER_C,
         ],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
         softCursors,
-      });
+      }));
 
     expect(
       runDaemonIteration,
@@ -1013,22 +851,14 @@ describe('runDaemonCycle', () => {
         )
       );
 
-    await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      bindRoundImporter,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
+    await runDaemonCycle(cycleOptions({
       consumers: [
         VALIDATED_CONSUMER_A,
         VALIDATED_CONSUMER_B,
         VALIDATED_CONSUMER_C,
       ],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
       softCursors,
-    });
+    }));
 
     expect(
       softCursors.get(
@@ -1090,23 +920,12 @@ describe('runDaemonCycle', () => {
         secondResult
       );
 
-    const cycle =
-      runDaemonCycle({
-        publicClient: PUBLIC_CLIENT,
-        bindRoundImporter,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [
-          VALIDATED_CONSUMER_A,
-          VALIDATED_CONSUMER_B,
-        ],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        softCursors:
-          new Map<Address, SoftScanCursor>(),
-      });
+    const cycle = runDaemonCycle(cycleOptions({
+      consumers: [
+        VALIDATED_CONSUMER_A,
+        VALIDATED_CONSUMER_B,
+      ],
+    }));
 
     await vi.waitFor(() => {
       expect(runDaemonIteration).toHaveBeenCalledTimes(1);
@@ -1181,23 +1000,12 @@ describe('runDaemonCycle', () => {
         secondResult
       );
 
-    const cycle =
-      runDaemonCycle({
-        publicClient: PUBLIC_CLIENT,
-        bindRoundImporter,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [
-          VALIDATED_CONSUMER_A,
-          VALIDATED_CONSUMER_B,
-        ],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        softCursors:
-          new Map<Address, SoftScanCursor>(),
-      });
+    const cycle = runDaemonCycle(cycleOptions({
+      consumers: [
+        VALIDATED_CONSUMER_A,
+        VALIDATED_CONSUMER_B,
+      ],
+    }));
 
     await vi.waitFor(() => {
       expect(runDaemonIteration).toHaveBeenCalledTimes(1);
@@ -1251,21 +1059,13 @@ describe('runDaemonCycle', () => {
       [CONSUMER_A, existingCursor],
     ]);
 
-    const result = await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      bindRoundImporter,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
+    const result = await runDaemonCycle(cycleOptions({
       consumers: [
         VALIDATED_CONSUMER_A,
         VALIDATED_CONSUMER_B,
       ],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
       softCursors,
-    });
+    }));
 
     expect(submitter.recover).toHaveBeenCalledExactlyOnceWith();
     expect(runDaemonIteration).not.toHaveBeenCalled();
@@ -1296,19 +1096,9 @@ describe('runDaemonCycle', () => {
 
     controller.abort(reason);
 
-    await expect(runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      bindRoundImporter,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      softCursors: new Map<Address, SoftScanCursor>(),
+    await expect(runDaemonCycle(cycleOptions({
       signal: controller.signal,
-    })).rejects.toBe(reason);
+    }))).rejects.toBe(reason);
 
     expect(submitter.recover).not.toHaveBeenCalled();
     expect(runDaemonIteration).not.toHaveBeenCalled();
@@ -1332,22 +1122,14 @@ describe('runDaemonCycle', () => {
         vi.mocked(runDaemonIteration).mockImplementationOnce(cancel);
       }
 
-      await expect(runDaemonCycle({
-        publicClient: PUBLIC_CLIENT,
-        bindRoundImporter,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
+      await expect(runDaemonCycle(cycleOptions({
         consumers: [
           VALIDATED_CONSUMER_A,
           VALIDATED_CONSUMER_B,
         ],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
         softCursors,
         signal: controller.signal,
-      })).rejects.toBe(reason);
+      }))).rejects.toBe(reason);
 
       expect(submitter.recover).toHaveBeenCalledOnce();
 
@@ -1384,19 +1166,9 @@ describe('runDaemonCycle', () => {
       };
     });
 
-    const result = await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      bindRoundImporter,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      softCursors: new Map<Address, SoftScanCursor>(),
+    const result = await runDaemonCycle(cycleOptions({
       signal: controller.signal,
-    });
+    }));
 
     expect(result).toEqual({ consumers: [] });
     expect(submitter.recover).toHaveBeenCalledOnce();
@@ -1417,22 +1189,14 @@ describe('runDaemonCycle', () => {
       },
     );
 
-    const result = await runDaemonCycle({
-      publicClient: PUBLIC_CLIENT,
-      bindRoundImporter,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
+    const result = await runDaemonCycle(cycleOptions({
       consumers: [
         VALIDATED_CONSUMER_A,
         VALIDATED_CONSUMER_B,
       ],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
       softCursors,
       signal: controller.signal,
-    });
+    }));
 
     expect(runDaemonIteration).toHaveBeenCalledOnce();
     expect(result).toEqual({
