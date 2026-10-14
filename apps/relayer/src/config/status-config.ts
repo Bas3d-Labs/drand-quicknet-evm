@@ -6,6 +6,10 @@ import {
   isFixedHex,
 } from '../shared/hex.js';
 
+import {
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
 import type {
   JournalIdentity,
 } from '../state/transaction-journal.js';
@@ -98,7 +102,7 @@ function positiveDecimal(
 
   const value = Number(input);
 
-  if (!Number.isSafeInteger(value) || value <= 0) {
+  if (!isPositiveSafeInteger(value)) {
     throw new TypeError(message);
   }
 
