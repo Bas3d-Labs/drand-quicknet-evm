@@ -4,7 +4,7 @@ import {
 } from 'node:child_process';
 
 import {
-  copyFileSync,
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -49,33 +49,13 @@ const SECRET = 'bootstrap-credential-canary';
 const RPC_URL =
   `https://user:${SECRET}@rpc.example/${SECRET}?key=${SECRET}`;
 
-// Paths relative to the application's compiled dist directory.
-// Keep the fixture layout identical to the production layout.
+// Paths used to launch the fixture or inject module failures.
 const MODULE_PATHS = {
   bootstrap: 'bootstrap.js',
   cli: 'cli/cli.js',
   'cli-output': 'cli/cli-output.js',
-  'config-errors': 'diagnostics/config-errors.js',
-  'daemon-snapshot-status-output': 'cli/daemon-snapshot-status-output.js',
-  'daemon-status-snapshot': 'state/daemon-status-snapshot.js',
-  decimal: 'shared/decimal.js',
   diagnostics: 'diagnostics/diagnostics.js',
-  'diagnostic-messages': 'diagnostics/diagnostic-messages.js',
-  'error-output': 'diagnostics/error-output.js',
   'error-summary': 'diagnostics/error-summary.js',
-  hex: 'shared/hex.js',
-  'journal-status-output': 'cli/journal-status-output.js',
-  'mismatch-errors': 'diagnostics/mismatch-errors.js',
-  'network-presets': 'config/network-presets.js',
-  'operation-context': 'diagnostics/operation-context.js',
-  'service-lock': 'state/service-lock.js',
-  'signer-gate': 'state/signer-gate.js',
-  'signer-journal-errors': 'diagnostics/signer-journal-errors.js',
-  'text-scrubber': 'diagnostics/text-scrubber.js',
-  'usage-error': 'diagnostics/usage-error.js',
-  uint: 'shared/uint.js',
-  uuid: 'shared/uuid.js',
-  'work-identity': 'execution/work-identity.js',
 } as const;
 
 type ModuleName = keyof typeof MODULE_PATHS;
@@ -143,21 +123,23 @@ beforeAll(() => {
 }, 35_000);
 
 beforeEach(() => {
-  // Restore all supporting modules before each failure injection.
+  // Restore the complete compiled application before each failure injection.
   for (const [name, relativePath] of Object.entries(MODULE_PATHS)) {
     if (name === 'cli') {
       continue;
     }
 
-    const destination = fixturePath('dist', relativePath);
+    const destination = fixturePath('dist');
 
-    mkdirSync(dirname(destination), {
+    rmSync(destination, {
       recursive: true,
+      force: true,
     });
 
-    copyFileSync(
-      join(compiledApplication, 'dist', relativePath),
+    cpSync(
+      join(compiledApplication, 'dist'),
       destination,
+      { recursive: true },
     );
   }
 

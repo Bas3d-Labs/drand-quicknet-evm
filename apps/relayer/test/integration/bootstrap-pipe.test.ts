@@ -6,7 +6,7 @@ import {
 import {
   closeSync,
   constants,
-  copyFileSync,
+  cpSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -54,27 +54,6 @@ const EXPECTED_OUTPUT = Buffer.from(
 const MODULE_PATHS = {
   bootstrap: 'bootstrap.js',
   cli: 'cli/cli.js',
-  'cli-output': 'cli/cli-output.js',
-  'config-errors': 'diagnostics/config-errors.js',
-  'daemon-snapshot-status-output': 'cli/daemon-snapshot-status-output.js',
-  'daemon-status-snapshot': 'state/daemon-status-snapshot.js',
-  decimal: 'shared/decimal.js',
-  diagnostics: 'diagnostics/diagnostics.js',
-  'diagnostic-messages': 'diagnostics/diagnostic-messages.js',
-  'error-output': 'diagnostics/error-output.js',
-  'error-summary': 'diagnostics/error-summary.js',
-  hex: 'shared/hex.js',
-  'journal-status-output': 'cli/journal-status-output.js',
-  'mismatch-errors': 'diagnostics/mismatch-errors.js',
-  'network-presets': 'config/network-presets.js',
-  'operation-context': 'diagnostics/operation-context.js',
-  'service-lock': 'state/service-lock.js',
-  'signer-gate': 'state/signer-gate.js',
-  'signer-journal-errors': 'diagnostics/signer-journal-errors.js',
-  'usage-error': 'diagnostics/usage-error.js',
-  uint: 'shared/uint.js',
-  uuid: 'shared/uuid.js',
-  'work-identity': 'execution/work-identity.js',
 } as const;
 
 interface PipeResult {
@@ -135,9 +114,11 @@ describe.skipIf(process.platform !== 'linux')(
           recursive: true,
         });
 
-        copyFileSync(
-          join(compiledApplication, 'dist', relativePath),
-          destination,
+        // Preserve the complete compiled application and its relative imports.
+        cpSync(
+          join(compiledApplication, 'dist'),
+          dist,
+          { recursive: true },
         );
       }
 
