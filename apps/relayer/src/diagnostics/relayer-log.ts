@@ -12,6 +12,10 @@ import {
 } from 'viem';
 
 import {
+  isWorkId,
+} from '../execution/work-identity.js';
+
+import {
   BLOCKER_PRECEDENCE,
   type SignerBlocker,
 } from '../state/signer-gate.js';
@@ -19,6 +23,10 @@ import {
 import {
   isFixedHex
 } from '../shared/hex.js';
+
+import {
+  MAX_UINT256,
+} from '../shared/uint.js';
 
 import {
   type SummarizeErrorOptions,
@@ -83,7 +91,8 @@ interface Values {
   scanType: ScanType;
   error: unknown;
   consumers: readonly ConsumerHealth[];
-  deferralReason: 'signer-unavailable';
+  deferralReason: 'signer-unavailable' | 'already-retained';
+  workId: string;
   submission: 'witness' | 'compressed';
   fallbackReason:
     | 'witness-rejected'
@@ -207,13 +216,12 @@ const EVENTS = {
   roundDeferred: [
     'info',
     'round_deferred',
-    'Quicknet round import deferred because the signer is unavailable',
+    'Quicknet round import deferred',
     {
       consumer: 'address',
       scanType: 'scanType',
       round: 'uint',
       reason: 'deferralReason',
-      blocker: 'blocker',
     },
   ],
   roundPending: [
@@ -356,9 +364,32 @@ type Context<S extends Schema> = {
   [K in keyof S as S[K] extends OptionalKind ? K : never]?: Values[S[K]];
 };
 
+export type RoundDeferredContext = {
+  readonly consumer: Address;
+  readonly scanType: ScanType;
+  readonly round: bigint;
+} & (
+  | {
+      readonly reason: 'signer-unavailable';
+      readonly blocker: SignerBlocker;
+      readonly attemptId?: never;
+      readonly workId?: never;
+    }
+  | {
+      readonly reason: 'already-retained';
+      readonly attemptId: string;
+      readonly workId: string;
+      readonly blocker?: never;
+    }
+);
+
 export type RelayerLog = {
   readonly [K in keyof typeof EVENTS]:
-    (context: Context<(typeof EVENTS)[K][3]>) => void;
+    (
+      context: K extends 'roundDeferred'
+        ? RoundDeferredContext
+        : Context<(typeof EVENTS)[K][3]>
+    ) => void;
 };
 
 export type AttemptBroadcastNotAcknowledgedContext = {
@@ -411,7 +442,6 @@ type FallbackCode =
   | 'LOG_OUTPUT_FAILED';
 
 const RUN_ID = randomUUID();
-const MAX_UINT256 = (1n << 256n) - 1n;
 const MAX_HEARTBEAT_CONSUMERS = 25;
 
 const MAX_RECORD_BYTES = 16_384 - 1_024;
@@ -569,6 +599,47 @@ export function createRelayerLog(
 
     try {
       const projected = project(schema, context, policy);
+
+      if (event === 'round_deferred') {
+        if (typeof context !== 'object' || context === null) {
+          throw new TypeError('Invalid round deferral context.');
+        }
+
+        const reason = projected.reason;
+        const hasBlocker = Object.hasOwn(context, 'blocker');
+        const hasAttemptId = Object.hasOwn(context, 'attemptId');
+        const hasWorkId = Object.hasOwn(context, 'workId');
+
+        if (
+          hasBlocker !== (reason === 'signer-unavailable') ||
+          hasAttemptId !== (reason === 'already-retained') ||
+          hasWorkId !== (reason === 'already-retained')
+        ) {
+          throw new TypeError('Invalid round deferral context.');
+        }
+
+        switch (reason) {
+          case 'signer-unavailable':
+            Object.assign(
+              projected,
+              project({ blocker: 'blocker' }, context, policy),
+            );
+            break;
+
+          case 'already-retained':
+            Object.assign(
+              projected,
+              project({
+                attemptId: 'id',
+                workId: 'workId',
+              }, context, policy),
+            );
+            break;
+
+          default:
+            throw new TypeError('Invalid round deferral reason.');
+        }
+      }
 
       if (event === 'attempt_broadcast_not_acknowledged') {
         if (typeof context !== 'object' || context === null) {
@@ -974,8 +1045,17 @@ function scalar(
 
   if (
     kind === 'deferralReason' &&
-    value === 'signer-unavailable'
+    (
+      value === 'signer-unavailable' ||
+      value === 'already-retained'
+    )
   ) {
+    return value;
+  }
+
+  // Work identities are public, adapter-composed identifiers. Preserve exact
+  // equality with the journal. Structural validation does not detect secrets.
+  if (kind === 'workId' && isWorkId(value)) {
     return value;
   }
 

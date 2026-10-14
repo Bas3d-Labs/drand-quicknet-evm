@@ -66,6 +66,7 @@ async function setup(options: {
 
   const attempt = {
     attemptId: '11111111-1111-4111-8111-111111111111',
+    workId: 'test-work:4',
     nonce: 4n,
     signedTransactions: [{
       transactionHash: keccak256(bytes),

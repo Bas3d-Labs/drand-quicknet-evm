@@ -1,4 +1,8 @@
 import {
+  MAX_UINT256,
+} from '../shared/uint.js';
+
+import {
   MAX_RETAINED_NONCE_REPAIRS,
   type AnchoredNonceObservation,
   type JournalIdentity,
@@ -41,8 +45,6 @@ export type NonceSyncPlan =
       readonly repair: JournalNonceRepair;
       readonly snapshot: TransactionJournalSnapshot;
     };
-
-const MAX_UINT256 = (1n << 256n) - 1n;
 
 /**
  * Plans a forward nonce adoption for a present, empty journal.

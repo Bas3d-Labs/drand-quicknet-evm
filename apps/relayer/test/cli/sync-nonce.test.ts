@@ -236,6 +236,7 @@ describe('syncNonce', () => {
         nextNonce: 5n,
         attempts: [{
           attemptId: '11111111-1111-4111-8111-111111111111',
+          workId: 'test-work:4',
           nonce: 4n,
           createdAt: '2026-10-12T11:00:00.000Z',
           signedTransactions: [{

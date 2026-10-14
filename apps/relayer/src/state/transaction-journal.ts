@@ -97,6 +97,18 @@ export type JournalInclusionObservation = {
  */
 export type JournalAttempt = {
   readonly attemptId: string;
+
+  /**
+   * Adapter-defined identity of the application work.
+   * 
+   * Compared exactly across retained attempts, independently of
+   * transaction intent. Inclusion does not release the identity.
+   * Durable resolution removes the attempt and releases it.
+   * 
+   * This is not a durable fulfillment record.
+   */
+  readonly workId: string;
+  
   readonly nonce: bigint;
   readonly createdAt: string;
 

@@ -73,7 +73,9 @@ const MODULE_PATHS = {
   'signer-journal-errors': 'diagnostics/signer-journal-errors.js',
   'text-scrubber': 'diagnostics/text-scrubber.js',
   'usage-error': 'diagnostics/usage-error.js',
+  uint: 'shared/uint.js',
   uuid: 'shared/uuid.js',
+  'work-identity': 'execution/work-identity.js',
 } as const;
 
 type ModuleName = keyof typeof MODULE_PATHS;

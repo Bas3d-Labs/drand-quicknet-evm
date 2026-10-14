@@ -119,6 +119,7 @@ describe('projectJournalStatus', () => {
     // belongs to the journal reader, upstream of this function.
     const signedBytes = '0xdeadbeef' as const;
     const canary = 'must-not-appear-in-status';
+    const workId = ' work:e\u0301 ';
     const base = snapshot();
 
     const input = {
@@ -131,6 +132,7 @@ describe('projectJournalStatus', () => {
       },
       attempts: [{
         attemptId: 'attempt-1',
+        workId,
         nonce: 8n,
         createdAt: AT,
         phase: 'signed' as const,
@@ -160,6 +162,7 @@ describe('projectJournalStatus', () => {
 
     expect(result.attempts).toEqual([{
       attemptId: 'attempt-1',
+      workId,
       nonce: '8',
       createdAt: AT,
       phase: 'signed',
@@ -175,7 +178,9 @@ describe('projectJournalStatus', () => {
 
     // The result must not retain mutable references into journal state.
     input.identity.chainId = 999;
+    input.attempts[0]!.workId = 'different-work';
 
     expect(result.identity.chainId).toBe(4663);
+    expect(result.attempts[0]!.workId).toBe(workId);
   });
 });

@@ -76,6 +76,7 @@ async function fixture(): Promise<TransactionJournalSnapshot> {
     repairs: [],
     attempts: [{
       attemptId: '11111111-1111-4111-8111-111111111111',
+      workId: 'test-work:4',
       nonce: 4n,
       signedTransactions: [{
         transactionHash: keccak256(signedTransaction),
@@ -346,6 +347,7 @@ describe('journal persistence latch', () => {
     const second = {
       ...first.attempts[0]!,
       attemptId: '22222222-2222-4222-8222-222222222222',
+      workId: 'test-work:5',
       nonce: 5n,
       signedTransactions: [{
         transactionHash: keccak256(bytes),

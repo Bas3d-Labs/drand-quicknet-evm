@@ -113,6 +113,7 @@ async function queueSnapshot(): Promise<TransactionJournalSnapshot> {
     attempts: [
       {
         attemptId: '11111111-1111-4111-8111-111111111111',
+        workId: ' work:e\u0301 ',
         nonce: 4n,
         createdAt: CREATED,
         signedTransactions: [original, replacement],
@@ -130,6 +131,7 @@ async function queueSnapshot(): Promise<TransactionJournalSnapshot> {
       },
       {
         attemptId: '22222222-2222-4222-8222-222222222222',
+        workId: 'other-work',
         nonce: 5n,
         createdAt: '2026-10-04T00:01:00.000Z',
         signedTransactions: [second],
@@ -258,6 +260,7 @@ async function preparationSetup(maxRetainedAttempts = 3) {
     options: {
       account: ACCOUNT,
       transaction,
+      workId: 'test-work:new-allocation',
     },
   };
 }
@@ -562,6 +565,7 @@ describe('signer coordinator startup', () => {
 
     expect(summaries).toEqual(snapshot.attempts.map((attempt) => ({
       attemptId: attempt.attemptId,
+      workId: attempt.workId,
       nonce: attempt.nonce,
       phase: attempt.phase,
       transactionHashes: attempt.signedTransactions.map(
@@ -583,6 +587,7 @@ describe('signer coordinator startup', () => {
         'nonce',
         'phase',
         'transactionHashes',
+        'workId',
       ]);
     }
 
@@ -1725,6 +1730,11 @@ describe('signer coordinator startup', () => {
 
     try {
       const prepared = await t.coordinator.prepareAttempt(t.options, 10);
+
+      if (prepared.status !== 'prepared') {
+        throw new Error('Expected a newly prepared startup fixture.');
+      }
+
       const saved = t.save.mock.calls[0]![0];
       const appended = saved.attempts[2]!;
 
@@ -1742,6 +1752,7 @@ describe('signer coordinator startup', () => {
 
       expect(appended).toMatchObject({
         attemptId: prepared.attemptId,
+        workId: t.options.workId,
         nonce: 6n,
         phase: 'signed',
         inclusion: null,
@@ -1756,6 +1767,7 @@ describe('signer coordinator startup', () => {
       });
 
       expect(prepared).toEqual({
+        status: 'prepared',
         attemptId: appended.attemptId,
         transactionHash: t.signed.transactionHash,
         nonce: 6n,
@@ -1932,6 +1944,11 @@ describe('signer coordinator startup', () => {
 
     try {
       const prepared = await t.coordinator.prepareAttempt(t.options);
+
+      if (prepared.status !== 'prepared') {
+        throw new Error('Expected a newly prepared startup fixture.');
+      }
+
       const allocated = t.save.mock.calls[0]![0];
 
       t.save.mockClear();
@@ -2039,6 +2056,11 @@ describe('signer coordinator startup', () => {
 
     try {
       const prepared = await t.coordinator.prepareAttempt(t.options);
+
+      if (prepared.status !== 'prepared') {
+        throw new Error('Expected a newly prepared startup fixture.');
+      }
+
       t.save.mockClear();
 
       const request = vi.fn(async () => t.signed.transactionHash);
@@ -2085,6 +2107,11 @@ describe('signer coordinator startup', () => {
 
       try {
         const prepared = await t.coordinator.prepareAttempt(t.options);
+
+        if (prepared.status !== 'prepared') {
+          throw new Error('Expected a newly prepared startup fixture.');
+        }
+
         t.save.mockClear();
 
         const request = vi.fn(async () => t.signed.transactionHash);

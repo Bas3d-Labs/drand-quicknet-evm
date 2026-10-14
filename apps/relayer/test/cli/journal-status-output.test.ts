@@ -13,6 +13,7 @@ const SIGNER = `0x${'ab'.repeat(20)}`;
 const HASH = `0x${'aa'.repeat(32)}`;
 const SECOND_HASH = `0x${'bb'.repeat(32)}`;
 const ATTEMPT_ID = '11111111-1111-4111-8111-111111111111';
+const WORK_ID = ' work:e\u0301 ';
 const AT = '2026-10-12T12:00:00.000Z';
 const SECRET = 'signed-bytes-canary';
 
@@ -41,6 +42,7 @@ function status() {
     durableNextNonce: '8',
     attempts: [{
       attemptId: ATTEMPT_ID,
+      workId: WORK_ID,
       nonce: '8',
       createdAt: AT,
       phase: 'signed',
@@ -81,6 +83,7 @@ describe('renderJournalStatusOutput', () => {
     expect(output).toContain('Last accepted observation nonce: 8');
     expect(output).toContain('Retained attempts: 1');
     expect(output).toContain('Attempt: ' + ATTEMPT_ID);
+    expect(output.split('\n')).toContain('    Work identity: ' + WORK_ID);
     expect(output).toContain('Created at: ' + AT);
     expect(output).toContain('Phase: signed');
     expect(output).toContain('      ' + HASH);
@@ -178,6 +181,13 @@ describe('renderJournalStatusOutput', () => {
 
   it.each([
     { attemptId: SECRET },
+    { workId: undefined },
+    { workId: null },
+    { workId: 42 },
+    { workId: '' },
+    { workId: 'x'.repeat(257) },
+    { workId: 'work\nforged' },
+    { workId: 'work\u0085forged' },
     { phase: SECRET },
     { createdAt: '2026-10-12T12:00:00Z' },
     { transactionHashes: [] },
@@ -203,6 +213,48 @@ describe('renderJournalStatusOutput', () => {
       ...input,
       repairs: [{ ...input.repairs[0], ...patch }],
     })).toThrow('Invalid journal status output.');
+  });
+
+  it('accepts a work identity at the maximum length', () => {
+    const input = status();
+    const workId = 'x'.repeat(256);
+    input.attempts[0]!.workId = workId;
+
+    expect(renderJournalStatusOutput(input).split('\n'))
+      .toContain('    Work identity: ' + workId);
+  });
+
+  it('rejects a missing work identity', () => {
+    const input = status();
+    Reflect.deleteProperty(input.attempts[0]!, 'workId');
+
+    expect(() => renderJournalStatusOutput(input))
+      .toThrow('Invalid journal status output.');
+  });
+
+  it('rejects a work identity getter without invoking it', () => {
+    const input = status();
+    const getter = vi.fn(() => WORK_ID);
+
+    Object.defineProperty(input.attempts[0]!, 'workId', {
+      get: getter,
+    });
+
+    expect(() => renderJournalStatusOutput(input))
+      .toThrow('Invalid journal status output.');
+
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it('rejects an inherited work identity', () => {
+    const input = status();
+    const attempt = input.attempts[0]!;
+
+    Object.setPrototypeOf(attempt, { workId: WORK_ID });
+    Reflect.deleteProperty(attempt, 'workId');
+
+    expect(() => renderJournalStatusOutput(input))
+      .toThrow('Invalid journal status output.');
   });
 
   it('rejects a displayed getter without invoking it', () => {

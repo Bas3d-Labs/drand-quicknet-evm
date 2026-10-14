@@ -83,7 +83,7 @@ export function renderDaemonSnapshotStatusOutput(
       ),
     },
     attempts: elements(own(raw, 'attempts')).map((attempt) => ({
-      ...fields(attempt, ['attemptId', 'nonce', 'phase']),
+      ...fields(attempt, ['attemptId', 'workId', 'nonce', 'phase']),
       transactionHashes: elements(own(attempt, 'transactionHashes')),
     })),
     lastCompletedCycle: nullableFields(
@@ -141,6 +141,7 @@ export function renderDaemonSnapshotStatusOutput(
   for (const attempt of observation.attempts) {
     lines.push(
       '  Attempt: ' + attempt.attemptId,
+      '    Work identity: ' + attempt.workId,
       '    Nonce: ' + attempt.nonce,
       '    Phase: ' + attempt.phase,
       '    Candidate transaction hashes:',

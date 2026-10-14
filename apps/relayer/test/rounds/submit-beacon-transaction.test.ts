@@ -11,6 +11,7 @@ import {
 } from 'vitest';
 
 import {
+  decodeFunctionData,
   TransactionReceiptNotFoundError,
 } from 'viem';
 
@@ -37,6 +38,7 @@ import {
 
 import {
   encodeBeaconSubmission,
+  type BeaconSubmissionRequest,
 } from '../../src/rounds/encode-beacon-submission.js';
 
 import {
@@ -69,6 +71,10 @@ const REGISTRY =
 const HASH = `0x${'aa'.repeat(32)}` as const;
 const SIGNATURE = `0x${'11'.repeat(48)}` as const;
 
+const WORK_ID =
+  'quicknet-round:v1:4663:' +
+  '0x2222222222222222222222222222222222222222:20791007';
+
 function setup() {
   const events: string[] = [];
 
@@ -96,6 +102,7 @@ function setup() {
   );
 
   const attempt = {
+    status: 'prepared' as const,
     attemptId: '11111111-1111-4111-8111-111111111111',
     transactionHash: HASH,
     nonce: 4n,
@@ -119,6 +126,7 @@ function setup() {
   const status = { open: true };
 
   const coordinator = {
+    chainId: 4663,
     status,
     prepareAttempt,
     broadcastAttempt,
@@ -171,6 +179,7 @@ describe('beacon transaction submission', () => {
     expect(t.prepareAttempt).toHaveBeenCalledExactlyOnceWith({
       account: t.options.account,
       transaction: t.transaction,
+      workId: WORK_ID,
     }, 7);
 
     expect(t.broadcastAttempt).toHaveBeenCalledExactlyOnceWith({
@@ -179,6 +188,99 @@ describe('beacon transaction submission', () => {
     }, 7);
 
     expect(result).toBe(t.broadcast);
+  });
+
+  it('returns already-retained without broadcasting the retained attempt', async () => {
+    const t = setup();
+    const retained = Object.freeze({
+      status: 'already-retained' as const,
+      attemptId: t.attempt.attemptId,
+      workId: WORK_ID,
+    });
+
+    t.prepareAttempt.mockResolvedValueOnce(retained);
+
+    const result = await submitBeaconTransaction(t.options, 7);
+
+    expect(result).toBe(retained);
+    expect(t.prepareAttempt).toHaveBeenCalledExactlyOnceWith({
+      account: t.options.account,
+      transaction: t.transaction,
+      workId: WORK_ID,
+    }, 7);
+    expect(t.broadcastAttempt).not.toHaveBeenCalled();
+  });
+
+  it('uses the same work identity for compressed and witness calls with distinct calldata', async () => {
+    const t = setup();
+
+    const compressed = {
+      address: REGISTRY,
+      abi: drandQuicknetBeaconRegistryAbi,
+      functionName: 'submitBeacon',
+      args: [20_791_007n, SIGNATURE],
+    } as const satisfies BeaconSubmissionRequest;
+
+    const witness = {
+      address: REGISTRY,
+      abi: drandQuicknetBeaconRegistryAbi,
+      functionName: 'submitBeaconWithWitness',
+      args: [20_791_007n, SIGNATURE, 123n, 456n],
+    } as const satisfies BeaconSubmissionRequest;
+
+    // Preserve each encoded call through the fee-preparation stub.
+    preparationMocks.prepareRelayerTransaction.mockImplementation(
+      async (call: {
+        to: typeof REGISTRY;
+        data: `0x${string}`;
+        value: bigint;
+      }) => ({
+        ...t.transaction,
+        to: call.to,
+        data: call.data,
+        value: call.value,
+      }),
+    );
+
+    await submitBeaconTransaction({
+      ...t.options,
+      request: compressed,
+    }, 7);
+
+    await submitBeaconTransaction({
+      ...t.options,
+      request: witness,
+    }, 8);
+
+    expect(t.prepareAttempt).toHaveBeenCalledTimes(2);
+
+    const first = t.prepareAttempt.mock.calls[0]![0];
+    const second = t.prepareAttempt.mock.calls[1]![0];
+
+    expect(first.workId).toBe(WORK_ID);
+    expect(second.workId).toBe(WORK_ID);
+
+    expect(first.transaction.to).toBe(REGISTRY);
+    expect(second.transaction.to).toBe(REGISTRY);
+    expect(first.transaction.value).toBe(0n);
+    expect(second.transaction.value).toBe(0n);
+    expect(first.transaction.data).not.toBe(second.transaction.data);
+
+    expect(decodeFunctionData({
+      abi: drandQuicknetBeaconRegistryAbi,
+      data: first.transaction.data,
+    })).toEqual({
+      functionName: 'submitBeacon',
+      args: [20_791_007n, SIGNATURE],
+    });
+
+    expect(decodeFunctionData({
+      abi: drandQuicknetBeaconRegistryAbi,
+      data: second.transaction.data,
+    })).toEqual({
+      functionName: 'submitBeaconWithWitness',
+      args: [20_791_007n, SIGNATURE, 123n, 456n],
+    });
   });
 
   it('does no preparation while the signer gate is closed', async () => {
@@ -485,6 +587,7 @@ describe('beacon transaction submission', () => {
       const signed = attempt.signedTransactions[0]!;
 
       expect(attempt.phase).toBe('signed');
+      expect(attempt.workId).toBe(WORK_ID);
       expect(attempt.nonce).toBe(4n);
       expect(attempt.signedTransactions).toHaveLength(1);
 
@@ -502,6 +605,7 @@ describe('beacon transaction submission', () => {
       await expect(restarted.prepareAttempt({
         account,
         transaction: t.transaction,
+        workId: WORK_ID,
       })).rejects.toThrow('signer gate');
 
       await expect(restarted.broadcastAttempt({
@@ -552,6 +656,7 @@ describe('beacon transaction submission', () => {
           durableNextNonce: 4n,
           attempts: [{
             attemptId: attempt.attemptId,
+            workId: WORK_ID,
             nonce: 4n,
             phase: 'broadcast-may-have-occurred',
             signedTransactions: [signed],

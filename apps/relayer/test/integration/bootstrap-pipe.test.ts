@@ -72,7 +72,9 @@ const MODULE_PATHS = {
   'signer-gate': 'state/signer-gate.js',
   'signer-journal-errors': 'diagnostics/signer-journal-errors.js',
   'usage-error': 'diagnostics/usage-error.js',
+  uint: 'shared/uint.js',
   uuid: 'shared/uuid.js',
+  'work-identity': 'execution/work-identity.js',
 } as const;
 
 interface PipeResult {

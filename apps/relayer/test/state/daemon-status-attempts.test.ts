@@ -22,6 +22,9 @@ const IDENTITY = {
 const FIRST_ID = '11111111-1111-4111-8111-111111111111';
 const SECOND_ID = '22222222-2222-4222-8222-222222222222';
 
+const WORK_ID = ' work:e\u0301 ';
+const OTHER_WORK_ID = 'other-work';
+
 const FIRST_HASH: Hash = `0x${'aa'.repeat(32)}`;
 const SECOND_HASH: Hash = `0x${'bb'.repeat(32)}`;
 const THIRD_HASH: Hash = `0x${'cc'.repeat(32)}`;
@@ -29,6 +32,7 @@ const THIRD_HASH: Hash = `0x${'cc'.repeat(32)}`;
 function attempt(): DaemonStatusAttempt {
   return {
     attemptId: FIRST_ID,
+    workId: WORK_ID,
     nonce: '4',
     phase: 'broadcast-may-have-occurred',
     transactionHashes: [FIRST_HASH, SECOND_HASH],
@@ -100,6 +104,7 @@ describe('daemon status retained attempts', () => {
       .toBe(true);
 
     source.nonce = '99';
+    source.workId = OTHER_WORK_ID;
     hashes.push(THIRD_HASH);
     attempts.length = 0;
 
@@ -149,6 +154,13 @@ describe('daemon status retained attempts', () => {
 
   it.each([
     { attemptId: 'invalid' },
+    { workId: undefined },
+    { workId: null },
+    { workId: 42 },
+    { workId: '' },
+    { workId: 'x'.repeat(257) },
+    { workId: 'work\nforged' },
+    { workId: 'work\u0085forged' },
     { phase: 'confirmed' },
     { transactionHashes: [] },
     { transactionHashes: ['0x1234'] },
@@ -188,10 +200,74 @@ describe('daemon status retained attempts', () => {
       attempt(),
       {
         ...attempt(),
+        workId: OTHER_WORK_ID,
         nonce: '5',
         transactionHashes: [THIRD_HASH],
       },
     ])).toThrow('Invalid daemon status snapshot.');
+  });
+
+  it('rejects a missing work identity', () => {
+    const source = { ...attempt() };
+    Reflect.deleteProperty(source, 'workId');
+
+    expect(() => readAttempts([source]))
+      .toThrow('Invalid daemon status snapshot.');
+  });
+
+  it('accepts a work identity at the maximum length', () => {
+    const workId = 'x'.repeat(256);
+
+    const result = readAttempts([{ ...attempt(), workId }]);
+
+    expect(result.attempts[0]!.workId).toBe(workId);
+  });
+
+  it.each([
+    'signed',
+    'broadcast-may-have-occurred',
+    'included',
+  ] as const)('rejects duplicate work identities in phase %s', (phase) => {
+    const first = { ...attempt(), phase };
+    const second = {
+      ...attempt(),
+      attemptId: SECOND_ID,
+      workId: OTHER_WORK_ID,
+      nonce: '5',
+      phase,
+      transactionHashes: [THIRD_HASH],
+    };
+
+    // Establish that the pair is valid before introducing the duplicate.
+    expect(readAttempts([first, second]).attempts).toHaveLength(2);
+
+    expect(() => readAttempts([
+      first,
+      { ...second, workId: first.workId },
+    ])).toThrow('Invalid daemon status snapshot.');
+  });
+
+  it.each([
+    { name: 'case', first: 'work:A', second: 'work:a' },
+    { name: 'spacing', first: 'work:a', second: ' work:a ' },
+    {
+      name: 'Unicode representation',
+      first: 'work:\u00e9',
+      second: 'work:e\u0301',
+    },
+  ])('keeps work identities distinct by $name', ({ first, second }) => {
+    const attempts = [
+      { ...attempt(), workId: first },
+      {
+        ...attempt(),
+        attemptId: SECOND_ID,
+        workId: second,
+        nonce: '5',
+        transactionHashes: [THIRD_HASH],
+      },
+    ];
+
+    expect(readAttempts(attempts).attempts).toEqual(attempts);
   });
 
   it.each(['4', '3'])(
@@ -202,6 +278,7 @@ describe('daemon status retained attempts', () => {
         {
           ...attempt(),
           attemptId: SECOND_ID,
+          workId: OTHER_WORK_ID,
           nonce,
           transactionHashes: [THIRD_HASH],
         },
@@ -215,6 +292,7 @@ describe('daemon status retained attempts', () => {
       {
         ...attempt(),
         attemptId: SECOND_ID,
+        workId: OTHER_WORK_ID,
         nonce: '10',
         transactionHashes: [THIRD_HASH],
       },

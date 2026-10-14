@@ -317,6 +317,78 @@ describe('createDaemonLogger', () => {
     },
   );
 
+  it.each([
+    { scanType: 'durable', throws: false },
+    { scanType: 'soft', throws: false },
+    { scanType: 'durable', throws: true },
+    { scanType: 'soft', throws: true },
+  ] as const)(
+    'reports retained $scanType work (logger throws: $throws)',
+    ({ scanType, throws }) => {
+      const attemptId = '11111111-1111-4111-8111-111111111111';
+      const workId = ' work:e\u0301 ';
+      const failure = new Error('Deferred logging failed.');
+
+      const incomplete: DaemonIncompleteRound[] = [{
+        scanType,
+        outcome: {
+          round: ROUND,
+          firstRequestBlock: 800n,
+          status: 'deferred',
+          reason: 'already-retained',
+          attemptId,
+          workId,
+        },
+      }];
+
+      const base = createSuccessfulCycle();
+
+      const cycle: RunDaemonCycleResult = {
+        ...base,
+        consumers: base.consumers.map((consumer) => ({
+          ...consumer,
+          incomplete,
+        })),
+      };
+
+      if (throws) {
+        loggerMocks.roundDeferred.mockImplementation(() => {
+          throw failure;
+        });
+      }
+
+      const daemonLogger = createDaemonLogger({
+        logger: LOGGER,
+        now: () => 0,
+      });
+
+      expect(() => daemonLogger.onCycle(cycle)).not.toThrow();
+
+      expect(loggerMocks.roundDeferred).toHaveBeenCalledExactlyOnceWith({
+        consumer: CONSUMER_A,
+        scanType,
+        round: ROUND,
+        reason: 'already-retained',
+        attemptId,
+        workId,
+      });
+
+      expect(loggerMocks.roundPending).not.toHaveBeenCalled();
+      expect(loggerMocks.roundImported).not.toHaveBeenCalled();
+      expect(loggerMocks.roundAlreadyStored).not.toHaveBeenCalled();
+      expect(loggerMocks.checkpointAdvanced).not.toHaveBeenCalled();
+      expect(loggerMocks.consumerFailed).not.toHaveBeenCalled();
+
+      if (throws) {
+        expect(loggerMocks.loggingFailed).toHaveBeenCalledExactlyOnceWith({
+          error: failure,
+        });
+      } else {
+        expect(loggerMocks.loggingFailed).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it('rejects a zero heartbeat interval', () => {
     expect(() => {
       createDaemonLogger({

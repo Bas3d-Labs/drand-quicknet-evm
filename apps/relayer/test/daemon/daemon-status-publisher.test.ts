@@ -24,6 +24,7 @@ const IDENTITY = {
 
 const RUN_ID = '11111111-1111-4111-8111-111111111111';
 const ATTEMPT_ID = '22222222-2222-4222-8222-222222222222';
+const WORK_ID = ' work:e\u0301 ';
 
 const FIRST_HASH = `0x${'aa'.repeat(32)}` as const;
 const SECOND_HASH = `0x${'bb'.repeat(32)}` as const;
@@ -44,6 +45,7 @@ function runtime(): SignerRuntimeObservation {
     },
     attempts: [{
       attemptId: ATTEMPT_ID,
+      workId: WORK_ID,
       nonce: 4n,
       phase: 'broadcast-may-have-occurred',
       transactionHashes: [FIRST_HASH, SECOND_HASH],
@@ -120,6 +122,7 @@ describe('daemon status publisher', () => {
     await t.publisher.publish();
 
     expect(t.write).toHaveBeenCalledOnce();
+    expect(t.onFailure).not.toHaveBeenCalled();
 
     const written = t.write.mock.calls[0]![0];
 
@@ -136,6 +139,7 @@ describe('daemon status publisher', () => {
       lastRetryObservation: null,
       attempts: [{
         attemptId: ATTEMPT_ID,
+        workId: WORK_ID,
         nonce: '4',
         phase: 'broadcast-may-have-occurred',
         transactionHashes: [FIRST_HASH, SECOND_HASH],

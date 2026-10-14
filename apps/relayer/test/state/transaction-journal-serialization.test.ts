@@ -74,6 +74,7 @@ async function fixture(): Promise<TransactionJournalSnapshot> {
     repairs: [],
     attempts: [{
       attemptId: '11111111-1111-4111-8111-111111111111',
+      workId: 'test-work:4',
       nonce: 4n,
       signedTransactions: [await signedTransaction()],
       createdAt: '2026-10-04T00:00:00.000Z',
@@ -141,6 +142,7 @@ describe('transaction journal serialization', () => {
       repairs: [],
       attempts: [{
         attemptId: input.attempts[0]!.attemptId,
+        workId: 'test-work:4',
         nonce: '4',
         createdAt: input.attempts[0]!.createdAt,
         signedTransactions: input.attempts[0]!.signedTransactions,
@@ -173,6 +175,43 @@ describe('transaction journal serialization', () => {
 
   it('round-trips initialized state without attempts', async () => {
     await expectRoundTrip(await emptyFixture());
+  });
+
+  it.each([
+    { name: 'surrounding spaces', workId: ' Work:Example ' },
+    { name: 'NFD representation', workId: 'work:e\u0301' },
+    { name: 'maximum length', workId: 'x'.repeat(256) },
+    { name: 'astral characters', workId: '😀'.repeat(128) },
+    { name: 'lone surrogate', workId: 'work:\ud800' },
+  ])('round-trips work identity exactly: $name', async ({ workId }) => {
+    const input = await fixture();
+
+    const { contents, decoded } = await expectRoundTrip({
+      ...input,
+      attempts: [{
+        ...input.attempts[0]!,
+        workId,
+      }],
+    });
+
+    expect(JSON.parse(contents).attempts[0].workId).toBe(workId);
+    expect(decoded.attempts[0]!.workId).toBe(workId);
+  });
+
+  it.each([
+    { name: 'null', value: null },
+    { name: 'number', value: 123 },
+    { name: 'empty string', value: '' },
+    { name: 'overlong string', value: 'x'.repeat(257) },
+    { name: 'C0 control', value: 'work\nother' },
+    { name: 'C1 control', value: 'work\u0085other' },
+  ])('rejects persisted invalid work identity: $name', async ({ value }) => {
+    const raw = await encodedFixture();
+    raw.attempts[0].workId = value;
+
+    await expect(
+      decodeJournalSnapshot(JSON.stringify(raw), IDENTITY),
+    ).rejects.toThrow(new TypeError(FAILURE));
   });
 
   it('round-trips a signed attempt without a replacement search', async () => {
@@ -229,6 +268,7 @@ describe('transaction journal serialization', () => {
       {
         ...first,
         attemptId: '22222222-2222-4222-8222-222222222222',
+        workId: 'test-work:5',
         nonce: 5n,
         signedTransactions: [await signedTransaction(5)],
       },
@@ -391,6 +431,7 @@ describe('transaction journal serialization', () => {
   it.each([
     'attempts',
     'durableNextNonce',
+    'workId',
     'signedTransactions',
     'inclusion',
     'replacementSearch',

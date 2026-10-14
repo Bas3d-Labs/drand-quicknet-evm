@@ -44,6 +44,7 @@ const IDENTITY = {
 
 const HASH = `0x${'aa'.repeat(32)}` as const;
 const CREATED = '2026-10-05T12:00:00.000Z';
+const WORK_ID = 'test-work:preparation';
 
 const OBSERVATION = {
   anchor: {
@@ -69,6 +70,7 @@ async function setup(options: {
   missing?: boolean;
   unrecovered?: boolean;
   brokenLog?: boolean;
+  maxRetainedAttempts?: number;
 } = {}) {
   const snapshot: TransactionJournalSnapshot = {
     version: 1,
@@ -153,7 +155,7 @@ async function setup(options: {
   const create = () => SignerCoordinator.create({
     identity: IDENTITY,
     store: { load, save },
-    maxRetainedAttempts: 3,
+    maxRetainedAttempts: options.maxRetainedAttempts ?? 3,
     log,
     createErrorSummary: factory,
     now: () => Date.parse(CREATED),
@@ -188,9 +190,10 @@ async function setup(options: {
     signTransaction,
   };
 
-  const prepare = () => coordinator.prepareAttempt({
+  const prepare = (workId = WORK_ID) => coordinator.prepareAttempt({
     account,
     transaction: transaction(),
+    workId,
   }, 7);
 
   return {
@@ -210,6 +213,96 @@ async function setup(options: {
   };
 }
 
+async function setupIncludedWork(maxRetainedAttempts = 3) {
+  // Duplicate detection requires included work below capacity.
+  // Production capacity 1 instead keeps the signer gate closed.
+  const t = await setup({ maxRetainedAttempts });
+  const prepared = await t.prepare();
+
+  if (prepared.status !== 'prepared') {
+    throw new Error('Expected a newly prepared attempt.');
+  }
+
+  const head = {
+    blockNumber: 101n,
+    blockHash: `0x${'bb'.repeat(32)}` as const,
+  };
+
+  const getTransactionReceipt = vi.fn(async (
+    request: { hash: string },
+  ) => {
+    expect(request.hash).toBe(prepared.transactionHash);
+
+    return {
+      transactionHash: prepared.transactionHash,
+      blockNumber: head.blockNumber,
+      blockHash: head.blockHash,
+      status: 'success',
+    };
+  });
+
+  await t.coordinator.checkInclusions({
+    publicClient: {
+      getBlock: async (request: { blockNumber: bigint }) => {
+        expect(request.blockNumber).toBe(head.blockNumber);
+
+        return {
+          number: head.blockNumber,
+          hash: head.blockHash,
+        };
+      },
+      getTransactionReceipt,
+      getTransactionCount: async () => 5,
+    } as unknown as PublicClient,
+    head,
+  });
+
+  expect(getTransactionReceipt).toHaveBeenCalled();
+  expect(t.coordinator.status).toMatchObject({
+    open: maxRetainedAttempts > 1,
+    recoveryComplete: true,
+    inclusionChecksComplete: true,
+    persistenceState: 'idle',
+  });
+  expect(t.coordinator.canBroadcast).toBe(false);
+
+  const current = await t.load();
+
+  if (current.kind !== 'present') {
+    throw new Error('Expected the included attempt to remain retained.');
+  }
+
+  const includedSnapshot = current.snapshot;
+
+  expect(includedSnapshot.attempts).toHaveLength(1);
+  expect(includedSnapshot).toMatchObject({
+    nextNonce: 5n,
+    durableNextNonce: 4n,
+    attempts: [{
+      attemptId: prepared.attemptId,
+      workId: WORK_ID,
+      phase: 'included',
+      inclusion: {
+        outcome: 'success',
+        transactionHash: prepared.transactionHash,
+        inclusion: head,
+      },
+    }],
+  });
+
+  // Measure only the preparation call made after inclusion.
+  t.signTransaction.mockClear();
+  t.save.mockClear();
+  t.factory.mockClear();
+  t.lines.length = 0;
+
+  return {
+    ...t,
+    prepared,
+    includedSnapshot,
+  };
+}
+
 function deferred() {
   let resolve!: () => void;
 
@@ -224,6 +317,13 @@ describe('durable attempt preparation', () => {
   it('records signed bytes and advances allocation without advancing durable progress', async () => {
     const t = await setup();
     const result = await t.prepare();
+
+    expect(result.status).toBe('prepared');
+
+    if (result.status !== 'prepared') {
+      throw new Error('Expected a newly prepared attempt.');
+    }
+
     const saved = t.save.mock.calls[0]![0];
     const attempt = saved.attempts[0]!;
     const signed = attempt.signedTransactions[0];
@@ -234,6 +334,7 @@ describe('durable attempt preparation', () => {
       lastObservation: OBSERVATION,
       attempts: [{
         attemptId: result.attemptId,
+        workId: WORK_ID,
         nonce: result.nonce,
         phase: 'signed',
         inclusion: null,
@@ -263,6 +364,7 @@ describe('durable attempt preparation', () => {
     expect(Object.keys(result).sort()).toEqual([
       'attemptId',
       'nonce',
+      'status',
       'transactionHash',
     ]);
 
@@ -328,6 +430,42 @@ describe('durable attempt preparation', () => {
     },
   );
 
+  it.each([
+    { name: 'empty', workId: '' },
+    { name: 'overlong', workId: 'x'.repeat(257) },
+    { name: 'control character', workId: 'work\nother' },
+  ])('rejects $name work identity before signing', async ({ workId }) => {
+    const t = await setup();
+    const before = t.coordinator.status;
+
+    expect(before.open).toBe(true);
+
+    await expect(t.prepare(workId))
+      .rejects.toThrow(new TypeError('Invalid work identity.'));
+
+    expect(t.signTransaction).not.toHaveBeenCalled();
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.factory).not.toHaveBeenCalled();
+    expect(t.records()).toEqual([]);
+    expect(t.coordinator.status).toEqual(before);
+  });
+
+  it('reports a closed gate before an invalid work identity', async () => {
+    const t = await setup({ unrecovered: true });
+    const before = t.coordinator.status;
+
+    expect(before.open).toBe(false);
+
+    await expect(t.prepare('')).rejects.toThrow(
+      'The signer gate must be open before preparing an attempt.',
+    );
+
+    expect(t.signTransaction).not.toHaveBeenCalled();
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.records()).toEqual([]);
+    expect(t.coordinator.status).toEqual(before);
+  });
+
   it('rejects another attempt while the recorded attempt is unresolved', async () => {
     const t = await setup();
 
@@ -337,6 +475,107 @@ describe('durable attempt preparation', () => {
 
     expect(t.signTransaction).toHaveBeenCalledTimes(1);
     expect(t.save).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { name: 'same calldata', data: '0x1234' },
+    { name: 'different calldata', data: '0x5678' },
+  ] as const)(
+    'returns already-retained for included work with $name',
+    async ({ data }) => {
+      const t = await setupIncludedWork();
+      const before = t.coordinator.status;
+
+      const result = await t.coordinator.prepareAttempt({
+        account: t.account,
+        transaction: {
+          ...transaction(),
+          data,
+        },
+        workId: WORK_ID,
+      }, 7);
+
+      expect(result).toEqual({
+        status: 'already-retained',
+        attemptId: t.prepared.attemptId,
+        workId: WORK_ID,
+      });
+      expect(Object.isFrozen(result)).toBe(true);
+
+      expect(t.signTransaction).not.toHaveBeenCalled();
+      expect(t.save).not.toHaveBeenCalled();
+      expect(t.factory).not.toHaveBeenCalled();
+      expect(t.records()).toEqual([]);
+      expect(t.coordinator.status).toEqual(before);
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      const current = await t.load();
+
+      expect(current).toEqual({
+        kind: 'present',
+        snapshot: t.includedSnapshot,
+      });
+    },
+  );
+
+  it('reports capacity before duplicate work at production capacity 1', async () => {
+    const t = await setupIncludedWork(1);
+    const before = t.coordinator.status;
+
+    expect(before).toMatchObject({
+      open: false,
+      primaryReason: 'journal-capacity-reached',
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      persistenceState: 'idle',
+    });
+
+    await expect(t.prepare(WORK_ID)).rejects.toThrow(
+      'The signer gate must be open before preparing an attempt.',
+    );
+
+    expect(t.signTransaction).not.toHaveBeenCalled();
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.factory).not.toHaveBeenCalled();
+    expect(t.records()).toEqual([]);
+    expect(t.coordinator.status).toEqual(before);
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    expect(await t.load()).toEqual({
+      kind: 'present',
+      snapshot: t.includedSnapshot,
+    });
+  });
+
+  it('allows distinct work while an included attempt remains below capacity', async () => {
+    const t = await setupIncludedWork();
+    const workId = WORK_ID + ':other';
+
+    const result = await t.prepare(workId);
+
+    expect(result.status).toBe('prepared');
+
+    if (result.status !== 'prepared') {
+      throw new Error('Expected distinct work to prepare a new attempt.');
+    }
+
+    expect(result.nonce).toBe(5n);
+    expect(result.attemptId).not.toBe(t.prepared.attemptId);
+    expect(t.signTransaction).toHaveBeenCalledTimes(1);
+    expect(t.save).toHaveBeenCalledTimes(1);
+
+    const saved = t.save.mock.calls[0]![0];
+
+    expect(saved.nextNonce).toBe(6n);
+    expect(saved.durableNextNonce).toBe(4n);
+    expect(saved.attempts).toHaveLength(2);
+    expect(saved.attempts[0]).toEqual(t.includedSnapshot.attempts[0]);
+    expect(saved.attempts[1]).toMatchObject({
+      attemptId: result.attemptId,
+      workId,
+      nonce: 5n,
+      phase: 'signed',
+    });
   });
 
   it.each([
@@ -482,12 +721,16 @@ describe('durable attempt preparation', () => {
     await expect(restarted.prepareAttempt({
       account: t.account,
       transaction: transaction(),
+      workId: WORK_ID,
     })).rejects.toThrow('signer gate');
 
     expect(t.signTransaction).toHaveBeenCalledTimes(1);
 
     expect(t.save.mock.calls[0]![0].attempts[0]!.attemptId)
       .toBe(prepared.attemptId);
+
+    expect(t.save.mock.calls[0]![0].attempts[0]!.workId)
+      .toBe(WORK_ID);
   });
 
   it('contains logger failures with signed-byte redaction installed', async () => {

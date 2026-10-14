@@ -3,12 +3,20 @@ import type {
 } from 'viem';
 
 import {
+  isWorkId,
+} from '../execution/work-identity.js';
+
+import {
   isDecimalInteger,
 } from '../shared/decimal.js';
 
 import {
   isFixedHex,
 } from '../shared/hex.js';
+
+import {
+  MAX_UINT256,
+} from '../shared/uint.js';
 
 import {
   isUuidV4,
@@ -30,6 +38,9 @@ import type {
 
 export interface DaemonStatusAttempt {
   readonly attemptId: string;
+
+  /** Exact public work identity from the retained journal attempt. */
+  readonly workId: string;
 
   /** Canonical unsigned decimal representation. */
   readonly nonce: string;
@@ -93,8 +104,6 @@ export type SnapshotAge =
     };
 
 const INVALID = 'Invalid daemon status snapshot.';
-
-const MAX_UINT256 = (1n << 256n) - 1n;
 
 /**
  * Validates and projects public snapshot fields.
@@ -339,6 +348,7 @@ function readAttempts(
   }
 
   const attemptIds = new Set<string>();
+  const workIds = new Set<string>();
   const attempts: DaemonStatusAttempt[] = [];
   let previousNonce: bigint | undefined;
 
@@ -348,12 +358,14 @@ function readAttempts(
 
     if (
       attemptIds.has(attempt.attemptId) ||
+      workIds.has(attempt.workId) ||
       (previousNonce !== undefined && nonce <= previousNonce)
     ) {
       throw new TypeError(INVALID);
     }
 
     attemptIds.add(attempt.attemptId);
+    workIds.add(attempt.workId);
     previousNonce = nonce;
     attempts.push(attempt);
   }
@@ -366,12 +378,16 @@ function readAttempt(
 ): DaemonStatusAttempt {
   const value = object(input);
 
-  if (!isUuidV4(value.attemptId)) {
+  if (
+    !isUuidV4(value.attemptId) ||
+    !isWorkId(value.workId)
+  ) {
     throw new TypeError(INVALID);
   }
 
   return Object.freeze({
     attemptId: value.attemptId,
+    workId: value.workId,
     nonce: readNonce(value.nonce),
     phase: readAttemptPhase(value.phase),
     transactionHashes: readTransactionHashes(value.transactionHashes),

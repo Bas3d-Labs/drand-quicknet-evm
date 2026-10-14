@@ -123,6 +123,7 @@ async function setup() {
   const signTransaction = vi.fn(ACCOUNT.signTransaction);
 
   const prepared = await coordinator.prepareAttempt({
+    workId: 'test-work:broadcast',
     account: {
       ...ACCOUNT,
       signTransaction,
@@ -139,6 +140,11 @@ async function setup() {
   });
 
   const signed = save.mock.calls[0]![0];
+
+  if (prepared.status !== 'prepared') {
+    throw new Error('Expected a newly prepared broadcast fixture.');
+  }
+
   const signedTransaction =
     signed.attempts[0]!.signedTransactions[0].signedTransaction;
 

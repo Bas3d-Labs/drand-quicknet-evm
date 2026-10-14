@@ -9,8 +9,20 @@ import type {
 } from '../chain/block-anchor.js';
 
 import {
+  isWorkId,
+} from '../execution/work-identity.js';
+
+import {
   isFixedHex,
 } from '../shared/hex.js';
+
+import {
+  MAX_UINT256,
+} from '../shared/uint.js';
+
+import {
+  isUuidV4
+} from '../shared/uuid.js';
 
 import {
   MAX_RETAINED_NONCE_REPAIRS,
@@ -26,12 +38,6 @@ import type {
   ReplacementSearch,
   TransactionJournalSnapshot,
 } from './transaction-journal.js';
-
-import {
-  isUuidV4
-} from '../shared/uuid.js';
-
-const MAX_UINT256 = (1n << 256n) - 1n;
 
 /**
  * Validates the in-memory snapshot structure and returns a detached,
@@ -81,6 +87,7 @@ export function validateJournalSnapshotStructure(
   );
 
   const attemptIds = new Set<string>();
+  const workIds = new Set<string>();
   const transactionHashes = new Set<string>();
 
   for (let index = 0; index < attempts.length; index += 1) {
@@ -91,8 +98,10 @@ export function validateJournalSnapshotStructure(
       attempt.nonce === durableNextNonce + BigInt(index)
     );
     requireValid(!attemptIds.has(attemptId));
+    requireValid(!workIds.has(attempt.workId));
     
     attemptIds.add(attemptId);
+    workIds.add(attempt.workId);
 
     for (const transaction of attempt.signedTransactions) {
       const hash = transaction.transactionHash.toLowerCase();
@@ -154,11 +163,13 @@ export function readObservation(
 
 function readAttempt(input: unknown): JournalAttempt {
   const attemptId = field(input, 'attemptId');
+  const workId = field(input, 'workId');
   const nonce = readUint(field(input, 'nonce'));
   const createdAt = field(input, 'createdAt');
   const phase = field(input, 'phase');
 
   requireValid(isUuidV4(attemptId));
+  requireValid(isWorkId(workId));
   requireValid(typeof createdAt === 'string');
 
   const timestamp = Date.parse(createdAt);
@@ -184,6 +195,7 @@ function readAttempt(input: unknown): JournalAttempt {
 
   const common = {
     attemptId,
+    workId,
     nonce,
     createdAt,
     signedTransactions,
