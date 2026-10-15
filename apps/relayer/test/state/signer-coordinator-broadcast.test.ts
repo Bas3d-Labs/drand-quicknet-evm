@@ -350,7 +350,7 @@ describe('journaled transaction broadcast', () => {
     await t.broadcast();
   });
 
-  it.each([
+  it.each(([
     {
       reason: 'unattributed-signer-activity',
       observedNonce: 6,
@@ -367,8 +367,13 @@ describe('journaled transaction broadcast', () => {
       remainingBlocks: 0n,
       searchedThrough: 102n,
     },
-  ] as const)(
-    'does not broadcast while blocked by $reason',
+  ] as const).flatMap((scenario) =>
+    [false, true].map((inspectHead) => ({
+      ...scenario,
+      inspectHead,
+    })),
+  ))(
+    'does not broadcast while blocked by $reason; subsequent head inspection: $inspectHead',
     async ({
       reason,
       observedNonce,
@@ -376,6 +381,7 @@ describe('journaled transaction broadcast', () => {
       scannedBlocks,
       remainingBlocks,
       searchedThrough,
+      inspectHead,
     }) => {
       const t = await setup();
 
@@ -392,6 +398,10 @@ describe('journaled transaction broadcast', () => {
 
         if (blockNumber === 102n) {
           return `0x${'cc'.repeat(32)}` as const;
+        }
+
+        if (blockNumber === 103n) {
+          return `0x${'dd'.repeat(32)}` as const;
         }
 
         throw new Error('Unexpected fixture block.');
@@ -474,6 +484,65 @@ describe('journaled transaction broadcast', () => {
 
       expect(t.coordinator.status.blockers).not.toContain(otherReason);
       expect(t.coordinator.canBroadcast).toBe(false);
+
+      expect(t.coordinator.status.recoveryComplete).toBe(true);
+
+      if (inspectHead) {
+        const head = {
+          blockNumber: 103n,
+          blockHash: hashAt(103n),
+        };
+
+        // Model a later provider observation reporting the attempt nonce
+        // as unconsumed. It must not erase an established blocker.
+        t.getTransactionCount.mockResolvedValueOnce(4);
+
+        const inspection = await t.coordinator.checkInclusions({
+          publicClient: t.publicClient,
+          head,
+        });
+
+        expect(inspection).toMatchObject({
+          status: 'inspected',
+          observation: {
+            anchor: head,
+            nonce: 4n,
+          },
+          broadcastAttemptId: t.prepared.attemptId,
+        });
+
+        expect(t.save).toHaveBeenCalledTimes(2);
+
+        expect(t.coordinator.status.recoveryComplete).toBe(true);
+        expect(t.coordinator.status.blockers).toContain(reason);
+        expect(t.coordinator.status.blockers).not.toContain(otherReason);
+        expect(t.coordinator.canBroadcast).toBe(false);
+
+        expect(t.visible()).toMatchObject({
+          kind: 'present',
+          snapshot: {
+            lastObservation: reason === 'unattributed-signer-activity'
+              ? {
+                  anchor,
+                  nonce: BigInt(observedNonce),
+                }
+              : {
+                  anchor: head,
+                  nonce: 4n,
+                },
+            attempts: [{
+              attemptId: t.prepared.attemptId,
+              replacementSearch: {
+                lowerBound: OBSERVATION,
+                searchedThrough: {
+                  blockNumber: searchedThrough,
+                  blockHash: hashAt(searchedThrough),
+                },
+              },
+            }],
+          },
+        });
+      }
 
       // Measure only the rejected broadcast below.
       t.save.mockClear();
@@ -1137,28 +1206,4 @@ describe('journaled transaction broadcast', () => {
 
     expect(t.request).toHaveBeenCalledTimes(1);
   });
-
-  it.each([
-    'unattributed-signer-activity',
-    'conflict-search-exhausted',
-  ] as const)(
-    'does not authorize broadcasting from head inspection while blocked by %s',
-    async (reason) => {
-      const t = await setup();
-
-      t.coordinator.block(reason);
-
-      await t.coordinator.checkInclusions({
-        publicClient: t.publicClient,
-        head: ANCHOR,
-      });
-
-      expect(t.coordinator.canBroadcast).toBe(false);
-
-      await expect(t.broadcast())
-        .rejects.toThrow('Fresh reconciliation');
-
-      expect(t.request).not.toHaveBeenCalled();
-    },
-  );
 });
