@@ -7,6 +7,7 @@ import {
 
 import {
   parseTransaction,
+  TransactionReceiptNotFoundError,
   type LocalAccount,
   type PublicClient,
 } from 'viem';
@@ -446,12 +447,125 @@ describe('durable attempt preparation', () => {
     async (reason) => {
       const t = await setup();
 
-      t.coordinator.block(reason);
+      if (reason === 'conflict-search-exhausted') {
+        await expect(t.prepare()).resolves.toMatchObject({
+          status: 'prepared',
+        });
 
-      await expect(t.prepare()).rejects.toThrow('signer gate');
+        expect(t.signTransaction).toHaveBeenCalledOnce();
+      }
+
+      const anchor = {
+        blockNumber: 101n,
+        blockHash: `0x${'bb'.repeat(32)}` as const,
+      };
+
+      const publicClient = {
+        getBlock: async (request: { blockNumber: bigint }) => {
+          if (request.blockNumber === OBSERVATION.anchor.blockNumber) {
+            return {
+              number: OBSERVATION.anchor.blockNumber,
+              hash: OBSERVATION.anchor.blockHash,
+            };
+          }
+
+          if (request.blockNumber === anchor.blockNumber) {
+            return {
+              number: anchor.blockNumber,
+              hash: anchor.blockHash,
+              parentHash: OBSERVATION.anchor.blockHash,
+              transactions: [],
+            };
+          }
+
+          throw new Error('Unexpected fixture block.');
+        },
+        getTransactionCount: async () => 5,
+        getTransactionReceipt: async (
+          request: { hash: `0x${string}` },
+        ) => {
+          throw new TransactionReceiptNotFoundError({
+            hash: request.hash,
+          });
+        },
+      } as unknown as PublicClient;
+
+      const recovery = await t.coordinator.recover({
+        publicClient,
+        anchor,
+        maxBlockRange: 1n,
+      });
+
+      if (reason === 'unattributed-signer-activity') {
+        expect(recovery).toMatchObject({
+          status: 'no-attempt',
+          observation: {
+            anchor,
+            nonce: 5n,
+          },
+        });
+
+        expect(t.coordinator.attempts).toHaveLength(0);
+      } else {
+        expect(recovery).toMatchObject({
+          status: 'unresolved',
+          observation: {
+            anchor,
+            nonce: 5n,
+          },
+          search: {
+            status: 'not-found',
+            scannedBlocks: 1n,
+            remainingBlocks: 0n,
+            searchedThrough: anchor,
+          },
+        });
+
+        expect(t.coordinator.attempts).toHaveLength(1);
+        expect(t.coordinator.attempts[0]).toMatchObject({
+          nonce: 4n,
+        });
+
+        const saved = t.save.mock.lastCall?.[0];
+
+        expect(saved).toBeDefined();
+        expect(saved?.attempts).toHaveLength(1);
+        expect(saved?.attempts[0]).toMatchObject({
+          nonce: 4n,
+          replacementSearch: {
+            lowerBound: OBSERVATION,
+            searchedThrough: anchor,
+          },
+        });
+      }
+
+      expect(t.coordinator.status.recoveryComplete).toBe(true);
+      expect(t.coordinator.status.blockers).toContain(reason);
+
+      const otherReason = reason === 'unattributed-signer-activity'
+        ? 'conflict-search-exhausted'
+        : 'unattributed-signer-activity';
+
+      expect(t.coordinator.status.blockers).not.toContain(otherReason);
+      expect(t.coordinator.status.open).toBe(false);
+
+      const before = t.coordinator.status;
+
+      // Measure only the attempted preparation below.
+      t.save.mockClear();
+      t.signTransaction.mockClear();
+      t.factory.mockClear();
+      t.lines.length = 0;
+
+      await expect(
+        t.prepare('test-work:blocked-preparation'),
+      ).rejects.toThrow('signer gate');
 
       expect(t.signTransaction).not.toHaveBeenCalled();
       expect(t.save).not.toHaveBeenCalled();
+      expect(t.factory).not.toHaveBeenCalled();
+      expect(t.records()).toEqual([]);
+      expect(t.coordinator.status).toEqual(before);
     },
   );
 
