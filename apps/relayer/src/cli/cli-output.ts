@@ -569,23 +569,22 @@ export function renderCliOutput(
       return lines.join('\n');
     }
 
-    const randomness = hex(own(result, 'randomness'), 32);
+    const fields = completedImportFields(result, status);
 
-    if (status === 'already-stored') {
+    if (fields.status === 'already-stored') {
       return [
         'Quicknet round ' + round + ' is already stored.',
-        'Randomness: ' + randomness,
+        'Randomness: ' + fields.randomness,
       ].join('\n');
     }
 
-    if (status === 'imported') {
-      const hash = hex(own(result, 'transactionHash'), 32);
+    if (fields.status === 'imported') {
       const submission = own(result, 'submission');
 
       const lines = [
         'Imported Quicknet round ' + round + '.',
-        'Randomness: ' + randomness,
-        'Transaction: ' + hash,
+        'Randomness: ' + fields.randomness,
+        'Transaction: ' + fields.transactionHash,
       ];
 
       if (submission === 'witness') {
@@ -610,8 +609,6 @@ export function renderCliOutput(
 
       return lines.join('\n');
     }
-
-    throw new TypeError('Invalid import outcome.');
   }
 
   if (type === 'daemon-startup') {
@@ -673,6 +670,40 @@ function pendingImportFields(
   };
 }
 
+function completedImportFields(
+  result: unknown,
+  status: unknown,
+):
+  | {
+      status: 'already-stored';
+      randomness: string;
+    }
+  | {
+      status: 'imported';
+      randomness: string;
+      transactionHash: string;
+    } {
+  const randomness = hex(own(result, 'randomness'), 32);
+
+  if (status === 'already-stored') {
+    return {
+      status,
+      randomness,
+    };
+  }
+
+  if (status === 'imported') {
+    return {
+      status,
+      randomness,
+      transactionHash: hex(own(result, 'transactionHash'), 32),
+    };
+  }
+
+  throw new TypeError('Invalid import outcome.');
+}
+  
+
 // Preserve a known import outcome if rendering or writing its output fails.
 export function renderOutputFailure(
   output: CliOutput,
@@ -725,25 +756,16 @@ export function renderOutputFailure(
           status,
           ...fields,
         };
-      } else if (status === 'imported') {
-        const randomness = hex(own(result, 'randomness'), 32);
-        const transactionHash = hex(own(result, 'transactionHash'), 32);
+      } else if (
+        status === 'imported' ||
+        status === 'already-stored'
+      ) {
+        const fields = completedImportFields(result, status);
 
         context = {
           output: type,
           round,
-          status,
-          randomness,
-          transactionHash,
-        };
-      } else if (status === 'already-stored') {
-        const randomness = hex(own(result, 'randomness'), 32);
-
-        context = {
-          output: type,
-          round,
-          status,
-          randomness,
+          ...fields,
         };
       }
     }
