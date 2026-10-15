@@ -4,8 +4,7 @@ import type {
 } from 'viem';
 
 import {
-  blockAnchorsMatch,
-  getBlockAnchor,
+  checkBlockAnchor,
   type BlockAnchor,
 } from './block-anchor.js';
 
@@ -63,16 +62,9 @@ export async function readAnchoredNonce(
     throw new TypeError('Invalid anchored nonce input.');
   }
 
-  const before = await getBlockAnchor(
-    publicClient,
-    anchor.blockNumber,
-  );
-
-  if (!blockAnchorsMatch(anchor, before)) {
-    return {
-      status: 'anchor-changed',
-      observedAnchor: Object.freeze(before),
-    };
+  const before = await checkBlockAnchor(publicClient, anchor);
+  if (before !== null) {
+    return before;
   }
 
   const nonce = await publicClient.getTransactionCount({
@@ -88,16 +80,9 @@ export async function readAnchoredNonce(
     throw new TypeError('Invalid anchored nonce response.');
   }
 
-  const after = await getBlockAnchor(
-    publicClient,
-    anchor.blockNumber,
-  );
-
-  if (!blockAnchorsMatch(anchor, after)) {
-    return {
-      status: 'anchor-changed',
-      observedAnchor: Object.freeze(after),
-    };
+  const after = await checkBlockAnchor(publicClient, anchor);
+  if (after !== null) {
+    return after;
   }
 
   return {

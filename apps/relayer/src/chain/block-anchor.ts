@@ -12,6 +12,28 @@ export interface BlockAnchor {
   blockHash: Hash;
 }
 
+export async function checkBlockAnchor(
+  publicClient: PublicClient,
+  expected: Readonly<BlockAnchor>,
+): Promise<{
+  status: 'anchor-changed';
+  observedAnchor: Readonly<BlockAnchor>;
+} | null> {
+  const observed = await getBlockAnchor(
+    publicClient,
+    expected.blockNumber,
+  );
+
+  if (blockAnchorsMatch(expected, observed)) {
+    return null;
+  }
+
+  return {
+    status: 'anchor-changed',
+    observedAnchor: Object.freeze(observed),
+  };
+}
+
 export async function getBlockAnchor(
   publicClient: PublicClient,
   blockNumber: bigint,
