@@ -8,6 +8,11 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+import {
+  expectConfigError,
+  expectConfigRejection,
+} from '../helpers/diagnostic-assertions.js';
+
 vi.mock('../../src/config/config.js', () => ({
   loadRelayerConfig: vi.fn(),
 }));
@@ -16,13 +21,6 @@ import {
   loadRelayerConfig,
   type LoadedRelayerConfig,
 } from '../../src/config/config.js';
-
-import {
-  configDiagnostic,
-  RelayerConfigError,
-  type ConfigCode,
-  type ConfigSetting,
-} from '../../src/diagnostics/config-errors.js';
 
 import {
   DEFAULT_MAX_BLOCK_RANGE,
@@ -104,46 +102,6 @@ function createEnvironment(
     QUICKNET_CHECKPOINT_FILE: './state/checkpoint.json',
     ...overrides,
   };
-}
-
-function assertConfigDiagnostic(
-  error: unknown,
-  code: ConfigCode,
-  setting: ConfigSetting,
-): void {
-  expect(error).toBeInstanceOf(RelayerConfigError);
-  expect(configDiagnostic(error)).toEqual({ code, setting });
-}
-
-function expectConfigError(
-  action: () => unknown,
-  code: ConfigCode,
-  setting: ConfigSetting,
-): void {
-  let thrown: unknown;
-
-  try {
-    action();
-  } catch (error) {
-    thrown = error;
-  }
-
-  assertConfigDiagnostic(thrown, code, setting);
-}
-
-async function expectConfigRejection(
-  promise: Promise<unknown>,
-  code: ConfigCode,
-  setting: ConfigSetting,
-): Promise<void> {
-  const error = await promise.then(
-    () => {
-      throw new Error('Expected the promise to reject.');
-    },
-    (failure: unknown) => failure,
-  );
-
-  assertConfigDiagnostic(error, code, setting);
 }
 
 describe('parseConsumerAddresses', () => {

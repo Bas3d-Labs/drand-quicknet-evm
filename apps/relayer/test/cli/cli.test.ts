@@ -23,6 +23,10 @@ import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
 
+import {
+  expectUsageError,
+} from '../helpers/diagnostic-assertions.js';
+
 const signerRuntimeMocks = vi.hoisted(() => ({
   openBeaconSubmitter: vi.fn(),
 }));
@@ -122,10 +126,8 @@ import {
   createRpcMetrics,
 } from '../../src/diagnostics/rpc-metrics.js';
 
-import {
-  UsageError,
-  usageCode,
-  type UsageCode,
+import type {
+  UsageCode,
 } from '../../src/diagnostics/usage-error.js';
 
 import {
@@ -239,16 +241,10 @@ function expectUsage(
   args: readonly string[],
   code: UsageCode,
 ): void {
-  let thrown: unknown;
-
-  try {
-    parseCommandArguments(args);
-  } catch (error) {
-    thrown = error;
-  }
-
-  expect(thrown).toBeInstanceOf(UsageError);
-  expect(usageCode(thrown)).toBe(code);
+  expectUsageError(
+    () => parseCommandArguments(args),
+    code,
+  );
 }
 
 const NETWORK_CASES: {
