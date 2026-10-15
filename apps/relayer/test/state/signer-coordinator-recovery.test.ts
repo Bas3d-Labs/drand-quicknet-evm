@@ -263,7 +263,22 @@ describe('coordinator recovery', () => {
     const t = await setup(true);
 
     t.getTransactionCount.mockResolvedValue(4);
-    t.coordinator.completeRecovery();
+
+    await expect(t.coordinator.recover(t.options))
+      .resolves.toEqual({
+        status: 'no-attempt',
+        observation: {
+          anchor: t.options.anchor,
+          nonce: 4n,
+        },
+      });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
     await t.checkInclusions();
 
     expect(t.coordinator.status.open).toBe(true);
@@ -287,13 +302,6 @@ describe('coordinator recovery', () => {
 
       expect(t.coordinator.status.open).toBe(false);
 
-      expect(() => t.coordinator.completeRecovery())
-        .toThrow('already in progress');
-
-      expect(() =>
-        t.coordinator.block('unattributed-signer-activity'),
-      ).toThrow('already in progress');
-
       await expect(
         t.coordinator.recover(t.options),
       ).rejects.toThrow('already in progress');
@@ -303,8 +311,10 @@ describe('coordinator recovery', () => {
       ).rejects.toThrow('already in progress');
 
       await expect(
-        t.coordinator.recordObservation(t.snapshot.lastObservation),
+        t.checkInclusions(),
       ).rejects.toThrow('already in progress');
+
+      expect(t.save).not.toHaveBeenCalled();
     } finally {
       finish.resolve();
       await pending;
@@ -806,7 +816,22 @@ describe('coordinator recovery', () => {
     const t = await setup(true);
 
     t.getTransactionCount.mockResolvedValue(4);
-    t.coordinator.completeRecovery();
+
+    await expect(t.coordinator.recover(t.options))
+      .resolves.toEqual({
+        status: 'no-attempt',
+        observation: {
+          anchor: t.options.anchor,
+          nonce: 4n,
+        },
+      });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
     await t.checkInclusions();
 
     expect(t.coordinator.status.open).toBe(true);
