@@ -313,17 +313,27 @@ describe('journaled transaction broadcast', () => {
     expect(t.signTransaction).toHaveBeenCalledTimes(1);
   });
 
-  it('requires fresh inspection after acknowledgement, even if recovery is manually completed', async () => {
+  it('rejects a second send after acknowledgement without fresh reconciliation', async () => {
     const t = await setup();
 
     await t.broadcast();
 
-    t.coordinator.completeRecovery();
+    expect(t.coordinator.status).toMatchObject({
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    t.save.mockClear();
 
     await expect(t.broadcast())
       .rejects.toThrow('Fresh reconciliation');
 
     expect(t.request).toHaveBeenCalledTimes(1);
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+    expect(t.getTransactionCount).not.toHaveBeenCalled();
+    expect(t.signTransaction).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a stale attempt identifier without spending the valid permit', async () => {
