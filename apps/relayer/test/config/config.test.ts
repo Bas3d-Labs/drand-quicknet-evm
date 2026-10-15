@@ -391,15 +391,21 @@ describe('loadRelayerConfig', () => {
       ]);
     });
 
-    it('loads the selected custom network config file', async () => {
+    it('passes the selected file and environment to the custom network loader', async () => {
+      const env = {
+        ...createEnvironment(),
+        INIT_CWD: '/injected/project',
+      };
+
       await loadRelayerConfig({
         source: CUSTOM_SOURCE,
-        env: createEnvironment(),
+        env,
       });
 
-      expect(
-        loadCustomNetworkDescriptor,
-      ).toHaveBeenCalledExactlyOnceWith(CUSTOM_CONFIG_FILE);
+      expect(loadCustomNetworkDescriptor).toHaveBeenCalledExactlyOnceWith(
+        CUSTOM_CONFIG_FILE,
+        { env },
+      );
 
       expect(loadRegistryDeployment).not.toHaveBeenCalled();
     });

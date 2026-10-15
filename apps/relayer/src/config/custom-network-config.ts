@@ -16,6 +16,7 @@ import {
 
 import {
   resolveNetworkConfigPath,
+  type ResolveNetworkConfigPathOptions,
 } from './network-config-path.js';
 
 export interface CustomChainDescriptor {
@@ -84,10 +85,11 @@ export const CustomNetworkDescriptor = {
 
 export async function loadCustomNetworkDescriptor(
   filePath: string,
+  options: ResolveNetworkConfigPathOptions = {},
 ): Promise<CustomNetworkDescriptor> {
   let contents: string;
   try {
-    const configPath = resolveNetworkConfigPath(filePath);
+    const configPath = resolveNetworkConfigPath(filePath, options);
     contents = await readFile(configPath, 'utf8');
   } catch (cause) {
     throw new Error(

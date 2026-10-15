@@ -17,6 +17,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from 'vitest';
 
 import {
@@ -1050,6 +1051,44 @@ describe('loadCustomNetworkDescriptor', () => {
     ).rejects.toThrow(
       'Custom network config version must be 1.'
     );
+  });
+
+  it('uses injected INIT_CWD instead of the process environment', async () => {
+    const injectedDirectory = await createTemporaryDirectory();
+    const processDirectory = await createTemporaryDirectory();
+
+    await writeFile(
+      join(injectedDirectory, 'network.json'),
+      JSON.stringify({
+        ...createValidConfig(),
+        name: 'injected-network',
+      }),
+      'utf8',
+    );
+
+    await writeFile(
+      join(processDirectory, 'network.json'),
+      JSON.stringify({
+        ...createValidConfig(),
+        name: 'process-network',
+      }),
+      'utf8',
+    );
+
+    vi.stubEnv('INIT_CWD', processDirectory);
+
+    try {
+      const descriptor = await loadCustomNetworkDescriptor(
+        'network.json',
+        {
+          env: { INIT_CWD: injectedDirectory },
+        },
+      );
+
+      expect(descriptor.name).toBe('injected-network');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

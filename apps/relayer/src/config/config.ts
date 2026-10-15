@@ -205,7 +205,7 @@ export async function loadRelayerConfig(
 
   const broadcastRetry = loadBroadcastRetryConfig(env);
   const receiptTimeoutMs = loadReceiptTimeoutMs(env);
-  const network = await resolveNetworkConfig(source, rpcUrl);
+  const network = await resolveNetworkConfig(source, rpcUrl, env);
 
   return {
     ...network,
@@ -232,13 +232,14 @@ export function parseRelayerNetworkPreset(
 async function resolveNetworkConfig(
   source: NetworkSource,
   rpcUrl: string,
+  env: Readonly<Record<string, string | undefined>>,
 ): Promise<ResolvedNetworkConfig> {
   switch (source.type) {
     case 'preset':
       return resolveNetworkPreset(source.network, rpcUrl);
 
     case 'custom':
-      return resolveCustomNetwork(source.configFile, rpcUrl);
+      return resolveCustomNetwork(source.configFile, rpcUrl, env);
   }
 }
 
@@ -265,8 +266,11 @@ async function resolveNetworkPreset(
 async function resolveCustomNetwork(
   configFile: string,
   rpcUrl: string,
+  env: Readonly<Record<string, string | undefined>>,
 ): Promise<ResolvedNetworkConfig> {
-  const descriptor = await loadCustomNetworkDescriptor(configFile);
+  const descriptor = await loadCustomNetworkDescriptor(configFile, {
+    env,
+  });
 
   const chainDefinition: Chain = {
     id: descriptor.chain.id,
