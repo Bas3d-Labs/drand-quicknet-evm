@@ -10,10 +10,6 @@ import {
 } from '../chain/chain-heads.js';
 
 import {
-  type CliOutput,
-} from './cli-output.js';
-
-import {
   loadRelayerConfig,
   type NetworkSource,
 } from '../config/config.js';
@@ -35,10 +31,6 @@ import {
 } from '../diagnostics/relayer-log.js';
 
 import {
-  assertServiceLockHeld,
-} from '../state/service-lock.js';
-
-import {
   importQuicknetRound,
   type ImportQuicknetRoundResult,
 } from '../rounds/import-round.js';
@@ -46,6 +38,14 @@ import {
 import {
   importQuicknetRoundWhenAvailable,
 } from '../rounds/import-round-when-available.js';
+
+import {
+  assertServiceLockHeld,
+} from '../state/service-lock.js';
+
+import {
+  type CliOutput,
+} from './cli-output.js';
 
 import {
   openBeaconSubmitter,
@@ -61,6 +61,10 @@ import {
 import {
   readRelayerStatus,
 } from './read-relayer-status.js';
+
+import {
+  runWithShutdownSignal,
+} from './run-with-shutdown-signal.js';
 
 import {
   syncNonce,
@@ -240,36 +244,6 @@ async function runRoundImportCommand(
   });
 
   return importOutcome(result);
-}
-
-async function runWithShutdownSignal(
-  run: (signal: AbortSignal) => Promise<CliOutcome>,
-  interruptedOutcome: 'success' | 'interrupted',
-): Promise<CliOutcome> {
-  const controller = new AbortController();
-
-  const handleShutdown = (): void => {
-    controller.abort();
-  };
-
-  process.on('SIGINT', handleShutdown);
-  process.on('SIGTERM', handleShutdown);
-
-  try {
-    return await run(controller.signal);
-  } catch (error) {
-    if (
-      !controller.signal.aborted ||
-      error !== controller.signal.reason
-    ) {
-      throw error;
-    }
-
-    return interruptedOutcome;
-  } finally {
-    process.removeListener('SIGINT', handleShutdown);
-    process.removeListener('SIGTERM', handleShutdown);
-  }
 }
 
 async function runDaemonCli(
