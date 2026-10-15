@@ -16,13 +16,57 @@ import {
 
 const INVALID = 'Invalid journal status output.';
 
+interface ObservationProjection {
+  nonce: string;
+  blockNumber: string;
+  blockHash: string;
+}
+
+interface AttemptProjection {
+  attemptId: string;
+  workId: string;
+  nonce: string;
+  createdAt: string;
+  phase: 'signed' | 'broadcast-may-have-occurred' | 'included';
+  transactionHashes: string[];
+}
+
+interface RepairProjection {
+  kind: 'sync-nonce';
+  at: string;
+  previousNextNonce: string;
+  nextNonce: string;
+  observation: ObservationProjection;
+}
+
+type JournalStatusProjection =
+  | {
+      source: 'journal';
+      gate: 'unknown';
+      journal: 'missing';
+    }
+  | {
+      source: 'journal';
+      gate: 'unknown';
+      journal: 'present';
+      identity: {
+        chainId: number;
+        signer: string;
+      },
+      nextNonce: string;
+      durableNextNonce: string;
+      baseline: ObservationProjection;
+      lastObservation: ObservationProjection;
+      attempts: AttemptProjection[];
+      repairs: RepairProjection[];
+    };
+
 /**
- * Validates and renders the public journal projection.
- * Never serializes the supplied object or its undeclared finish.
+ * Copies and validates only declared public journal fields.
  */
-export function renderJournalStatusOutput(
+export function projectJournalStatusOutput(
   input: unknown,
-): string {
+): JournalStatusProjection {
   if (
     own(input, 'source') !== 'journal' ||
     own(input, 'gate') !== 'unknown' 
@@ -32,17 +76,12 @@ export function renderJournalStatusOutput(
 
   const journal = own(input, 'journal');
 
-  const lines = [
-    'Status source: journal',
-    'Current signing authorization: unknown',
-  ];
-
   if (journal === 'missing') {
-    return [
-      ...lines,
-      'Journal: missing',
-      'A missing journal does not establish signer readiness.',
-    ].join('\n');
+    return {
+      source: 'journal',
+      gate: 'unknown',
+      journal: 'missing',
+    };
   }
 
   if (journal !== 'present') {
@@ -60,24 +99,19 @@ export function renderJournalStatusOutput(
     throw new TypeError(INVALID);
   }
 
-  lines.push(
-    'Journal: present',
-    'Chain ID: ' + chainId,
-    'Signer: ' + hex(own(identity, 'signer'), 20),
-    'Next nonce: ' + decimal(own(input, 'nextNonce')),
-    'Durable next nonce: ' + decimal(own(input, 'durableNextNonce')),
-    ...observationLines('Baseline', own(input, 'baseline')),
-    ...observationLines(
-      'Last accepted observation',
-      own(input, 'lastObservation'),
-    ),
+  const signer = hex(own(identity, 'signer'), 20);
+  const nextNonce = decimal(own(input, 'nextNonce'));
+  const durableNextNonce = decimal(own(input, 'durableNextNonce'));
+  const baseline = projectObservation(own(input, 'baseline'));
+  const lastObservation = projectObservation(
+    own(input, 'lastObservation'),
   );
 
-  const attempts = array(own(input, 'attempts'));
-  lines.push('Retained attempts: ' + attempts.length);
+  const rawAttempts = array(own(input, 'attempts'));
+  const attempts: AttemptProjection[] = [];
 
-  for (let index = 0; index < attempts.length; index += 1) {
-    const attempt = own(attempts, String(index));
+  for (let index = 0; index < rawAttempts.length; index += 1) {
+    const attempt = own(rawAttempts, String(index));
     const attemptId = own(attempt, 'attemptId');
     const workId = own(attempt, 'workId');
     const phase = own(attempt, 'phase');
@@ -95,55 +129,144 @@ export function renderJournalStatusOutput(
     }
 
     const hashes = array(own(attempt, 'transactionHashes'));
-
     if (hashes.length === 0) {
       throw new TypeError(INVALID);
     }
 
-    lines.push(
-      '  Attempt: ' + attemptId,
-      '    Work identity: ' + workId,
-      '    Nonce: ' + decimal(own(attempt, 'nonce')),
-      '    Created at: ' + timestamp(own(attempt, 'createdAt')),
-      '    Phase: ' + phase,
-      '    Candidate transaction hashes:',
-    );
+    const nonce = decimal(own(attempt, 'nonce'));
+    const createdAt = timestamp(own(attempt, 'createdAt'));
+    const transactionHashes: string[] = [];
 
     for (let hashIndex = 0; hashIndex < hashes.length; hashIndex += 1) {
-      lines.push(
-        '      ' + hex(own(hashes, String(hashIndex)), 32),
+      transactionHashes.push(
+        hex(own(hashes, String(hashIndex)), 32),
       );
     }
+
+    attempts.push({
+      attemptId,
+      workId,
+      nonce,
+      createdAt,
+      phase,
+      transactionHashes,
+    });
   }
 
-  const repairs = array(own(input, 'repairs'));
-  lines.push('Retained nonce repairs: ' + repairs.length);
+  const rawRepairs = array(own(input, 'repairs'));
+  const repairs: RepairProjection[] = [];
 
-  for (let index = 0; index < repairs.length; index += 1) {
-    const repair = own(repairs, String(index));
+  for (let index = 0; index < rawRepairs.length; index += 1) {
+    const repair = own(rawRepairs, String(index));
 
     if (own(repair, 'kind') !== 'sync-nonce') {
       throw new TypeError(INVALID);
     }
 
-    const previous = decimal(own(repair, 'previousNextNonce'));
-    const next = decimal(own(repair, 'nextNonce'));
+    const previousNextNonce = decimal(
+      own(repair, 'previousNextNonce'),
+    );
+    const nextNonce = decimal(own(repair, 'nextNonce'));
     const observation = own(repair, 'observation');
 
     if (
-      BigInt(next) <= BigInt(previous) ||
-      decimal(own(observation, 'nonce')) !== next
+      BigInt(nextNonce) <= BigInt(previousNextNonce) ||
+      decimal(own(observation, 'nonce')) !== nextNonce
     ) {
       throw new TypeError(INVALID);
     }
 
+    const at = timestamp(own(repair, 'at'));
+    const projectedObservation = projectObservation(observation);
+
+    repairs.push({
+      kind: 'sync-nonce',
+      at,
+      previousNextNonce,
+      nextNonce,
+      observation: projectedObservation,
+    });
+  }
+
+  return {
+    source: 'journal',
+    gate: 'unknown',
+    journal: 'present',
+    identity: { chainId, signer },
+    nextNonce,
+    durableNextNonce,
+    baseline,
+    lastObservation,
+    attempts,
+    repairs,
+  };
+}
+
+/**
+ * Rends the validated public journal projection.
+ */
+export function renderJournalStatusOutput(
+  input: unknown,
+): string {
+  const projection = projectJournalStatusOutput(input);
+
+  const lines = [
+    'Status source: journal',
+    'Current signing authorization: unknown',
+  ];
+
+  if (projection.journal === 'missing') {
+    return [
+      ...lines,
+      'Journal: missing',
+      'A missing journal does not establish signer readiness.',
+    ].join('\n');
+  }
+
+  lines.push(
+    'Journal: present',
+    'Chain ID: ' + projection.identity.chainId,
+    'Signer: ' + projection.identity.signer,
+    'Next nonce: ' + projection.nextNonce,
+    'Durable next nonce: ' + projection.durableNextNonce,
+    ...observationLines('Baseline', projection.baseline),
+    ...observationLines(
+      'Last accepted observation',
+      projection.lastObservation,
+    ),
+    'Retained attempts: ' + projection.attempts.length,
+  );
+
+  const attempts = array(own(input, 'attempts'));
+  lines.push('Retained attempts: ' + attempts.length);
+  
+  for (const attempt of projection.attempts) {
+    lines.push(
+      '  Attempt: ' + attempt.attemptId,
+      '    Work identity: ' + attempt.workId,
+      '    Nonce: ' + attempt.nonce,
+      '    Created at: ' + attempt.createdAt,
+      '    Phase: ' + attempt.phase,
+      '    Candidate transaction hashes:',
+    );
+
+    for (const hash of attempt.transactionHashes) {
+      lines.push('      ' + hash);
+    }
+  }
+
+  lines.push('Retained nonce repairs: ' + projection.repairs.length);
+
+  for (const repair of projection.repairs) {
     lines.push(
       '  Repair: sync-nonce',
-      '    Recorded at: ' + timestamp(own(repair, 'at')),
-      '    Previous next nonce: ' + previous,
-      '    Next nonce: ' + next,
-      ...observationLines('Accepted observation', observation)
-        .map((line) => '    ' + line),
+      '    Recorded at: ' + repair.at,
+      '    Previous next nonce: ' + repair.previousNextNonce,
+      '    Next nonce: ' + repair.nextNonce,
+      ...observationLines(
+        'Accepted observation',
+        repair.observation,
+      ).map((line) => '    ' + line),
     );
   }
 
@@ -154,16 +277,26 @@ export function renderJournalStatusOutput(
   return lines.join('\n');
 }
 
-function observationLines(
-  label: string,
+function projectObservation(
   input: unknown,
-): string[] {
+): ObservationProjection {
   const anchor = own(input, 'anchor');
 
+  return {
+    nonce: decimal(own(input, 'nonce')),
+    blockNumber: decimal(own(anchor, 'blockNumber')),
+    blockHash: hex(own(anchor, 'blockHash'), 32),
+  };
+}
+
+function observationLines(
+  label: string,
+  observation: ObservationProjection,
+): string[] {
   return [
-    label + ' nonce: ' + decimal(own(input, 'nonce')),
-    label + ' block: ' + decimal(own(anchor, 'blockNumber')),
-    label + ' block hash: ' + hex(own(anchor, 'blockHash'), 32),
+    label + ' nonce: ' + observation.nonce,
+    label + ' block: ' + observation.blockNumber,
+    label + ' block hash: ' + observation.blockHash,
   ];
 }
 

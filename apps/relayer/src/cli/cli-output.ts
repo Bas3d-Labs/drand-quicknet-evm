@@ -43,10 +43,12 @@ import type {
 } from '../state/transaction-journal.js';
 
 import {
+  projectDaemonSnapshotStatusOutput,
   renderDaemonSnapshotStatusOutput,
 } from './daemon-snapshot-status-output.js';
 
 import {
+  projectJournalStatusOutput,
   renderJournalStatusOutput,
 } from './journal-status-output.js';
 
@@ -454,25 +456,30 @@ function renderRelayerStatus(
 function statusFailureFields(
   result: unknown,
 ): Record<string, unknown> {
-  // Validate the entire result before preserving any diagnostic context.
-  // The rendered text is deliberately not included in the arguments.
-  renderRelayerStatus(result);
+  switch (own(result, 'source')) {
+    case 'journal': {
+      const projection = projectJournalStatusOutput(result);
 
-  const source = own(result, 'source');
+      return {
+        source: projection.source,
+        journal: projection.journal,
+        gate: projection.gate,
+      };
+    }
 
-  if (source === 'journal') {
-    return {
-      source,
-      journal: own(result, 'journal'),
-      gate: 'unknown',
-    };
+    case 'daemon-snapshot': {
+      const projection = projectDaemonSnapshotStatusOutput(result);
+
+      return {
+        source: projection.source,
+        snapshot: projection.snapshot,
+        gate: projection.gate,
+      };
+    }
+
+    default:
+      throw new TypeError('Invalid relayer status source.');
   }
-
-  return {
-    source,
-    snapshot: own(result, 'snapshot'),
-    gate: 'unknown',
-  };
 }
 
 function deferredImportFields(

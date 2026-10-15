@@ -5,6 +5,7 @@ import {
 
 import {
   blockAnchorsMatch,
+  checkBlockAnchor,
   getBlockAnchor,
   type BlockAnchor,
 } from './block-anchor.js';
@@ -87,13 +88,9 @@ export async function recheckAttemptInclusion(
     };
   }
 
-  const before = await getBlockAnchor(publicClient, head.blockNumber);
-
-  if (!blockAnchorsMatch(head, before)) {
-    return {
-      status: 'anchor-changed',
-      observedAnchor: Object.freeze(before),
-    };
+  const before = await checkBlockAnchor(publicClient, head);
+  if (before !== null) {
+    return before;
   }
 
   const canonicalBlock = Object.freeze(
@@ -155,13 +152,9 @@ export async function recheckAttemptInclusion(
     }
   }
 
-  const after = await getBlockAnchor(publicClient, head.blockNumber);
-
-  if (!blockAnchorsMatch(head, after)) {
-    return {
-      status: 'anchor-changed',
-      observedAnchor: Object.freeze(after),
-    };
+  const after = await checkBlockAnchor(publicClient, head);
+  if (after !== null) {
+    return after;
   }
 
   return result;

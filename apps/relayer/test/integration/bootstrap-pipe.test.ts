@@ -102,25 +102,12 @@ describe.skipIf(process.platform !== 'linux')(
         JSON.stringify({ type: 'module' }),
       );
 
-      // Preserve the compiled directory structure and relative imports.
-      for (const [name, relativePath] of Object.entries(MODULE_PATHS)) {
-        if (name === 'cli') {
-          continue;
-        }
-
-        const destination = join(dist, relativePath);
-
-        mkdirSync(dirname(destination), {
-          recursive: true,
-        });
-
-        // Preserve the complete compiled application and its relative imports.
-        cpSync(
-          join(compiledApplication, 'dist'),
-          dist,
-          { recursive: true },
-        );
-      }
+      // Preserve the complete compiled application and its relative imports.
+      cpSync(
+        join(compiledApplication, 'dist'),
+        dist,
+        { recursive: true },
+      );
 
       // Observe errors from the real OS write, then rethrow unchanged.
       // No fake clock, injected EAGAIN, or replacement write result.

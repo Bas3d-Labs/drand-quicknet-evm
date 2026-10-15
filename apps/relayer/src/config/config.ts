@@ -1,7 +1,3 @@
-import {
-  resolve,
-} from 'node:path';
-
 import process from 'node:process';
 
 import {
@@ -23,18 +19,30 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+import type {
+  FinalityPolicy,
+} from '../chain/finality-policy.js';
+
 import {
   RelayerConfigError,
   type ConfigSetting,
 } from '../diagnostics/config-errors.js';
 
+import type {
+  SummarizeErrorOptions,
+} from '../diagnostics/error-summary.js';
+
 import {
   createScrubber,
 } from '../diagnostics/text-scrubber.js';
 
-import type {
-  SummarizeErrorOptions,
-} from '../diagnostics/error-summary.js';
+import {
+  UsageError,
+} from '../diagnostics/usage-error.js';
+
+import {
+  isFixedHex,
+} from '../shared/hex.js';
 
 import {
   loadCustomNetworkDescriptor,
@@ -44,22 +52,10 @@ import {
   loadRegistryDeployment,
 } from './deployment.js';
 
-import type {
-  FinalityPolicy,
-} from '../chain/finality-policy.js';
-
-import {
-  isFixedHex,
-} from '../shared/hex.js';
-
 import {
   RELAYER_NETWORK_PRESETS,
   type RelayerNetworkPreset,
 } from './network-presets.js';
-
-import {
-  UsageError,
-} from '../diagnostics/usage-error.js';
 
 import {
   loadReceiptTimeoutMs,
@@ -209,7 +205,7 @@ export async function loadRelayerConfig(
 
   const broadcastRetry = loadBroadcastRetryConfig(env);
   const receiptTimeoutMs = loadReceiptTimeoutMs(env);
-  const network = await resolveNetworkConfig(source, rpcUrl);
+  const network = await resolveNetworkConfig(source, rpcUrl, env);
 
   return {
     ...network,
@@ -236,13 +232,14 @@ export function parseRelayerNetworkPreset(
 async function resolveNetworkConfig(
   source: NetworkSource,
   rpcUrl: string,
+  env: Readonly<Record<string, string | undefined>>,
 ): Promise<ResolvedNetworkConfig> {
   switch (source.type) {
     case 'preset':
       return resolveNetworkPreset(source.network, rpcUrl);
 
     case 'custom':
-      return resolveCustomNetwork(source.configFile, rpcUrl);
+      return resolveCustomNetwork(source.configFile, rpcUrl, env);
   }
 }
 
@@ -269,8 +266,11 @@ async function resolveNetworkPreset(
 async function resolveCustomNetwork(
   configFile: string,
   rpcUrl: string,
+  env: Readonly<Record<string, string | undefined>>,
 ): Promise<ResolvedNetworkConfig> {
-  const descriptor = await loadCustomNetworkDescriptor(configFile);
+  const descriptor = await loadCustomNetworkDescriptor(configFile, {
+    env,
+  });
 
   const chainDefinition: Chain = {
     id: descriptor.chain.id,
@@ -320,29 +320,6 @@ function resolveRpcUrl(
   validateRpcUrl(rpcUrl, setting);
 
   return rpcUrl;
-}
-
-export interface ResolveNetworkConfigPathOptions {
-  env?: Readonly<Record<string, string | undefined>>;
-  cwd?: string;
-}
-
-export function resolveNetworkConfigPath(
-  value: string,
-  options: ResolveNetworkConfigPathOptions = {}
-): string {
-  const env = options.env ?? process.env;
-  const cwd = options.cwd ?? process.cwd();
-
-  const initCwd = env.INIT_CWD?.trim();
-
-  let baseDir = cwd;
-
-  if (initCwd !== undefined && initCwd.length > 0) {
-    baseDir = initCwd;
-  }
-
-  return resolve(baseDir, value);
 }
 
 function requireEnvironmentVariable(

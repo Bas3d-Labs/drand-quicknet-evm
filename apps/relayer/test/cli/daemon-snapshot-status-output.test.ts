@@ -6,6 +6,7 @@ import {
 } from 'vitest';
 
 import {
+  projectDaemonSnapshotStatusOutput,
   renderDaemonSnapshotStatusOutput,
 } from '../../src/cli/daemon-snapshot-status-output.js';
 
@@ -341,5 +342,34 @@ describe('renderDaemonSnapshotStatusOutput', () => {
 
     expect(() => renderDaemonSnapshotStatusOutput(input))
       .toThrow('Invalid daemon snapshot status output.');
+  });
+
+  it('projects detached fields without retaining undeclared properties', () => {
+    const input = status();
+
+    const projection = projectDaemonSnapshotStatusOutput({
+      ...input,
+      secret: SECRET,
+      observation: {
+        ...input.observation,
+        secret: SECRET,
+      },
+    });
+
+    expect(projection.snapshot).toBe('present');
+
+    if (projection.snapshot !== 'present') {
+      throw new Error('Expected a present snapshot projection.');
+    }
+
+    expect(projection).not.toHaveProperty('secret');
+    expect(projection.observation).not.toHaveProperty('secret');
+
+    input.observation.attempts[0]!.transactionHashes.push(HASH);
+    input.age.ageMs = 100;
+
+    expect(projection.observation.attempts[0]!.transactionHashes)
+      .toEqual([HASH, SECOND_HASH]);
+    expect(projection.age.ageMs).toBe(0);
   });
 });

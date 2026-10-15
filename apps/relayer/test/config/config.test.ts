@@ -1,6 +1,12 @@
 import { resolve } from 'node:path';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi
+} from 'vitest';
 
 import {
   createWalletClient,
@@ -11,12 +17,21 @@ import {
   type Hex,
 } from 'viem';
 
-import { privateKeyToAccount } from 'viem/accounts';
-import { robinhoodTestnet } from 'viem/chains';
+import {
+  privateKeyToAccount
+} from 'viem/accounts';
+
+import {
+  robinhoodTestnet
+} from 'viem/chains';
 
 import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
+
+import {
+  resolveNetworkConfigPath,
+} from '../../src/config/network-config-path.js';
 
 vi.mock('../../src/config/deployment.js', () => ({
   loadRegistryDeployment: vi.fn(),
@@ -30,7 +45,6 @@ import {
   loadRelayerConfig,
   parseRelayerNetworkPreset,
   RELAYER_NETWORK_PRESETS,
-  resolveNetworkConfigPath,
 } from '../../src/config/config.js';
 
 import {
@@ -53,8 +67,14 @@ import {
   type CustomNetworkDescriptor,
 } from '../../src/config/custom-network-config.js';
 
-import { loadRegistryDeployment } from '../../src/config/deployment.js';
-import { UsageError, usageCode } from '../../src/diagnostics/usage-error.js';
+import {
+  loadRegistryDeployment
+} from '../../src/config/deployment.js';
+
+import {
+  UsageError,
+  usageCode
+} from '../../src/diagnostics/usage-error.js';
 
 const PRESET_SOURCE = {
   type: 'preset',
@@ -371,15 +391,21 @@ describe('loadRelayerConfig', () => {
       ]);
     });
 
-    it('loads the selected custom network config file', async () => {
+    it('passes the selected file and environment to the custom network loader', async () => {
+      const env = {
+        ...createEnvironment(),
+        INIT_CWD: '/injected/project',
+      };
+
       await loadRelayerConfig({
         source: CUSTOM_SOURCE,
-        env: createEnvironment(),
+        env,
       });
 
-      expect(
-        loadCustomNetworkDescriptor,
-      ).toHaveBeenCalledExactlyOnceWith(CUSTOM_CONFIG_FILE);
+      expect(loadCustomNetworkDescriptor).toHaveBeenCalledExactlyOnceWith(
+        CUSTOM_CONFIG_FILE,
+        { env },
+      );
 
       expect(loadRegistryDeployment).not.toHaveBeenCalled();
     });

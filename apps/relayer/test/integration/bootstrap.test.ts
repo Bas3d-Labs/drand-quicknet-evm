@@ -124,24 +124,18 @@ beforeAll(() => {
 
 beforeEach(() => {
   // Restore the complete compiled application before each failure injection.
-  for (const [name, relativePath] of Object.entries(MODULE_PATHS)) {
-    if (name === 'cli') {
-      continue;
-    }
+  const destination = fixturePath('dist');
 
-    const destination = fixturePath('dist');
+  rmSync(destination, {
+    recursive: true,
+    force: true,
+  });
 
-    rmSync(destination, {
-      recursive: true,
-      force: true,
-    });
-
-    cpSync(
-      join(compiledApplication, 'dist'),
-      destination,
-      { recursive: true },
-    );
-  }
+  cpSync(
+    join(compiledApplication, 'dist'),
+    destination,
+    { recursive: true },
+  );
 
   setModule('cli', `
     export async function main(args, output) {

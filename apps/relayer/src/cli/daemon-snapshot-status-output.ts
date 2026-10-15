@@ -9,12 +9,23 @@ import {
 
 const INVALID = 'Invalid daemon snapshot status output.';
 
-/**
- * Renders historical daemon observations.
- */
-export function renderDaemonSnapshotStatusOutput(
+type DaemonSnapshotStatusProjection =
+  | {
+      source: 'daemon-snapshot';
+      gate: 'unknown';
+      snapshot: 'missing';
+    }
+  | {
+      source: 'daemon-snapshot';
+      gate: 'unknown';
+      snapshot: 'present';
+      age: SnapshotAge;
+      observation: ReturnType<typeof readDaemonStatusSnapshot>;
+    };
+
+export function projectDaemonSnapshotStatusOutput(
   input: unknown,
-): string {
+): DaemonSnapshotStatusProjection {
   if (
     own(input, 'source') !== 'daemon-snapshot' ||
     own(input, 'gate') !== 'unknown'
@@ -24,17 +35,12 @@ export function renderDaemonSnapshotStatusOutput(
 
   const state = own(input, 'snapshot');
 
-  const lines = [
-    'Status source: daemon snapshot',
-    'Current signing authorization: unknown',
-  ];
-
   if (state === 'missing') {
-    return [
-      ...lines,
-      'Snapshot: missing',
-      'No daemon observation is available.',
-    ].join('\n');
+    return {
+      source: 'daemon-snapshot',
+      gate: 'unknown',
+      snapshot: 'missing',
+    };
   }
 
   if (state !== 'present') {
@@ -95,6 +101,38 @@ export function renderDaemonSnapshotStatusOutput(
       ['observedAt', 'retryDelayMs'],
     ),
   }, { chainId, signer });
+
+  return {
+    source: 'daemon-snapshot',
+    gate: 'unknown',
+    snapshot: 'present',
+    age,
+    observation,
+  };
+}
+
+/**
+ * Renders historical daemon observations.
+ */
+export function renderDaemonSnapshotStatusOutput(
+  input: unknown,
+): string {
+  const projection = projectDaemonSnapshotStatusOutput(input);
+
+  const lines = [
+    'Status source: daemon snapshot',
+    'Current signing authorization: unknown',
+  ];
+
+  if (projection.snapshot === 'missing') {
+    return [
+      ...lines,
+      'Snapshot: missing',
+      'No daemon observation is available.',
+    ].join('\n');
+  }
+
+  const { age, observation } = projection;
 
   lines.push(
     'Snapshot: present',

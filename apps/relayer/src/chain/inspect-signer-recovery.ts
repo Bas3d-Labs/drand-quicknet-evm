@@ -3,24 +3,6 @@ import type {
 } from 'viem';
 
 import type {
-  BlockAnchor,
-} from './block-anchor.js';
-
-import {
-  reconcileAttemptReceipt,
-  type AttemptReceiptResult,
-} from './reconcile-attempt-receipt.js';
-
-import {
-  readAnchoredNonce,
-} from './read-anchored-nonce.js';
-
-import {
-  searchAttemptReplacement,
-  type ReplacementSearchResult,
-} from './search-attempt-replacement.js';
-
-import type {
   AttemptResolutionEvidence,
 } from '../diagnostics/transaction-evidence.js';
 
@@ -36,6 +18,28 @@ import type {
 import {
   validateJournalSnapshotStructure,
 } from '../state/transaction-journal-validation.js';
+
+import type {
+  BlockAnchor,
+} from './block-anchor.js';
+
+import {
+  readAnchoredNonce,
+} from './read-anchored-nonce.js';
+
+import {
+  reconcileAttemptReceipt,
+  type AttemptReceiptResult,
+} from './reconcile-attempt-receipt.js';
+
+import {
+  resolveReplacementSearch,
+} from './resolve-replacement-search.js';
+
+import {
+  searchAttemptReplacement,
+  type ReplacementSearchResult,
+} from './search-attempt-replacement.js';
 
 type UnresolvedReceipt = Exclude<
   AttemptReceiptResult,
@@ -195,17 +199,10 @@ export async function inspectSignerRecovery(
     };
   }
 
-  let replacementSearch = attempt.replacementSearch;
-
-  if (
-    replacementSearch === null &&
-    snapshot.lastObservation.nonce <= attempt.nonce
-  ) {
-    replacementSearch = {
-      lowerBound: snapshot.lastObservation,
-      searchedThrough: null,
-    };
-  }
+  const replacementSearch = resolveReplacementSearch(
+    attempt,
+    snapshot.lastObservation,
+  );
 
   const search = await searchAttemptReplacement({
     publicClient,
