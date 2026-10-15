@@ -351,20 +351,139 @@ describe('journaled transaction broadcast', () => {
   });
 
   it.each([
-    'unattributed-signer-activity',
-    'conflict-search-exhausted',
+    {
+      reason: 'unattributed-signer-activity',
+      observedNonce: 6,
+      maxBlockRange: 1n,
+      scannedBlocks: 1n,
+      remainingBlocks: 1n,
+      searchedThrough: 101n,
+    },
+    {
+      reason: 'conflict-search-exhausted',
+      observedNonce: 5,
+      maxBlockRange: 2n,
+      scannedBlocks: 2n,
+      remainingBlocks: 0n,
+      searchedThrough: 102n,
+    },
   ] as const)(
-    'does not broadcast while blocked by %s',
-    async (reason) => {
+    'does not broadcast while blocked by $reason',
+    async ({
+      reason,
+      observedNonce,
+      maxBlockRange,
+      scannedBlocks,
+      remainingBlocks,
+      searchedThrough,
+    }) => {
       const t = await setup();
 
-      t.coordinator.block(reason);
+      expect(t.coordinator.canBroadcast).toBe(true);
+
+      const hashAt = (blockNumber: bigint) => {
+        if (blockNumber === 100n) {
+          return HASH;
+        }
+
+        if (blockNumber === 101n) {
+          return OTHER;
+        }
+
+        if (blockNumber === 102n) {
+          return `0x${'cc'.repeat(32)}` as const;
+        }
+
+        throw new Error('Unexpected fixture block.');
+      };
+
+      t.getBlock.mockImplementation(async ({ blockNumber } = {}) => {
+        if (blockNumber === undefined) {
+          throw new Error('Expected an explicit block number.');
+        }
+
+        return {
+          number: blockNumber,
+          hash: hashAt(blockNumber),
+          parentHash: blockNumber === 100n
+            ? HASH
+            : hashAt(blockNumber - 1n),
+          transactions: [],
+        } as never;
+      });
+
+      t.getTransactionCount.mockResolvedValue(observedNonce);
+
+      const anchor = {
+        blockNumber: 102n,
+        blockHash: hashAt(102n),
+      };
+
+      const result = await t.coordinator.recover({
+        publicClient: t.publicClient,
+        anchor,
+        maxBlockRange,
+      });
+
+      expect(result).toMatchObject({
+        status: 'unresolved',
+        observation: {
+          anchor,
+          nonce: BigInt(observedNonce),
+        },
+        search: {
+          status: 'not-found',
+          scannedBlocks,
+          remainingBlocks,
+          searchedThrough: {
+            blockNumber: searchedThrough,
+            blockHash: hashAt(searchedThrough),
+          },
+        },
+      });
+
+      expect(t.save).toHaveBeenCalledOnce();
+
+      expect(t.visible()).toMatchObject({
+        kind: 'present',
+        snapshot: {
+          nextNonce: 5n,
+          durableNextNonce: 4n,
+          lastObservation: {
+            anchor,
+            nonce: BigInt(observedNonce),
+          },
+          attempts: [{
+            attemptId: t.prepared.attemptId,
+            replacementSearch: {
+              lowerBound: OBSERVATION,
+              searchedThrough: {
+                blockNumber: searchedThrough,
+                blockHash: hashAt(searchedThrough),
+              },
+            },
+          }],
+        },
+      });
+
+      expect(t.coordinator.status.blockers).toContain(reason);
+
+      const otherReason = reason === 'unattributed-signer-activity'
+        ? 'conflict-search-exhausted'
+        : 'unattributed-signer-activity';
+
+      expect(t.coordinator.status.blockers).not.toContain(otherReason);
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      // Measure only the rejected broadcast below.
+      t.save.mockClear();
 
       await expect(t.broadcast())
         .rejects.toThrow('Fresh reconciliation');
 
       expect(t.save).not.toHaveBeenCalled();
       expect(t.request).not.toHaveBeenCalled();
+      expect(t.signTransaction).toHaveBeenCalledTimes(1);
     },
   );
 
