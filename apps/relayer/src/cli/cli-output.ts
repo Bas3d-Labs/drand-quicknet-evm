@@ -19,6 +19,10 @@ import type {
 } from '../rounds/import-round.js';
 
 import {
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
+import {
   isFixedHex,
 } from '../shared/hex.js';
 
@@ -141,7 +145,6 @@ const HELP = [
   'Snapshot freshness does not establish daemon health or signing authorization.',
   '',
   'Run relayer daemon --help for daemon-specific usage.',
-  'Run relayer daemon --help for daemon-specific usage.',
 ].join('\n');
 
 const DAEMON_HELP = [
@@ -215,11 +218,7 @@ function hex(
 function positiveInteger(
   value: unknown,
 ): number {
-  if (
-    typeof value !== 'number' ||
-    !Number.isSafeInteger(value) ||
-    value <= 0
-  ) {
+  if (!isPositiveSafeInteger(value)) {
     throw new TypeError('Invalid CLI number.');
   }
 
