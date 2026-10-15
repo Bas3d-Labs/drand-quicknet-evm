@@ -43,6 +43,7 @@ import type {
 } from '../state/transaction-journal.js';
 
 import {
+  projectDaemonSnapshotStatusOutput,
   renderDaemonSnapshotStatusOutput,
 } from './daemon-snapshot-status-output.js';
 
@@ -454,23 +455,25 @@ function renderRelayerStatus(
 function statusFailureFields(
   result: unknown,
 ): Record<string, unknown> {
-  // Validate the entire result before preserving any diagnostic context.
-  // The rendered text is deliberately not included in the arguments.
-  renderRelayerStatus(result);
-
   const source = own(result, 'source');
 
-  if (source === 'journal') {
+  if (source === 'daemon-snapshot') {
+    // Validate the complete result before retaining compact context.
+    const projection = projectDaemonSnapshotStatusOutput(result);
+
     return {
-      source,
-      journal: own(result, 'journal'),
-      gate: 'unknown',
+      source: projection.source,
+      snapshot: projection.snapshot,
+      gate: projection.gate,
     };
   }
 
+  // Journal projection is the next extraction.
+  renderRelayerStatus(result);
+
   return {
     source,
-    snapshot: own(result, 'snapshot'),
+    journal: own(result, 'journal'),
     gate: 'unknown',
   };
 }
