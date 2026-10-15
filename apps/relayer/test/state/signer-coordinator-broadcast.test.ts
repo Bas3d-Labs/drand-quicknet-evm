@@ -794,25 +794,65 @@ describe('journaled transaction broadcast', () => {
     expect(t.signTransaction).toHaveBeenCalledTimes(1);
   });
 
-  it('requires inspection after restart before sending the recorded attempt', async () => {
+  it('requires recovery after restart even when head inspection succeeds', async () => {
     const t = await setup();
 
     await t.broadcast();
 
     const restarted = await t.create();
 
-    restarted.completeRecovery();
+    expect(restarted.status.recoveryComplete).toBe(false);
+    expect(restarted.canBroadcast).toBe(false);
 
     await expect(restarted.broadcastAttempt(t.options))
       .rejects.toThrow('Fresh reconciliation');
 
-    await restarted.recover(t.recovery);
+    expect(t.request).toHaveBeenCalledTimes(1);
+
+    const inspection = await restarted.checkInclusions({
+      publicClient: t.publicClient,
+      head: ANCHOR,
+    });
+
+    expect(inspection).toMatchObject({
+      status: 'inspected',
+      broadcastAttemptId: t.prepared.attemptId,
+    });
+
+    // Reopening requires recovery; head inspection cannot replace it.
+    expect(restarted.status.recoveryComplete).toBe(false);
+    expect(restarted.canBroadcast).toBe(false);
+
+    await expect(restarted.broadcastAttempt(t.options))
+      .rejects.toThrow('Fresh reconciliation');
+
+    expect(t.request).toHaveBeenCalledTimes(1);
+
+    await expect(restarted.recover(t.recovery))
+      .resolves.toMatchObject({
+        status: 'unresolved',
+        receipt: {
+          status: 'receipt-not-found',
+        },
+        search: null,
+      });
+
+    expect(restarted.status.recoveryComplete).toBe(true);
+    expect(restarted.canBroadcast).toBe(true);
+
     await restarted.broadcastAttempt(t.options);
 
+    expect(t.request).toHaveBeenCalledTimes(2);
     expect(t.request.mock.calls[1])
       .toEqual(t.request.mock.calls[0]);
 
     expect(t.signTransaction).toHaveBeenCalledTimes(1);
+    expect(restarted.canBroadcast).toBe(false);
+
+    await expect(restarted.broadcastAttempt(t.options))
+      .rejects.toThrow('Fresh reconciliation');
+
+    expect(t.request).toHaveBeenCalledTimes(2);
   });
 
   it('does not send an attempt cleared by durable receipt reconciliation', async () => {
