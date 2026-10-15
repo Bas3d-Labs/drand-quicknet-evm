@@ -10,8 +10,8 @@ import {
   isPositiveSafeInteger,
 } from '../shared/integer.js';
 
-export const DEFAULT_BROADCAST_RETRY_INITIAL_MS = 5_000;
-export const DEFAULT_BROADCAST_RETRY_MAX_MS = 60_000;
+const DEFAULT_BROADCAST_RETRY_INITIAL_MS = 5_000;
+const DEFAULT_BROADCAST_RETRY_MAX_MS = 60_000;
 
 const MAX_DELAY_MS = 2_147_483_647;
 

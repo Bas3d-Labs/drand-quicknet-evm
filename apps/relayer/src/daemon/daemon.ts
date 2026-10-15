@@ -52,7 +52,7 @@ import type {
 
 const DURABLE_HEAD_POLL_INTERVAL_MS = 30_000;
 
-export interface DaemonCycleContext {
+interface DaemonCycleContext {
   readonly cycle: number;
 }
 

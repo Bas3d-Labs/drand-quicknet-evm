@@ -146,7 +146,7 @@ export interface PrepareAttemptOptions {
   readonly workId: string;
 }
 
-export interface PreparedAttempt {
+interface PreparedAttempt {
   readonly attemptId: string;
   readonly transactionHash: Hash;
   readonly nonce: bigint;

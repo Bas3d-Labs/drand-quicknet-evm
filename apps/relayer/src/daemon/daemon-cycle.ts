@@ -71,7 +71,7 @@ export interface DaemonIncompleteRound {
   outcome: IncompleteQuicknetRoundOutcome;
 }
 
-export type DaemonConsumerCycleResult =
+type DaemonConsumerCycleResult =
   | {
       status: 'success';
       consumer: ValidatedQuicknetConsumer;

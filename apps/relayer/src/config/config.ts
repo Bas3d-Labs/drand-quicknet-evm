@@ -103,7 +103,7 @@ const NETWORK_PRESETS: Record<RelayerNetworkPreset, NetworkPresetConfig> = {
   },
 };
 
-export interface ResolvedNetworkConfig {
+interface ResolvedNetworkConfig {
   network: string;
   chain: Chain;
   rpcUrl: string;

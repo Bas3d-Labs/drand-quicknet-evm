@@ -80,7 +80,7 @@ export interface PendingImportResult {
     | 'receipt-timeout';
 }
 
-export type DeferredImportResult = {
+type DeferredImportResult = {
   readonly status: 'deferred';
   readonly round: bigint;
 } & (

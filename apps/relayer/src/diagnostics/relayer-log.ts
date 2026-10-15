@@ -52,7 +52,7 @@ import {
 type Level = 'debug' | 'info' | 'warn' | 'error';
 type ScanType = 'durable' | 'soft';
 
-export interface RelayerLogContext {
+interface RelayerLogContext {
   readonly cycle?: number;
   readonly signer?: Address;
   readonly attemptId?: string;
@@ -392,7 +392,7 @@ export type RelayerLog = {
     ) => void;
 };
 
-export type AttemptBroadcastNotAcknowledgedContext = {
+type AttemptBroadcastNotAcknowledgedContext = {
   readonly signer: Address;
   readonly attemptId: string;
   readonly transactionHash: Hash;
@@ -424,7 +424,7 @@ type TransactionLog = {
     ) => void;
 };
 
-export interface LogDestination {
+interface LogDestination {
   write(line: string): void;
   on?(event: 'error', listener: (error: unknown) => void): unknown;
 }
