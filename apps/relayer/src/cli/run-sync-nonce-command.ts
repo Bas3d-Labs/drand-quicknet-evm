@@ -13,13 +13,13 @@ import {
 } from '../diagnostics/relayer-log.js';
 
 import type {
-  CliOptions,
-  CliOutcome,
-} from './cli.js';
-
-import type {
   CliOutputHandler,
 } from './cli-output.js';
+
+import type {
+  CliOptions,
+  CliOutcome,
+} from './cli-types.js';
 
 import type {
   SyncNonceCommandArguments,

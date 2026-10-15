@@ -2,7 +2,7 @@ import process from 'node:process';
 
 import type {
   CliOutcome,
-} from './cli.js';
+} from './cli-types.js';
 
 export async function runWithShutdownSignal(
   run: (signal: AbortSignal) => Promise<CliOutcome>,

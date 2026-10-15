@@ -2,14 +2,6 @@ import {
   type NetworkSource,
 } from '../config/config.js';
 
-import type {
-  SummarizeErrorOptions,
-} from '../diagnostics/error-summary.js';
-
-import type {
-  RoundImportProgress,
-} from '../diagnostics/operation-context.js';
-
 import {
   assertServiceLockHeld,
 } from '../state/service-lock.js';
@@ -17,6 +9,11 @@ import {
 import type {
   CliOutputHandler,
 } from './cli-output.js';
+
+import type {
+  CliOptions,
+  CliOutcome,
+} from './cli-types.js';
 
 import {
   runDaemonCommand,
@@ -41,23 +38,6 @@ import {
 import {
   runWithShutdownSignal,
 } from './run-with-shutdown-signal.js';
-
-export interface CliOptions {
-  onDiagnostics?: (
-    policy: SummarizeErrorOptions | undefined,
-  ) => void;
-  onImportFailure?: (
-    error: unknown,
-    progress: RoundImportProgress,
-  ) => void;
-}
-
-export type CliOutcome =
-  | 'success'
-  | 'failure'
-  | 'pending'
-  | 'deferred'
-  | 'interrupted';
 
 export async function main(
   args: readonly string[],

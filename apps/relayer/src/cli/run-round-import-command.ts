@@ -30,13 +30,13 @@ import {
 } from '../rounds/import-round-when-available.js';
 
 import type {
-  CliOptions,
-  CliOutcome,
-} from './cli.js';
-
-import type {
   CliOutputHandler,
 } from './cli-output.js';
+
+import type {
+  CliOptions,
+  CliOutcome,
+} from './cli-types.js';
 
 import {
   openBeaconSubmitter,
