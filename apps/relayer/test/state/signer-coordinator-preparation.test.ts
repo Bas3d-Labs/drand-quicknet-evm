@@ -54,6 +54,20 @@ const OBSERVATION = {
   nonce: 4n,
 };
 
+function recoveryOptions() {
+  return {
+    publicClient: {
+      getBlock: async () => ({
+        number: OBSERVATION.anchor.blockNumber,
+        hash: OBSERVATION.anchor.blockHash,
+      }),
+      getTransactionCount: async () => Number(OBSERVATION.nonce),
+    } as unknown as PublicClient,
+    anchor: OBSERVATION.anchor,
+    maxBlockRange: 2n,
+  };
+}
+
 function transaction() {
   return {
     type: 'eip1559' as const,
@@ -164,17 +178,28 @@ async function setup(options: {
   const coordinator = await create();
 
   if (!options.missing && !options.unrecovered) {
-    coordinator.completeRecovery();
+    const recovery = recoveryOptions();
+
+    await expect(coordinator.recover(recovery)).resolves.toEqual({
+      status: 'no-attempt',
+      observation: OBSERVATION,
+    });
+
+    expect(coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
 
     await coordinator.checkInclusions({
-      publicClient: {
-        getBlock: async () => ({
-          number: OBSERVATION.anchor.blockNumber,
-          hash: OBSERVATION.anchor.blockHash,
-        }),
-        getTransactionCount: async () => Number(OBSERVATION.nonce),
-      } as unknown as PublicClient,
+      publicClient: recovery.publicClient,
       head: OBSERVATION.anchor,
+    });
+
+    expect(coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
     });
   }
 
@@ -616,8 +641,9 @@ describe('durable attempt preparation', () => {
         await expect(t.coordinator.retryPersistence())
           .rejects.toThrow('already in progress');
 
-        expect(() => t.coordinator.completeRecovery())
-          .toThrow('already in progress');
+        await expect(
+          t.coordinator.recover(recoveryOptions()),
+        ).rejects.toThrow('already in progress');
       } finally {
         finish.resolve();
         await pending;
