@@ -6,6 +6,10 @@ import {
   isDecimalInteger,
 } from '../shared/decimal.js';
 
+import {
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
 export const DEFAULT_BROADCAST_RETRY_INITIAL_MS = 5_000;
 export const DEFAULT_BROADCAST_RETRY_MAX_MS = 60_000;
 
@@ -71,8 +75,7 @@ function parseDelay(
   const parsed = Number(value);
 
   if (
-    !Number.isSafeInteger(parsed) ||
-    parsed <= 0 ||
+    !isPositiveSafeInteger(parsed) ||
     parsed > MAX_DELAY_MS
   ) {
     throw new RelayerConfigError(

@@ -1,6 +1,6 @@
 import {
-  isFixedHex,
-} from '../shared/hex.js';
+  captureJournalIdentity,
+} from './journal-identity.js';
 
 import type {
   JournalIdentity,
@@ -52,20 +52,7 @@ export class JournalPersistence {
   static async create(
     options: JournalPersistenceOptions,
   ): Promise<JournalPersistence> {
-    const { chainId, signer } = options.identity;
-
-    if (
-      !Number.isSafeInteger(chainId) ||
-      chainId <= 0 ||
-      !isFixedHex(signer, 20)
-    ) {
-      throw new TypeError('Invalid journal identity.');
-    }
-
-    const identity = Object.freeze({
-      chainId,
-      signer,
-    });
+    const identity = captureJournalIdentity(options.identity);
 
     let initial: TransactionJournalRead;
 

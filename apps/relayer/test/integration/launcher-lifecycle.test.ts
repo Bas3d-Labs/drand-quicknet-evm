@@ -338,6 +338,7 @@ function writePreload(
           existsSync,
           fstatSync,
           readdirSync,
+          renameSync,
           statSync,
           writeFileSync,
         } = require('node:fs');
@@ -379,10 +380,15 @@ function writePreload(
           String(lockDescriptors),
         );
 
+        const readyPath = join(directory, 'child-ready');
+        const temporaryReadyPath = join(directory, 'child-ready.tmp');
+
         writeFileSync(
-          join(directory, 'child-ready'),
+          temporaryReadyPath,
           String(process.pid),
         );
+
+        renameSync(temporaryReadyPath, readyPath);
 
         const timer = setInterval(() => {
           if (existsSync(join(directory, 'stop-child'))) {

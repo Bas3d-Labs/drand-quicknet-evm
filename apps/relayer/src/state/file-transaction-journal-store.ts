@@ -16,10 +16,6 @@ import {
 } from 'node:util';
 
 import {
-  isFixedHex,
-} from '../shared/hex.js';
-
-import {
   removeCheckpointTempFiles as removeJournalTempFiles,
 } from './checkpoint-temp-files.js';
 
@@ -27,6 +23,10 @@ import {
   durableReplace,
   type PersistenceBoundaryHook,
 } from './durable-replace.js';
+
+import {
+  captureJournalIdentity,
+} from './journal-identity.js';
 
 import type {
   JournalIdentity,
@@ -81,22 +81,11 @@ export class FileTransactionJournalStore
       throw new TypeError('Invalid journal file path.');
     }
 
-    const { chainId, signer } = options.identity;
-
-    if (
-      !Number.isSafeInteger(chainId) ||
-      chainId <= 0 ||
-      !isFixedHex(signer, 20)
-    ) {
-      throw new TypeError('Invalid journal identity.');
-    }
+    const identity = captureJournalIdentity(options.identity);
 
     this.filePath = resolve(options.filePath);
     this.onPersistenceBoundary = options.onPersistenceBoundary;
-    this.identity = Object.freeze({
-      chainId,
-      signer,
-    });
+    this.identity = identity;
   }
 
   /**

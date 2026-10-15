@@ -55,6 +55,7 @@ import {
 
 import {
   runDaemon,
+  type RunDaemonOptions,
 } from '../../src/daemon/daemon.js';
 
 import type {
@@ -189,21 +190,28 @@ beforeEach(() => {
   };
 });
 
+function daemonOptions(
+  overrides: Partial<RunDaemonOptions> = {},
+): RunDaemonOptions {
+  return {
+    publicClient: PUBLIC_CLIENT,
+    account: ACCOUNT,
+    submitter,
+    deployment: DEPLOYMENT,
+    checkpointStore: CHECKPOINT_STORE,
+    consumers: [VALIDATED_CONSUMER_A],
+    startBlock: 1_000n,
+    maxBlockRange: 100n,
+    finality: FINALITY,
+    pollIntervalMs: 1_000,
+    ...overrides,
+  };
+}
+
 describe('runDaemon', () => {
   it('rejects a zero pollIntervalMs', async () => {
     await expect(
-      runDaemon({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [VALIDATED_CONSUMER_A],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        pollIntervalMs: 0,
-      })
+      runDaemon(daemonOptions({ pollIntervalMs: 0 }))
     ).rejects.toThrow(
       'pollIntervalMs must be a positive safe integer.'
     );
@@ -215,18 +223,7 @@ describe('runDaemon', () => {
 
   it('rejects a negative pollIntervalMs', async () => {
     await expect(
-      runDaemon({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [VALIDATED_CONSUMER_A],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        pollIntervalMs: -1,
-      })
+      runDaemon(daemonOptions({ pollIntervalMs: -1 }))
     ).rejects.toThrow(
       'pollIntervalMs must be a positive safe integer.'
     );
@@ -234,18 +231,7 @@ describe('runDaemon', () => {
 
   it('rejects a fractional pollIntervalMs', async () => {
     await expect(
-      runDaemon({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [VALIDATED_CONSUMER_A],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        pollIntervalMs: 1.5,
-      })
+      runDaemon(daemonOptions({ pollIntervalMs: 1.5 }))
     ).rejects.toThrow(
       'pollIntervalMs must be a positive safe integer.'
     );
@@ -253,46 +239,24 @@ describe('runDaemon', () => {
 
   it('rejects a pollIntervalMs larger than the maximum safe integer', async () => {
     await expect(
-      runDaemon({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [VALIDATED_CONSUMER_A],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
+      runDaemon(daemonOptions({
         pollIntervalMs: Number.MAX_SAFE_INTEGER + 1,
-      })
+      }))
     ).rejects.toThrow(
       'pollIntervalMs must be a positive safe integer.'
     );
   });
 
   it('does nothing when the signal is already aborted', async () => {
-    const controller =
-      new AbortController();
-
-    const sleep =
-      vi.fn();
+    const controller = new AbortController();
+    const sleep = vi.fn();
 
     controller.abort();
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
+    await runDaemon(daemonOptions({
       signal: controller.signal,
       sleep,
-    });
+    }));
 
     expect(
       runDaemonCycle,
@@ -312,25 +276,18 @@ describe('runDaemon', () => {
       caughtUpCycle()
     );
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
+    await runDaemon(daemonOptions({
       consumers: [
         VALIDATED_CONSUMER_A,
         VALIDATED_CONSUMER_B,
       ],
       startBlock: 500n,
       maxBlockRange: 250n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
       signal: controller.signal,
       onCycle: () => {
         controller.abort();
       },
-    });
+    }));
 
     expect(
       runDaemonCycle,
@@ -379,22 +336,12 @@ describe('runDaemon', () => {
       },
     );
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
+    await runDaemon(daemonOptions({
       signal: controller.signal,
       onCycle: () => {
         controller.abort();
       },
-    });
+    }));
 
     expect(
       initialSize,
@@ -424,17 +371,7 @@ describe('runDaemon', () => {
 
     let cycleCount = 0;
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
+    await runDaemon(daemonOptions({
       signal: controller.signal,
       sleep,
       onCycle: () => {
@@ -444,7 +381,7 @@ describe('runDaemon', () => {
           controller.abort();
         }
       },
-    });
+    }));
 
     const firstCall =
       vi.mocked(
@@ -523,17 +460,7 @@ describe('runDaemon', () => {
 
     let cycleCount = 0;
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
+    await runDaemon(daemonOptions({
       signal: controller.signal,
       sleep,
       onCycle: () => {
@@ -543,7 +470,7 @@ describe('runDaemon', () => {
           controller.abort();
         }
       },
-    });
+    }));
 
     expect(
       observedCursor,
@@ -570,20 +497,10 @@ describe('runDaemon', () => {
       cycleResult
     );
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
+    await runDaemon(daemonOptions({
       signal: controller.signal,
       onCycle,
-    });
+    }));
 
     expect(
       onCycle,
@@ -617,17 +534,7 @@ describe('runDaemon', () => {
 
     let cycleCount = 0;
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
+    await runDaemon(daemonOptions({
       signal: controller.signal,
       sleep,
       onCycle: () => {
@@ -637,7 +544,7 @@ describe('runDaemon', () => {
           controller.abort();
         }
       },
-    });
+    }));
 
     expect(
       runDaemonCycle,
@@ -703,17 +610,7 @@ describe('runDaemon', () => {
 
     let cycleCount = 0;
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
+    await runDaemon(daemonOptions({
       signal: controller.signal,
       sleep,
       onCycle: () => {
@@ -723,7 +620,7 @@ describe('runDaemon', () => {
           controller.abort();
         }
       },
-    });
+    }));
 
     expect(
       runDaemonCycle,
@@ -739,8 +636,7 @@ describe('runDaemon', () => {
   });
 
   it('sleeps when every successful consumer is caught up', async () => {
-    const controller =
-      new AbortController();
+    const controller = new AbortController();
 
     const sleep =
       vi.fn(async () => {
@@ -753,20 +649,11 @@ describe('runDaemon', () => {
       caughtUpCycle()
     );
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
+    await runDaemon(daemonOptions({
       pollIntervalMs: 2_500,
       signal: controller.signal,
       sleep,
-    });
+    }));
 
     expect(
       sleep,
@@ -799,20 +686,10 @@ describe('runDaemon', () => {
       )
     );
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
+    await runDaemon(daemonOptions({
       signal: controller.signal,
       sleep,
-    });
+    }));
 
     expect(
       sleep,
@@ -873,23 +750,14 @@ describe('runDaemon', () => {
       cycleResult
     );
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
+    await runDaemon(daemonOptions({
       consumers: [
         VALIDATED_CONSUMER_A,
         VALIDATED_CONSUMER_B,
       ],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
       signal: controller.signal,
       sleep,
-    });
+    }));
 
     expect(runDaemonCycle).toHaveBeenCalledOnce();
     expect(sleep).toHaveBeenCalledOnce();
@@ -912,23 +780,13 @@ describe('runDaemon', () => {
       caughtUpCycle()
     );
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
+    await runDaemon(daemonOptions({
       signal: controller.signal,
       sleep,
       onCycle: () => {
         controller.abort();
       },
-    });
+    }));
 
     expect(
       sleep,
@@ -956,17 +814,7 @@ describe('runDaemon', () => {
 
     let cycleCount = 0;
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
+    await runDaemon(daemonOptions({
       signal: controller.signal,
       sleep,
       onCycle: () => {
@@ -976,7 +824,7 @@ describe('runDaemon', () => {
           controller.abort();
         }
       },
-    });
+    }));
 
     expect(
       runDaemonCycle,
@@ -1007,24 +855,10 @@ describe('runDaemon', () => {
       failure
     );
 
-    await expect(
-      runDaemon({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [VALIDATED_CONSUMER_A],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        pollIntervalMs: 1_000,
-        sleep,
-        onCycle,
-      })
-    ).rejects.toBe(
-      failure
-    );
+    await expect(runDaemon(daemonOptions({
+      sleep,
+      onCycle,
+    }))).rejects.toBe(failure);
 
     expect(
       onCycle,
@@ -1050,26 +884,12 @@ describe('runDaemon', () => {
       caughtUpCycle()
     );
 
-    await expect(
-      runDaemon({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [VALIDATED_CONSUMER_A],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        pollIntervalMs: 1_000,
-        sleep,
-        onCycle: () => {
-          throw failure;
-        },
-      })
-    ).rejects.toBe(
-      failure
-    );
+    await expect(runDaemon(daemonOptions({
+      sleep,
+      onCycle: () => {
+        throw failure;
+      },
+    }))).rejects.toBe(failure);
 
     expect(
       sleep,
@@ -1088,44 +908,20 @@ describe('runDaemon', () => {
       caughtUpCycle()
     );
 
-    await expect(
-      runDaemon({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [VALIDATED_CONSUMER_A],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        pollIntervalMs: 1_000,
-        sleep: async () => {
-          throw failure;
-        },
-      })
-    ).rejects.toBe(
-      failure
-    );
+    await expect(runDaemon(daemonOptions({
+      sleep: async () => {
+        throw failure;
+      },
+    }))).rejects.toBe(failure);
   });
 
   it('rejects an invalid receipt timeout before starting a cycle', async () => {
     const readChainHeads = vi.fn();
 
-    await expect(runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
+    await expect(runDaemon(daemonOptions({
       receiptTimeoutMs: 0,
       readChainHeads,
-    })).rejects.toThrow('Invalid receipt timeout.');
+    }))).rejects.toThrow('Invalid receipt timeout.');
 
     expect(readChainHeads).not.toHaveBeenCalled();
     expect(runDaemonCycle).not.toHaveBeenCalled();
@@ -1145,21 +941,11 @@ describe('runDaemon', () => {
       throw reason;
     });
 
-    await expect(runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
+    await expect(runDaemon(daemonOptions({
       signal: controller.signal,
       sleep,
       onCycle,
-    })).rejects.toBe(reason);
+    }))).rejects.toBe(reason);
 
     expect(runDaemonCycle).toHaveBeenCalledOnce();
     expect(sleep).not.toHaveBeenCalled();
@@ -1188,17 +974,7 @@ describe('daemon cycle correlation', () => {
       const controller = new AbortController();
       const observed: number[] = [];
 
-      await runDaemon({
-        publicClient: PUBLIC_CLIENT,
-        account: ACCOUNT,
-        submitter,
-        deployment: DEPLOYMENT,
-        checkpointStore: CHECKPOINT_STORE,
-        consumers: [VALIDATED_CONSUMER_A],
-        startBlock: 1_000n,
-        maxBlockRange: 100n,
-        finality: FINALITY,
-        pollIntervalMs: 1_000,
+      await runDaemon(daemonOptions({
         signal: controller.signal,
         sleep: async () => {},
         onCycle(_result, context) {
@@ -1210,7 +986,7 @@ describe('daemon cycle correlation', () => {
             controller.abort();
           }
         },
-      });
+      }));
 
       expect(observed).toEqual([1, 2, 3]);
     }
@@ -1223,17 +999,7 @@ describe('daemon cycle correlation', () => {
       .mockResolvedValueOnce(caughtUpCycle())
       .mockResolvedValueOnce(caughtUpCycle());
 
-    await runDaemon({
-      publicClient: PUBLIC_CLIENT,
-      account: ACCOUNT,
-      submitter,
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [VALIDATED_CONSUMER_A],
-      startBlock: 1_000n,
-      maxBlockRange: 100n,
-      finality: FINALITY,
-      pollIntervalMs: 1_000,
+    await runDaemon(daemonOptions({
       receiptTimeoutMs: 45_000,
       signal: controller.signal,
       sleep: async () => {},
@@ -1242,7 +1008,7 @@ describe('daemon cycle correlation', () => {
           controller.abort();
         }
       },
-    });
+    }));
 
     const first = vi.mocked(runDaemonCycle).mock.calls[0]?.[0];
     const second = vi.mocked(runDaemonCycle).mock.calls[1]?.[0];

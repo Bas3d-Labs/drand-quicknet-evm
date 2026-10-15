@@ -1,10 +1,11 @@
-import {
-  setTimeout as delay,
-} from 'node:timers/promises';
 
 import {
   roundScheduledTime
 } from "@based-labs/drand-quicknet";
+
+import {
+  sleepFor,
+} from '../shared/sleep-for.js';
 
 export interface WaitForQuicknetRoundOptions {
   round: bigint;
@@ -51,16 +52,4 @@ export async function waitForQuicknetRound(
   }
 
   options.signal?.throwIfAborted();
-}
-
-async function sleepFor(
-  milliseconds: number,
-  signal?: AbortSignal,
-): Promise<void> {
-  try {
-    await delay(milliseconds, undefined, { signal });
-  } catch (error) {
-    signal?.throwIfAborted();
-    throw error;
-  }
 }

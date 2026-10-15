@@ -22,6 +22,10 @@ import {
   isUuidV4,
 } from '../shared/uuid.js';
 
+import {
+  captureJournalIdentity,
+} from './journal-identity.js';
+
 import type {
   JournalPersistenceState,
 } from './journal-persistence.js';
@@ -112,7 +116,7 @@ export function readDaemonStatusSnapshot(
   input: unknown,
   expectedIdentity: JournalIdentity,
 ): DaemonStatusSnapshot {
-  requireIdentity(expectedIdentity);
+  captureJournalIdentity(expectedIdentity);
 
   const root = object(input);
   const identity = object(root.identity);
@@ -251,16 +255,6 @@ export function classifySnapshotAge(
     status: ageMs <= maxAgeMs ? 'fresh' : 'stale',
     ageMs,
   };
-}
-
-function requireIdentity(identity: JournalIdentity): void {
-  if (
-    !Number.isSafeInteger(identity.chainId) ||
-    identity.chainId <= 0 ||
-    !isFixedHex(identity.signer, 20)
-  ) {
-    throw new TypeError('Invalid journal identity.');
-  }
 }
 
 function object(input: unknown): Record<string, unknown> {

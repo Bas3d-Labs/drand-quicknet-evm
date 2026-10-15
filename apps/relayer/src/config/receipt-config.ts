@@ -6,6 +6,10 @@ import {
   isDecimalInteger,
 } from '../shared/decimal.js';
 
+import {
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
 export const DEFAULT_RECEIPT_TIMEOUT_MS = 30_000;
 
 const MAX_RECEIPT_TIMEOUT_MS = 2_147_483_647;
@@ -18,8 +22,7 @@ export function validateReceiptTimeoutMs(
   value: number,
 ): number {
   if (
-    !Number.isSafeInteger(value) ||
-    value <= 0 ||
+    !isPositiveSafeInteger(value) ||
     value > MAX_RECEIPT_TIMEOUT_MS
   ) {
     throw new TypeError('Invalid receipt timeout.');

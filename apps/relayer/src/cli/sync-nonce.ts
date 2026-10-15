@@ -19,12 +19,13 @@ import {
 } from '../chain/inspect-nonce-sync.js';
 
 import {
-  isFixedHex,
-} from '../shared/hex.js';
-
-import {
   FileTransactionJournalStore,
 } from '../state/file-transaction-journal-store.js';
+
+import {
+  captureJournalIdentity,
+  journalFilename,
+} from '../state/journal-identity.js';
 
 import {
   planNonceSync,
@@ -83,18 +84,7 @@ export async function syncNonce(
     apply,
   } = options;
 
-  const identity = Object.freeze({
-    chainId: options.identity.chainId,
-    signer: options.identity.signer,
-  });
-
-  if (
-    !Number.isSafeInteger(identity.chainId) ||
-    identity.chainId <= 0 ||
-    !isFixedHex(identity.signer, 20)
-  ) {
-    throw new TypeError('Invalid journal identity.');
-  }
+  const identity = captureJournalIdentity(options.identity);
 
   const finality = { ...options.finality };
   const env = { ...(options.env ?? process.env) };
@@ -109,7 +99,7 @@ export async function syncNonce(
 
   const filePath = join(
     ownership.stateDirectory,
-    `transaction-journal-${identity.chainId}-${identity.signer.toLowerCase()}.json`,
+    journalFilename(identity),
   );
 
   const storeOptions = {

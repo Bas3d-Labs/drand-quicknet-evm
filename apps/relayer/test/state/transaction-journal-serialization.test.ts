@@ -24,6 +24,10 @@ import {
   MAX_JOURNAL_BYTES,
 } from '../../src/state/transaction-journal-serialization.js';
 
+import {
+  broadcastAttempt,
+} from '../helpers/journal-attempt.js';
+
 // Public test fixture only.
 const ACCOUNT = privateKeyToAccount(`0x${'11'.repeat(32)}`);
 
@@ -73,13 +77,12 @@ async function fixture(): Promise<TransactionJournalSnapshot> {
     durableNextNonce: 4n,
     repairs: [],
     attempts: [{
-      attemptId: '11111111-1111-4111-8111-111111111111',
-      workId: 'test-work:4',
-      nonce: 4n,
-      signedTransactions: [await signedTransaction()],
-      createdAt: '2026-10-04T00:00:00.000Z',
-      phase: 'broadcast-may-have-occurred',
-      inclusion: null,
+      ...broadcastAttempt({
+        attemptId: '11111111-1111-4111-8111-111111111111',
+        workId: 'test-work:4',
+        nonce: 4n,
+        signedTransactions: [await signedTransaction()],
+      }),
       replacementSearch: {
         lowerBound: observation,
         searchedThrough: null,

@@ -32,6 +32,10 @@ import {
   createRoundImporter,
 } from '../rounds/create-round-importer.js';
 
+import {
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
 import type {
   CheckpointStore,
 } from '../state/checkpoint.js';
@@ -76,10 +80,7 @@ export interface RunDaemonOptions {
 export async function runDaemon(
   options: RunDaemonOptions,
 ): Promise<void> {
-  if (
-    !Number.isSafeInteger(options.pollIntervalMs) ||
-    options.pollIntervalMs <= 0
-  ) {
+  if (!isPositiveSafeInteger(options.pollIntervalMs)) {
     throw new Error('pollIntervalMs must be a positive safe integer.');
   }
 
