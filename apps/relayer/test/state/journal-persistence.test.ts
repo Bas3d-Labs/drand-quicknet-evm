@@ -23,6 +23,10 @@ import type {
   TransactionJournalStore,
 } from '../../src/state/transaction-journal.js';
 
+import {
+  broadcastAttempt,
+} from '../helpers/journal-attempt.js';
+
 // Public test fixture only.
 const ACCOUNT = privateKeyToAccount(`0x${'11'.repeat(32)}`);
 
@@ -74,19 +78,17 @@ async function fixture(): Promise<TransactionJournalSnapshot> {
     nextNonce: 5n,
     durableNextNonce: 4n,
     repairs: [],
-    attempts: [{
-      attemptId: '11111111-1111-4111-8111-111111111111',
-      workId: 'test-work:4',
-      nonce: 4n,
-      signedTransactions: [{
-        transactionHash: keccak256(signedTransaction),
-        signedTransaction,
-      }],
-      createdAt: '2026-10-04T00:00:00.000Z',
-      phase: 'broadcast-may-have-occurred',
-      inclusion: null,
-      replacementSearch: null,
-    }],
+    attempts: [
+      broadcastAttempt({
+        attemptId: '11111111-1111-4111-8111-111111111111',
+        workId: 'test-work:4',
+        nonce: 4n,
+        signedTransactions: [{
+          transactionHash: keccak256(signedTransaction),
+          signedTransaction,
+        }],
+      }),
+    ],
   };
 }
 
