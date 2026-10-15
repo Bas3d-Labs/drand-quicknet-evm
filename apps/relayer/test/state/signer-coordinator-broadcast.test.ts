@@ -645,22 +645,68 @@ describe('journaled transaction broadcast', () => {
     expect(t.getTransactionCount).toHaveBeenCalledTimes(1);
   });
 
-  it('does not retain a permit after recovery fails', async () => {
+  it('requires successful recovery after a failure even when head inspection succeeds', async () => {
     const t = await setup();
 
-    t.getTransactionReceipt.mockRejectedValueOnce(
-      new Error('RPC failed'),
-    );
+    expect(t.coordinator.canBroadcast).toBe(true);
+
+    const failure = new Error('RPC failed');
+
+    t.getTransactionReceipt.mockRejectedValueOnce(failure);
 
     await expect(t.coordinator.recover(t.recovery))
-      .rejects.toThrow('RPC failed');
+      .rejects.toBe(failure);
 
-    t.coordinator.completeRecovery();
+    expect(t.coordinator.status.recoveryComplete).toBe(false);
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.request).not.toHaveBeenCalled();
+
+    const inspection = await t.coordinator.checkInclusions({
+      publicClient: t.publicClient,
+      head: ANCHOR,
+    });
+
+    expect(inspection).toMatchObject({
+      status: 'inspected',
+      broadcastAttemptId: t.prepared.attemptId,
+    });
+
+    // Head inspection found a broadcast candidate, but cannot complete
+    // the durable recovery that failed.
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.coordinator.status.recoveryComplete).toBe(false);
+    expect(t.coordinator.canBroadcast).toBe(false);
 
     await expect(t.broadcast())
       .rejects.toThrow('Fresh reconciliation');
 
     expect(t.request).not.toHaveBeenCalled();
+
+    // A subsequent successful recovery can authorize the recorded attempt.
+    await expect(t.coordinator.recover(t.recovery))
+      .resolves.toMatchObject({
+        status: 'unresolved',
+        receipt: {
+          status: 'receipt-not-found',
+        },
+        search: null,
+      });
+
+    expect(t.coordinator.status.recoveryComplete).toBe(true);
+    expect(t.coordinator.canBroadcast).toBe(true);
+
+    await t.broadcast();
+
+    expect(t.request).toHaveBeenCalledExactlyOnceWith({
+      method: 'eth_sendRawTransaction',
+      params: [t.signedTransaction],
+    }, {
+      retryCount: 0,
+    });
+
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.signTransaction).toHaveBeenCalledTimes(1);
   });
 
   it('waits for durability when the receipt is already included above the anchor', async () => {
