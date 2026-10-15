@@ -1,5 +1,4 @@
 import {
-  formatEther,
   type Address,
   type Hex,
   type PublicClient,
@@ -76,57 +75,6 @@ export async function collectDaemonStartupSummary(
     pollIntervalMs: config.pollIntervalMs,
     durableNextBlocks,
   };
-}
-
-export function formatDaemonStartupSummary(
-  summary: DaemonStartupSummary,
-): string {
-  const lines = [
-    'Relayer daemon starting',
-    '',
-    `Network:           ${summary.network}`,
-    `Chain ID:          ${summary.chainId}`,
-    `RPC origin:        ${summary.rpcOrigin}`,
-    `Signer:            ${summary.signer}`,
-    `Signer balance:    ${formatEther(summary.signerBalance)} ETH`,
-    `Registry:          ${summary.registry}`,
-    `Registry codehash: ${summary.registryRuntimeCodehash}`,
-    `Finality:          ${formatFinality(summary.finality)}`,
-    `Latest head:       ${summary.latestHead}`,
-    `Durable head:      ${summary.durableHead}`,
-    `Checkpoint:        ${summary.checkpointFile}`,
-    `Start block:       ${summary.startBlock}`,
-    `Max block range:   ${summary.maxBlockRange}`,
-    `Poll interval:     ${summary.pollIntervalMs} ms`,
-    'Consumers:',
-  ];
-
-  for (const consumer of summary.consumers) {
-    const nextBlock = summary.durableNextBlocks.get(consumer);
-
-    lines.push(
-      nextBlock === undefined
-        ? `  - ${consumer}`
-        : `  - ${consumer} (next durable block: ${nextBlock})`
-    );
-  }
-
-  return lines.join('\n');
-}
-
-function formatFinality(
-  policy: FinalityPolicy
-): string {
-  switch (policy.type) {
-    case 'safe':
-      return 'safe';
-
-    case 'finalized':
-      return 'finalized';
-
-    case 'confirmations':
-      return `${policy.confirmations} confirmations`;
-  }
 }
 
 function formatRpcOrigin(

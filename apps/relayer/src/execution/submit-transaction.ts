@@ -15,7 +15,7 @@ import type {
   SignerCoordinator,
 } from '../state/signer-coordinator.js';
 
-export type TransactionCall = Pick<
+type TransactionCall = Pick<
   PrepareRelayerTransactionOptions,
   'to' | 'data' | 'value' | 'gas'
 >;

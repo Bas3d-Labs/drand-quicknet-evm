@@ -37,7 +37,7 @@ import {
 export type BeaconSubmissionRequest =
   SubmitBeaconTransactionOptions['request'];
 
-export type BeaconSubmissionResult =
+type BeaconSubmissionResult =
   | SubmitTransactionResult
   | {
       /**

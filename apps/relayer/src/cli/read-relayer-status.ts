@@ -37,7 +37,7 @@ export type ReadRelayerStatusOptions = CommonStatusOptions & (
     }
 );
 
-export type DaemonSnapshotStatus =
+type DaemonSnapshotStatus =
   | {
       readonly source: 'daemon-snapshot';
       readonly snapshot: 'missing';

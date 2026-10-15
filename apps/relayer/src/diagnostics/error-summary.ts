@@ -60,7 +60,7 @@ const SYSTEM_CODES = new Set([
   'ETIMEDOUT',
 ]);
 
-export type RevertArgument = string | number | boolean | null;
+type RevertArgument = string | number | boolean | null;
 
 export interface ErrorSummary {
   name: string;
@@ -76,7 +76,7 @@ export interface ErrorSummary {
   mismatch?: MismatchDetails;
 }
 
-export interface RevertSummary {
+interface RevertSummary {
   name?: string;
   reason?: string;
   args?: RevertArgument[];

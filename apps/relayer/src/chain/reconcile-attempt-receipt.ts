@@ -23,7 +23,7 @@ import {
   isFixedHex,
 } from '../shared/hex.js';
 
-export type ReceiptResolutionEvidence = Extract<
+type ReceiptResolutionEvidence = Extract<
   AttemptResolutionEvidence,
   { outcome: 'success' | 'reverted' }
 >;

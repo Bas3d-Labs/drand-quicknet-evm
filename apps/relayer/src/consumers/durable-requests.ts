@@ -24,7 +24,7 @@ import {
   type QuicknetRoundOutcome,
 } from './request-processor.js';
 
-export type DurableFulfillment =
+type DurableFulfillment =
   | {
       status: 'stored';
     }
@@ -36,7 +36,7 @@ export type DurableFulfillment =
       error: unknown;
     };
 
-export interface DurableRoundOutcome {
+interface DurableRoundOutcome {
   round: bigint;
   firstRequestBlock: bigint;
   fulfillment: DurableFulfillment;

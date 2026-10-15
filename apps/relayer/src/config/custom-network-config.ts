@@ -19,7 +19,7 @@ import {
   type ResolveNetworkConfigPathOptions,
 } from './network-config-path.js';
 
-export interface CustomChainDescriptor {
+interface CustomChainDescriptor {
   id: number;
   name: string;
   nativeCurrency: Chain['nativeCurrency'];
