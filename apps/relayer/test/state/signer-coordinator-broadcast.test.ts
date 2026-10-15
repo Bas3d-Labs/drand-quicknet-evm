@@ -688,18 +688,64 @@ describe('journaled transaction broadcast', () => {
     expect(t.request).not.toHaveBeenCalled();
   });
 
-  it('does not broadcast after observing that the nonce was consumed', async () => {
+  it('does not broadcast after head inspection observes a consumed nonce', async () => {
     const t = await setup();
 
-    await t.coordinator.recordObservation({
-      ...OBSERVATION,
-      nonce: 5n,
+    expect(t.coordinator.canBroadcast).toBe(true);
+
+    const head = {
+      blockNumber: 101n,
+      blockHash: HASH,
+    };
+
+    t.getTransactionCount.mockResolvedValueOnce(5);
+
+    const result = await t.coordinator.checkInclusions({
+      publicClient: t.publicClient,
+      head,
     });
+
+    expect(result).toMatchObject({
+      status: 'inspected',
+      observation: {
+        anchor: head,
+        nonce: 5n,
+      },
+      inclusionChecksComplete: false,
+      broadcastAttemptId: null,
+    });
+
+    expect(t.getTransactionReceipt).toHaveBeenCalledTimes(1);
+    expect(t.getTransactionCount).toHaveBeenCalledTimes(1);
+
+    expect(t.save).toHaveBeenCalledOnce();
+
+    expect(t.visible()).toMatchObject({
+      kind: 'present',
+      snapshot: {
+        lastObservation: {
+          anchor: head,
+          nonce: 5n,
+        },
+        nextNonce: 5n,
+        durableNextNonce: 4n,
+        attempts: [{
+          attemptId: t.prepared.attemptId,
+          nonce: 4n,
+          phase: 'signed',
+          inclusion: null,
+        }],
+      },
+    });
+
+    expect(t.coordinator.canBroadcast).toBe(false);
 
     await expect(t.broadcast())
       .rejects.toThrow('Fresh reconciliation');
 
     expect(t.request).not.toHaveBeenCalled();
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.signTransaction).toHaveBeenCalledTimes(1);
   });
 
   it('requires inspection after restart before sending the recorded attempt', async () => {
