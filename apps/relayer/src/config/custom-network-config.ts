@@ -16,7 +16,7 @@ import {
 
 import {
   resolveNetworkConfigPath,
-} from './config.js';
+} from './network-config-path.js';
 
 export interface CustomChainDescriptor {
   id: number;
