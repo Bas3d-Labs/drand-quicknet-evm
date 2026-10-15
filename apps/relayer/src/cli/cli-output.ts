@@ -48,6 +48,7 @@ import {
 } from './daemon-snapshot-status-output.js';
 
 import {
+  projectJournalStatusOutput,
   renderJournalStatusOutput,
 } from './journal-status-output.js';
 
@@ -455,27 +456,30 @@ function renderRelayerStatus(
 function statusFailureFields(
   result: unknown,
 ): Record<string, unknown> {
-  const source = own(result, 'source');
+  switch (own(result, 'source')) {
+    case 'journal': {
+      const projection = projectJournalStatusOutput(result);
 
-  if (source === 'daemon-snapshot') {
-    // Validate the complete result before retaining compact context.
-    const projection = projectDaemonSnapshotStatusOutput(result);
+      return {
+        source: projection.source,
+        journal: projection.journal,
+        gate: projection.gate,
+      };
+    }
 
-    return {
-      source: projection.source,
-      snapshot: projection.snapshot,
-      gate: projection.gate,
-    };
+    case 'daemon-snapshot': {
+      const projection = projectDaemonSnapshotStatusOutput(result);
+
+      return {
+        source: projection.source,
+        snapshot: projection.snapshot,
+        gate: projection.gate,
+      };
+    }
+
+    default:
+      throw new TypeError('Invalid relayer status source.');
   }
-
-  // Journal projection is the next extraction.
-  renderRelayerStatus(result);
-
-  return {
-    source,
-    journal: own(result, 'journal'),
-    gate: 'unknown',
-  };
 }
 
 function deferredImportFields(
