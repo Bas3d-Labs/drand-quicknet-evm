@@ -104,17 +104,39 @@ async function setup() {
   });
 
   const coordinator = await create();
-  coordinator.completeRecovery();
+
+  const startupClient = {
+    getBlock: async () => ({
+      number: ANCHOR.blockNumber,
+      hash: ANCHOR.blockHash,
+    }),
+    getTransactionCount: async () => Number(OBSERVATION.nonce),
+  } as unknown as PublicClient;
+
+  await expect(coordinator.recover({
+    publicClient: startupClient,
+    anchor: ANCHOR,
+    maxBlockRange: 2n,
+  })).resolves.toEqual({
+    status: 'no-attempt',
+    observation: OBSERVATION,
+  });
+
+  expect(coordinator.status).toMatchObject({
+    open: false,
+    recoveryComplete: true,
+    inclusionChecksComplete: false,
+  });
 
   await coordinator.checkInclusions({
-    publicClient: {
-      getBlock: async () => ({
-        number: ANCHOR.blockNumber,
-        hash: ANCHOR.blockHash,
-      }),
-      getTransactionCount: async () => Number(OBSERVATION.nonce),
-    } as unknown as PublicClient,
+    publicClient: startupClient,
     head: ANCHOR,
+  });
+
+  expect(coordinator.status).toMatchObject({
+    open: true,
+    recoveryComplete: true,
+    inclusionChecksComplete: true,
   });
 
   // Keep saved-call indexing focused on preparation and broadcasting.
