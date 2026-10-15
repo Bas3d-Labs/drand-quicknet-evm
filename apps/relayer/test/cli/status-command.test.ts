@@ -23,8 +23,11 @@ vi.mock('../../src/config/config.js', async (importOriginal) => {
 
 import {
   main,
-  parseCommandArguments,
 } from '../../src/cli/cli.js';
+
+import {
+  parseCommandArguments,
+} from '../../src/cli/parse-command-arguments.js';
 
 import {
   readRelayerStatus,

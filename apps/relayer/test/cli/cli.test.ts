@@ -84,8 +84,11 @@ vi.mock('../../src/state/service-lock.js', async (importOriginal) => {
 });
 
 import {
+  createRelayerClients,
+} from '../../src/chain/clients.js';
+
+import {
   main,
-  parseCommandArguments,
 } from '../../src/cli/cli.js';
 
 import type {
@@ -97,13 +100,13 @@ import {
 } from '../../src/cli/daemon-command.js';
 
 import {
+  parseCommandArguments,
+} from '../../src/cli/parse-command-arguments.js';
+
+import {
   syncNonce,
   type SyncNonceResult,
 } from '../../src/cli/sync-nonce.js';
-
-import {
-  createRelayerClients,
-} from '../../src/chain/clients.js';
 
 import {
   loadRelayerConfig,
