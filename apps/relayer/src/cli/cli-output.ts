@@ -539,26 +539,13 @@ export function renderCliOutput(
     const status = own(result, 'status');
 
     if (status === 'pending') {
-      const attemptId = own(result, 'attemptId');
-      const hash = hex(own(result, 'transactionHash'), 32);
-      const reason = own(result, 'reason');
-
-      if (!isUuidV4(attemptId)) {
-        throw new TypeError('Invalid CLI attempt ID.');
-      }
-
-      if (
-        reason !== 'broadcast-not-acknowledged' &&
-        reason !== 'receipt-timeout'
-      ) {
-        throw new TypeError('Invalid pending reason.');
-      }
+      const fields = pendingImportFields(result);
 
       return [
         'Quicknet round ' + round + ' import is pending.',
-        'Reason: ' + reason,
-        'Attempt: ' + attemptId,
-        'Transaction: ' + hash,
+        'Reason: ' + fields.reason,
+        'Attempt: ' + fields.attemptId,
+        'Transaction: ' + fields.transactionHash,
       ].join('\n');
     }
 
@@ -661,6 +648,31 @@ export function renderCliOutput(
   throw new TypeError('Invalid CLI output type.');
 }
 
+function pendingImportFields(
+  result: unknown,
+) {
+  const attemptId = own(result, 'attemptId');
+  const transactionHash = hex(own(result, 'transactionHash'), 32);
+  const reason = own(result, 'reason');
+
+  if (!isUuidV4(attemptId)) {
+    throw new TypeError('Invalid CLI attempt ID.');
+  }
+
+  if (
+    reason !== 'broadcast-not-acknowledged' &&
+    reason !== 'receipt-timeout'
+  ) {
+    throw new TypeError('Invalid pending reason.');
+  }
+
+  return {
+    attemptId,
+    transactionHash,
+    reason,
+  };
+}
+
 // Preserve a known import outcome if rendering or writing its output fails.
 export function renderOutputFailure(
   output: CliOutput,
@@ -696,28 +708,13 @@ export function renderOutputFailure(
       const status = own(result, 'status');
 
       if (status === 'pending') {
-        const attemptId = own(result, 'attemptId');
-        const transactionHash = hex(own(result, 'transactionHash'), 32);
-        const reason = own(result, 'reason');
-
-        if (!isUuidV4(attemptId)) {
-          throw new TypeError('Invalid CLI attempt ID.');
-        }
-
-        if (
-          reason !== 'broadcast-not-acknowledged' &&
-          reason !== 'receipt-timeout'
-        ) {
-          throw new TypeError('Invalid pending reason.');
-        }
+        const fields = pendingImportFields(result);
 
         context = {
           output: type,
           round,
           status,
-          attemptId,
-          transactionHash,
-          reason,
+          ...fields,
         };
       } else if (status === 'deferred') {
         const fields = deferredImportFields(result);
