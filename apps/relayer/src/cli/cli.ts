@@ -1,12 +1,4 @@
-
-import process from 'node:process';
-
 import {
-  createRelayerClients,
-} from '../chain/clients.js';
-
-import {
-  loadRelayerConfig,
   type NetworkSource,
 } from '../config/config.js';
 
@@ -17,10 +9,6 @@ import type {
 import type {
   RoundImportProgress,
 } from '../diagnostics/operation-context.js';
-
-import {
-  createRelayerLog,
-} from '../diagnostics/relayer-log.js';
 
 import {
   assertServiceLockHeld,
@@ -36,7 +24,6 @@ import {
 
 import {
   parseCommandArguments,
-  type SyncNonceCommandArguments,
 } from './parse-command-arguments.js';
 
 import {
@@ -48,12 +35,12 @@ import {
 } from './run-round-import-command.js';
 
 import {
-  runWithShutdownSignal,
-} from './run-with-shutdown-signal.js';
+  runSyncNonceCommand,
+} from './run-sync-nonce-command.js';
 
 import {
-  syncNonce,
-} from './sync-nonce.js';
+  runWithShutdownSignal,
+} from './run-with-shutdown-signal.js';
 
 export interface CliOptions {
   onDiagnostics?: (
@@ -156,80 +143,6 @@ async function runDaemonCli(
 
     return 'success';
   }, 'success');
-}
-
-async function runSyncNonceCommand(
-  command: SyncNonceCommandArguments,
-  output: CliOutputHandler,
-  options: CliOptions,
-  signal: AbortSignal,
-): Promise<CliOutcome> {
-  signal.throwIfAborted();
-
-  const config = await loadRelayerConfig({
-    source: command.source,
-    ...(options.onDiagnostics !== undefined
-      ? { onDiagnostics: options.onDiagnostics }
-      : {}),
-  });
-
-  signal.throwIfAborted();
-
-  const clients = createRelayerClients(config);
-
-  const logger = createRelayerLog({
-    chainId: config.chain.id,
-    level: process.env.QUICKNET_LOG_LEVEL ?? 'info',
-    errorSummary: config.errorSummary,
-    destination: process.stderr,
-  });
-
-  const identity = {
-    chainId: config.chain.id,
-    signer: config.account.address,
-  };
-
-  const result = await syncNonce({
-    publicClient: clients.publicClient,
-    identity,
-    finality: config.finality,
-    apply: command.apply,
-    signal,
-  });
-
-  if (result.status === 'applied') {
-    const { repair } = result;
-
-    logger.signerNonceSynced({
-      signer: identity.signer,
-      previousNextNonce: repair.previousNextNonce,
-      nextNonce: repair.nextNonce,
-      durableBlock: repair.observation.anchor.blockNumber,
-      durableBlockHash: repair.observation.anchor.blockHash,
-      durableNonce: repair.observation.nonce,
-      repairAt: repair.at,
-    });
-  }
-
-  output({
-    type: 'nonce-sync-result',
-    identity,
-    mode: command.apply ? 'apply' : 'preview',
-    result,
-  });
-
-  switch (result.status) {
-    case 'repair-available':
-    case 'already-synchronized':
-    case 'applied':
-      return 'success';
-
-    case 'deferred':
-      return 'deferred';
-
-    case 'refused':
-      return 'failure';
-  }
 }
 
 function normalizeArguments(
