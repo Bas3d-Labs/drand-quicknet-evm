@@ -205,15 +205,14 @@ async function searchSetup(firstIncluded = false) {
   };
 }
 
-async function preparationSetup(maxRetainedAttempts = 3) {
-  const snapshot = await queueSnapshot();
-  const t = setup({ kind: 'present', snapshot }, maxRetainedAttempts);
-  const coordinator = await t.create();
-
+async function recoverRetainedInclusions(
+  coordinator: SignerCoordinator,
+  snapshot: TransactionJournalSnapshot,
+): Promise<void> {
   const oldest = snapshot.attempts[0]!;
   const includedHash = oldest.signedTransactions[1]!.transactionHash;
 
-  const recoveryClient = {
+  const publicClient = {
     getBlock: vi.fn<PublicClient['getBlock']>()
       .mockImplementation(async ({ blockNumber } = {}) => ({
         number: blockNumber,
@@ -237,7 +236,7 @@ async function preparationSetup(maxRetainedAttempts = 3) {
   } as unknown as PublicClient;
 
   expect(await coordinator.recover({
-    publicClient: recoveryClient,
+    publicClient,
     anchor: BASELINE.anchor,
     maxBlockRange: 2n,
   })).toMatchObject({
@@ -257,6 +256,14 @@ async function preparationSetup(maxRetainedAttempts = 3) {
 
   expect(coordinator.attempts.map((attempt) => attempt.attemptId))
     .toEqual(snapshot.attempts.map((attempt) => attempt.attemptId));
+}
+
+async function preparationSetup(maxRetainedAttempts = 3) {
+  const snapshot = await queueSnapshot();
+  const t = setup({ kind: 'present', snapshot }, maxRetainedAttempts);
+  const coordinator = await t.create();
+
+  await recoverRetainedInclusions(coordinator, snapshot);
 
   expect(t.save.mock.lastCall?.[0]).toMatchObject({
     nextNonce: 6n,
@@ -1481,7 +1488,10 @@ describe('signer coordinator startup', () => {
     const t = setup({ kind: 'present', snapshot });
     const coordinator = await t.create();
 
-    coordinator.completeRecovery();
+    await recoverRetainedInclusions(coordinator, snapshot);
+
+    // Count only the inclusion write controlled below.
+    t.save.mockClear();
 
     const inspect = vi.spyOn(
       inclusionInspection,
