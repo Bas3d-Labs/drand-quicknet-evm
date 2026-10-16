@@ -1582,7 +1582,10 @@ describe('signer coordinator startup', () => {
     const t = setup({ kind: 'present', snapshot });
     const coordinator = await t.create();
 
-    coordinator.completeRecovery();
+    await recoverRetainedInclusions(coordinator, snapshot);
+
+    // Keep write assertions scoped to inclusion checking.
+    t.save.mockClear();
 
     const inspect = vi.spyOn(
       inclusionInspection,
@@ -1601,11 +1604,13 @@ describe('signer coordinator startup', () => {
         head: OBSERVED_AT,
       });
 
+      expect(t.save).toHaveBeenCalledOnce();
       expect(t.save.mock.calls[0]![0].attempts)
         .toEqual(snapshot.attempts);
 
       expect(coordinator.status).toMatchObject({
         open: false,
+        recoveryComplete: true,
         inclusionChecksComplete: false,
       });
     } finally {
@@ -1663,7 +1668,10 @@ describe('signer coordinator startup', () => {
     const t = setup({ kind: 'present', snapshot });
     const coordinator = await t.create();
 
-    coordinator.completeRecovery();
+    await recoverRetainedInclusions(coordinator, snapshot);
+
+    // Keep write assertions scoped to inclusion checking.
+    t.save.mockClear();
 
     const inspect = vi.spyOn(
       inclusionInspection,
