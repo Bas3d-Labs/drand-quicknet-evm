@@ -894,14 +894,15 @@ describe('signer coordinator startup', () => {
     }
   });
 
-  it('retains the exact failed observation snapshot through retry', async () => {
+  it('retains the exact failed inclusion snapshot through retry', async () => {
     const snapshot = await queueSnapshot();
     const t = setup({ kind: 'present', snapshot });
     const coordinator = await t.create();
+
+    await recoverRetainedInclusions(coordinator, snapshot);
+    t.save.mockClear();
+
     const before = coordinator.attempts;
-
-    t.save.mockRejectedValueOnce(new Error('Injected write failure'));
-
     const observation = {
       anchor: {
         blockNumber: 130n,
@@ -910,43 +911,70 @@ describe('signer coordinator startup', () => {
       nonce: 7n,
     };
 
-    await expect(coordinator.recordObservation(observation))
-      .rejects.toThrow('Journal persistence');
-
-    const pending = t.save.mock.calls[0]![0];
-
-    expect(coordinator.attempts).toEqual(before);
-    expect(coordinator.status.primaryReason).toBe('persistence-failure');
-
-    observation.nonce = 4n;
-    observation.anchor.blockNumber = 999n;
-
-    await coordinator.retryPersistence();
-
-    expect(t.save.mock.calls[1]![0]).toBe(pending);
-    expect(pending.lastObservation).toEqual({
-      anchor: {
-        blockNumber: 130n,
-        blockHash: HASH,
-      },
-      nonce: 7n,
-    });
-
-    expect(pending.nextNonce).toBe(6n);
-    expect(pending.durableNextNonce).toBe(4n);
-    expect(pending.attempts).toHaveLength(2);
-
-    expect(coordinator.status).toMatchObject({
-      open: false,
+    const inspect = vi.spyOn(
+      inclusionInspection,
+      'inspectSignerInclusions',
+    ).mockResolvedValueOnce({
+      status: 'inspected',
+      observation,
+      attempts: snapshot.attempts,
+      broadcastAttemptId: null,
       inclusionChecksComplete: false,
-      primaryReason: 'unattributed-signer-activity',
     });
 
-    await expect(coordinator.recordObservation(observation))
-      .rejects.toThrow('Cannot overwrite');
+    const options = {
+      publicClient: {} as PublicClient,
+      head: { ...observation.anchor },
+    };
 
-    expect(t.load).toHaveBeenCalledTimes(1);
-    expect(t.save).toHaveBeenCalledTimes(2);
+    t.save.mockRejectedValueOnce(new Error('Injected write failure'));
+
+    try {
+      await expect(coordinator.checkInclusions(options))
+        .rejects.toThrow('Journal persistence');
+
+      const pending = t.save.mock.calls[0]![0];
+
+      expect(coordinator.attempts).toEqual(before);
+      expect(coordinator.status.primaryReason).toBe('persistence-failure');
+
+      // Mutating the inspector's result must not change the pending snapshot.
+      observation.nonce = 4n;
+      observation.anchor.blockNumber = 999n;
+
+      await expect(coordinator.checkInclusions(options))
+        .rejects.toThrow('must be retried');
+
+      expect(inspect).toHaveBeenCalledTimes(1);
+      expect(t.save).toHaveBeenCalledOnce();
+
+      await coordinator.retryPersistence();
+
+      expect(t.save.mock.calls[1]![0]).toBe(pending);
+      expect(pending.lastObservation).toEqual({
+        anchor: {
+          blockNumber: 130n,
+          blockHash: HASH,
+        },
+        nonce: 7n,
+      });
+
+      expect(pending.nextNonce).toBe(6n);
+      expect(pending.durableNextNonce).toBe(4n);
+      expect(pending.attempts).toEqual(snapshot.attempts);
+
+      expect(coordinator.status).toMatchObject({
+        open: false,
+        inclusionChecksComplete: false,
+        primaryReason: 'unattributed-signer-activity',
+      });
+
+      expect(inspect).toHaveBeenCalledTimes(1);
+      expect(t.load).toHaveBeenCalledTimes(1);
+      expect(t.save).toHaveBeenCalledTimes(2);
+    } finally {
+      inspect.mockRestore();
+    }
   });
 
   it.each([false, true])(
