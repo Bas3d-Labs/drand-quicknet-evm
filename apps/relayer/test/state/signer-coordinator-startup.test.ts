@@ -814,33 +814,84 @@ describe('signer coordinator startup', () => {
     }
   });
 
-  it('requires recovery when an observation falls behind durable progress', async () => {
+  it('requires recovery when an inclusion observation falls behind durable progress', async () => {
     const snapshot = await queueSnapshot();
+    const retained = snapshot.attempts[1]!;
 
     const t = setup({
       kind: 'present',
       snapshot: {
         ...snapshot,
         durableNextNonce: 5n,
-        attempts: [snapshot.attempts[1]!],
+        attempts: [retained],
       },
     });
 
     const coordinator = await t.create();
-    coordinator.completeRecovery();
 
-    await expect(coordinator.recordObservation({
-      anchor: OBSERVED_AT,
-      nonce: 4n,
-    })).rejects.toThrow('Observed nonce is behind the journal');
+    const publicClient = {
+      getBlock: vi.fn<PublicClient['getBlock']>()
+        .mockImplementation(async ({ blockNumber } = {}) => ({
+          number: blockNumber,
+          hash: HASH,
+        }) as never),
+      getTransactionCount: vi.fn<PublicClient['getTransactionCount']>()
+        .mockResolvedValue(5),
+      getTransactionReceipt: vi.fn<PublicClient['getTransactionReceipt']>()
+        .mockResolvedValue({
+          transactionHash: retained.signedTransactions[0]!.transactionHash,
+          blockNumber: 111n,
+          blockHash: HASH,
+          status: 'success',
+        } as never),
+    } as unknown as PublicClient;
 
-    expect(t.save).not.toHaveBeenCalled();
-
-    expect(coordinator.status).toMatchObject({
-      open: false,
-      recoveryComplete: false,
-      inclusionChecksComplete: false,
+    expect(await coordinator.recover({
+      publicClient,
+      anchor: BASELINE.anchor,
+      maxBlockRange: 2n,
+    })).toMatchObject({
+      status: 'unresolved',
+      receipt: {
+        status: 'included-not-durable',
+      },
+      search: null,
     });
+
+    expect(coordinator.status.recoveryComplete).toBe(true);
+
+    const before = coordinator.attempts;
+    t.save.mockClear();
+
+    const regressed = {
+      status: 'nonce-behind-journal' as const,
+      observation: {
+        anchor: OBSERVED_AT,
+        nonce: 4n,
+      },
+    };
+
+    const inspect = vi.spyOn(
+      inclusionInspection,
+      'inspectSignerInclusions',
+    ).mockResolvedValueOnce(regressed);
+
+    try {
+      expect(await coordinator.checkInclusions({
+        publicClient,
+        head: OBSERVED_AT,
+      })).toEqual(regressed);
+
+      expect(t.save).not.toHaveBeenCalled();
+      expect(coordinator.attempts).toEqual(before);
+      expect(coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: false,
+        inclusionChecksComplete: false,
+      });
+    } finally {
+      inspect.mockRestore();
+    }
   });
 
   it('retains the exact failed observation snapshot through retry', async () => {
@@ -1733,8 +1784,55 @@ describe('signer coordinator startup', () => {
 
     const t = setup({ kind: 'present', snapshot });
     const coordinator = await t.create();
+    const includedHash =
+      snapshot.attempts[0]!.signedTransactions[1]!.transactionHash;
 
-    coordinator.completeRecovery();
+    const publicClient = {
+      getBlock: vi.fn<PublicClient['getBlock']>()
+        .mockImplementation(async ({ blockNumber } = {}) => ({
+          number: blockNumber,
+          hash: HASH,
+        }) as never),
+      getTransactionCount: vi.fn<PublicClient['getTransactionCount']>()
+        .mockResolvedValue(7),
+      getTransactionReceipt: vi.fn<PublicClient['getTransactionReceipt']>()
+        .mockImplementation(async ({ hash }) => {
+          if (hash !== includedHash) {
+            throw new TransactionReceiptNotFoundError({ hash });
+          }
+
+          return {
+            transactionHash: includedHash,
+            blockNumber: 110n,
+            blockHash: HASH,
+            status: 'success',
+          } as never;
+        }),
+    } as unknown as PublicClient;
+
+    expect(await coordinator.recover({
+      publicClient,
+      anchor: OBSERVED_AT,
+      maxBlockRange: 2n,
+    })).toMatchObject({
+      status: 'resolution-available',
+      observation: snapshot.lastObservation,
+    });
+
+    expect(coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+      primaryReason: 'unattributed-signer-activity',
+    });
+
+    const recovered = t.save.mock.lastCall![0];
+
+    expect(recovered.nextNonce).toBe(6n);
+    expect(recovered.durableNextNonce).toBe(5n);
+    expect(recovered.attempts).toEqual([snapshot.attempts[1]]);
+
+    t.save.mockClear();
 
     const inspect = vi.spyOn(
       inclusionInspection,
@@ -1749,24 +1847,26 @@ describe('signer coordinator startup', () => {
         nonce: 6n,
       },
       broadcastAttemptId: null,
-      attempts: snapshot.attempts,
+      attempts: recovered.attempts,
       inclusionChecksComplete: true,
     });
 
     try {
       await coordinator.checkInclusions({
-        publicClient: {} as PublicClient,
+        publicClient,
         head: {
           blockNumber: 130n,
           blockHash: HASH,
         },
       });
 
-      expect(t.save.mock.calls[0]![0].lastObservation)
-        .toEqual(snapshot.lastObservation);
+      expect(t.save).toHaveBeenCalledOnce();
+      expect(t.save.mock.calls[0]![0]).toEqual(recovered);
 
       expect(coordinator.status).toMatchObject({
         open: false,
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
         primaryReason: 'unattributed-signer-activity',
       });
     } finally {
@@ -1779,7 +1879,10 @@ describe('signer coordinator startup', () => {
     const t = setup({ kind: 'present', snapshot });
     const coordinator = await t.create();
 
-    coordinator.completeRecovery();
+    await recoverRetainedInclusions(coordinator, snapshot);
+
+    // Count only writes made by the inclusion checks below.
+    t.save.mockClear();
 
     const changed = {
       status: 'anchor-changed' as const,
