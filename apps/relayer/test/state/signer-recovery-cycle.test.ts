@@ -7,6 +7,7 @@ import {
 
 import {
   TransactionReceiptNotFoundError,
+  type Hash,
   type PublicClient,
 } from 'viem';
 
@@ -118,18 +119,35 @@ async function setup(options: {
   const signTransaction = vi.fn(ACCOUNT.signTransaction);
 
   if (!options.missing) {
-    coordinator.completeRecovery();
+    const startupClient = {
+      getBlock: vi.fn().mockResolvedValue({
+        number: ANCHOR.blockNumber,
+        hash: ANCHOR.blockHash,
+      }),
+      getTransactionCount: vi.fn().mockResolvedValue(4),
+    } as unknown as PublicClient;
+
+    expect(await coordinator.recover({
+      publicClient: startupClient,
+      anchor: ANCHOR,
+      maxBlockRange: 2n,
+    })).toEqual({
+      status: 'no-attempt',
+      observation: OBSERVATION,
+    });
+
+    expect(coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
 
     await coordinator.checkInclusions({
-      publicClient: {
-        getBlock: vi.fn().mockResolvedValue({
-          number: ANCHOR.blockNumber,
-          hash: ANCHOR.blockHash,
-        }),
-        getTransactionCount: vi.fn().mockResolvedValue(4),
-      } as unknown as PublicClient,
+      publicClient: startupClient,
       head: ANCHOR,
     });
+
+    expect(coordinator.status.open).toBe(true);
 
     if (!options.empty) {
       const prepared = await coordinator.prepareAttempt({
@@ -542,14 +560,85 @@ describe('signer recovery cycle', () => {
   it('keeps broadcasting blocked by unattributed activity', async () => {
     const t = await setup();
 
-    t.coordinator.block('unattributed-signer-activity');
+    const hashes = new Map<bigint, Hash>([
+      [100n, HASH],
+      [101n, OTHER],
+      [102n, `0x${'cc'.repeat(32)}`],
+      [103n, `0x${'dd'.repeat(32)}`],
+    ]);
 
-    expect(await t.cycle.run(t.recovery)).toMatchObject({
+    t.getBlock.mockImplementation(async ({ blockNumber } = {}) => {
+      if (blockNumber === undefined || !hashes.has(blockNumber)) {
+        throw new Error('Unexpected block requested.');
+      }
+
+      return {
+        number: blockNumber,
+        hash: hashes.get(blockNumber),
+        parentHash: hashes.get(blockNumber - 1n) ?? HASH,
+        transactions: [],
+      } as never;
+    });
+
+    // The retained attempt allocated nonce 4, so nextNonce is 5.
+    // Observing 6 establishes activity beyond that recorded allocation.
+    t.getTransactionCount.mockResolvedValue(6);
+
+    expect(await t.coordinator.recover({
+      publicClient: t.recovery.publicClient,
+      anchor: {
+        blockNumber: 102n,
+        blockHash: hashes.get(102n)!,
+      },
+      maxBlockRange: 1n,
+    })).toMatchObject({
+      status: 'unresolved',
+      search: {
+        status: 'not-found',
+        scannedBlocks: 1n,
+        remainingBlocks: 1n,
+      },
+    });
+
+    expect(t.coordinator.status.blockers)
+      .toContain('unattributed-signer-activity');
+    expect(t.coordinator.status.blockers)
+      .not.toContain('conflict-search-exhausted');
+
+    t.save.mockClear();
+    t.events.length = 0;
+
+    // Advance the anchor so this pass also leaves search work remaining.
+    expect(await t.cycle.run({
+      ...t.recovery,
+      anchor: {
+        blockNumber: 103n,
+        blockHash: hashes.get(103n)!,
+      },
+      maxBlockRange: 1n,
+    })).toMatchObject({
+      inspection: {
+        status: 'unresolved',
+        search: {
+          status: 'not-found',
+          scannedBlocks: 1n,
+          remainingBlocks: 1n,
+        },
+      },
       broadcast: null,
       retryDelayMs: 0,
     });
 
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.coordinator.status.blockers)
+      .toContain('unattributed-signer-activity');
+    expect(t.coordinator.status.blockers)
+      .not.toContain('conflict-search-exhausted');
+    expect(t.coordinator.status.open).toBe(false);
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.coordinator.attempts).toHaveLength(1);
     expect(t.request).not.toHaveBeenCalled();
+    expect(t.schedule.delayMs).toBe(0);
   });
 
   it('does not broadcast after an inspection RPC failure', async () => {
@@ -640,18 +729,32 @@ describe('signer recovery cycle', () => {
     t.save.mockRejectedValueOnce(new Error('failed observation'));
 
     await expect(
-      t.coordinator.recordObservation(OBSERVATION),
-    ).rejects.toThrow();
+      t.coordinator.recover(t.recovery),
+    ).rejects.toThrow('Journal persistence');
 
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      persistenceState: 'failed',
+    });
+    expect(t.request).not.toHaveBeenCalled();
+
+    const failedSnapshot = t.save.mock.calls[0]![0];
     const originalSave = t.save.getMockImplementation()!;
 
+    // Isolate the cycle's reads from the recovery that created the failure.
+    t.getBlock.mockClear();
+
     t.save.mockImplementationOnce(async (snapshot) => {
+      expect(snapshot).toBe(failedSnapshot);
       t.recovery.anchor.blockNumber = 999n;
       await originalSave(snapshot);
     });
 
     await t.cycle.run(t.recovery);
 
+    expect(t.recovery.anchor.blockNumber).toBe(999n);
+    expect(t.getBlock).toHaveBeenCalled();
     expect(t.getBlock.mock.calls.every(
       ([options]) => options?.blockNumber === 100n,
     )).toBe(true);
