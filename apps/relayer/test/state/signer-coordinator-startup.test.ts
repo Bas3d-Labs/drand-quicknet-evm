@@ -7,6 +7,7 @@ import {
 
 import {
   keccak256,
+  TransactionReceiptNotFoundError,
   type PublicClient,
 } from 'viem';
 
@@ -209,7 +210,58 @@ async function preparationSetup(maxRetainedAttempts = 3) {
   const t = setup({ kind: 'present', snapshot }, maxRetainedAttempts);
   const coordinator = await t.create();
 
-  coordinator.completeRecovery();
+  const oldest = snapshot.attempts[0]!;
+  const includedHash = oldest.signedTransactions[1]!.transactionHash;
+
+  const recoveryClient = {
+    getBlock: vi.fn<PublicClient['getBlock']>()
+      .mockImplementation(async ({ blockNumber } = {}) => ({
+        number: blockNumber,
+        hash: HASH,
+      }) as never),
+    getTransactionCount: vi.fn<PublicClient['getTransactionCount']>()
+      .mockResolvedValue(4),
+    getTransactionReceipt: vi.fn<PublicClient['getTransactionReceipt']>()
+      .mockImplementation(async ({ hash }) => {
+        if (hash !== includedHash) {
+          throw new TransactionReceiptNotFoundError({ hash });
+        }
+
+        return {
+          transactionHash: includedHash,
+          blockNumber: 110n,
+          blockHash: HASH,
+          status: 'success',
+        } as never;
+      }),
+  } as unknown as PublicClient;
+
+  expect(await coordinator.recover({
+    publicClient: recoveryClient,
+    anchor: BASELINE.anchor,
+    maxBlockRange: 2n,
+  })).toMatchObject({
+    status: 'unresolved',
+    observation: BASELINE,
+    receipt: {
+      status: 'included-not-durable',
+    },
+    search: null,
+  });
+
+  expect(coordinator.status).toMatchObject({
+    open: false,
+    recoveryComplete: true,
+    inclusionChecksComplete: false,
+  });
+
+  expect(coordinator.attempts.map((attempt) => attempt.attemptId))
+    .toEqual(snapshot.attempts.map((attempt) => attempt.attemptId));
+
+  expect(t.save.mock.lastCall?.[0]).toMatchObject({
+    nextNonce: 6n,
+    durableNextNonce: 4n,
+  });
 
   const inspect = vi.spyOn(
     inclusionInspection,
@@ -404,20 +456,47 @@ describe('signer coordinator startup', () => {
     expect(t.save).not.toHaveBeenCalled();
   });
 
-  it('does not let completeRecovery bypass inclusion checks', async () => {
+  it('keeps the signer closed after recovery until inclusion checks complete', async () => {
     const t = setup({
       kind: 'present',
-      snapshot: await queueSnapshot(),
+      snapshot: emptySnapshot(),
     });
 
     const coordinator = await t.create();
-    coordinator.completeRecovery();
+
+    const publicClient = {
+      getBlock: vi.fn().mockResolvedValue({
+        number: BASELINE.anchor.blockNumber,
+        hash: BASELINE.anchor.blockHash,
+      }),
+      getTransactionCount: vi.fn().mockResolvedValue(4),
+    } as unknown as PublicClient;
+
+    expect(await coordinator.recover({
+      publicClient,
+      anchor: BASELINE.anchor,
+      maxBlockRange: 2n,
+    })).toEqual({
+      status: 'no-attempt',
+      observation: BASELINE,
+    });
 
     expect(coordinator.status).toMatchObject({
       open: false,
       recoveryComplete: true,
       inclusionChecksComplete: false,
       primaryReason: 'recovery-incomplete',
+    });
+
+    await coordinator.checkInclusions({
+      publicClient,
+      head: BASELINE.anchor,
+    });
+
+    expect(coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
     });
   });
 
