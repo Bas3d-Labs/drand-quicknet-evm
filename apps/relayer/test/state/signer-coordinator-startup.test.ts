@@ -1030,26 +1030,82 @@ describe('signer coordinator startup', () => {
   });
 
   it.each([false, true])(
-    'saves progress only for the oldest unresolved attempt; first included: %s',
+    'saves search progress for the oldest remaining attempt; first included: %s',
     async (firstIncluded) => {
       const t = await searchSetup(firstIncluded);
+      const publicClient = recoveryClientWithMissingReceipts(6);
 
-      await t.coordinator.recordSearchProgress(t.progress);
+      let before = t.snapshot;
 
+      if (firstIncluded) {
+        const oldest = t.snapshot.attempts[0]!;
+        const includedHash =
+          oldest.signedTransactions[1]!.transactionHash;
+
+        vi.mocked(publicClient.getTransactionReceipt)
+          .mockImplementationOnce(async ({ hash }) => {
+            throw new TransactionReceiptNotFoundError({ hash });
+          })
+          .mockResolvedValueOnce({
+            transactionHash: includedHash,
+            blockNumber: 110n,
+            blockHash: HASH,
+            status: 'success',
+          } as never);
+
+        expect(await t.coordinator.recover({
+          publicClient,
+          anchor: OBSERVED_AT,
+          maxBlockRange: 5n,
+        })).toMatchObject({
+          status: 'resolution-available',
+        });
+
+        expect(t.save).toHaveBeenCalledOnce();
+        before = t.save.mock.calls[0]![0];
+
+        expect(before.attempts).toEqual([t.snapshot.attempts[1]]);
+        expect(before.nextNonce).toBe(6n);
+        expect(before.durableNextNonce).toBe(5n);
+
+        t.save.mockClear();
+      }
+
+      expect(await t.coordinator.recover({
+        publicClient,
+        anchor: OBSERVED_AT,
+        maxBlockRange: 5n,
+      })).toMatchObject({
+        status: 'unresolved',
+        search: {
+          status: 'not-found',
+          searchedThrough: {
+            blockNumber: 105n,
+            blockHash: HASH,
+          },
+          scannedBlocks: 5n,
+          remainingBlocks: 15n,
+        },
+      });
+
+      expect(t.save).toHaveBeenCalledOnce();
       const saved = t.save.mock.calls[0]![0];
 
-      expect(saved.nextNonce).toBe(t.snapshot.nextNonce);
-      expect(saved.durableNextNonce).toBe(t.snapshot.durableNextNonce);
-      expect(saved.lastObservation).toEqual(t.snapshot.lastObservation);
+      expect(saved.nextNonce).toBe(before.nextNonce);
+      expect(saved.durableNextNonce).toBe(before.durableNextNonce);
+      expect(saved.lastObservation).toEqual(before.lastObservation);
 
       expect(saved.attempts).toEqual(
-        t.snapshot.attempts.map((attempt, index) =>
-          index === t.targetIndex
+        before.attempts.map((attempt, index) =>
+          index === 0
             ? {
                 ...attempt,
                 replacementSearch: {
                   lowerBound: BASELINE,
-                  searchedThrough: t.progress.result.searchedThrough,
+                  searchedThrough: {
+                    blockNumber: 105n,
+                    blockHash: HASH,
+                  },
                 },
               }
             : attempt,
@@ -1174,15 +1230,23 @@ describe('signer coordinator startup', () => {
   it('reconstructs an exhausted search after restarting with the saved queue', async () => {
     const t = await searchSetup();
 
-    await t.coordinator.recordSearchProgress({
-      ...t.progress,
-      result: {
+    expect(await t.coordinator.recover({
+      publicClient: recoveryClientWithMissingReceipts(6),
+      anchor: OBSERVED_AT,
+      maxBlockRange: 20n,
+    })).toMatchObject({
+      status: 'unresolved',
+      search: {
         status: 'not-found',
         searchedThrough: OBSERVED_AT,
         scannedBlocks: 20n,
         remainingBlocks: 0n,
       },
     });
+
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.coordinator.status.blockers)
+      .toContain('conflict-search-exhausted');
 
     const saved = t.save.mock.calls[0]![0];
     const restarted = await setup({
