@@ -324,6 +324,24 @@ async function preparationSetup(maxRetainedAttempts = 3) {
   };
 }
 
+function recoveryClientWithMissingReceipts(nonce: number): PublicClient {
+  return {
+    getBlock: vi.fn<PublicClient['getBlock']>()
+      .mockImplementation(async ({ blockNumber } = {}) => ({
+        number: blockNumber,
+        hash: HASH,
+        parentHash: HASH,
+        transactions: [],
+      }) as never),
+    getTransactionCount: vi.fn<PublicClient['getTransactionCount']>()
+      .mockResolvedValue(nonce),
+    getTransactionReceipt: vi.fn<PublicClient['getTransactionReceipt']>()
+      .mockImplementation(async ({ hash }) => {
+        throw new TransactionReceiptNotFoundError({ hash });
+      }),
+  } as unknown as PublicClient;
+}
+
 function setup(
   initial: TransactionJournalRead,
   maxRetainedAttempts = 3,
@@ -710,7 +728,7 @@ describe('signer coordinator startup', () => {
     expect(serialized).not.toContain(KEY);
   });
 
-  it('records an observation below allocation without advancing either counter', async () => {
+  it('records recovery below allocation without advancing either counter', async () => {
     const snapshot = await queueSnapshot();
     const t = setup({ kind: 'present', snapshot });
     const coordinator = await t.create();
@@ -720,11 +738,21 @@ describe('signer coordinator startup', () => {
         blockNumber: 130n,
         blockHash: HASH,
       },
-      nonce: 5n,
+      nonce: 4n,
     };
 
-    await coordinator.recordObservation(observation);
+    expect(await coordinator.recover({
+      publicClient: recoveryClientWithMissingReceipts(4),
+      anchor: observation.anchor,
+      maxBlockRange: 1n,
+    })).toMatchObject({
+      status: 'unresolved',
+      observation,
+      receipt: { status: 'receipt-not-found' },
+      search: null,
+    });
 
+    expect(t.save).toHaveBeenCalledOnce();
     const saved = t.save.mock.calls[0]![0];
 
     expect(saved.nextNonce).toBe(6n);
@@ -732,23 +760,25 @@ describe('signer coordinator startup', () => {
     expect(saved.lastObservation).toEqual(observation);
     expect(saved.attempts).toHaveLength(2);
 
-    // Neither observation proves nonce 4 was unconsumed.
-    expect(saved.attempts[0]!.replacementSearch).toBeNull();
-
-    // Nonce 5 remains unconsumed at the new observation.
-    expect(saved.attempts[1]!.replacementSearch).toEqual({
+    expect(saved.attempts[0]!.replacementSearch).toEqual({
       lowerBound: observation,
       searchedThrough: null,
     });
 
+    // Durable recovery updates the oldest record only.
+    expect(saved.attempts[1]).toEqual(snapshot.attempts[1]);
+
     expect(saved.attempts.map((attempt) => attempt.inclusion))
       .toEqual(snapshot.attempts.map((attempt) => attempt.inclusion));
 
-    expect(coordinator.status.inclusionChecksComplete).toBe(false);
-    expect(coordinator.status.open).toBe(false);
+    expect(coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
   });
 
-  it('uses the earlier observation when the new nonce has consumed both attempts', async () => {
+  it('uses the earlier observation to search the oldest consumed attempt', async () => {
     const snapshot = {
       ...await queueSnapshot(),
       lastObservation: BASELINE,
@@ -757,20 +787,35 @@ describe('signer coordinator startup', () => {
     const t = setup({ kind: 'present', snapshot });
     const coordinator = await t.create();
 
-    await coordinator.recordObservation({
+    expect(await coordinator.recover({
+      publicClient: recoveryClientWithMissingReceipts(6),
       anchor: OBSERVED_AT,
-      nonce: 6n,
+      maxBlockRange: 1n,
+    })).toMatchObject({
+      status: 'unresolved',
+      observation: {
+        anchor: OBSERVED_AT,
+        nonce: 6n,
+      },
+      search: {
+        status: 'not-found',
+        scannedBlocks: 1n,
+        remainingBlocks: 19n,
+      },
     });
 
+    expect(t.save).toHaveBeenCalledOnce();
     const saved = t.save.mock.calls[0]![0];
 
-    for (const attempt of saved.attempts) {
-      expect(attempt.replacementSearch).toEqual({
-        lowerBound: BASELINE,
-        searchedThrough: null,
-      });
-    }
+    expect(saved.attempts[0]!.replacementSearch).toEqual({
+      lowerBound: BASELINE,
+      searchedThrough: {
+        blockNumber: 101n,
+        blockHash: HASH,
+      },
+    });
 
+    expect(saved.attempts[1]).toEqual(snapshot.attempts[1]);
     expect(saved.nextNonce).toBe(6n);
     expect(saved.durableNextNonce).toBe(4n);
   });
@@ -799,13 +844,20 @@ describe('signer coordinator startup', () => {
 
     const coordinator = await t.create();
 
-    await coordinator.recordObservation({
+    expect(await coordinator.recover({
+      publicClient: recoveryClientWithMissingReceipts(4),
       anchor: {
         blockNumber: 130n,
         blockHash: HASH,
       },
-      nonce: 6n,
+      maxBlockRange: 1n,
+    })).toMatchObject({
+      status: 'unresolved',
+      receipt: { status: 'receipt-not-found' },
+      search: null,
     });
+
+    expect(t.save).toHaveBeenCalledOnce();
 
     const saved = t.save.mock.calls[0]![0];
 
