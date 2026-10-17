@@ -455,24 +455,45 @@ describe('signer coordinator transitions', () => {
   });
 
   it('resolves without releasing while another blocker remains', async () => {
-    const t = await setup();
-    t.coordinator.completeRecovery();
-    t.coordinator.block('unattributed-signer-activity');
+    const t = await setup({ extraNonce: true });
     t.lines.length = 0;
 
-    await t.coordinator.resolveAttempt(t.evidence);
+    expect(await t.coordinator.recover(
+      receiptRecoveryOptions(t),
+    )).toMatchObject({
+      status: 'resolution-available',
+      evidence: t.evidence,
+    });
 
     expect(t.records().map((record) => record.event))
       .toEqual(['attempt_resolved']);
 
+    expect(t.save.mock.calls[0]![0]).toMatchObject({
+      attempts: [],
+      nextNonce: 5n,
+      durableNextNonce: 5n,
+      lastObservation: t.snapshot.lastObservation,
+    });
+
     expect(t.coordinator.status).toMatchObject({
       open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
       blockedSince: CREATED,
       primaryReason: 'unattributed-signer-activity',
     });
 
-    t.coordinator.completeRecovery();
-    expect(t.coordinator.status.open).toBe(false);
+    await checkEmptyInclusions(t.coordinator, 8);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      primaryReason: 'unattributed-signer-activity',
+    });
+
+    expect(t.records().map((record) => record.event))
+      .toEqual(['attempt_resolved']);
   });
 
   it('defers release until recovery and inclusion checks complete and preserves the episode', async () => {
@@ -658,10 +679,15 @@ describe('signer coordinator transitions', () => {
 
   it('contains logger failures using the attempt policy through release', async () => {
     const t = await setup({ brokenLog: true });
-    t.coordinator.completeRecovery();
     t.lines.length = 0;
 
-    await t.coordinator.resolveAttempt(t.evidence, 9);
+    expect(await t.coordinator.recover(
+      receiptRecoveryOptions(t),
+      9,
+    )).toMatchObject({
+      status: 'resolution-available',
+      evidence: t.evidence,
+    });
 
     expect(t.coordinator.status.open).toBe(false);
 
@@ -699,7 +725,15 @@ describe('signer coordinator transitions', () => {
       blockedSince: '2026-10-04T01:00:00.000Z',
     });
 
-    t.coordinator.completeRecovery();
+    expect(await t.coordinator.recover(
+      receiptRecoveryOptions(t, 4),
+    )).toEqual({
+      status: 'no-attempt',
+      observation: {
+        anchor: t.evidence.anchor,
+        nonce: 4n,
+      },
+    });
 
     expect(t.coordinator.status).toMatchObject({
       open: false,
@@ -723,7 +757,10 @@ describe('signer coordinator transitions', () => {
       cleared: ['recovery-incomplete'],
     });
 
-    t.coordinator.completeRecovery();
+    // Repeating a successful inclusion check must not duplicate release.
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
     expect(t.records()).toHaveLength(2);
   });
 
