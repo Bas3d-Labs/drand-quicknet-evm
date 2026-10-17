@@ -172,6 +172,36 @@ async function setup(options: {
   };
 }
 
+function receiptRecoveryOptions(
+  t: Awaited<ReturnType<typeof setup>>,
+  nonce = 5,
+) {
+  const publicClient = {
+    getBlock: vi.fn<PublicClient['getBlock']>()
+      .mockImplementation(async ({ blockNumber } = {}) => ({
+        number: blockNumber,
+        hash: blockNumber === t.evidence.inclusion.blockNumber
+          ? t.evidence.inclusion.blockHash
+          : t.evidence.anchor.blockHash,
+      }) as never),
+    getTransactionCount: vi.fn<PublicClient['getTransactionCount']>()
+      .mockResolvedValue(nonce),
+    getTransactionReceipt: vi.fn<PublicClient['getTransactionReceipt']>()
+      .mockResolvedValue({
+        transactionHash: t.evidence.transactionHash,
+        blockNumber: t.evidence.inclusion.blockNumber,
+        blockHash: t.evidence.inclusion.blockHash,
+        status: t.evidence.outcome,
+      } as never),
+  } as unknown as PublicClient;
+
+  return {
+    publicClient,
+    anchor: { ...t.evidence.anchor },
+    maxBlockRange: 2n,
+  };
+}
+
 async function checkEmptyInclusions(
   coordinator: SignerCoordinator,
   nonce: number,
@@ -197,7 +227,7 @@ async function checkEmptyInclusions(
 describe('signer coordinator transitions', () => {
   it('emits resolution then release only after durable clear, with correlation', async () => {
     const t = await setup();
-    t.coordinator.completeRecovery(1);
+    const options = receiptRecoveryOptions(t);
     t.lines.length = 0;
 
     let finish!: () => void;
@@ -215,7 +245,7 @@ describe('signer coordinator transitions', () => {
       });
     });
 
-    const pending = t.coordinator.resolveAttempt(t.evidence, 2);
+    const pending = t.coordinator.recover(options, 2);
 
     try {
       await started;
@@ -223,12 +253,19 @@ describe('signer coordinator transitions', () => {
       expect(t.records()).toEqual([]);
       expect(t.coordinator.status.open).toBe(false);
 
-      await expect(t.coordinator.resolveAttempt(t.evidence))
+      await expect(t.coordinator.recover(options))
         .rejects.toThrow('already in progress');
+
+      expect(t.save).toHaveBeenCalledOnce();
     } finally {
       finish();
       await pending;
     }
+
+    expect(await pending).toMatchObject({
+      status: 'resolution-available',
+      evidence: t.evidence,
+    });
 
     expect(t.records().map((record) => record.event)).toEqual([
       'attempt_resolved',
