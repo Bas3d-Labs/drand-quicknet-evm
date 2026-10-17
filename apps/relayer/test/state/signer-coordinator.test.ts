@@ -7,6 +7,7 @@ import {
 
 import {
   keccak256,
+  TransactionReceiptNotFoundError,
   type PublicClient,
 } from 'viem';
 
@@ -199,6 +200,37 @@ function receiptRecoveryOptions(
     publicClient,
     anchor: { ...t.evidence.anchor },
     maxBlockRange: 2n,
+  };
+}
+
+function replacementRecoveryOptions(
+  t: Awaited<ReturnType<typeof setup>>,
+  nonce = 5,
+) {
+  const options = receiptRecoveryOptions(t, nonce);
+
+  vi.mocked(options.publicClient.getTransactionReceipt)
+    .mockImplementation(async ({ hash }) => {
+      throw new TransactionReceiptNotFoundError({ hash });
+    });
+
+  vi.mocked(options.publicClient.getBlock)
+    .mockImplementation(async ({ blockNumber } = {}) => ({
+      number: blockNumber,
+      hash: blockNumber === 109n ? OTHER : HASH,
+      parentHash: blockNumber === 110n ? OTHER : HASH,
+      transactions: blockNumber === 109n
+        ? [{
+            hash: OTHER,
+            from: IDENTITY.signer,
+            nonce: 4,
+          }]
+        : [],
+    }) as never);
+
+  return {
+    ...options,
+    maxBlockRange: 10n,
   };
 }
 
@@ -595,18 +627,27 @@ describe('signer coordinator transitions', () => {
   });
 
   it.each(['success', 'reverted'] as const)(
-    'rejects mismatched %s evidence before persistence',
+    'rejects a mismatched %s receipt before persistence',
     async (outcome) => {
       const t = await setup();
+      const options = receiptRecoveryOptions(t);
       t.lines.length = 0;
 
-      await expect(t.coordinator.resolveAttempt({
-        ...t.evidence,
-        outcome,
-        transactionHash: OTHER,
-      })).rejects.toThrow('Invalid attempt resolution');
+      vi.mocked(options.publicClient.getTransactionReceipt)
+        .mockResolvedValue({
+          transactionHash: OTHER,
+          blockNumber: t.evidence.inclusion.blockNumber,
+          blockHash: t.evidence.inclusion.blockHash,
+          status: outcome,
+        } as never);
+
+      await expect(t.coordinator.recover(options))
+        .rejects.toThrow('Invalid attempt receipt response');
 
       expect(t.save).not.toHaveBeenCalled();
+      expect(t.coordinator.attempts.map((attempt) => attempt.attemptId))
+        .toEqual([t.attempt.attemptId]);
+      expect(t.coordinator.status.recoveryComplete).toBe(false);
       expect(t.records()).toEqual([]);
     },
   );
@@ -615,7 +656,6 @@ describe('signer coordinator transitions', () => {
     'accepts %s evidence without treating it as application completion',
     async (outcome) => {
       const t = await setup();
-      t.coordinator.completeRecovery();
       t.lines.length = 0;
 
       let evidence: AttemptResolutionEvidence = {
@@ -633,7 +673,26 @@ describe('signer coordinator transitions', () => {
         };
       }
 
-      await t.coordinator.resolveAttempt(evidence);
+      const options = outcome === 'replaced'
+        ? replacementRecoveryOptions(t)
+        : receiptRecoveryOptions(t);
+
+      if (outcome === 'reverted') {
+        vi.mocked(options.publicClient.getTransactionReceipt)
+          .mockResolvedValue({
+            transactionHash: t.evidence.transactionHash,
+            blockNumber: t.evidence.inclusion.blockNumber,
+            blockHash: t.evidence.inclusion.blockHash,
+            status: 'reverted',
+          } as never);
+      }
+
+      expect(await t.coordinator.recover(options)).toMatchObject({
+        status: 'resolution-available',
+        evidence,
+      });
+
+      expect(t.save).toHaveBeenCalledOnce();
 
       expect(t.records()[0].resolution.outcome).toBe(outcome);
 
@@ -657,18 +716,32 @@ describe('signer coordinator transitions', () => {
 
   it('blocks additional unaccounted nonce consumption', async () => {
     const t = await setup();
-    t.coordinator.completeRecovery();
 
-    await t.coordinator.resolveAttempt({
-      outcome: 'replaced',
-      anchor: t.evidence.anchor,
-      inclusion: t.evidence.inclusion,
-      replacementTransactionHash: OTHER,
-      nonceAtAnchor: 8n,
+    expect(await t.coordinator.recover(
+      replacementRecoveryOptions(t, 8),
+    )).toMatchObject({
+      status: 'resolution-available',
+      evidence: {
+        outcome: 'replaced',
+        replacementTransactionHash: OTHER,
+        nonceAtAnchor: 8n,
+      },
+    });
+
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.save.mock.calls[0]![0]).toMatchObject({
+      attempts: [],
+      nextNonce: 5n,
+      durableNextNonce: 5n,
+      lastObservation: {
+        anchor: t.evidence.anchor,
+        nonce: 8n,
+      },
     });
 
     expect(t.coordinator.status).toMatchObject({
       open: false,
+      recoveryComplete: true,
       primaryReason: 'unattributed-signer-activity',
     });
 
