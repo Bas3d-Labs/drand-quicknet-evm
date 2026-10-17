@@ -320,7 +320,7 @@ describe('signer coordinator transitions', () => {
 
   it('retains evidence and policy across visible failed clears and repeated retries', async () => {
     const t = await setup();
-    t.coordinator.completeRecovery();
+    const options = receiptRecoveryOptions(t);
     t.lines.length = 0;
 
     let visible: TransactionJournalRead = {
@@ -335,8 +335,8 @@ describe('signer coordinator transitions', () => {
 
     t.save.mockRejectedValueOnce(new Error('failed again'));
 
-    await expect(t.coordinator.resolveAttempt(t.evidence))
-      .rejects.toThrow();
+    await expect(t.coordinator.recover(options))
+      .rejects.toThrow('Journal persistence');
 
     expect(visible).toMatchObject({
       snapshot: {
@@ -347,6 +347,10 @@ describe('signer coordinator transitions', () => {
     });
 
     t.evidence.anchor.blockNumber = 999n;
+
+    vi.mocked(options.publicClient.getBlock).mockClear();
+    vi.mocked(options.publicClient.getTransactionCount).mockClear();
+    vi.mocked(options.publicClient.getTransactionReceipt).mockClear();
 
     await expect(t.coordinator.retryPersistence()).rejects.toThrow();
 
@@ -377,15 +381,51 @@ describe('signer coordinator transitions', () => {
 
     expect(t.coordinator.status).toMatchObject({
       open: false,
-      recoveryComplete: true,
+      recoveryComplete: false,
       inclusionChecksComplete: false,
     });
 
     expect(t.save.mock.calls[2]![0]).toBe(t.save.mock.calls[0]![0]);
+    expect(t.save.mock.calls[1]![0]).toBe(t.save.mock.calls[0]![0]);
+
+    expect(options.publicClient.getBlock).not.toHaveBeenCalled();
+    expect(options.publicClient.getTransactionCount).not.toHaveBeenCalled();
+    expect(options.publicClient.getTransactionReceipt).not.toHaveBeenCalled();
+
     expect(t.load).toHaveBeenCalledTimes(1);
 
     await expect(t.coordinator.retryPersistence())
       .rejects.toThrow('No failed journal');
+
+    // Inclusion checking alone cannot complete recovery after a failed write.
+    await checkEmptyInclusions(t.coordinator, 5, 4);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: true,
+    });
+
+    expect(t.records().some(
+      (record) => record.event === 'signer_gate_released',
+    )).toBe(false);
+
+    expect(await t.coordinator.recover(options, 4)).toEqual({
+      status: 'no-attempt',
+      observation: {
+        anchor: {
+          blockNumber: 110n,
+          blockHash: HASH,
+        },
+        nonce: 5n,
+      },
+    });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
 
     await checkEmptyInclusions(t.coordinator, 5, 4);
 
