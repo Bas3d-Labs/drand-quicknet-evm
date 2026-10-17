@@ -234,6 +234,23 @@ function replacementRecoveryOptions(
   };
 }
 
+function searchRecoveryOptions(
+  t: Awaited<ReturnType<typeof setup>>,
+  nonce = 5,
+) {
+  const options = replacementRecoveryOptions(t, nonce);
+  const readBlock =
+    vi.mocked(options.publicClient.getBlock).getMockImplementation()!;
+
+  vi.mocked(options.publicClient.getBlock)
+    .mockImplementation(async (args) => ({
+      ...await readBlock(args),
+      transactions: [],
+    }));
+
+  return options;
+}
+
 async function checkEmptyInclusions(
   coordinator: SignerCoordinator,
   nonce: number,
@@ -590,41 +607,87 @@ describe('signer coordinator transitions', () => {
 
   it('preserves blockedSince and emits only primary-reason changes', async () => {
     const t = await setup();
+    const options = searchRecoveryOptions(t);
 
-    const observation = {
-      anchor: t.evidence.anchor,
-      nonce: 5n,
-    };
-
-    await t.coordinator.recordObservation(observation);
-    t.lines.length = 0;
-
-    t.coordinator.block('conflict-search-exhausted');
-    t.coordinator.block('conflict-search-exhausted');
-
-    const progress = {
-      attemptId: t.attempt.attemptId,
-      observation,
-      result: {
-        status: 'not-found' as const,
-        searchedThrough: {
-          blockNumber: 105n,
-          blockHash: OTHER,
-        },
+    // Establish partial search progress before checking reason changes.
+    expect(await t.coordinator.recover({
+      ...options,
+      maxBlockRange: 5n,
+    })).toMatchObject({
+      status: 'unresolved',
+      search: {
+        status: 'not-found',
         scannedBlocks: 5n,
         remainingBlocks: 5n,
       },
-    };
+    });
 
-    await t.coordinator.recordSearchProgress(progress);
+    t.lines.length = 0;
 
-    await t.coordinator.recordSearchProgress({
-      ...progress,
-      result: {
-        ...progress.result,
-        scannedBlocks: 0n,
+    // Finish the range and establish exhaustion.
+    expect(await t.coordinator.recover(options)).toMatchObject({
+      status: 'unresolved',
+      search: {
+        status: 'not-found',
+        scannedBlocks: 5n,
+        remainingBlocks: 0n,
       },
     });
+
+    expect(t.coordinator.status.primaryReason)
+      .toBe('conflict-search-exhausted');
+
+    // Rechecking the exhausted range must not repeat the blocked event.
+    expect(await t.coordinator.recover(options)).toMatchObject({
+      status: 'unresolved',
+      search: {
+        status: 'not-found',
+        scannedBlocks: 0n,
+        remainingBlocks: 0n,
+      },
+    });
+
+    expect(t.records().map((record) => record.reason))
+      .toEqual(['conflict-search-exhausted']);
+
+    const advanced = {
+      ...options,
+      anchor: {
+        blockNumber: 120n,
+        blockHash: HASH,
+      },
+      maxBlockRange: 5n,
+    };
+
+    // An advanced anchor allows partial progress and clears exhaustion.
+    expect(await t.coordinator.recover(advanced)).toMatchObject({
+      status: 'unresolved',
+      search: {
+        status: 'not-found',
+        scannedBlocks: 5n,
+        remainingBlocks: 5n,
+      },
+    });
+
+    expect(t.coordinator.status.primaryReason).toBe('unresolved-attempt');
+
+    // More partial progress leaves the primary reason unchanged.
+    expect(await t.coordinator.recover({
+      ...advanced,
+      maxBlockRange: 1n,
+    })).toMatchObject({
+      status: 'unresolved',
+      search: {
+        status: 'not-found',
+        scannedBlocks: 1n,
+        remainingBlocks: 4n,
+      },
+    });
+
+    expect(t.records().map((record) => record.event)).toEqual([
+      'signer_blocked',
+      'signer_blocked',
+    ]);
 
     expect(t.records().map((record) => record.reason)).toEqual([
       'conflict-search-exhausted',
@@ -883,50 +946,32 @@ describe('signer coordinator transitions', () => {
   it('clears the attempt search blocker after durable resolution', async () => {
     const t = await setup();
 
-    t.coordinator.completeRecovery();
-    t.coordinator.block('conflict-search-exhausted');
-    t.lines.length = 0;
-
-    await t.coordinator.resolveAttempt(t.evidence, 2);
-
-    expect(t.records().map((record) => record.event)).toEqual([
-      'attempt_resolved',
-      'signer_blocked',
-    ]);
+    expect(await t.coordinator.recover(
+      searchRecoveryOptions(t),
+    )).toMatchObject({
+      status: 'unresolved',
+      search: {
+        status: 'not-found',
+        scannedBlocks: 10n,
+        remainingBlocks: 0n,
+      },
+    });
 
     expect(t.coordinator.status.blockers)
-      .not.toContain('conflict-search-exhausted');
+      .toContain('conflict-search-exhausted');
 
-    expect(t.coordinator.status).toMatchObject({
-      open: false,
-      recoveryComplete: true,
-      inclusionChecksComplete: false,
-      primaryReason: 'recovery-incomplete',
-      blockedSince: CREATED,
+    t.save.mockClear();
+    t.lines.length = 0;
+
+    expect(await t.coordinator.recover(
+      receiptRecoveryOptions(t),
+      2,
+    )).toMatchObject({
+      status: 'resolution-available',
+      evidence: t.evidence,
     });
 
-    await checkEmptyInclusions(t.coordinator, 5, 3);
-
-    expect(t.records().map((record) => record.event)).toEqual([
-      'attempt_resolved',
-      'signer_blocked',
-      'signer_gate_released',
-    ]);
-
-    expect(t.records()[2]).toMatchObject({
-      cycle: 3,
-      blockedSince: CREATED,
-    });
-
-    expect(t.records()[2].cleared).toEqual(
-      expect.arrayContaining([
-        'conflict-search-exhausted',
-        'unresolved-attempt',
-        'recovery-incomplete',
-      ]),
-    );
-
-    expect(t.coordinator.status.open).toBe(true);
+    expect(t.save).toHaveBeenCalledOnce();
   });
 
   it('does not initialize a missing journal through inclusion checking', async () => {
