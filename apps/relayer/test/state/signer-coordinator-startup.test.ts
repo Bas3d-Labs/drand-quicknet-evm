@@ -1433,21 +1433,69 @@ describe('signer coordinator startup', () => {
   it.each([6n, 7n])(
     'compares replacement nonce %s with allocation progress',
     async (nonceAtAnchor) => {
-      const snapshot = await queueSnapshot();
+      const original = await queueSnapshot();
+
+      // Supply the historical observation needed to search for the
+      // transaction that consumed the oldest attempt's nonce.
+      const snapshot = {
+        ...original,
+        attempts: original.attempts.map((attempt, index) =>
+          index === 0
+            ? {
+                ...attempt,
+                replacementSearch: {
+                  lowerBound: BASELINE,
+                  searchedThrough: null,
+                },
+              }
+            : attempt,
+        ),
+      };
+
       const t = setup({ kind: 'present', snapshot });
       const coordinator = await t.create();
+      const publicClient =
+        recoveryClientWithMissingReceipts(Number(nonceAtAnchor));
+      const replacementHash = `0x${'ef'.repeat(32)}` as const;
 
-      await coordinator.resolveAttempt({
-        outcome: 'replaced',
-        replacementTransactionHash: `0x${'ef'.repeat(32)}`,
-        inclusion: {
-          blockNumber: 110n,
-          blockHash: HASH,
-        },
+      vi.mocked(publicClient.getBlock).mockImplementation(
+        async ({ blockNumber } = {}) => ({
+          number: blockNumber,
+          hash: HASH,
+          parentHash: HASH,
+          transactions: blockNumber === 110n
+            ? [{
+                hash: replacementHash,
+                from: IDENTITY.signer,
+                nonce: 4,
+              }]
+            : [],
+        }) as never,
+      );
+
+      expect(await coordinator.recover({
+        publicClient,
         anchor: OBSERVED_AT,
-        nonceAtAnchor,
+        maxBlockRange: 20n,
+      })).toMatchObject({
+        status: 'resolution-available',
+        observation: {
+          anchor: OBSERVED_AT,
+          nonce: nonceAtAnchor,
+        },
+        evidence: {
+          outcome: 'replaced',
+          replacementTransactionHash: replacementHash,
+          inclusion: {
+            blockNumber: 110n,
+            blockHash: HASH,
+          },
+          anchor: OBSERVED_AT,
+          nonceAtAnchor,
+        },
       });
 
+      expect(t.save).toHaveBeenCalledOnce();
       const saved = t.save.mock.calls[0]![0];
 
       expect(saved.nextNonce).toBe(6n);
@@ -1488,8 +1536,29 @@ describe('signer coordinator startup', () => {
       anchor: { ...OBSERVED_AT },
     };
 
-    await expect(coordinator.resolveAttempt(evidence))
-      .rejects.toThrow('Journal persistence');
+    const publicClient = recoveryClientWithMissingReceipts(6);
+
+    vi.mocked(publicClient.getTransactionReceipt)
+      .mockImplementation(async ({ hash }) => {
+        if (hash !== evidence.transactionHash) {
+          throw new TransactionReceiptNotFoundError({ hash });
+        }
+
+        return {
+          transactionHash: hash,
+          blockNumber: evidence.inclusion.blockNumber,
+          blockHash: evidence.inclusion.blockHash,
+          status: 'success',
+        } as never;
+      });
+
+    await expect(coordinator.recover({
+      publicClient,
+      anchor: evidence.anchor,
+      maxBlockRange: 2n,
+    })).rejects.toThrow('Journal persistence');
+
+    expect(t.save).toHaveBeenCalledOnce();
 
     const pending = t.save.mock.calls[0]![0];
 
@@ -1506,6 +1575,10 @@ describe('signer coordinator startup', () => {
     )).toBe(false);
 
     evidence.anchor.blockNumber = 999n;
+
+    vi.mocked(publicClient.getBlock).mockClear();
+    vi.mocked(publicClient.getTransactionCount).mockClear();
+    vi.mocked(publicClient.getTransactionReceipt).mockClear();
 
     t.save.mockRejectedValueOnce(new Error('Injected retry failure'));
 
@@ -1543,6 +1616,16 @@ describe('signer coordinator startup', () => {
     });
 
     expect(t.load).toHaveBeenCalledTimes(1);
+
+    expect(publicClient.getBlock).not.toHaveBeenCalled();
+    expect(publicClient.getTransactionCount).not.toHaveBeenCalled();
+    expect(publicClient.getTransactionReceipt).not.toHaveBeenCalled();
+
+    expect(coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
   });
 
   it('removes the durable prefix in nonce order without rolling back allocation', async () => {
