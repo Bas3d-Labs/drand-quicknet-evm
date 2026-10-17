@@ -1038,7 +1038,17 @@ describe('durable signer observations', () => {
     const t = await setup();
     t.lines.length = 0;
 
-    await t.coordinator.recordObservation(observation(4n), 2);
+    expect(await t.coordinator.recover(
+      searchRecoveryOptions(t, 4),
+      2,
+    )).toMatchObject({
+      status: 'unresolved',
+      observation: observation(4n),
+      receipt: { status: 'receipt-not-found' },
+      search: null,
+    });
+
+    expect(t.save).toHaveBeenCalledOnce();
 
     const saved = t.save.mock.calls[0]![0];
 
@@ -1062,28 +1072,82 @@ describe('durable signer observations', () => {
   it('preserves the earlier observation when the nonce has already advanced', async () => {
     const t = await setup();
 
-    await t.coordinator.recordObservation(observation(5n));
-
-    expect(
-      t.save.mock.calls[0]![0].attempts[0]?.replacementSearch
-    ).toEqual({
-      lowerBound: t.snapshot.lastObservation,
-      searchedThrough: null,
+    expect(await t.coordinator.recover({
+      ...searchRecoveryOptions(t),
+      maxBlockRange: 5n,
+    })).toMatchObject({
+      status: 'unresolved',
+      observation: observation(5n),
+      search: {
+        status: 'not-found',
+        scannedBlocks: 5n,
+        remainingBlocks: 5n,
+      },
     });
+
+    expect(t.save).toHaveBeenCalledOnce();
+    const saved = t.save.mock.calls[0]![0];
+
+    expect(saved.attempts[0]!.replacementSearch).toEqual({
+      lowerBound: t.snapshot.lastObservation,
+      searchedThrough: {
+        blockNumber: 105n,
+        blockHash: HASH,
+      },
+    });
+
+    expect(saved.nextNonce).toBe(5n);
+    expect(saved.durableNextNonce).toBe(4n);
+    expect(saved.attempts).toHaveLength(1);
+    expect(t.coordinator.status.open).toBe(false);
   });
 
   it('keeps an established lower bound across later observations', async () => {
     const t = await setup();
 
-    await t.coordinator.recordObservation(observation(4n));
-    await t.coordinator.recordObservation(observation(5n, 120n));
-
-    expect(
-      t.save.mock.calls[1]![0].attempts[0]?.replacementSearch,
-    ).toEqual({
-      lowerBound: observation(4n),
-      searchedThrough: null,
+    expect(await t.coordinator.recover(
+      searchRecoveryOptions(t, 4),
+    )).toMatchObject({
+      status: 'unresolved',
+      observation: observation(4n),
+      search: null,
     });
+
+    expect(t.save.mock.calls[0]![0].attempts[0]!.replacementSearch)
+      .toEqual({
+        lowerBound: observation(4n),
+        searchedThrough: null,
+      });
+
+    expect(await t.coordinator.recover({
+      ...searchRecoveryOptions(t),
+      anchor: observation(5n, 120n).anchor,
+      maxBlockRange: 5n,
+    })).toMatchObject({
+      status: 'unresolved',
+      observation: observation(5n, 120n),
+      search: {
+        status: 'not-found',
+        scannedBlocks: 5n,
+        remainingBlocks: 5n,
+      },
+    });
+
+    expect(t.save).toHaveBeenCalledTimes(2);
+    const saved = t.save.mock.calls[1]![0];
+
+    expect(saved.attempts[0]!.replacementSearch).toEqual({
+      lowerBound: observation(4n),
+      searchedThrough: {
+        blockNumber: 115n,
+        blockHash: HASH,
+      },
+    });
+
+    expect(saved.nextNonce).toBe(5n);
+    expect(saved.durableNextNonce).toBe(4n);
+    expect(saved.attempts).toHaveLength(1);
+    expect(t.coordinator.status.open).toBe(false);
   });
 
   it('closes an otherwise open gate while saving and rejects overlapping operations', async () => {
