@@ -1339,7 +1339,32 @@ describe('signer coordinator startup', () => {
         anchor: OBSERVED_AT,
       };
 
-      await coordinator.resolveAttempt(evidence, 7);
+      const publicClient = recoveryClientWithMissingReceipts(6);
+
+      vi.mocked(publicClient.getTransactionReceipt)
+        .mockImplementation(async ({ hash }) => {
+          if (hash !== evidence.transactionHash) {
+            throw new TransactionReceiptNotFoundError({ hash });
+          }
+
+          return {
+            transactionHash: hash,
+            blockNumber: evidence.inclusion.blockNumber,
+            blockHash: evidence.inclusion.blockHash,
+            status: outcome,
+          } as never;
+        });
+
+      expect(await coordinator.recover({
+        publicClient,
+        anchor: OBSERVED_AT,
+        maxBlockRange: 2n,
+      }, 7)).toMatchObject({
+        status: 'resolution-available',
+        evidence,
+      });
+
+      expect(t.save).toHaveBeenCalledOnce();
 
       const saved = t.save.mock.calls[0]![0];
 
@@ -1354,6 +1379,7 @@ describe('signer coordinator startup', () => {
 
       expect(coordinator.status).toMatchObject({
         open: false,
+        recoveryComplete: true,
         inclusionChecksComplete: false,
       });
 
@@ -1523,29 +1549,66 @@ describe('signer coordinator startup', () => {
     const snapshot = await queueSnapshot();
     const t = setup({ kind: 'present', snapshot });
     const coordinator = await t.create();
+    const publicClient = recoveryClientWithMissingReceipts(6);
 
-    for (const attempt of snapshot.attempts) {
-      await coordinator.resolveAttempt({
-        outcome: 'success',
-        transactionHash: attempt.signedTransactions[0].transactionHash,
-        inclusion: {
+    const receipts = new Map(
+      snapshot.attempts.map((attempt) => [
+        attempt.signedTransactions[0].transactionHash,
+        {
+          transactionHash: attempt.signedTransactions[0].transactionHash,
           blockNumber: 110n + (attempt.nonce - 4n),
           blockHash: HASH,
+          status: 'success' as const,
         },
+      ] as const),
+    );
+
+    vi.mocked(publicClient.getTransactionReceipt)
+      .mockImplementation(async ({ hash }) => {
+        const receipt = receipts.get(hash);
+
+        if (receipt === undefined) {
+          throw new TransactionReceiptNotFoundError({ hash });
+        }
+
+        return receipt as never;
+      });
+
+    for (const [index, attempt] of snapshot.attempts.entries()) {
+      expect(await coordinator.recover({
+        publicClient,
         anchor: OBSERVED_AT,
+        maxBlockRange: 2n,
+      })).toMatchObject({
+        status: 'resolution-available',
+        evidence: {
+          outcome: 'success',
+          transactionHash: attempt.signedTransactions[0].transactionHash,
+        },
+      });
+
+      expect(t.save).toHaveBeenCalledTimes(index + 1);
+
+      const saved = t.save.mock.calls[index]![0];
+
+      expect(saved.nextNonce).toBe(6n);
+      expect(saved.durableNextNonce).toBe(attempt.nonce + 1n);
+      expect(saved.attempts).toEqual(snapshot.attempts.slice(index + 1));
+
+      expect(coordinator.attempts.map((remaining) => remaining.nonce))
+        .toEqual(
+          snapshot.attempts.slice(index + 1).map((remaining) => remaining.nonce),
+        );
+
+      // Durable recovery does not perform the inclusion pass.
+      expect(coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: true,
+        inclusionChecksComplete: false,
       });
     }
 
-    const saved = t.save.mock.calls[1]![0];
-
-    expect(saved.nextNonce).toBe(6n);
-    expect(saved.durableNextNonce).toBe(6n);
-    expect(saved.attempts).toEqual([]);
     expect(coordinator.attempts).toEqual([]);
-
-    // Removing records does not perform fresh inclusion/recovery checks.
-    expect(coordinator.status.open).toBe(false);
-    expect(coordinator.status.inclusionChecksComplete).toBe(false);
   });
 
   it('applies durable recovery to the oldest record without advancing allocation', async () => {
