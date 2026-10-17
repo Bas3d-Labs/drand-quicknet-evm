@@ -532,7 +532,13 @@ describe('signer coordinator transitions', () => {
     const t = await setup();
     t.lines.length = 0;
 
-    await t.coordinator.resolveAttempt(t.evidence);
+    expect(await t.coordinator.recover(
+      receiptRecoveryOptions(t),
+      7,
+    )).toMatchObject({
+      status: 'resolution-available',
+      evidence: t.evidence,
+    });
 
     expect(t.records().map((record) => record.event)).toEqual([
       'attempt_resolved',
@@ -541,21 +547,26 @@ describe('signer coordinator transitions', () => {
 
     expect(t.coordinator.status).toMatchObject({
       open: false,
-      recoveryComplete: false,
+      recoveryComplete: true,
       inclusionChecksComplete: false,
       blockedSince: CREATED,
     });
 
-    t.coordinator.completeRecovery(7);
+    // Another durable recovery still cannot replace inclusion checking.
+    expect(await t.coordinator.recover(
+      receiptRecoveryOptions(t),
+      7,
+    )).toMatchObject({
+      status: 'no-attempt',
+    });
 
+    expect(t.records()).toHaveLength(2);
     expect(t.coordinator.status).toMatchObject({
       open: false,
       recoveryComplete: true,
       inclusionChecksComplete: false,
       blockedSince: CREATED,
     });
-
-    expect(t.records()).toHaveLength(2);
 
     await checkEmptyInclusions(t.coordinator, 5, 8);
 
@@ -571,8 +582,9 @@ describe('signer coordinator transitions', () => {
     });
 
     expect(t.coordinator.status.open).toBe(true);
+    expect(t.coordinator.status.blockedSince).toBeNull();
 
-    t.coordinator.completeRecovery();
+    await checkEmptyInclusions(t.coordinator, 5, 8);
     expect(t.records()).toHaveLength(3);
   });
 
@@ -837,13 +849,33 @@ describe('signer coordinator transitions', () => {
     expect(t.records()).toHaveLength(2);
   });
 
-  it('latches already recorded unattributed activity during recovery', async () => {
+  it('preserves already recorded unattributed activity during recovery', async () => {
     const t = await setup({ empty: true, extraNonce: true });
 
-    t.coordinator.completeRecovery();
+    expect(await t.coordinator.recover(
+      receiptRecoveryOptions(t, 8),
+    )).toEqual({
+      status: 'no-attempt',
+      observation: {
+        anchor: t.evidence.anchor,
+        nonce: 8n,
+      },
+    });
+
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.save.mock.calls[0]![0]).toMatchObject({
+      attempts: [],
+      nextNonce: 4n,
+      durableNextNonce: 4n,
+      lastObservation: {
+        nonce: 8n,
+      },
+    });
 
     expect(t.coordinator.status).toMatchObject({
       open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
       primaryReason: 'unattributed-signer-activity',
     });
   });
@@ -897,7 +929,7 @@ describe('signer coordinator transitions', () => {
     expect(t.coordinator.status.open).toBe(true);
   });
 
-  it('does not initialize missing journals or complete their recovery', async () => {
+  it('does not initialize a missing journal through inclusion checking', async () => {
     const save = vi.fn<TransactionJournalStore['save']>();
 
     const load = vi.fn<TransactionJournalStore['load']>()
@@ -915,8 +947,24 @@ describe('signer coordinator transitions', () => {
       }),
     });
 
-    expect(() => coordinator.completeRecovery())
-      .toThrow('initialized journal');
+    const getBlock = vi.fn<PublicClient['getBlock']>();
+    const getTransactionCount =
+      vi.fn<PublicClient['getTransactionCount']>();
+
+    await expect(coordinator.checkInclusions({
+      publicClient: {
+        getBlock,
+        getTransactionCount,
+      } as unknown as PublicClient,
+      head: {
+        blockNumber: 110n,
+        blockHash: HASH,
+      },
+    })).rejects.toThrow('initialized journal');
+
+    expect(getBlock).not.toHaveBeenCalled();
+    expect(getTransactionCount).not.toHaveBeenCalled();
+    expect(load).toHaveBeenCalledOnce();
 
     expect(coordinator.status).toMatchObject({
       open: false,
