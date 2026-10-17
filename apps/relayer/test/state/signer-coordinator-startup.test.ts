@@ -1159,30 +1159,77 @@ describe('signer coordinator startup', () => {
 
   it('retains the exact progress snapshot and blocker through a failed write', async () => {
     const t = await searchSetup();
+    const publicClient = recoveryClientWithMissingReceipts(6);
 
-    t.coordinator.block('conflict-search-exhausted');
-    t.save.mockRejectedValueOnce(new Error('Injected write failure'));
-
-    await expect(
-      t.coordinator.recordSearchProgress(t.progress),
-    ).rejects.toThrow('Journal persistence');
-
-    const pending = t.save.mock.calls[0]![0];
+    expect(await t.coordinator.recover({
+      publicClient,
+      anchor: OBSERVED_AT,
+      maxBlockRange: 20n,
+    })).toMatchObject({
+      status: 'unresolved',
+      search: {
+        status: 'not-found',
+        scannedBlocks: 20n,
+        remainingBlocks: 0n,
+      },
+    });
 
     expect(t.coordinator.status.blockers)
       .toContain('conflict-search-exhausted');
 
-    // Mutating the caller's input must not change the retained retry.
-    t.progress.result.searchedThrough.blockNumber = 120n;
-    t.progress.result.scannedBlocks = 20n;
-    t.progress.result.remainingBlocks = 0n;
+    const before = t.coordinator.attempts;
+    t.save.mockClear();
+
+    const options = {
+      publicClient,
+      anchor: {
+        blockNumber: 125n,
+        blockHash: HASH,
+      },
+      maxBlockRange: 2n,
+    };
+
+    t.save.mockRejectedValueOnce(new Error('Injected write failure'));
+
+    await expect(t.coordinator.recover(options))
+      .rejects.toThrow('Journal persistence');
+
+    expect(t.save).toHaveBeenCalledOnce();
+    const pending = t.save.mock.calls[0]![0];
+
+    expect(t.coordinator.attempts).toEqual(before);
+    expect(t.coordinator.status.blockers)
+      .toContain('conflict-search-exhausted');
+    expect(t.coordinator.status.persistenceState).toBe('failed');
+
+    // Caller mutations cannot alter the retained retry snapshot.
+    options.anchor.blockNumber = 999n;
+    options.maxBlockRange = 100n;
+
+    vi.mocked(publicClient.getBlock).mockClear();
+    vi.mocked(publicClient.getTransactionCount).mockClear();
+    vi.mocked(publicClient.getTransactionReceipt).mockClear();
 
     await t.coordinator.retryPersistence();
 
+    expect(t.save).toHaveBeenCalledTimes(2);
     expect(t.save.mock.calls[1]![0]).toBe(pending);
-    expect(
-      pending.attempts[0]!.replacementSearch!.searchedThrough!.blockNumber,
-    ).toBe(105n);
+
+    expect(pending.lastObservation).toEqual({
+      anchor: {
+        blockNumber: 125n,
+        blockHash: HASH,
+      },
+      nonce: 6n,
+    });
+
+    expect(pending.attempts[0]!.replacementSearch).toEqual({
+      lowerBound: BASELINE,
+      searchedThrough: {
+        blockNumber: 122n,
+        blockHash: HASH,
+      },
+    });
 
     expect(pending.attempts[1]).toEqual(t.snapshot.attempts[1]);
     expect(pending.nextNonce).toBe(6n);
@@ -1193,38 +1240,83 @@ describe('signer coordinator startup', () => {
     expect(t.coordinator.status.blockers)
       .toContain('unresolved-attempt');
 
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      persistenceState: 'idle',
+    });
+
+    expect(publicClient.getBlock).not.toHaveBeenCalled();
+    expect(publicClient.getTransactionCount).not.toHaveBeenCalled();
+    expect(publicClient.getTransactionReceipt).not.toHaveBeenCalled();
     expect(t.load).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps repeated zero progress inert and rejects a changed boundary hash', async () => {
+  it('preserves saved progress when the searched-through boundary changes', async () => {
     const t = await searchSetup();
+    const publicClient = recoveryClientWithMissingReceipts(6);
 
-    await t.coordinator.recordSearchProgress(t.progress);
-
-    const repeated = {
-      ...t.progress,
-      result: {
-        ...t.progress.result,
-        scannedBlocks: 0n,
-      },
+    const options = {
+      publicClient,
+      anchor: OBSERVED_AT,
+      maxBlockRange: 5n,
     };
 
-    await t.coordinator.recordSearchProgress(repeated);
-
-    expect(t.save).toHaveBeenCalledTimes(1);
-
-    await expect(t.coordinator.recordSearchProgress({
-      ...repeated,
-      result: {
-        ...repeated.result,
+    expect(await t.coordinator.recover(options)).toMatchObject({
+      status: 'unresolved',
+      search: {
+        status: 'not-found',
         searchedThrough: {
-          ...repeated.result.searchedThrough,
-          blockHash: `0x${'bb'.repeat(32)}`,
+          blockNumber: 105n,
+          blockHash: HASH,
+        },
+        scannedBlocks: 5n,
+        remainingBlocks: 15n,
+      },
+    });
+
+    const saved = t.save.mock.calls[0]![0];
+    const before = t.coordinator.attempts;
+    t.save.mockClear();
+
+    const changedHash = `0x${'bb'.repeat(32)}` as const;
+
+    vi.mocked(publicClient.getBlock).mockImplementation(
+      async ({ blockNumber } = {}) => ({
+        number: blockNumber,
+        hash: blockNumber === 105n ? changedHash : HASH,
+        parentHash: HASH,
+        transactions: [],
+      }) as never,
+    );
+
+    expect(await t.coordinator.recover(options)).toMatchObject({
+      status: 'unresolved',
+      search: {
+        status: 'boundary-changed',
+        boundary: 'searched-through',
+        observedAnchor: {
+          blockNumber: 105n,
+          blockHash: changedHash,
         },
       },
-    })).rejects.toThrow('Invalid replacement search progress');
+    });
 
-    expect(t.save).toHaveBeenCalledTimes(1);
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.coordinator.attempts).toEqual(before);
+    expect(saved.attempts[0]!.replacementSearch).toEqual({
+      lowerBound: BASELINE,
+      searchedThrough: {
+        blockNumber: 105n,
+        blockHash: HASH,
+      },
+    });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
   });
 
   it('reconstructs an exhausted search after restarting with the saved queue', async () => {
