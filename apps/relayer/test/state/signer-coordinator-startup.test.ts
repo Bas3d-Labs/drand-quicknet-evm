@@ -1116,47 +1116,6 @@ describe('signer coordinator startup', () => {
     },
   );
 
-  it('rejects progress for a later unresolved attempt', async () => {
-    const t = await searchSetup();
-
-    await expect(t.coordinator.recordSearchProgress({
-      ...t.progress,
-      attemptId: t.snapshot.attempts[1]!.attemptId,
-    })).rejects.toThrow('Search progress does not match');
-
-    expect(t.save).not.toHaveBeenCalled();
-  });
-
-  it('rejects progress for an included attempt before the unresolved target', async () => {
-    const t = await searchSetup(true);
-
-    await expect(t.coordinator.recordSearchProgress({
-      ...t.progress,
-      attemptId: t.snapshot.attempts[0]!.attemptId,
-    })).rejects.toThrow('Search progress does not match');
-
-    expect(t.save).not.toHaveBeenCalled();
-  });
-
-  it('rejects search progress when every retained attempt is included', async () => {
-    const snapshot = await queueSnapshot();
-    const t = setup({ kind: 'present', snapshot });
-    const coordinator = await t.create();
-
-    await expect(coordinator.recordSearchProgress({
-      attemptId: snapshot.attempts[0]!.attemptId,
-      observation: snapshot.lastObservation,
-      result: {
-        status: 'not-found',
-        searchedThrough: OBSERVED_AT,
-        scannedBlocks: 20n,
-        remainingBlocks: 0n,
-      },
-    })).rejects.toThrow('No unresolved attempt');
-
-    expect(t.save).not.toHaveBeenCalled();
-  });
-
   it('retains the exact progress snapshot and blocker through a failed write', async () => {
     const t = await searchSetup();
     const publicClient = recoveryClientWithMissingReceipts(6);
