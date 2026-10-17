@@ -1409,25 +1409,58 @@ describe('signer coordinator startup', () => {
     },
   );
 
-  it('rejects resolution for a later attempt before removing the oldest', async () => {
+  it('does not resolve a later attempt while the oldest receipts are unavailable', async () => {
     const snapshot = await queueSnapshot();
     const t = setup({ kind: 'present', snapshot });
     const coordinator = await t.create();
+    const publicClient = recoveryClientWithMissingReceipts(6);
 
-    await expect(coordinator.resolveAttempt({
-      outcome: 'success',
-      transactionHash:
-        snapshot.attempts[1]!.signedTransactions[0].transactionHash,
-      inclusion: {
-        blockNumber: 111n,
-        blockHash: HASH,
-      },
+    const first = snapshot.attempts[0]!;
+    const laterHash =
+      snapshot.attempts[1]!.signedTransactions[0].transactionHash;
+
+    vi.mocked(publicClient.getTransactionReceipt)
+      .mockImplementation(async ({ hash }) => {
+        if (hash === laterHash) {
+          return {
+            transactionHash: hash,
+            blockNumber: 111n,
+            blockHash: HASH,
+            status: 'success',
+          } as never;
+        }
+
+        throw new TransactionReceiptNotFoundError({ hash });
+      });
+
+    t.lines.length = 0;
+
+    expect(await coordinator.recover({
+      publicClient,
       anchor: OBSERVED_AT,
-    })).rejects.toThrow('Invalid attempt resolution evidence');
+      maxBlockRange: 2n,
+    })).toMatchObject({
+      status: 'unresolved',
+      receipt: { status: 'receipt-not-found' },
+      search: { status: 'missing-lower-bound' },
+    });
 
-    expect(t.save).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(publicClient.getTransactionReceipt).mock.calls
+        .map(([options]) => options.hash),
+    ).toEqual(
+      first.signedTransactions.map((transaction) => transaction.transactionHash),
+    );
+
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.save.mock.calls[0]![0]).toEqual(snapshot);
     expect(coordinator.attempts.map((attempt) => attempt.nonce))
       .toEqual([4n, 5n]);
+    expect(coordinator.status.open).toBe(false);
+
+    expect(t.lines.map((line) => JSON.parse(line)).some(
+      (record) => record.event === 'attempt_resolved',
+    )).toBe(false);
   });
 
   it.each([6n, 7n])(
@@ -2936,36 +2969,58 @@ describe('signer coordinator startup', () => {
 
   it('does not authorize rebroadcast while a coordinator blocker remains', async () => {
     const t = await searchSetup();
+    const publicClient = recoveryClientWithMissingReceipts(6);
+    const request = vi.fn();
 
-    t.coordinator.block('conflict-search-exhausted');
+    Object.assign(publicClient, { request });
 
-    const inspect = vi.spyOn(
-      recoveryInspection,
-      'inspectSignerRecovery',
-    ).mockResolvedValueOnce({
+    expect(await t.coordinator.recover({
+      publicClient,
+      anchor: OBSERVED_AT,
+      maxBlockRange: 20n,
+    })).toMatchObject({
+      status: 'unresolved',
+      search: {
+        status: 'not-found',
+        scannedBlocks: 20n,
+        remainingBlocks: 0n,
+      },
+    });
+
+    expect(t.coordinator.status.blockers)
+      .toContain('conflict-search-exhausted');
+
+    // A later RPC response reports the oldest nonce unconsumed.
+    // That observation alone must not clear established exhaustion.
+    vi.mocked(publicClient.getTransactionCount).mockResolvedValue(4);
+    t.save.mockClear();
+
+    expect(await t.coordinator.recover({
+      publicClient,
+      anchor: OBSERVED_AT,
+      maxBlockRange: 5n,
+    })).toMatchObject({
       status: 'unresolved',
       observation: {
         anchor: OBSERVED_AT,
-        nonce: t.snapshot.attempts[0]!.nonce,
+        nonce: 4n,
       },
-      receipt: {
-        status: 'receipt-not-found',
-      },
+      receipt: { status: 'receipt-not-found' },
       search: null,
     });
 
-    try {
-      await t.coordinator.recover({
-        publicClient: {} as PublicClient,
-        anchor: OBSERVED_AT,
-        maxBlockRange: 5n,
-      });
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.coordinator.status.recoveryComplete).toBe(true);
+    expect(t.coordinator.status.blockers)
+      .toContain('conflict-search-exhausted');
+    expect(t.coordinator.canBroadcast).toBe(false);
 
-      expect(t.coordinator.status.blockers)
-        .toContain('conflict-search-exhausted');
-      expect(t.coordinator.canBroadcast).toBe(false);
-    } finally {
-      inspect.mockRestore();
-    }
+    await expect(t.coordinator.broadcastAttempt({
+      publicClient,
+      attemptId: t.snapshot.attempts[0]!.attemptId,
+    })).rejects.toThrow('Fresh reconciliation');
+
+    expect(request).not.toHaveBeenCalled();
+    expect(t.save).toHaveBeenCalledOnce();
   });
 });
