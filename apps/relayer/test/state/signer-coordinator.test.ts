@@ -972,6 +972,45 @@ describe('signer coordinator transitions', () => {
     });
 
     expect(t.save).toHaveBeenCalledOnce();
+
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
+    ]);
+
+    expect(t.coordinator.status.blockers)
+      .not.toContain('conflict-search-exhausted');
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+      primaryReason: 'recovery-incomplete',
+      blockedSince: CREATED,
+    });
+
+    await checkEmptyInclusions(t.coordinator, 5, 3);
+
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
+      'signer_gate_released',
+    ]);
+
+    expect(t.records()[2]).toMatchObject({
+      cycle: 3,
+      blockedSince: CREATED,
+    });
+
+    expect(t.records()[2].cleared).toEqual(
+      expect.arrayContaining([
+        'conflict-search-exhausted',
+        'unresolved-attempt',
+        'recovery-incomplete',
+      ]),
+    );
+
+    expect(t.coordinator.status.open).toBe(true);
   });
 
   it('does not initialize a missing journal through inclusion checking', async () => {
@@ -1152,7 +1191,13 @@ describe('durable signer observations', () => {
 
   it('closes an otherwise open gate while saving and rejects overlapping operations', async () => {
     const t = await setup({ empty: true });
-    t.coordinator.completeRecovery();
+
+    const options = receiptRecoveryOptions(t, 4);
+
+    expect(await t.coordinator.recover(options)).toMatchObject({
+      status: 'no-attempt',
+    });
+
     await checkEmptyInclusions(t.coordinator, 4);
 
     expect(t.coordinator.status.open).toBe(true);
@@ -1175,22 +1220,20 @@ describe('durable signer observations', () => {
       });
     });
 
-    const pending = t.coordinator.recordObservation(
-      observation(4n),
-    );
+    const pending = t.coordinator.recover(options);
 
     try {
       await started;
 
       expect(t.coordinator.status.open).toBe(false);
 
-      await expect(
-        t.coordinator.recordObservation(observation(4n)),
-      ).rejects.toThrow('already in progress');
+      await expect(t.coordinator.recover(options))
+        .rejects.toThrow('already in progress');
 
-      await expect(
-        t.coordinator.retryPersistence(),
-      ).rejects.toThrow('already in progress');
+      await expect(checkEmptyInclusions(t.coordinator, 4))
+        .rejects.toThrow('already in progress');
+
+      expect(t.save).toHaveBeenCalledOnce();
     } finally {
       finish();
       await pending;
@@ -1217,9 +1260,13 @@ describe('durable signer observations', () => {
 
   it('retries the exact failed observation and preserves unexpected activity across restart', async () => {
     const t = await setup({ empty: true });
-    t.coordinator.completeRecovery();
-    await checkEmptyInclusions(t.coordinator, 4);
+    const options = receiptRecoveryOptions(t, 4);
 
+    expect(await t.coordinator.recover(options)).toMatchObject({
+      status: 'no-attempt',
+    });
+
+    await checkEmptyInclusions(t.coordinator, 4);
     expect(t.coordinator.status.open).toBe(true);
 
     t.save.mockClear();
@@ -1232,44 +1279,56 @@ describe('durable signer observations', () => {
       throw new Error('Durability uncertain');
     });
 
-    const input = observation(8n);
+    vi.mocked(options.publicClient.getTransactionCount)
+      .mockResolvedValue(8);
 
-    await expect(
-      t.coordinator.recordObservation(input),
-    ).rejects.toThrow('Journal persistence');
+    await expect(t.coordinator.recover(options))
+      .rejects.toThrow('Journal persistence');
 
-    expect(visible.lastObservation.nonce).toBe(8n);
+    const pending = t.save.mock.calls[0]![0];
+
+    expect(visible).toBe(pending);
+    expect(pending).toMatchObject({
+      attempts: [],
+      nextNonce: 4n,
+      durableNextNonce: 4n,
+      lastObservation: observation(8n),
+    });
 
     expect(t.coordinator.status).toMatchObject({
       open: false,
+      recoveryComplete: false,
       primaryReason: 'persistence-failure',
     });
 
-    input.nonce = 4n;
+    // Changed RPC responses cannot replace the retained failed snapshot.
+    vi.mocked(options.publicClient.getTransactionCount)
+      .mockResolvedValue(4);
 
-    await expect(
-      t.coordinator.recordObservation(input),
-    ).rejects.toThrow('must be retried');
+    vi.mocked(options.publicClient.getBlock).mockClear();
+    vi.mocked(options.publicClient.getTransactionCount).mockClear();
 
-    await expect(
-      t.coordinator.resolveAttempt(t.evidence),
-    ).rejects.toThrow('must be retried');
+    await expect(t.coordinator.recover(options))
+      .rejects.toThrow('must be retried');
 
     t.save.mockRejectedValueOnce(new Error('Retry failed'));
 
-    await expect(
-      t.coordinator.retryPersistence(),
-    ).rejects.toThrow('Journal persistence');
+    await expect(t.coordinator.retryPersistence())
+      .rejects.toThrow('Journal persistence');
 
     await t.coordinator.retryPersistence(3);
 
-    expect(t.save.mock.calls[2]![0])
-      .toBe(t.save.mock.calls[0]![0]);
+    expect(t.save).toHaveBeenCalledTimes(3);
+    expect(t.save.mock.calls[1]![0]).toBe(pending);
+    expect(t.save.mock.calls[2]![0]).toBe(pending);
 
-    expect(t.load).toHaveBeenCalledTimes(1);
+    expect(options.publicClient.getBlock).not.toHaveBeenCalled();
+    expect(options.publicClient.getTransactionCount).not.toHaveBeenCalled();
+    expect(t.load).toHaveBeenCalledOnce();
 
     expect(t.coordinator.status).toMatchObject({
       open: false,
+      recoveryComplete: false,
       primaryReason: 'unattributed-signer-activity',
     });
 
@@ -1294,25 +1353,53 @@ describe('durable signer observations', () => {
       createErrorSummary: t.factory,
     });
 
-    restarted.completeRecovery();
-
     expect(restarted.status).toMatchObject({
       open: false,
+      recoveryComplete: false,
       primaryReason: 'unattributed-signer-activity',
     });
 
-    await expect(
-      restarted.recordObservation(observation(4n)),
-    ).rejects.toThrow('Cannot overwrite');
+    // A lower observation cannot overwrite the recorded excess activity.
+    expect(await restarted.recover(options)).toMatchObject({
+      status: 'no-attempt',
+      observation: observation(4n),
+    });
 
     expect(t.save).toHaveBeenCalledTimes(3);
+
+    expect(restarted.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      primaryReason: 'unattributed-signer-activity',
+    });
+
+    await checkEmptyInclusions(restarted, 4);
+
+    expect(t.save).toHaveBeenCalledTimes(4);
+    expect(t.save.mock.calls[3]![0]).toMatchObject({
+      attempts: [],
+      nextNonce: 4n,
+      durableNextNonce: 4n,
+      lastObservation: observation(8n),
+    });
+
+    expect(restarted.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: true,
+      primaryReason: 'unattributed-signer-activity',
+    });
   });
 
   it('retries an ordinary observation without emitting an attempt resolution', async () => {
     const t = await setup({ empty: true });
-    t.coordinator.completeRecovery();
-    await checkEmptyInclusions(t.coordinator, 4);
+    const options = receiptRecoveryOptions(t, 4);
 
+    expect(await t.coordinator.recover(options)).toMatchObject({
+      status: 'no-attempt',
+    });
+
+    await checkEmptyInclusions(t.coordinator, 4);
     expect(t.coordinator.status.open).toBe(true);
 
     t.save.mockClear();
@@ -1320,15 +1407,25 @@ describe('durable signer observations', () => {
 
     t.save.mockRejectedValueOnce(new Error('Failed'));
 
-    await expect(
-      t.coordinator.recordObservation(observation(4n)),
-    ).rejects.toThrow();
+    await expect(t.coordinator.recover(options))
+      .rejects.toThrow('Journal persistence');
+
+    const pending = t.save.mock.calls[0]![0];
+
+    vi.mocked(options.publicClient.getBlock).mockClear();
+    vi.mocked(options.publicClient.getTransactionCount).mockClear();
 
     await t.coordinator.retryPersistence();
 
+    expect(t.save).toHaveBeenCalledTimes(2);
+    expect(t.save.mock.calls[1]![0]).toBe(pending);
+
+    expect(options.publicClient.getBlock).not.toHaveBeenCalled();
+    expect(options.publicClient.getTransactionCount).not.toHaveBeenCalled();
+
     expect(t.coordinator.status).toMatchObject({
       open: false,
-      recoveryComplete: true,
+      recoveryComplete: false,
       inclusionChecksComplete: false,
       primaryReason: 'recovery-incomplete',
     });
@@ -1337,9 +1434,41 @@ describe('durable signer observations', () => {
       (record) => record.event === 'signer_gate_released',
     )).toBe(false);
 
+    // Inclusion checking cannot complete recovery after a failed write.
     await checkEmptyInclusions(t.coordinator, 4);
 
-    expect(t.coordinator.status.open).toBe(true);
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: true,
+    });
+
+    expect(t.records().some(
+      (record) => record.event === 'signer_gate_released',
+    )).toBe(false);
+
+    // Fresh recovery invalidates the earlier inclusion authorization.
+    expect(await t.coordinator.recover(options)).toMatchObject({
+      status: 'no-attempt',
+    });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
+    expect(t.records().some(
+      (record) => record.event === 'signer_gate_released',
+    )).toBe(false);
+
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
 
     expect(t.records().filter(
       (record) => record.event === 'signer_gate_released',
@@ -1350,41 +1479,135 @@ describe('durable signer observations', () => {
     )).toBe(false);
   });
 
-  it('does not complete startup recovery merely by saving an observation', async () => {
+  it('does not complete startup recovery through inclusion checking alone', async () => {
     const t = await setup({ empty: true });
+    t.lines.length = 0;
 
-    await t.coordinator.recordObservation(observation(4n));
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.save.mock.calls[0]![0]).toMatchObject({
+      attempts: [],
+      nextNonce: 4n,
+      durableNextNonce: 4n,
+      lastObservation: observation(4n),
+    });
 
     expect(t.coordinator.status).toMatchObject({
       open: false,
       recoveryComplete: false,
+      inclusionChecksComplete: true,
+      primaryReason: 'recovery-incomplete',
     });
+
+    expect(t.records().some(
+      (record) => record.event === 'signer_gate_released',
+    )).toBe(false);
+
+    expect(await t.coordinator.recover(
+      receiptRecoveryOptions(t, 4),
+    )).toMatchObject({
+      status: 'no-attempt',
+    });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    expect(t.records().filter(
+      (record) => record.event === 'signer_gate_released',
+    )).toHaveLength(1);
   });
 
   it('requires fresh recovery when the observed nonce is behind the journal', async () => {
     const t = await setup({ empty: true });
-    t.coordinator.completeRecovery();
-    await checkEmptyInclusions(t.coordinator, 4);
+    const options = receiptRecoveryOptions(t, 4);
 
+    expect(await t.coordinator.recover(options)).toMatchObject({
+      status: 'no-attempt',
+    });
+
+    await checkEmptyInclusions(t.coordinator, 4);
     expect(t.coordinator.status.open).toBe(true);
 
     t.save.mockClear();
     t.lines.length = 0;
 
-    await expect(
-      t.coordinator.recordObservation(observation(3n)),
-    ).rejects.toThrow('Observed nonce is behind the journal. Recovery is required.');
+    vi.mocked(options.publicClient.getTransactionCount)
+      .mockResolvedValue(3);
+
+    expect(await t.coordinator.recover(options)).toMatchObject({
+      status: 'nonce-behind-journal',
+    });
 
     expect(t.coordinator.status).toMatchObject({
       open: false,
       recoveryComplete: false,
+      inclusionChecksComplete: false,
     });
 
     expect(t.save).not.toHaveBeenCalled();
 
-    await t.coordinator.recordObservation(observation(4n));
+    // A valid head observation cannot replace durable recovery.
+    await checkEmptyInclusions(t.coordinator, 4);
 
-    expect(t.coordinator.status.open).toBe(false);
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.save.mock.calls[0]![0]).toMatchObject({
+      attempts: [],
+      nextNonce: 4n,
+      durableNextNonce: 4n,
+      lastObservation: observation(4n),
+    });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: true,
+    });
+
+    expect(t.records().some(
+      (record) => record.event === 'signer_gate_released',
+    )).toBe(false);
+
+    vi.mocked(options.publicClient.getTransactionCount)
+      .mockResolvedValue(4);
+
+    expect(await t.coordinator.recover(options)).toMatchObject({
+      status: 'no-attempt',
+      observation: observation(4n),
+    });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
+    expect(t.records().some(
+      (record) => record.event === 'signer_gate_released',
+    )).toBe(false);
+
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
+
+    expect(t.records().filter(
+      (record) => record.event === 'signer_gate_released',
+    )).toHaveLength(1);
+
+    expect(t.records().some(
+      (record) => record.event === 'attempt_resolved',
+    )).toBe(false);
   });
 
   it('rejects invalid observation fields before saving without invoking accessors', async () => {
@@ -1407,15 +1630,18 @@ describe('durable signer observations', () => {
 
   it('persists excess nonce evidence with a replacement clear for restart recovery', async () => {
     const t = await setup();
+    const options = replacementRecoveryOptions(t, 8);
 
-    await t.coordinator.resolveAttempt({
-      outcome: 'replaced',
-      anchor: t.evidence.anchor,
-      inclusion: t.evidence.inclusion,
-      replacementTransactionHash: OTHER,
-      nonceAtAnchor: 8n,
+    expect(await t.coordinator.recover(options)).toMatchObject({
+      status: 'resolution-available',
+      evidence: {
+        outcome: 'replaced',
+        replacementTransactionHash: OTHER,
+        nonceAtAnchor: 8n,
+      },
     });
 
+    expect(t.save).toHaveBeenCalledOnce();
     const saved = t.save.mock.calls[0]![0];
 
     expect(saved).toMatchObject({
@@ -1441,29 +1667,128 @@ describe('durable signer observations', () => {
       createErrorSummary: t.factory,
     });
 
-    restarted.completeRecovery();
+    expect(restarted.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      primaryReason: 'unattributed-signer-activity',
+    });
+
+    t.save.mockClear();
+    vi.mocked(options.publicClient.getTransactionReceipt).mockClear();
+
+    expect(await restarted.recover(options)).toEqual({
+      status: 'no-attempt',
+      observation: observation(8n),
+    });
+
+    expect(options.publicClient.getTransactionReceipt)
+      .not.toHaveBeenCalled();
+
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.save.mock.calls[0]![0]).toMatchObject({
+      attempts: [],
+      nextNonce: 5n,
+      durableNextNonce: 5n,
+      lastObservation: observation(8n),
+    });
+
+    await checkEmptyInclusions(restarted, 8);
 
     expect(restarted.status).toMatchObject({
       open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
       primaryReason: 'unattributed-signer-activity',
     });
   });
 
   it('does not erase an existing higher nonce observation during replacement clear', async () => {
-    const t = await setup({ extraNonce: true });
+    const t = await setup();
 
-    await t.coordinator.resolveAttempt({
-      outcome: 'replaced',
-      anchor: t.evidence.anchor,
-      inclusion: t.evidence.inclusion,
-      replacementTransactionHash: OTHER,
-      nonceAtAnchor: 5n,
+    // Establish excess activity and a usable replacement-search boundary.
+    expect(await t.coordinator.recover({
+      ...searchRecoveryOptions(t, 8),
+      maxBlockRange: 5n,
+    })).toMatchObject({
+      status: 'unresolved',
+      observation: observation(8n),
+      search: {
+        status: 'not-found',
+        scannedBlocks: 5n,
+        remainingBlocks: 5n,
+      },
     });
 
-    expect(t.save.mock.calls[0]![0].lastObservation)
-      .toEqual(t.snapshot.lastObservation);
+    expect(t.save).toHaveBeenCalledOnce();
 
-    expect(t.coordinator.status.open).toBe(false);
+    const recorded = t.save.mock.calls[0]![0];
+
+    expect(recorded).toMatchObject({
+      nextNonce: 5n,
+      durableNextNonce: 4n,
+      lastObservation: observation(8n),
+      attempts: [{
+        attemptId: t.attempt.attemptId,
+        replacementSearch: {
+          lowerBound: t.snapshot.lastObservation,
+          searchedThrough: {
+            blockNumber: 105n,
+            blockHash: HASH,
+          },
+        },
+      }],
+    });
+
+    expect(t.coordinator.status.primaryReason)
+      .toBe('unattributed-signer-activity');
+
+    t.save.mockClear();
+    t.lines.length = 0;
+
+    // Resolve the replacement despite a lower current nonce observation.
+    expect(await t.coordinator.recover(
+      replacementRecoveryOptions(t, 5),
+    )).toMatchObject({
+      status: 'resolution-available',
+      evidence: {
+        outcome: 'replaced',
+        replacementTransactionHash: OTHER,
+        nonceAtAnchor: 5n,
+      },
+    });
+
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.save.mock.calls[0]![0]).toMatchObject({
+      attempts: [],
+      nextNonce: 5n,
+      durableNextNonce: 5n,
+      lastObservation: recorded.lastObservation,
+    });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+      primaryReason: 'unattributed-signer-activity',
+    });
+
+    expect(t.records().map((record) => record.event))
+      .toEqual(['attempt_resolved']);
+
+    await checkEmptyInclusions(t.coordinator, 5);
+
+    expect(t.save.mock.calls[1]![0].lastObservation)
+      .toEqual(recorded.lastObservation);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      primaryReason: 'unattributed-signer-activity',
+    });
+
+    expect(t.records().map((record) => record.event))
+      .toEqual(['attempt_resolved']);
   });
 
   it('does not initialize a missing journal from an ordinary observation', async () => {
