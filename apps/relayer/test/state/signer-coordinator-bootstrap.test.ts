@@ -236,9 +236,13 @@ describe('signer bootstrap during recovery', () => {
       expect(t.coordinator.attempts).toEqual([]);
       expect(t.events()).not.toContain('signer_gate_released');
 
-      // Deferral must leave the journal missing.
-      expect(() => t.coordinator.completeRecovery())
-        .toThrow('initialized journal');
+      await expect(
+        t.coordinator.checkInclusions({
+          publicClient: t.options.publicClient,
+          head: ANCHOR,
+          maxReplacementBlockRange: 2n,
+        }),
+      ).rejects.toThrow('initialized journal');
 
       // A later pass can initialize after the observations agree.
       expect(await t.coordinator.recover(t.options)).toEqual({
@@ -377,14 +381,25 @@ describe('signer bootstrap during recovery', () => {
         t.coordinator.recover(t.options),
       ).rejects.toThrow('already in progress');
 
-      await expect(t.recover()).rejects.toThrow('already in progress');
+      await expect(
+        t.coordinator.checkInclusions({
+          publicClient: t.options.publicClient,
+          head: ANCHOR,
+          maxReplacementBlockRange: 2n,
+        }),
+      ).rejects.toThrow('already in progress');
 
       finishRpc.resolve();
 
       await Promise.race([saveEntered.promise, pending]);
 
-      expect(() => t.coordinator.completeRecovery())
-        .toThrow('already in progress');
+      await expect(
+        t.coordinator.checkInclusions({
+          publicClient: t.options.publicClient,
+          head: ANCHOR,
+          maxReplacementBlockRange: 2n,
+        }),
+      ).rejects.toThrow('already in progress');
 
       await expect(
         t.coordinator.retryPersistence(),
@@ -501,19 +516,6 @@ describe('signer bootstrap during recovery', () => {
     });
 
     expect(restarted.status.open).toBe(true);
-  });
-
-  it('does not override an explicit coordinator blocker', async () => {
-    const t = await setup();
-
-    t.coordinator.block('unattributed-signer-activity');
-
-    await expect(
-      t.coordinator.recover(t.options),
-    ).rejects.toThrow('blockers remain');
-
-    expect(t.getBlock).not.toHaveBeenCalled();
-    expect(t.save).not.toHaveBeenCalled();
   });
 
   it('captures the bootstrap anchor before awaiting RPC', async () => {
@@ -652,8 +654,13 @@ describe('missing journal policy', () => {
         inclusionChecksComplete: false,
       });
 
-      expect(() => t.coordinator.completeRecovery())
-        .toThrow('initialized journal');
+      await expect(
+        t.coordinator.checkInclusions({
+          publicClient: t.options.publicClient,
+          head: ANCHOR,
+          maxReplacementBlockRange: 2n,
+        }),
+      ).rejects.toThrow('initialized journal');
 
       expect(t.getBlock).not.toHaveBeenCalled();
       expect(t.getTransactionCount).not.toHaveBeenCalled();

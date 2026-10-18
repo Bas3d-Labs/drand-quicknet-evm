@@ -263,7 +263,22 @@ describe('coordinator recovery', () => {
     const t = await setup(true);
 
     t.getTransactionCount.mockResolvedValue(4);
-    t.coordinator.completeRecovery();
+
+    await expect(t.coordinator.recover(t.options))
+      .resolves.toEqual({
+        status: 'no-attempt',
+        observation: {
+          anchor: t.options.anchor,
+          nonce: 4n,
+        },
+      });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
     await t.checkInclusions();
 
     expect(t.coordinator.status.open).toBe(true);
@@ -287,13 +302,6 @@ describe('coordinator recovery', () => {
 
       expect(t.coordinator.status.open).toBe(false);
 
-      expect(() => t.coordinator.completeRecovery())
-        .toThrow('already in progress');
-
-      expect(() =>
-        t.coordinator.block('unattributed-signer-activity'),
-      ).toThrow('already in progress');
-
       await expect(
         t.coordinator.recover(t.options),
       ).rejects.toThrow('already in progress');
@@ -303,8 +311,10 @@ describe('coordinator recovery', () => {
       ).rejects.toThrow('already in progress');
 
       await expect(
-        t.coordinator.recordObservation(t.snapshot.lastObservation),
+        t.checkInclusions(),
       ).rejects.toThrow('already in progress');
+
+      expect(t.save).not.toHaveBeenCalled();
     } finally {
       finish.resolve();
       await pending;
@@ -610,7 +620,45 @@ describe('coordinator recovery', () => {
     async (kind) => {
       const t = await setup();
 
-      t.coordinator.completeRecovery();
+      // Establish completed recovery without resolving the retained attempt.
+      // These overrides apply only to this setup pass.
+      t.getTransactionReceipt.mockRejectedValueOnce(
+        new TransactionReceiptNotFoundError({ hash: t.hash }),
+      );
+      t.getTransactionCount.mockResolvedValueOnce(4);
+
+      await expect(t.coordinator.recover({
+        ...t.options,
+        anchor: t.snapshot.lastObservation.anchor,
+      })).resolves.toMatchObject({
+        status: 'unresolved',
+        observation: t.snapshot.lastObservation,
+        receipt: {
+          status: 'receipt-not-found',
+        },
+        search: null,
+      });
+
+      expect(t.coordinator.status).toMatchObject({
+        recoveryComplete: true,
+        inclusionChecksComplete: false,
+      });
+      expect(t.coordinator.canBroadcast).toBe(true);
+
+      expect(t.coordinator.attempts).toHaveLength(1);
+      expect(t.coordinator.attempts[0]).toMatchObject({
+        nonce: 4n,
+        phase: 'broadcast-may-have-occurred',
+      });
+
+      expect(t.save).toHaveBeenCalledOnce();
+
+      // Measure only the failing recovery below.
+      t.save.mockClear();
+      t.getBlock.mockClear();
+      t.getTransactionReceipt.mockClear();
+      t.getTransactionCount.mockClear();
+      t.lines.length = 0;
 
       const error = new Error('RPC failed');
 
@@ -647,6 +695,9 @@ describe('coordinator recovery', () => {
         open: false,
         recoveryComplete: false,
       });
+
+      expect(t.coordinator.canBroadcast).toBe(false);
+      expect(t.coordinator.attempts).toHaveLength(1);
 
       expect(t.events()).not.toContain('attempt_resolved');
     },
@@ -806,7 +857,22 @@ describe('coordinator recovery', () => {
     const t = await setup(true);
 
     t.getTransactionCount.mockResolvedValue(4);
-    t.coordinator.completeRecovery();
+
+    await expect(t.coordinator.recover(t.options))
+      .resolves.toEqual({
+        status: 'no-attempt',
+        observation: {
+          anchor: t.options.anchor,
+          nonce: 4n,
+        },
+      });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+
     await t.checkInclusions();
 
     expect(t.coordinator.status.open).toBe(true);

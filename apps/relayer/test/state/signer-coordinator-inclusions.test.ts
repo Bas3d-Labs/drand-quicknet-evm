@@ -118,9 +118,6 @@ describe('coordinator replacement inclusions', () => {
         }),
       });
 
-      coordinator.completeRecovery();
-      lines.length = 0;
-
       const getBlock = vi.fn(async (request: {
         blockNumber: bigint;
         includeTransactions?: boolean;
@@ -154,11 +151,51 @@ describe('coordinator replacement inclusions', () => {
         };
       });
 
+      const getTransactionCount = vi.fn().mockResolvedValue(5);
+
       const publicClient = {
         getBlock,
         getTransactionReceipt,
-        getTransactionCount: vi.fn().mockResolvedValue(5),
+        getTransactionCount,
       } as unknown as PublicClient;
+
+      // At the durable baseline, nonce 4 remains unconsumed.
+      // The later head inspection will discover its replacement.
+      getTransactionCount.mockResolvedValueOnce(4);
+
+      const recovery = await coordinator.recover({
+        publicClient,
+        anchor: baseline.anchor,
+        maxBlockRange: 2n,
+      });
+
+      expect(recovery).toMatchObject({
+        status: 'unresolved',
+        observation: baseline,
+        receipt: {
+          status: 'receipt-not-found',
+        },
+        search: null,
+      });
+
+      expect(coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: true,
+        inclusionChecksComplete: false,
+      });
+
+      expect(coordinator.attempts).toHaveLength(1);
+      expect(coordinator.attempts[0]?.phase)
+        .toBe('broadcast-may-have-occurred');
+
+      expect(save).toHaveBeenCalledOnce();
+
+      // Subsequent assertions concern inclusion persistence, not setup recovery.
+      save.mockClear();
+      getBlock.mockClear();
+      getTransactionReceipt.mockClear();
+      getTransactionCount.mockClear();
+      lines.length = 0;
 
       const options = {
         publicClient,

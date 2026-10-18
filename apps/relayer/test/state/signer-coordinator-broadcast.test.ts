@@ -104,17 +104,39 @@ async function setup() {
   });
 
   const coordinator = await create();
-  coordinator.completeRecovery();
+
+  const startupClient = {
+    getBlock: async () => ({
+      number: ANCHOR.blockNumber,
+      hash: ANCHOR.blockHash,
+    }),
+    getTransactionCount: async () => Number(OBSERVATION.nonce),
+  } as unknown as PublicClient;
+
+  await expect(coordinator.recover({
+    publicClient: startupClient,
+    anchor: ANCHOR,
+    maxBlockRange: 2n,
+  })).resolves.toEqual({
+    status: 'no-attempt',
+    observation: OBSERVATION,
+  });
+
+  expect(coordinator.status).toMatchObject({
+    open: false,
+    recoveryComplete: true,
+    inclusionChecksComplete: false,
+  });
 
   await coordinator.checkInclusions({
-    publicClient: {
-      getBlock: async () => ({
-        number: ANCHOR.blockNumber,
-        hash: ANCHOR.blockHash,
-      }),
-      getTransactionCount: async () => Number(OBSERVATION.nonce),
-    } as unknown as PublicClient,
+    publicClient: startupClient,
     head: ANCHOR,
+  });
+
+  expect(coordinator.status).toMatchObject({
+    open: true,
+    recoveryComplete: true,
+    inclusionChecksComplete: true,
   });
 
   // Keep saved-call indexing focused on preparation and broadcasting.
@@ -291,17 +313,27 @@ describe('journaled transaction broadcast', () => {
     expect(t.signTransaction).toHaveBeenCalledTimes(1);
   });
 
-  it('requires fresh inspection after acknowledgement, even if recovery is manually completed', async () => {
+  it('rejects a second send after acknowledgement without fresh reconciliation', async () => {
     const t = await setup();
 
     await t.broadcast();
 
-    t.coordinator.completeRecovery();
+    expect(t.coordinator.status).toMatchObject({
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    t.save.mockClear();
 
     await expect(t.broadcast())
       .rejects.toThrow('Fresh reconciliation');
 
     expect(t.request).toHaveBeenCalledTimes(1);
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+    expect(t.getTransactionCount).not.toHaveBeenCalled();
+    expect(t.signTransaction).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a stale attempt identifier without spending the valid permit', async () => {
@@ -318,21 +350,209 @@ describe('journaled transaction broadcast', () => {
     await t.broadcast();
   });
 
-  it.each([
-    'unattributed-signer-activity',
-    'conflict-search-exhausted',
-  ] as const)(
-    'does not broadcast while blocked by %s',
-    async (reason) => {
+  it.each(([
+    {
+      reason: 'unattributed-signer-activity',
+      observedNonce: 6,
+      maxBlockRange: 1n,
+      scannedBlocks: 1n,
+      remainingBlocks: 1n,
+      searchedThrough: 101n,
+    },
+    {
+      reason: 'conflict-search-exhausted',
+      observedNonce: 5,
+      maxBlockRange: 2n,
+      scannedBlocks: 2n,
+      remainingBlocks: 0n,
+      searchedThrough: 102n,
+    },
+  ] as const).flatMap((scenario) =>
+    [false, true].map((inspectHead) => ({
+      ...scenario,
+      inspectHead,
+    })),
+  ))(
+    'does not broadcast while blocked by $reason; subsequent head inspection: $inspectHead',
+    async ({
+      reason,
+      observedNonce,
+      maxBlockRange,
+      scannedBlocks,
+      remainingBlocks,
+      searchedThrough,
+      inspectHead,
+    }) => {
       const t = await setup();
 
-      t.coordinator.block(reason);
+      expect(t.coordinator.canBroadcast).toBe(true);
+
+      const hashAt = (blockNumber: bigint) => {
+        if (blockNumber === 100n) {
+          return HASH;
+        }
+
+        if (blockNumber === 101n) {
+          return OTHER;
+        }
+
+        if (blockNumber === 102n) {
+          return `0x${'cc'.repeat(32)}` as const;
+        }
+
+        if (blockNumber === 103n) {
+          return `0x${'dd'.repeat(32)}` as const;
+        }
+
+        throw new Error('Unexpected fixture block.');
+      };
+
+      t.getBlock.mockImplementation(async ({ blockNumber } = {}) => {
+        if (blockNumber === undefined) {
+          throw new Error('Expected an explicit block number.');
+        }
+
+        return {
+          number: blockNumber,
+          hash: hashAt(blockNumber),
+          parentHash: blockNumber === 100n
+            ? HASH
+            : hashAt(blockNumber - 1n),
+          transactions: [],
+        } as never;
+      });
+
+      t.getTransactionCount.mockResolvedValue(observedNonce);
+
+      const anchor = {
+        blockNumber: 102n,
+        blockHash: hashAt(102n),
+      };
+
+      const result = await t.coordinator.recover({
+        publicClient: t.publicClient,
+        anchor,
+        maxBlockRange,
+      });
+
+      expect(result).toMatchObject({
+        status: 'unresolved',
+        observation: {
+          anchor,
+          nonce: BigInt(observedNonce),
+        },
+        search: {
+          status: 'not-found',
+          scannedBlocks,
+          remainingBlocks,
+          searchedThrough: {
+            blockNumber: searchedThrough,
+            blockHash: hashAt(searchedThrough),
+          },
+        },
+      });
+
+      expect(t.save).toHaveBeenCalledOnce();
+
+      expect(t.visible()).toMatchObject({
+        kind: 'present',
+        snapshot: {
+          nextNonce: 5n,
+          durableNextNonce: 4n,
+          lastObservation: {
+            anchor,
+            nonce: BigInt(observedNonce),
+          },
+          attempts: [{
+            attemptId: t.prepared.attemptId,
+            replacementSearch: {
+              lowerBound: OBSERVATION,
+              searchedThrough: {
+                blockNumber: searchedThrough,
+                blockHash: hashAt(searchedThrough),
+              },
+            },
+          }],
+        },
+      });
+
+      expect(t.coordinator.status.blockers).toContain(reason);
+
+      const otherReason = reason === 'unattributed-signer-activity'
+        ? 'conflict-search-exhausted'
+        : 'unattributed-signer-activity';
+
+      expect(t.coordinator.status.blockers).not.toContain(otherReason);
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      expect(t.coordinator.status.recoveryComplete).toBe(true);
+
+      if (inspectHead) {
+        const head = {
+          blockNumber: 103n,
+          blockHash: hashAt(103n),
+        };
+
+        // Model a later provider observation reporting the attempt nonce
+        // as unconsumed. It must not erase an established blocker.
+        t.getTransactionCount.mockResolvedValueOnce(4);
+
+        const inspection = await t.coordinator.checkInclusions({
+          publicClient: t.publicClient,
+          head,
+        });
+
+        expect(inspection).toMatchObject({
+          status: 'inspected',
+          observation: {
+            anchor: head,
+            nonce: 4n,
+          },
+          broadcastAttemptId: t.prepared.attemptId,
+        });
+
+        expect(t.save).toHaveBeenCalledTimes(2);
+
+        expect(t.coordinator.status.recoveryComplete).toBe(true);
+        expect(t.coordinator.status.blockers).toContain(reason);
+        expect(t.coordinator.status.blockers).not.toContain(otherReason);
+        expect(t.coordinator.canBroadcast).toBe(false);
+
+        expect(t.visible()).toMatchObject({
+          kind: 'present',
+          snapshot: {
+            lastObservation: reason === 'unattributed-signer-activity'
+              ? {
+                  anchor,
+                  nonce: BigInt(observedNonce),
+                }
+              : {
+                  anchor: head,
+                  nonce: 4n,
+                },
+            attempts: [{
+              attemptId: t.prepared.attemptId,
+              replacementSearch: {
+                lowerBound: OBSERVATION,
+                searchedThrough: {
+                  blockNumber: searchedThrough,
+                  blockHash: hashAt(searchedThrough),
+                },
+              },
+            }],
+          },
+        });
+      }
+
+      // Measure only the rejected broadcast below.
+      t.save.mockClear();
 
       await expect(t.broadcast())
         .rejects.toThrow('Fresh reconciliation');
 
       expect(t.save).not.toHaveBeenCalled();
       expect(t.request).not.toHaveBeenCalled();
+      expect(t.signTransaction).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -623,22 +843,68 @@ describe('journaled transaction broadcast', () => {
     expect(t.getTransactionCount).toHaveBeenCalledTimes(1);
   });
 
-  it('does not retain a permit after recovery fails', async () => {
+  it('requires successful recovery after a failure even when head inspection succeeds', async () => {
     const t = await setup();
 
-    t.getTransactionReceipt.mockRejectedValueOnce(
-      new Error('RPC failed'),
-    );
+    expect(t.coordinator.canBroadcast).toBe(true);
+
+    const failure = new Error('RPC failed');
+
+    t.getTransactionReceipt.mockRejectedValueOnce(failure);
 
     await expect(t.coordinator.recover(t.recovery))
-      .rejects.toThrow('RPC failed');
+      .rejects.toBe(failure);
 
-    t.coordinator.completeRecovery();
+    expect(t.coordinator.status.recoveryComplete).toBe(false);
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.request).not.toHaveBeenCalled();
+
+    const inspection = await t.coordinator.checkInclusions({
+      publicClient: t.publicClient,
+      head: ANCHOR,
+    });
+
+    expect(inspection).toMatchObject({
+      status: 'inspected',
+      broadcastAttemptId: t.prepared.attemptId,
+    });
+
+    // Head inspection found a broadcast candidate, but cannot complete
+    // the durable recovery that failed.
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.coordinator.status.recoveryComplete).toBe(false);
+    expect(t.coordinator.canBroadcast).toBe(false);
 
     await expect(t.broadcast())
       .rejects.toThrow('Fresh reconciliation');
 
     expect(t.request).not.toHaveBeenCalled();
+
+    // A subsequent successful recovery can authorize the recorded attempt.
+    await expect(t.coordinator.recover(t.recovery))
+      .resolves.toMatchObject({
+        status: 'unresolved',
+        receipt: {
+          status: 'receipt-not-found',
+        },
+        search: null,
+      });
+
+    expect(t.coordinator.status.recoveryComplete).toBe(true);
+    expect(t.coordinator.canBroadcast).toBe(true);
+
+    await t.broadcast();
+
+    expect(t.request).toHaveBeenCalledExactlyOnceWith({
+      method: 'eth_sendRawTransaction',
+      params: [t.signedTransaction],
+    }, {
+      retryCount: 0,
+    });
+
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.signTransaction).toHaveBeenCalledTimes(1);
   });
 
   it('waits for durability when the receipt is already included above the anchor', async () => {
@@ -666,39 +932,125 @@ describe('journaled transaction broadcast', () => {
     expect(t.request).not.toHaveBeenCalled();
   });
 
-  it('does not broadcast after observing that the nonce was consumed', async () => {
+  it('does not broadcast after head inspection observes a consumed nonce', async () => {
     const t = await setup();
 
-    await t.coordinator.recordObservation({
-      ...OBSERVATION,
-      nonce: 5n,
+    expect(t.coordinator.canBroadcast).toBe(true);
+
+    const head = {
+      blockNumber: 101n,
+      blockHash: HASH,
+    };
+
+    t.getTransactionCount.mockResolvedValueOnce(5);
+
+    const result = await t.coordinator.checkInclusions({
+      publicClient: t.publicClient,
+      head,
     });
+
+    expect(result).toMatchObject({
+      status: 'inspected',
+      observation: {
+        anchor: head,
+        nonce: 5n,
+      },
+      inclusionChecksComplete: false,
+      broadcastAttemptId: null,
+    });
+
+    expect(t.getTransactionReceipt).toHaveBeenCalledTimes(1);
+    expect(t.getTransactionCount).toHaveBeenCalledTimes(1);
+
+    expect(t.save).toHaveBeenCalledOnce();
+
+    expect(t.visible()).toMatchObject({
+      kind: 'present',
+      snapshot: {
+        lastObservation: {
+          anchor: head,
+          nonce: 5n,
+        },
+        nextNonce: 5n,
+        durableNextNonce: 4n,
+        attempts: [{
+          attemptId: t.prepared.attemptId,
+          nonce: 4n,
+          phase: 'signed',
+          inclusion: null,
+        }],
+      },
+    });
+
+    expect(t.coordinator.canBroadcast).toBe(false);
 
     await expect(t.broadcast())
       .rejects.toThrow('Fresh reconciliation');
 
     expect(t.request).not.toHaveBeenCalled();
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.signTransaction).toHaveBeenCalledTimes(1);
   });
 
-  it('requires inspection after restart before sending the recorded attempt', async () => {
+  it('requires recovery after restart even when head inspection succeeds', async () => {
     const t = await setup();
 
     await t.broadcast();
 
     const restarted = await t.create();
 
-    restarted.completeRecovery();
+    expect(restarted.status.recoveryComplete).toBe(false);
+    expect(restarted.canBroadcast).toBe(false);
 
     await expect(restarted.broadcastAttempt(t.options))
       .rejects.toThrow('Fresh reconciliation');
 
-    await restarted.recover(t.recovery);
+    expect(t.request).toHaveBeenCalledTimes(1);
+
+    const inspection = await restarted.checkInclusions({
+      publicClient: t.publicClient,
+      head: ANCHOR,
+    });
+
+    expect(inspection).toMatchObject({
+      status: 'inspected',
+      broadcastAttemptId: t.prepared.attemptId,
+    });
+
+    // Reopening requires recovery; head inspection cannot replace it.
+    expect(restarted.status.recoveryComplete).toBe(false);
+    expect(restarted.canBroadcast).toBe(false);
+
+    await expect(restarted.broadcastAttempt(t.options))
+      .rejects.toThrow('Fresh reconciliation');
+
+    expect(t.request).toHaveBeenCalledTimes(1);
+
+    await expect(restarted.recover(t.recovery))
+      .resolves.toMatchObject({
+        status: 'unresolved',
+        receipt: {
+          status: 'receipt-not-found',
+        },
+        search: null,
+      });
+
+    expect(restarted.status.recoveryComplete).toBe(true);
+    expect(restarted.canBroadcast).toBe(true);
+
     await restarted.broadcastAttempt(t.options);
 
+    expect(t.request).toHaveBeenCalledTimes(2);
     expect(t.request.mock.calls[1])
       .toEqual(t.request.mock.calls[0]);
 
     expect(t.signTransaction).toHaveBeenCalledTimes(1);
+    expect(restarted.canBroadcast).toBe(false);
+
+    await expect(restarted.broadcastAttempt(t.options))
+      .rejects.toThrow('Fresh reconciliation');
+
+    expect(t.request).toHaveBeenCalledTimes(2);
   });
 
   it('does not send an attempt cleared by durable receipt reconciliation', async () => {
@@ -854,28 +1206,4 @@ describe('journaled transaction broadcast', () => {
 
     expect(t.request).toHaveBeenCalledTimes(1);
   });
-
-  it.each([
-    'unattributed-signer-activity',
-    'conflict-search-exhausted',
-  ] as const)(
-    'does not authorize broadcasting from head inspection while blocked by %s',
-    async (reason) => {
-      const t = await setup();
-
-      t.coordinator.block(reason);
-
-      await t.coordinator.checkInclusions({
-        publicClient: t.publicClient,
-        head: ANCHOR,
-      });
-
-      expect(t.coordinator.canBroadcast).toBe(false);
-
-      await expect(t.broadcast())
-        .rejects.toThrow('Fresh reconciliation');
-
-      expect(t.request).not.toHaveBeenCalled();
-    },
-  );
 });

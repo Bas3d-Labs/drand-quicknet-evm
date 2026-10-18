@@ -531,7 +531,21 @@ describe('beacon transaction submission', () => {
         request,
       } as unknown as PublicClient;
 
-      coordinator.completeRecovery();
+      expect(await coordinator.recover({
+        publicClient,
+        anchor,
+        maxBlockRange: 2n,
+      })).toEqual({
+        status: 'no-attempt',
+        observation,
+      });
+
+      expect(coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: true,
+        inclusionChecksComplete: false,
+      });
+
       await coordinator.checkInclusions({
         publicClient,
         head: anchor,
