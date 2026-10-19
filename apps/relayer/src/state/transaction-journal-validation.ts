@@ -17,6 +17,11 @@ import {
 } from '../shared/hex.js';
 
 import {
+  isNonNegativeSafeInteger,
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
+import {
   MAX_UINT256,
 } from '../shared/uint.js';
 
@@ -127,11 +132,7 @@ function readIdentity(input: unknown): JournalIdentity {
   const chainId = field(input, 'chainId');
   const signer = field(input, 'signer');
 
-  requireValid(
-    typeof chainId === 'number' &&
-    Number.isSafeInteger(chainId) &&
-    chainId > 0
-  );
+  requireValid(isPositiveSafeInteger(chainId));
   requireValid(isFixedHex(signer, 20));
 
   return Object.freeze({
@@ -353,9 +354,7 @@ function readRepairs(input: unknown): readonly JournalNonceRepair[] {
     const length = ownValue(input, 'length');
 
     requireValidRepair(
-      typeof length === 'number' &&
-      Number.isSafeInteger(length) &&
-      length >= 0 &&
+      isNonNegativeSafeInteger(length) &&
       length <= MAX_RETAINED_NONCE_REPAIRS
     );
 
@@ -414,11 +413,7 @@ function readArray<T>(
 
   const length = ownValue(input, 'length');
 
-  requireValid(
-    typeof length === 'number' &&
-    Number.isSafeInteger(length) &&
-    length >= 0
-  );
+  requireValid(isNonNegativeSafeInteger(length));
 
   const result: T[] = [];
 

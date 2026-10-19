@@ -15,6 +15,11 @@ import {
 } from '../chain/finality-policy.js';
 
 import {
+  isNonNegativeSafeInteger,
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
+import {
   resolveNetworkConfigPath,
   type ResolveNetworkConfigPathOptions,
 } from './network-config-path.js';
@@ -144,11 +149,7 @@ function parseChain(
     ['testnet'],
   );
 
-  if (
-    typeof value.id !== 'number' ||
-    !Number.isSafeInteger(value.id) ||
-    value.id <= 0
-  ) {
+  if (!isPositiveSafeInteger(value.id)) {
     throw new Error(
       'Custom network config chain.id must be a positive safe integer.'
     );
@@ -196,18 +197,22 @@ function parseNativeCurrency(
     ['name', 'symbol', 'decimals'],
   );
 
-  if (typeof value.name !== 'string' || value.name.trim().length === 0) {
+  if (
+    typeof value.name !== 'string' ||
+    value.name.trim().length === 0
+  ) {
     throw new Error('Custom network config chain.nativeCurrency.name must be a non-empty string.');
   }
 
-  if (typeof value.symbol !== 'string' || value.symbol.trim().length === 0) {
+  if (
+    typeof value.symbol !== 'string' ||
+    value.symbol.trim().length === 0
+  ) {
     throw new Error('Custom network config chain.nativeCurrency.symbol must be a non-empty string.');
   }
 
   if (
-    typeof value.decimals !== 'number' ||
-    !Number.isSafeInteger(value.decimals) ||
-    value.decimals < 0 ||
+    !isNonNegativeSafeInteger(value.decimals) ||
     value.decimals > 255
   ) {
     throw new Error('Custom network config chain.nativeCurrency.decimals must be an integer from 0 to 255.');

@@ -3,6 +3,11 @@ import {
 } from '../shared/hex.js';
 
 import {
+  isNonNegativeSafeInteger,
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
+import {
   readDaemonStatusSnapshot,
   type SnapshotAge,
 } from '../state/daemon-status-snapshot.js';
@@ -58,9 +63,7 @@ export function projectDaemonSnapshotStatusOutput(
   const signer = identity.signer;
 
   if (
-    typeof chainId !== 'number' ||
-    !Number.isSafeInteger(chainId) ||
-    chainId <= 0 ||
+    !isPositiveSafeInteger(chainId) ||
     !isFixedHex(signer, 20)
   ) {
     throw new TypeError(INVALID);
@@ -232,9 +235,7 @@ function readAge(input: unknown): SnapshotAge {
 
   if (
     (status === 'fresh' || status === 'stale') &&
-    typeof ageMs === 'number' &&
-    Number.isSafeInteger(ageMs) &&
-    ageMs >= 0
+    isNonNegativeSafeInteger(ageMs)
   ) {
     return { status, ageMs };
   }
