@@ -6,6 +6,7 @@ import type {
 
 import {
   blockAnchorsMatch,
+  checkBlockAnchor,
   getBlockAnchor,
   type BlockAnchor,
 } from './block-anchor.js';
@@ -194,16 +195,9 @@ export async function searchAttemptReplacement(
     };
   }
 
-  const before = await getBlockAnchor(
-    publicClient,
-    anchor.blockNumber,
-  );
-
-  if (!blockAnchorsMatch(anchor, before)) {
-    return {
-      status: 'anchor-changed',
-      observedAnchor: Object.freeze(before),
-    };
+  const before = await checkBlockAnchor(publicClient, anchor);
+  if (before !== null) {
+    return before;
   }
 
   const observedLower = await getBlockAnchor(
@@ -320,16 +314,9 @@ export async function searchAttemptReplacement(
     }
   }
 
-  const after = await getBlockAnchor(
-    publicClient,
-    anchor.blockNumber,
-  );
-
-  if (!blockAnchorsMatch(anchor, after)) {
-    return {
-      status: 'anchor-changed',
-      observedAnchor: Object.freeze(after),
-    };
+  const after = await checkBlockAnchor(publicClient, anchor);
+  if (after !== null) {
+    return after;
   }
 
   if (match !== undefined) {

@@ -3,8 +3,7 @@ import type {
 } from 'viem';
 
 import {
-  blockAnchorsMatch,
-  getBlockAnchor,
+  checkBlockAnchor,
   type BlockAnchor,
 } from './block-anchor.js';
 
@@ -116,16 +115,9 @@ export async function inspectSignerInclusions(
     throw new TypeError('Invalid signer inclusion input.');
   }
 
-  const openingHead = await getBlockAnchor(
-    publicClient,
-    head.blockNumber,
-  );
-
-  if (!blockAnchorsMatch(head, openingHead)) {
-    return {
-      status: 'anchor-changed',
-      observedAnchor: Object.freeze(openingHead),
-    };
+  const openingHead = await checkBlockAnchor(publicClient, head);
+  if (openingHead !== null) {
+    return openingHead;
   }
 
   const attempts: JournalAttempt[] = [];
@@ -314,16 +306,9 @@ export async function inspectSignerInclusions(
 
   if (searched) {
     // Close the entire pass after all additional searches.
-    const closingHead = await getBlockAnchor(
-      publicClient,
-      head.blockNumber,
-    );
-
-    if (!blockAnchorsMatch(head, closingHead)) {
-      return {
-        status: 'anchor-changed',
-        observedAnchor: Object.freeze(closingHead),
-      };
+    const closingHead = await checkBlockAnchor(publicClient, head);
+    if (closingHead !== null) {
+      return closingHead;
     }
   }
 
