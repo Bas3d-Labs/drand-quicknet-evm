@@ -11,6 +11,10 @@ import {
 } from 'node:path';
 
 import {
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
+import {
   isUuidV4
 } from '../shared/uuid.js';
 
@@ -81,7 +85,7 @@ function isProcessId(
     }
   }
 
-  return Number.isSafeInteger(Number(value));
+  return isPositiveSafeInteger(Number(value));
 }
 
 function isMissingFile(error: unknown): boolean {
