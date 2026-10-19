@@ -4,8 +4,7 @@ import type {
 } from 'viem';
 
 import {
-  blockAnchorsMatch,
-  getBlockAnchor,
+  checkBlockAnchor,
   type BlockAnchor,
 } from './block-anchor.js';
 
@@ -88,16 +87,13 @@ export async function inspectSignerBootstrap(
   const latestNonce = await readLiveNonce('latest');
   const pendingNonce = await readLiveNonce('pending');
 
-  const closingAnchor = await getBlockAnchor(
+  const closingAnchor = await checkBlockAnchor(
     publicClient,
-    observation.anchor.blockNumber,
+    observation.anchor,
   );
 
-  if (!blockAnchorsMatch(observation.anchor, closingAnchor)) {
-    return {
-      status: 'anchor-changed',
-      observedAnchor: Object.freeze(closingAnchor),
-    };
+  if (closingAnchor !== null) {
+    return closingAnchor;
   }
 
   if (
