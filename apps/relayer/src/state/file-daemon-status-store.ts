@@ -33,6 +33,10 @@ import {
 } from './journal-identity.js';
 
 import {
+  readFilePrefix,
+} from './read-file-prefix.js';
+
+import {
   assertServiceLockHeld,
   DAEMON_STATUS_FILENAME,
   ServiceLockNotHeldError,
@@ -182,31 +186,19 @@ export async function readDaemonStatusFile(
       throw new Error('Invalid daemon status file.');
     }
 
-    const buffer = Buffer.alloc(MAX_DAEMON_STATUS_BYTES + 1);
-    let length = 0;
+    const buffer = await readFilePrefix(
+      (buffer, offset, length, position) =>
+        file.read(buffer, offset, length, position),
+      MAX_DAEMON_STATUS_BYTES + 1,
+    );
 
-    while (length < buffer.length) {
-      const result = await file.read(
-        buffer,
-        length,
-        buffer.length - length,
-        length,
-      );
-
-      if (result.bytesRead === 0) {
-        break;
-      }
-
-      length += result.bytesRead;
-    }
-
-    if (length > MAX_DAEMON_STATUS_BYTES) {
+    if (buffer.length > MAX_DAEMON_STATUS_BYTES) {
       throw new Error('Daemon status file exceeds its size limit.');
     }
 
     const contents = new TextDecoder('utf-8', {
       fatal: true,
-    }).decode(buffer.subarray(0, length));
+    }).decode(buffer);
 
     return readDaemonStatusSnapshot(
       JSON.parse(contents),

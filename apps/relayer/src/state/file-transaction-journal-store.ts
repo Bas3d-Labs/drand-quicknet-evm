@@ -28,6 +28,10 @@ import {
   captureJournalIdentity,
 } from './journal-identity.js';
 
+import {
+  readFilePrefix,
+} from './read-file-prefix.js';
+
 import type {
   JournalIdentity,
   TransactionJournalRead,
@@ -268,34 +272,26 @@ async function readBoundedJournal(
       throw new Error('Journal file exceeds its size limit.');
     }
 
-    // The extra byte distinguishes an exactly-full file from an
-    // oversized file, including one that grew after stat().
-    const buffer = Buffer.alloc(MAX_JOURNAL_BYTES + 1);
-    let length = 0;
+    // The extra byte detects files that grew behind the limit after stat().
+    const buffer = await readFilePrefix(
+      (buffer, offset, length, position) => 
+        fileOperation('read', () => file.read(
+          buffer,
+          offset,
+          length,
+          position,
+        )),
+      MAX_JOURNAL_BYTES + 1,
+    );
 
-    while (length < buffer.length) {
-      const result = await fileOperation('read', () => file.read(
-        buffer,
-        length,
-        buffer.length - length,
-        length,
-      ));
-
-      if (result.bytesRead === 0) {
-        break;
-      }
-
-      length += result.bytesRead;
-    }
-
-    if (length > MAX_JOURNAL_BYTES) {
+    if (buffer.length > MAX_JOURNAL_BYTES) {
       throw new Error('Journal file exceeds its size limit.');
     }
 
     try {
       return new TextDecoder('utf-8', {
         fatal: true,
-      }).decode(buffer.subarray(0, length));
+      }).decode(buffer);
     } catch {
       throw new Error('Journal file contains invalid UTF-8.');
     }
