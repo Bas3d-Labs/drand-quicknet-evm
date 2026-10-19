@@ -3,6 +3,10 @@ import {
 } from 'node:perf_hooks';
 
 import {
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
+import {
   isUuidV4,
 } from '../shared/uuid.js';
 
@@ -43,9 +47,8 @@ export class BroadcastRetrySchedule {
     } = options;
 
     if (
-      !Number.isSafeInteger(initialDelayMs) ||
-      initialDelayMs <= 0 ||
-      !Number.isSafeInteger(maxDelayMs) ||
+      !isPositiveSafeInteger(initialDelayMs) ||
+      !isPositiveSafeInteger(maxDelayMs) ||
       maxDelayMs < initialDelayMs ||
       maxDelayMs > MAX_DELAY_MS
     ) {

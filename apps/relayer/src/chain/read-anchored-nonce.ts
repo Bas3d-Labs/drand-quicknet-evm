@@ -3,11 +3,6 @@ import type {
   PublicClient,
 } from 'viem';
 
-import {
-  checkBlockAnchor,
-  type BlockAnchor,
-} from './block-anchor.js';
-
 import type {
   AnchoredNonceObservation,
 } from '../state/transaction-journal.js';
@@ -15,6 +10,15 @@ import type {
 import {
   isFixedHex,
 } from '../shared/hex.js';
+
+import {
+  checkBlockAnchor,
+  type BlockAnchor,
+} from './block-anchor.js';
+
+import {
+  parseNonceResponse,
+} from './nonce-response.js';
 
 export interface ReadAnchoredNonceOptions {
   publicClient: PublicClient;
@@ -67,18 +71,12 @@ export async function readAnchoredNonce(
     return before;
   }
 
-  const nonce = await publicClient.getTransactionCount({
-    address: signer,
-    blockNumber: anchor.blockNumber,
-  });
-
-  if (
-    typeof nonce !== 'number' ||
-    !Number.isSafeInteger(nonce) ||
-    nonce < 0
-  ) {
-    throw new TypeError('Invalid anchored nonce response.');
-  }
+  const nonce = parseNonceResponse(
+    await publicClient.getTransactionCount({
+      address: signer,
+      blockNumber: anchor.blockNumber,
+    }),
+  );
 
   const after = await checkBlockAnchor(publicClient, anchor);
   if (after !== null) {
@@ -89,7 +87,7 @@ export async function readAnchoredNonce(
     status: 'verified',
     observation: Object.freeze({
       anchor,
-      nonce: BigInt(nonce),
+      nonce,
     }),
   };
 }

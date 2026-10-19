@@ -3,18 +3,22 @@ import type {
   PublicClient,
 } from 'viem';
 
+import type {
+  AnchoredNonceObservation,
+} from '../state/transaction-journal.js';
+
 import {
   checkBlockAnchor,
   type BlockAnchor,
 } from './block-anchor.js';
 
 import {
+  parseNonceResponse,
+} from './nonce-response.js';
+
+import {
   readAnchoredNonce,
 } from './read-anchored-nonce.js';
-
-import type {
-  AnchoredNonceObservation,
-} from '../state/transaction-journal.js';
 
 export interface InspectSignerBootstrapOptions {
   readonly publicClient: PublicClient;
@@ -69,19 +73,12 @@ export async function inspectSignerBootstrap(
   async function readLiveNonce(
     blockTag: 'latest' | 'pending',
   ): Promise<bigint> {
-    const nonce = await publicClient.getTransactionCount({
-      address: signer,
-      blockTag,
-    });
-
-    if (
-      !Number.isSafeInteger(nonce) ||
-      nonce < 0
-    ) {
-      throw new TypeError('Invalid bootstrap nonce response.');
-    }
-
-    return BigInt(nonce);
+    return parseNonceResponse(
+      await publicClient.getTransactionCount({
+        address: signer,
+        blockTag,
+      }),
+    );
   }
 
   const latestNonce = await readLiveNonce('latest');

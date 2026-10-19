@@ -55,6 +55,10 @@ import {
 } from '../shared/hex.js';
 
 import {
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
+import {
   JournalPersistence,
 } from './journal-persistence.js';
 
@@ -233,10 +237,7 @@ export class SignerCoordinator {
   ): Promise<SignerCoordinator> {
     const maxRetainedAttempts = options.maxRetainedAttempts;
 
-    if (
-      !Number.isSafeInteger(maxRetainedAttempts) ||
-      maxRetainedAttempts <= 0
-    ) {
+    if (!isPositiveSafeInteger(maxRetainedAttempts)) {
       throw new TypeError('Invalid retained attempt capacity.');
     }
 

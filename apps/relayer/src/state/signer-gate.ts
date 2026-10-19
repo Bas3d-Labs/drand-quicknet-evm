@@ -1,3 +1,7 @@
+import {
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
 import type {
   JournalPersistence,
 } from './journal-persistence.js';
@@ -54,10 +58,7 @@ export interface EvaluateSignerGateOptions {
 export function evaluateSignerGate(
   options: EvaluateSignerGateOptions,
 ): SignerGateDecision {
-  if (
-    !Number.isSafeInteger(options.maxRetainedAttempts) ||
-    options.maxRetainedAttempts <= 0
-  ) {
+  if (!isPositiveSafeInteger(options.maxRetainedAttempts)) {
     throw new TypeError('Invalid retained attempt capacity.');
   }
 
