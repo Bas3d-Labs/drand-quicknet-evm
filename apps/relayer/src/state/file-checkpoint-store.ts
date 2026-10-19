@@ -15,10 +15,17 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+import {
+  isDecimalInteger,
+} from '../shared/decimal.js';
+
+import {
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
 import type {
   CheckpointStore,
 } from './checkpoint.js';
-import { isDecimalInteger } from '../shared/decimal.js';
 
 import {
   durableReplace,
@@ -235,11 +242,7 @@ export class FileCheckpointStore
       throw new Error(`Unsupported checkpoint file version: ${String(root.version)}.`);
     }
 
-    if (
-      typeof root.chainId !== 'number' ||
-      !Number.isSafeInteger(root.chainId) ||
-      root.chainId <= 0
-    ) {
+    if (!isPositiveSafeInteger(root.chainId)) {
       throw new Error('Checkpoint file contains an invalid chainId.');
     }
 

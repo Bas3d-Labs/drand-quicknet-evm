@@ -126,27 +126,37 @@ describe.skipIf(process.platform !== 'linux')(
         join(tmpdir(), 'quicknet-service-lock-'),
       );
 
-      const source = await readFile(
-        join(
-          process.cwd(),
-          'src',
-          'state',
-          'service-lock.ts',
-        ),
+      // Preserve the source layout so relative imports resolve in subprocesses.
+      await mkdir(join(root, 'state'));
+      await mkdir(join(root, 'shared'));
+
+      await writeFile(
+        join(root, 'package.json'),
+        JSON.stringify({ type: 'module' }),
         'utf8',
       );
 
       // Run the actual implementation in independent Node processes.
       // Avoid relying on generated dist files or a TS runtime loader.
-      const compiled = stripTypeScriptTypes(source, {
-        mode: 'strip',
-      });
+      for (const relativePath of [
+        'state/service-lock',
+        'shared/integer',
+      ]) {
+        const source = await readFile(
+          join(process.cwd(), 'src', `${relativePath}.ts`),
+          'utf8',
+        );
 
-      await writeFile(
-        join(root, 'service-lock.mjs'),
-        compiled,
-        'utf8',
-      );
+        const compiled = stripTypeScriptTypes(source, {
+          mode: 'strip',
+        });
+
+        await writeFile(
+          join(root, `${relativePath}.js`),
+          compiled,
+          'utf8',
+        );
+      }
 
       runnerFile = join(root, 'probe.mjs');
 
@@ -166,7 +176,7 @@ import {
 import {
   assertServiceLockHeld,
   serviceLockReason,
-} from './service-lock.mjs';
+} from './state/service-lock.js';
 
 const [mode, stateDirectory, checkpointFile] =
   process.argv.slice(2);

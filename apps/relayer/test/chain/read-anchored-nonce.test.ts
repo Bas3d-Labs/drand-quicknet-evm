@@ -191,7 +191,7 @@ describe('anchored nonce observation', () => {
       );
 
       await expect(fixture.run()).rejects.toThrow(
-        'Invalid anchored nonce response.',
+        'Invalid nonce response.',
       );
     },
   );

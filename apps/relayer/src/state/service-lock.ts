@@ -14,6 +14,10 @@ import {
   resolve,
 } from 'node:path';
 
+import {
+  isNonNegativeSafeInteger,
+} from '../shared/integer.js';
+
 export const LOCK_FILENAME = 'relayer.flock';
 export const DAEMON_STATUS_FILENAME = 'daemon-status.json';
 
@@ -132,7 +136,7 @@ export function assertServiceLockHeld(
       }
 
       const fd = Number(name);
-      if (!Number.isSafeInteger(fd) || fd < 0) {
+      if (!isNonNegativeSafeInteger(fd)) {
         continue;
       }
 

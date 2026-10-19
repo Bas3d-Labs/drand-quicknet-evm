@@ -15,6 +15,11 @@ import {
 } from '../shared/hex.js';
 
 import {
+  isNonNegativeSafeInteger,
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
+
+import {
   MAX_UINT256,
 } from '../shared/uint.js';
 
@@ -232,8 +237,7 @@ export function classifySnapshotAge(
   if (
     !Number.isSafeInteger(nowMs) ||
     !Number.isFinite(new Date(nowMs).getTime()) ||
-    !Number.isSafeInteger(maxAgeMs) ||
-    maxAgeMs <= 0
+    !isPositiveSafeInteger(maxAgeMs)
   ) {
     throw new TypeError('Invalid snapshot age parameters.');
   }
@@ -288,11 +292,7 @@ function readCompletedCycle(
 
   const value = object(input);
 
-  if (
-    typeof value.cycle !== 'number' ||
-    !Number.isSafeInteger(value.cycle) ||
-    value.cycle <= 0
-  ) {
+  if (!isPositiveSafeInteger(value.cycle)) {
     throw new TypeError(INVALID);
   }
 
@@ -319,11 +319,7 @@ function readRetryObservation(
 
   if (
     retryDelayMs !== null &&
-    (
-      typeof retryDelayMs !== 'number' ||
-      !Number.isSafeInteger(retryDelayMs) ||
-      retryDelayMs < 0
-    )
+    !isNonNegativeSafeInteger(retryDelayMs)
   ) {
     throw new TypeError(INVALID);
   }

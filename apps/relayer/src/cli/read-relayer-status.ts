@@ -1,3 +1,4 @@
+import { isPositiveSafeInteger } from '../shared/integer.js';
 import {
   classifySnapshotAge,
   type DaemonStatusSnapshot,
@@ -88,10 +89,7 @@ export async function readRelayerStatus(
       const maxAgeMs = options.maxAgeMs;
       const now = options.now ?? Date.now;
 
-      if (
-        !Number.isSafeInteger(maxAgeMs) ||
-        maxAgeMs <= 0
-      ) {
+      if (!isPositiveSafeInteger(maxAgeMs)) {
         throw new TypeError('Invalid daemon snapshot maximum age.');
       }
 

@@ -1,4 +1,10 @@
-import { performance } from 'node:perf_hooks';
+import {
+  performance,
+} from 'node:perf_hooks';
+
+import {
+  isPositiveSafeInteger,
+} from '../shared/integer.js';
 
 import {
   getChainHeads,
@@ -22,7 +28,7 @@ export function createChainHeadsReader(
   options: CreateChainHeadsReaderOptions,
 ): () => Promise<ChainHeads> {
   const intervalMs = options.durableHeadPollIntervalMs;
-  if (!Number.isSafeInteger(intervalMs) || intervalMs <= 0) {
+  if (!isPositiveSafeInteger(intervalMs)) {
     throw new Error(
       'durableHeadPollIntervalMs must be a positive safe integer.'
     );

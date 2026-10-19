@@ -24,6 +24,10 @@ import {
   isFixedHex,
 } from '../shared/hex.js';
 
+import {
+  isNonNegativeSafeInteger,
+} from '../shared/integer.js';
+
 export interface SearchAttemptReplacementOptions {
   publicClient: PublicClient;
   signer: Address;
@@ -283,8 +287,7 @@ export async function searchAttemptReplacement(
         transaction === null ||
         !isFixedHex(transaction.hash, 32) ||
         !isFixedHex(transaction.from, 20) ||
-        !Number.isSafeInteger(transaction.nonce) ||
-        transaction.nonce < 0
+        !isNonNegativeSafeInteger(transaction.nonce)
       ) {
         throw new TypeError('Invalid replacement search transaction.');
       }

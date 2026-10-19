@@ -206,7 +206,7 @@ describe('inspectSignerBootstrap', () => {
         });
 
         await expect(t.inspect())
-          .rejects.toThrow('Invalid bootstrap nonce response.');
+          .rejects.toThrow('Invalid nonce response.');
       });
 
       it('propagates an RPC failure', async () => {

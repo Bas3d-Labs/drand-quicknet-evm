@@ -27,6 +27,10 @@ import {
 } from '../shared/hex.js';
 
 import {
+  isNonNegativeSafeInteger,
+} from '../shared/integer.js';
+
+import {
   MAX_UINT256,
 } from '../shared/uint.js';
 
@@ -251,11 +255,7 @@ function consumerLines(
   }
 
   const length = own(consumers, 'length');
-  if (
-    typeof length !== 'number' ||
-    !Number.isSafeInteger(length) ||
-    length < 0
-  ) {
+  if (!isNonNegativeSafeInteger(length)) {
     throw new TypeError('Invalid CLI consumers.');
   }
 

@@ -15,6 +15,7 @@ import type {
 import {
   validateJournalSnapshotStructure,
 } from './transaction-journal-validation.js';
+import { isNonNegativeSafeInteger } from '../shared/integer.js';
 
 const SECP256K1_ORDER =
   0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
@@ -116,11 +117,7 @@ async function verifySignedTransaction(
 
   const parsedNonce = transaction.nonce;
 
-  requireValid(
-      typeof parsedNonce === 'number' &&
-      Number.isSafeInteger(parsedNonce) &&
-      parsedNonce >= 0
-  );
+  requireValid(isNonNegativeSafeInteger(parsedNonce));
   requireValid(BigInt(parsedNonce) === nonce);
 
   requireValid(
