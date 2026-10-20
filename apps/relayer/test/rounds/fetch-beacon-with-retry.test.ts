@@ -21,7 +21,16 @@ const quicknetMocks = vi.hoisted(() => ({
 
 vi.mock(
   '@based-labs/drand-quicknet',
-  () => quicknetMocks,
+  async (importOriginal) => {
+    const actual = await importOriginal<
+      typeof import('@based-labs/drand-quicknet')
+    >();
+
+    return {
+      ...actual,
+      fetchBeacon: quicknetMocks.fetchBeacon,
+    };
+  },
 );
 
 import {

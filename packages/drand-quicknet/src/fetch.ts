@@ -12,7 +12,8 @@ import type {
 } from './types.js';
 
 const DEFAULT_TIMEOUT_MS = 5_000;
-const MAX_TIMEOUT_MS = 60_000;
+
+export const MAX_FETCH_TIMEOUT_MS = 60_000;
 
 export interface FetchBeaconOptions {
   signal?: AbortSignal;
@@ -150,10 +151,10 @@ function validateTimeout(
   if (
     !Number.isSafeInteger(value) ||
     value <= 0 ||
-    value > MAX_TIMEOUT_MS
+    value > MAX_FETCH_TIMEOUT_MS
   ) {
     throw new RangeError(
-      'timeoutMs must be a positive safe integer no greater than 60000.'
+      `timeoutMs must be a positive safe integer no greater than ${MAX_FETCH_TIMEOUT_MS}.`
     );
   }
 }

@@ -54,6 +54,9 @@ export function configMessage(
     case 'INVALID_CONSUMER':
       return 'QUICKNET_CONSUMERS contains an invalid consumer address.';
 
+    case 'INVALID_FETCH_TIMEOUT':
+      return 'QUICKNET_FETCH_TIMEOUT_MS must be a decimal integer between 1 and 60000 milliseconds.';
+
     case 'INVALID_PRIVATE_KEY':
       return 'PRIVATE_KEY must be a valid nonzero secp256k1 private key encoded as 32 hex bytes';
 

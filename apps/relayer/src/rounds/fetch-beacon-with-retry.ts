@@ -4,6 +4,10 @@ import {
 } from '@based-labs/drand-quicknet';
 
 import {
+  validateFetchTimeoutMs,
+} from '../config/fetch-config.js';
+
+import {
   isPositiveSafeInteger,
 } from '../shared/integer.js';
 
@@ -44,16 +48,8 @@ export async function fetchQuicknetBeaconWithRetry(
   validateMaxAttempts(maxAttempts);
   validateRetryDelay(retryDelayMs);
 
-  if (
-    options.timeoutMs !== undefined &&
-    (
-      !isPositiveSafeInteger(options.timeoutMs) ||
-      options.timeoutMs > 60_000
-    )
-  ) {
-    throw new RangeError(
-      'timeoutMs must be a positive safe integer no greater than 60000.'
-    );
+  if (options.timeoutMs !== undefined) {
+    validateFetchTimeoutMs(options.timeoutMs);
   }
 
   let lastError: unknown;
