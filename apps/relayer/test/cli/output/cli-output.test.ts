@@ -8,7 +8,7 @@ import {
   renderCliOutput,
   renderOutputFailure,
   type CliOutput,
-} from '../../src/cli/cli-output.js';
+} from '../../../src/cli/output/cli-output.js';
 
 const ROUND = 1000n;
 

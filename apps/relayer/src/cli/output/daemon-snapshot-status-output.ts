@@ -1,16 +1,16 @@
 import {
   isFixedHex,
-} from '../shared/hex.js';
+} from '../../shared/hex.js';
 
 import {
   isNonNegativeSafeInteger,
   isPositiveSafeInteger,
-} from '../shared/integer.js';
+} from '../../shared/integer.js';
 
 import {
   readDaemonStatusSnapshot,
   type SnapshotAge,
-} from '../state/daemon-status-snapshot.js';
+} from '../../state/daemon-status-snapshot.js';
 
 const INVALID = 'Invalid daemon snapshot status output.';
 

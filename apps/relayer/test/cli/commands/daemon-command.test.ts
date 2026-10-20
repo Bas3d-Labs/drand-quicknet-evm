@@ -29,27 +29,27 @@ import {
 
 import type {
   OpenBeaconSubmitterOptions,
-} from '../../src/cli/open-beacon-submitter.js';
+} from '../../../src/cli/open-beacon-submitter.js';
 
 import type {
   ScopedRelayerLog
-} from '../../src/diagnostics/relayer-log.js';
+} from '../../../src/diagnostics/relayer-log.js';
 
 import type {
   BeaconSubmitter,
-} from '../../src/rounds/create-beacon-submitter.js';
+} from '../../../src/rounds/create-beacon-submitter.js';
 
 import {
   isUuidV4,
-} from '../../src/shared/uuid.js';
+} from '../../../src/shared/uuid.js';
 
 import type {
   SignerRuntimeObservation,
-} from '../../src/state/read-signer-runtime-observation.js';
+} from '../../../src/state/read-signer-runtime-observation.js';
 
 import {
   writeDaemonStatusFile,
-} from '../../src/state/file-daemon-status-store.js';
+} from '../../../src/state/file-daemon-status-store.js';
 
 const signerRuntimeMocks = vi.hoisted(() => ({
   openBeaconSubmitter: vi.fn(),
@@ -97,42 +97,42 @@ vi.mock('@based-labs/drand-quicknet-registry', () => ({
   verifyRegistryDeployment: vi.fn(),
 }));
 
-vi.mock('../../src/chain/clients.js', () => ({
+vi.mock('../../../src/chain/clients.js', () => ({
   createRelayerClients: vi.fn(),
 }));
 
 vi.mock(
-  '../../src/cli/open-beacon-submitter.js',
+  '../../../src/cli/open-beacon-submitter.js',
   () => signerRuntimeMocks,
 );
 
-vi.mock('../../src/config/daemon-config.js', () => ({
+vi.mock('../../../src/config/daemon-config.js', () => ({
   loadDaemonConfig: vi.fn(),
 }));
 
-vi.mock('../../src/daemon/daemon-logging.js', () => ({
+vi.mock('../../../src/daemon/daemon-logging.js', () => ({
   createDaemonLogger: vi.fn(),
 }));
 
-vi.mock('../../src/daemon/daemon-startup.js', () => ({
+vi.mock('../../../src/daemon/daemon-startup.js', () => ({
   collectDaemonStartupSummary: vi.fn(),
 }));
 
-vi.mock('../../src/daemon/daemon.js', () => ({
+vi.mock('../../../src/daemon/daemon.js', () => ({
   runDaemon: vi.fn(),
 }));
 
-vi.mock('../../src/diagnostics/relayer-log.js', () => ({
+vi.mock('../../../src/diagnostics/relayer-log.js', () => ({
   createRelayerLog: vi.fn(),
 }));
 
-vi.mock('../../src/consumers/validate-consumers.js', () => ({
+vi.mock('../../../src/consumers/validate-consumers.js', () => ({
   validateQuicknetConsumers: vi.fn(),
 }));
 
-vi.mock('../../src/state/service-lock.js', async (importOriginal) => {
+vi.mock('../../../src/state/service-lock.js', async (importOriginal) => {
   const actual = await importOriginal<
-    typeof import('../../src/state/service-lock.js')
+    typeof import('../../../src/state/service-lock.js')
   >();
 
   return {
@@ -141,13 +141,13 @@ vi.mock('../../src/state/service-lock.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../../src/state/file-checkpoint-store.js', () => ({
+vi.mock('../../../src/state/file-checkpoint-store.js', () => ({
   FileCheckpointStore: {
     open: vi.fn(async () => checkpointStoreMocks),
   },
 }));
 
-vi.mock('../../src/state/file-daemon-status-store.js', () => ({
+vi.mock('../../../src/state/file-daemon-status-store.js', () => ({
   writeDaemonStatusFile: vi.fn(),
 }));
 
@@ -158,54 +158,54 @@ import {
 
 import {
   createRelayerClients
-} from '../../src/chain/clients.js';
+} from '../../../src/chain/clients.js';
 
 import type {
   ValidatedQuicknetConsumer
-} from '../../src/consumers/consumer.js';
+} from '../../../src/consumers/consumer.js';
 
 import {
   runDaemonCommand
-} from '../../src/cli/daemon-command.js';
+} from '../../../src/cli/commands/daemon-command.js';
 
 import {
   loadDaemonConfig,
   type DaemonConfig,
-} from '../../src/config/daemon-config.js';
+} from '../../../src/config/daemon-config.js';
 
 import {
   createDaemonLogger
-} from '../../src/daemon/daemon-logging.js';
+} from '../../../src/daemon/daemon-logging.js';
 
 import {
   collectDaemonStartupSummary,
   type DaemonStartupSummary,
-} from '../../src/daemon/daemon-startup.js';
+} from '../../../src/daemon/daemon-startup.js';
 
 import {
   runDaemon
-} from '../../src/daemon/daemon.js';
+} from '../../../src/daemon/daemon.js';
 
 import {
   assertServiceLockHeld,
   ServiceLockNotHeldError,
-} from '../../src/state/service-lock.js';
+} from '../../../src/state/service-lock.js';
 
 import {
   FileCheckpointStore
-} from '../../src/state/file-checkpoint-store.js';
+} from '../../../src/state/file-checkpoint-store.js';
 
 import {
   createRelayerLog
-} from '../../src/diagnostics/relayer-log.js';
+} from '../../../src/diagnostics/relayer-log.js';
 
 import {
   createRpcMetrics,
-} from '../../src/diagnostics/rpc-metrics.js';
+} from '../../../src/diagnostics/rpc-metrics.js';
 
 import {
   validateQuicknetConsumers
-} from '../../src/consumers/validate-consumers.js';
+} from '../../../src/consumers/validate-consumers.js';
 
 const SOURCE = {
   type: 'preset',

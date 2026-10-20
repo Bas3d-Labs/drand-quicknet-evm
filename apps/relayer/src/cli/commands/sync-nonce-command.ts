@@ -2,32 +2,32 @@ import process from 'node:process';
 
 import {
   createRelayerClients,
-} from '../chain/clients.js';
+} from '../../chain/clients.js';
 
 import {
   loadRelayerConfig,
-} from '../config/config.js';
+} from '../../config/config.js';
 
 import {
   createRelayerLog,
-} from '../diagnostics/relayer-log.js';
+} from '../../diagnostics/relayer-log.js';
 
 import type {
   CliOutputHandler,
-} from './cli-output.js';
+} from '../output/cli-output.js';
 
 import type {
   CliOptions,
   CliOutcome,
-} from './cli-types.js';
+} from '../cli-types.js';
 
 import type {
   SyncNonceCommandArguments,
-} from './parse-command-arguments.js';
+} from '../parse-command-arguments.js';
 
 import {
   syncNonce,
-} from './sync-nonce.js';
+} from '../sync-nonce.js';
 
 export async function runSyncNonceCommand(
   command: SyncNonceCommandArguments,

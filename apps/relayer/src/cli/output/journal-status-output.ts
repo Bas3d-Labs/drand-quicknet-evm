@@ -1,18 +1,18 @@
 import {
   isWorkId,
-} from '../execution/work-identity.js';
+} from '../../execution/work-identity.js';
 
 import {
   isFixedHex,
-} from '../shared/hex.js';
+} from '../../shared/hex.js';
 
 import {
   MAX_UINT256,
-} from '../shared/uint.js';
+} from '../../shared/uint.js';
 
 import {
   isUuidV4,
-} from '../shared/uuid.js';
+} from '../../shared/uuid.js';
 
 const INVALID = 'Invalid journal status output.';
 

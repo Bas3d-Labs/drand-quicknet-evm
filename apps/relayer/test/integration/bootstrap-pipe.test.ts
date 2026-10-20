@@ -37,7 +37,7 @@ import {
 
 import {
   renderCliOutput,
-} from '../../src/cli/cli-output.js';
+} from '../../src/cli/output/cli-output.js';
 
 import {
   compileRelayerFixture,

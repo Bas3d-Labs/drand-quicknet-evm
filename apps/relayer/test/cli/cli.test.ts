@@ -55,7 +55,7 @@ vi.mock('../../src/chain/clients.js', () => ({
   createRelayerClients: vi.fn(),
 }));
 
-vi.mock('../../src/cli/daemon-command.js', () => ({
+vi.mock('../../src/cli/commands/daemon-command.js', () => ({
   runDaemonCommand: vi.fn(),
 }));
 
@@ -97,11 +97,11 @@ import {
 
 import type {
   CliOutput,
-} from '../../src/cli/cli-output.js';
+} from '../../src/cli/output/cli-output.js';
 
 import {
   runDaemonCommand,
-} from '../../src/cli/daemon-command.js';
+} from '../../src/cli/commands/daemon-command.js';
 
 import {
   parseCommandArguments,

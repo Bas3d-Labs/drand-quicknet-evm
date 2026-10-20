@@ -18,60 +18,60 @@ import {
 
 import type {
   NetworkSource,
-} from '../config/config.js';
+} from '../../config/config.js';
 
 import {
   createChainHeadsReader,
-} from '../chain/chain-heads-reader.js';
+} from '../../chain/chain-heads-reader.js';
 
 import {
   createRelayerClients,
-} from '../chain/clients.js';
+} from '../../chain/clients.js';
 
 import {
   runDaemon,
-} from '../daemon/daemon.js';
+} from '../../daemon/daemon.js';
 
 import {
   createDaemonLogger,
-} from '../daemon/daemon-logging.js';
+} from '../../daemon/daemon-logging.js';
 
 import {
   loadDaemonConfig,
-} from '../config/daemon-config.js';
+} from '../../config/daemon-config.js';
 
 import {
   collectDaemonStartupSummary,
   type DaemonStartupSummary,
-} from '../daemon/daemon-startup.js';
+} from '../../daemon/daemon-startup.js';
 
 import {
   createDaemonStatusPublisher,
-} from '../daemon/daemon-status-publisher.js';
+} from '../../daemon/daemon-status-publisher.js';
 
 import type {
   SummarizeErrorOptions,
-} from '../diagnostics/error-summary.js';
+} from '../../diagnostics/error-summary.js';
 
 import {
   createRelayerLog,
-} from '../diagnostics/relayer-log.js';
+} from '../../diagnostics/relayer-log.js';
 
 import {
   FileCheckpointStore,
-} from '../state/file-checkpoint-store.js';
+} from '../../state/file-checkpoint-store.js';
 
 import {
   validateQuicknetConsumers,
-} from '../consumers/validate-consumers.js';
+} from '../../consumers/validate-consumers.js';
 
 import {
   assertServiceLockHeld,
-} from '../state/service-lock.js';
+} from '../../state/service-lock.js';
 
 import {
   openBeaconSubmitter,
-} from './open-beacon-submitter.js';
+} from '../open-beacon-submitter.js';
 
 export interface RunDaemonCommandOptions {
   source: NetworkSource;

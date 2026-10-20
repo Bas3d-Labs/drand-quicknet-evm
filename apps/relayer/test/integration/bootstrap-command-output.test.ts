@@ -39,11 +39,11 @@ const APP = fileURLToPath(
 
 const MODULE_PATHS = {
   bootstrap: 'bootstrap.js',
-  'cli-output': 'cli/cli-output.js',
+  'cli-output': 'cli/output/cli-output.js',
   config: 'config/config.js',
   clients: 'chain/clients.js',
   daemon: 'daemon/daemon.js',
-  'daemon-command': 'cli/daemon-command.js',
+  'daemon-command': 'cli/commands/daemon-command.js',
   'daemon-config': 'config/daemon-config.js',
   'daemon-startup': 'daemon/daemon-startup.js',
   'import-round': 'rounds/import-round.js',

@@ -6,13 +6,13 @@ import {
   vi,
 } from 'vitest';
 
-vi.mock('../../src/cli/read-relayer-status.js', () => ({
+vi.mock('../../../src/cli/read-relayer-status.js', () => ({
   readRelayerStatus: vi.fn(),
 }));
 
-vi.mock('../../src/config/config.js', async (importOriginal) => {
+vi.mock('../../../src/config/config.js', async (importOriginal) => {
   const actual = await importOriginal<
-    typeof import('../../src/config/config.js')
+    typeof import('../../../src/config/config.js')
   >();
 
   return {
@@ -23,25 +23,25 @@ vi.mock('../../src/config/config.js', async (importOriginal) => {
 
 import {
   main,
-} from '../../src/cli/cli.js';
+} from '../../../src/cli/cli.js';
 
 import {
   parseCommandArguments,
-} from '../../src/cli/parse-command-arguments.js';
+} from '../../../src/cli/parse-command-arguments.js';
 
 import {
   readRelayerStatus,
-} from '../../src/cli/read-relayer-status.js';
+} from '../../../src/cli/read-relayer-status.js';
 
 import {
   loadRelayerConfig,
-} from '../../src/config/config.js';
+} from '../../../src/config/config.js';
 
 import {
   UsageError,
   usageCode,
   type UsageCode,
-} from '../../src/diagnostics/usage-error.js';
+} from '../../../src/diagnostics/usage-error.js';
 
 const SIGNER = `0x${'ab'.repeat(20)}` as const;
 
