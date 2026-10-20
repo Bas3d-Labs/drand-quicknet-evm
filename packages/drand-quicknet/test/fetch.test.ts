@@ -112,6 +112,7 @@ describe('fetchBeacon', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
       'https://first.test/v2/beacons/quicknet/rounds/100',
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -148,11 +149,13 @@ describe('fetchBeacon', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       'https://first.test/v2/beacons/quicknet/rounds/100',
+      { signal: expect.any(AbortSignal) },
     );
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       'https://second.test/v2/beacons/quicknet/rounds/100',
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -289,6 +292,7 @@ describe('fetchBeacon', () => {
 
     expect(fetchMock).not.toHaveBeenCalledWith(
       'https://third.test/v2/beacons/quicknet/rounds/100',
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -489,7 +493,8 @@ describe('fetchBeacon', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
     for (const [, init] of fetchMock.mock.calls) {
-      expect(init.signal).toBe(controller.signal);
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+      expect(init.signal.aborted).toBe(false);
     }
   });
 
@@ -563,6 +568,7 @@ describe('fetchBeaconFromEndpoint', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledWith(
       'https://example.test/v2/beacons/quicknet/rounds/100',
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -581,6 +587,7 @@ describe('fetchBeaconFromEndpoint', () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       'https://example.test/v2/beacons/quicknet/rounds/100',
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -859,7 +866,7 @@ describe.each(cancellationCallers)(
 
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
       'https://first.test/v2/beacons/quicknet/rounds/100',
-      { signal: controller.signal },
+      { signal: expect.any(AbortSignal) },
     );
   });
 

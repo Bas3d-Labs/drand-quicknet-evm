@@ -7,6 +7,7 @@ export {
 export {
   fetchBeacon,
   fetchBeaconFromEndpoint,
+  type FetchBeaconOptions,
 } from './fetch.js';
 
 export {

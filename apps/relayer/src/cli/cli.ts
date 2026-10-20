@@ -16,10 +16,6 @@ import {
 } from './parse-command-arguments.js';
 
 import {
-  readRelayerStatus,
-} from './read-relayer-status.js';
-
-import {
   runWithShutdownSignal,
 } from './run-with-shutdown-signal.js';
 

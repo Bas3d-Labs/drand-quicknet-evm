@@ -178,7 +178,13 @@ Quicknet currently uses a 3-second period.
 - `parseCompressedSignature(signature)`
 - `createSignatureWitness(signature)`
 
-Fetching options accept `{ signal?: AbortSignal }`.
+Fetching options accept `{ signal?: AbortSignal; timeoutMs?: number }`.
+
+`timeoutMs` defaults to 5,000 milliseconds per endpoint and covers the
+request and response body consumption. It must be a positive safe integer
+no greater than 60,000. An endpoint timeout allows `fetchBeacon()`
+to try the next endpoint. Caller cancellation stops the entire operation
+and preserves the caller's cancellation reason.
 
 ### Types
 
