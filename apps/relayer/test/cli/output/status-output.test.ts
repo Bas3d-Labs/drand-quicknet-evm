@@ -9,23 +9,23 @@ import {
   renderCliOutput,
   renderOutputFailure,
   type CliOutput,
-} from '../../src/cli/cli-output.js';
+} from '../../../src/cli/output/cli-output.js';
 
 import {
   renderDaemonSnapshotStatusOutput,
-} from '../../src/cli/daemon-snapshot-status-output.js';
+} from '../../../src/cli/output/daemon-snapshot-status-output.js';
 
 import {
   renderJournalStatusOutput,
-} from '../../src/cli/journal-status-output.js';
+} from '../../../src/cli/output/journal-status-output.js';
 
 import type {
   RelayerStatus,
-} from '../../src/cli/read-relayer-status.js';
+} from '../../../src/cli/read-relayer-status.js';
 
 import {
   readDaemonStatusSnapshot,
-} from '../../src/state/daemon-status-snapshot.js';
+} from '../../../src/state/daemon-status-snapshot.js';
 
 const IDENTITY = {
   chainId: 4663,

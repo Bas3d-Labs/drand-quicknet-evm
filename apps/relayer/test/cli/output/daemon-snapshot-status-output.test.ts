@@ -8,7 +8,7 @@ import {
 import {
   projectDaemonSnapshotStatusOutput,
   renderDaemonSnapshotStatusOutput,
-} from '../../src/cli/daemon-snapshot-status-output.js';
+} from '../../../src/cli/output/daemon-snapshot-status-output.js';
 
 const SIGNER = `0x${'ab'.repeat(20)}`;
 const HASH = `0x${'aa'.repeat(32)}`;

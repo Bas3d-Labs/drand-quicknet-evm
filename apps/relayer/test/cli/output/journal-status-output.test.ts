@@ -7,7 +7,7 @@ import {
 
 import {
   renderJournalStatusOutput,
-} from '../../src/cli/journal-status-output.js';
+} from '../../../src/cli/output/journal-status-output.js';
 
 const SIGNER = `0x${'ab'.repeat(20)}`;
 const HASH = `0x${'aa'.repeat(32)}`;

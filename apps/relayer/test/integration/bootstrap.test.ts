@@ -34,7 +34,7 @@ import {
 
 import {
   renderCliOutput,
-} from '../../src/cli/cli-output.js';
+} from '../../src/cli/output/cli-output.js';
 
 import {
   compileRelayerFixture,
@@ -53,7 +53,7 @@ const RPC_URL =
 const MODULE_PATHS = {
   bootstrap: 'bootstrap.js',
   cli: 'cli/cli.js',
-  'cli-output': 'cli/cli-output.js',
+  'cli-output': 'cli/output/cli-output.js',
   diagnostics: 'diagnostics/diagnostics.js',
   'error-summary': 'diagnostics/error-summary.js',
 } as const;

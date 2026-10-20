@@ -2,50 +2,50 @@ import process from 'node:process';
 
 import {
   createRelayerClients,
-} from '../chain/clients.js';
+} from '../../chain/clients.js';
 
 import {
   getChainHeads,
-} from '../chain/chain-heads.js';
+} from '../../chain/chain-heads.js';
 
 import {
   loadRelayerConfig,
-} from '../config/config.js';
+} from '../../config/config.js';
 
 import type {
   RoundImportProgress,
-} from '../diagnostics/operation-context.js';
+} from '../../diagnostics/operation-context.js';
 
 import {
   createRelayerLog,
-} from '../diagnostics/relayer-log.js';
+} from '../../diagnostics/relayer-log.js';
 
 import {
   importQuicknetRound,
   type ImportQuicknetRoundResult,
-} from '../rounds/import-round.js';
+} from '../../rounds/import-round.js';
 
 import {
   importQuicknetRoundWhenAvailable,
-} from '../rounds/import-round-when-available.js';
+} from '../../rounds/import-round-when-available.js';
 
 import type {
   CliOutputHandler,
-} from './cli-output.js';
+} from '../output/cli-output.js';
 
 import type {
   CliOptions,
   CliOutcome,
-} from './cli-types.js';
+} from '../cli-types.js';
 
 import {
   openBeaconSubmitter,
-} from './open-beacon-submitter.js';
+} from '../open-beacon-submitter.js';
 
 import type {
   ImportCommandArguments,
   ImportWhenAvailableCommandArguments,
-} from './parse-command-arguments.js';
+} from '../parse-command-arguments.js';
 
 // Maximum replacement-search blocks per retained attempt in one pass.
 const IMPORT_REPLACEMENT_BLOCK_RANGE = 1_000n;

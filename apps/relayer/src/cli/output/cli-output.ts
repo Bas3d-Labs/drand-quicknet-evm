@@ -1,50 +1,58 @@
 import {
   summarizeErrorForOutput,
-} from '../diagnostics/error-output.js';
+} from '../../diagnostics/error-output.js';
 
 import type {
   SummarizeErrorOptions,
-} from '../diagnostics/error-summary.js';
+} from '../../diagnostics/error-summary.js';
 
 import type {
   DaemonStartupSummary,
-} from '../daemon/daemon-startup.js';
+} from '../../daemon/daemon-startup.js';
 
 import {
   isWorkId,
-} from '../execution/work-identity.js';
+} from '../../execution/work-identity.js';
 
 import type {
   ImportQuicknetRoundResult,
-} from '../rounds/import-round.js';
+} from '../../rounds/import-round.js';
 
 import {
   isPositiveSafeInteger,
-} from '../shared/integer.js';
+} from '../../shared/integer.js';
 
 import {
   isFixedHex,
-} from '../shared/hex.js';
+} from '../../shared/hex.js';
 
 import {
   isNonNegativeSafeInteger,
-} from '../shared/integer.js';
+} from '../../shared/integer.js';
 
 import {
   MAX_UINT256,
-} from '../shared/uint.js';
+} from '../../shared/uint.js';
 
 import {
   isUuidV4,
-} from '../shared/uuid.js';
+} from '../../shared/uuid.js';
 
 import {
   BLOCKER_PRECEDENCE,
-} from '../state/signer-gate.js';
+} from '../../state/signer-gate.js';
 
 import type {
   JournalIdentity,
-} from '../state/transaction-journal.js';
+} from '../../state/transaction-journal.js';
+
+import type {
+  RelayerStatus,
+} from '../read-relayer-status.js';
+
+import type {
+  SyncNonceResult,
+} from '../sync-nonce.js';
 
 import {
   projectDaemonSnapshotStatusOutput,
@@ -55,14 +63,6 @@ import {
   projectJournalStatusOutput,
   renderJournalStatusOutput,
 } from './journal-status-output.js';
-
-import type {
-  RelayerStatus,
-} from './read-relayer-status.js';
-
-import type {
-  SyncNonceResult,
-} from './sync-nonce.js';
 
 export type CliOutput =
   | {

@@ -196,7 +196,7 @@ try {
   const {
     renderCliOutput,
     renderOutputFailure,
-  } = await import('./cli/cli-output.js');
+  } = await import('./cli/output/cli-output.js');
 
   const { main } = await import('./cli/cli.js');
 

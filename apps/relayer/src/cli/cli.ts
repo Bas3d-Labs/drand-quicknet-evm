@@ -7,17 +7,9 @@ import {
 } from '../state/service-lock.js';
 
 import type {
-  CliOutputHandler,
-} from './cli-output.js';
-
-import type {
   CliOptions,
   CliOutcome,
 } from './cli-types.js';
-
-import {
-  runDaemonCommand,
-} from './daemon-command.js';
 
 import {
   parseCommandArguments,
@@ -28,16 +20,28 @@ import {
 } from './read-relayer-status.js';
 
 import {
+  runWithShutdownSignal,
+} from './run-with-shutdown-signal.js';
+
+import {
+  runDaemonCommand,
+} from './commands/daemon-command.js';
+
+import {
   runRoundImportCommand,
-} from './run-round-import-command.js';
+} from './commands/round-import-command.js';
+
+import {
+  runStatusCommand,
+} from './commands/status-command.js';
 
 import {
   runSyncNonceCommand,
-} from './run-sync-nonce-command.js';
+} from './commands/sync-nonce-command.js';
 
-import {
-  runWithShutdownSignal,
-} from './run-with-shutdown-signal.js';
+import type {
+  CliOutputHandler,
+} from './output/cli-output.js';
 
 export async function main(
   args: readonly string[],
@@ -81,19 +85,14 @@ export async function main(
       );
 
     case 'status':
-      return runWithShutdownSignal(async (signal) => {
-        const result = await readRelayerStatus({
-          ...command.config,
+      return runWithShutdownSignal(
+        (signal) => runStatusCommand(
+          command,
+          output,
           signal,
-        });
-
-        output({
-          type: 'relayer-status',
-          result,
-        });
-
-        return 'success';
-      }, 'interrupted');
+        ),
+        'interrupted',
+      );
 
     case 'help':
       output({ type: 'help' });
