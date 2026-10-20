@@ -18,6 +18,8 @@ export interface FetchQuicknetBeaconWithRetryOptions {
   round: bigint;
   maxAttempts?: number;
   retryDelayMs?: number;
+  /** Deadline per endpoint, including response body consumption. */
+  timeoutMs?: number;
   sleep?: (
     milliseconds: number,
     signal?: AbortSignal,
@@ -42,6 +44,18 @@ export async function fetchQuicknetBeaconWithRetry(
   validateMaxAttempts(maxAttempts);
   validateRetryDelay(retryDelayMs);
 
+  if (
+    options.timeoutMs !== undefined &&
+    (
+      !isPositiveSafeInteger(options.timeoutMs) ||
+      options.timeoutMs > 60_000
+    )
+  ) {
+    throw new RangeError(
+      'timeoutMs must be a positive safe integer no greater than 60000.'
+    );
+  }
+
   let lastError: unknown;
 
   for(let attempt=1; attempt <= maxAttempts; attempt++) {
@@ -50,7 +64,14 @@ export async function fetchQuicknetBeaconWithRetry(
     try {
       let beacon: QuicknetBeacon;
 
-      if (options.signal === undefined) {
+      if (options.timeoutMs !== undefined) {
+        beacon = await fetchBeacon(round, undefined, {
+          timeoutMs: options.timeoutMs,
+          ...(options.signal === undefined
+            ? {}
+            : { signal: options.signal }),
+        });
+      } else if (options.signal === undefined) {
         beacon = await fetchBeacon(round);
       } else {
         beacon = await fetchBeacon(round, undefined, {
