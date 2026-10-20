@@ -53,12 +53,11 @@ function rejectWhenAborted(
 function mockResponse(
   body: unknown,
   status = 200,
-) {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: vi.fn().mockResolvedValue(body),
-  };
+): Response {
+  return new Response(
+    body === undefined ? null : JSON.stringify(body),
+    { status },
+  );
 }
 
 function mockFetchResponse({
@@ -70,11 +69,15 @@ function mockFetchResponse({
   status?: number;
   body?: unknown;
 }) {
-  const fetchMock = vi.fn().mockResolvedValue({
-    ok,
-    status,
-    json: vi.fn().mockResolvedValue(body),
-  });
+  const successfulStatus = status >= 200 && status < 300;
+
+  if (ok !== successfulStatus) {
+    throw new Error('Inconsistent mock response status.');
+  }
+
+  const fetchMock = vi.fn().mockImplementation(
+    async () => mockResponse(body, status),
+  );
 
   vi.stubGlobal('fetch', fetchMock);
 
@@ -498,15 +501,9 @@ describe('fetchBeacon', () => {
     }
   });
 
-  it('fails over when reading or parsing a response body fails', async () => {
-    const response = mockResponse(undefined);
-
-    response.json.mockRejectedValue(
-      new SyntaxError('Invalid JSON'),
-    );
-
+  it('fails over when parsing a response body fails', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(response)
+      .mockResolvedValueOnce(new Response('{'))
       .mockResolvedValueOnce(mockResponse({
         round: 100,
         signature: WELL_FORMED_SIGNATURE,
@@ -514,18 +511,139 @@ describe('fetchBeacon', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const beacon = await fetchBeacon(
-      100n,
-      CANCELLATION_ENDPOINTS,
-    );
-
-    expect(beacon).toEqual({
+    await expect(
+      fetchBeacon(100n, CANCELLATION_ENDPOINTS),
+    ).resolves.toEqual({
       round: 100n,
       signature: `0x${WELL_FORMED_SIGNATURE}`,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    'oversized',
+    'invalid UTF-8',
+    'stream failure',
+  ] as const)(
+    'fails over after an %s response body',
+    async (kind) => {
+      let failedResponse: Response;
+
+      if (kind === 'oversized') {
+        failedResponse = new Response(
+          '{}' + ' '.repeat(16 * 1024 - 1),
+        );
+      } else if (kind === 'invalid UTF-8') {
+        failedResponse = new Response(
+          new Uint8Array([0xff]),
+        );
+      } else {
+        failedResponse = new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.error(new Error('Body read failed'));
+            },
+          }),
+        );
+      }
+
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(failedResponse)
+        .mockResolvedValueOnce(mockResponse({
+          round: 100,
+          signature: WELL_FORMED_SIGNATURE,
+        }));
+
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(
+        fetchBeacon(100n, CANCELLATION_ENDPOINTS),
+      ).resolves.toEqual({
+        round: 100n,
+        signature: `0x${WELL_FORMED_SIGNATURE}`,
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(failedResponse.body!.locked).toBe(false);
+    },
+  );
+
+  it.each(['rejects', 'never settles'] as const)(
+    'fails over when HTTP-error body cleanup %s',
+    async (cleanup) => {
+      const cancel = vi.fn(() => {
+        if (cleanup === 'rejects') {
+          return Promise.reject(new Error('Cleanup failed'));
+        }
+
+        return new Promise<void>(() => {});
+      });
+
+      const failedResponse = new Response(
+        new ReadableStream<Uint8Array>({ cancel }),
+        { status: 503 },
+      );
+
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(failedResponse)
+        .mockResolvedValueOnce(mockResponse({
+          round: 100,
+          signature: WELL_FORMED_SIGNATURE,
+        }));
+
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(
+        fetchBeacon(100n, CANCELLATION_ENDPOINTS),
+      ).resolves.toMatchObject({
+        round: 100n,
+      });
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('preserves the HTTP error when body cleanup rejects', async () => {
+    const cancel = vi.fn().mockRejectedValue(
+      new Error('Cleanup failed'),
+    );
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({ cancel }),
+        { status: 503 },
+      ),
+    ));
+
+    await expect(
+      fetchBeaconFromEndpoint(CANCELLATION_ENDPOINTS[0], 100n),
+    ).rejects.toThrow(
+      'Failed to fetch Quicknet round 100: HTTP 503',
+    );
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { label: 'null', body: null },
+    { label: 'array', body: [] },
+    { label: 'string', body: 'invalid' },
+    { label: 'number', body: 100 },
+  ])(
+    'rejects a non-object beacon response: $label',
+    async ({ body }) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(mockResponse(body)),
+      );
+
+      await expect(
+        fetchBeaconFromEndpoint(CANCELLATION_ENDPOINTS[0], 100n),
+      ).rejects.toThrow('Invalid Quicknet response: invalid round');
+    },
+  );
 });
 
 describe('fetchBeaconFromEndpoint', () => {
@@ -904,22 +1022,20 @@ describe.each(cancellationCallers)(
     const controller = new AbortController();
     const reason = { code: 'TEST_CANCELLED' };
     const entered = Promise.withResolvers<void>();
+    const cancel = vi.fn();
 
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => ({
-      ok: true,
-      status: 200,
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
+          entered.resolve();
+        },
+        cancel,
+      }, {
+        highWaterMark: 0,
+      }),
+    );
 
-      json() {
-        entered.resolve();
-
-        if (!init?.signal) {
-          throw new Error('Test requires a forwarded signal.');
-        }
-
-        return rejectWhenAborted(init.signal);
-      },
-    }));
-
+    const fetchMock = vi.fn().mockResolvedValue(response);
     vi.stubGlobal('fetch', fetchMock);
 
     const result = expect(
@@ -931,22 +1047,29 @@ describe.each(cancellationCallers)(
     await result;
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(response.body!.locked).toBe(false);
   });
 
   it('discards a valid body if cancellation happens before processing it', async () => {
     const controller = new AbortController();
     const reason = { code: 'TEST_CANCELLED' };
 
-    const response = mockResponse(undefined);
+    const bytes = new TextEncoder().encode(JSON.stringify({
+      round: 100,
+      signature: WELL_FORMED_SIGNATURE,
+    }));
 
-    response.json.mockImplementation(async () => {
-      controller.abort(reason);
-
-      return {
-        round: 100,
-        signature: WELL_FORMED_SIGNATURE,
-      };
-    });
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(stream) {
+          stream.enqueue(bytes);
+          controller.abort(reason);
+        },
+      }, {
+        highWaterMark: 0,
+      }),
+    );
 
     const fetchMock = vi.fn().mockResolvedValue(response);
     vi.stubGlobal('fetch', fetchMock);
@@ -956,5 +1079,6 @@ describe.each(cancellationCallers)(
     ).rejects.toBe(reason);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(response.body!.locked).toBe(false);
   });
 });

@@ -1,6 +1,15 @@
-import { QUICKNET_ENDPOINTS } from './constants.js';
-import { parseCompressedSignature } from './signature.js';
-import type { QuicknetBeacon } from './types.js';
+import {
+  QUICKNET_ENDPOINTS,
+} from './constants.js';
+import { readBeaconResponse } from './read-beacon-response.js';
+
+import {
+  parseCompressedSignature,
+} from './signature.js';
+
+import type {
+  QuicknetBeacon,
+} from './types.js';
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const MAX_TIMEOUT_MS = 60_000;
@@ -78,16 +87,28 @@ export async function fetchBeaconFromEndpoint(
     deadline.abort(error);
   }, timeoutMs);
 
+  let response: Response | undefined;
+
   try {
-    const response = await fetch(url, { signal });
+    response = await fetch(url, { signal });
     signal.throwIfAborted();
 
     if (!response.ok) {
       throw new Error(`Failed to fetch Quicknet round ${round}: HTTP ${response.status}`);
     }
 
-    const data = (await response.json()) as DrandBeaconResponse;
+    const value = await readBeaconResponse(response, signal);
     signal.throwIfAborted();
+
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      Array.isArray(value)
+    ) {
+      throw new Error('Invalid Quicknet response: invalid round');
+    }
+
+    const data = value as DrandBeaconResponse;
 
     if (
       typeof data.round !== 'number' ||
@@ -109,7 +130,12 @@ export async function fetchBeaconFromEndpoint(
       signature,
     };
   } catch (error) {
-    // Preserve caller cancellation even if fetch reports another error.
+    // Release unused bodies, including HTTP-error responses.
+    // Cleanup must not delay failover or replace the original error.
+    if (response?.body && !response.body.locked) {
+      void response.body.cancel().catch(() => {});
+    }
+
     options.signal?.throwIfAborted();
     signal.throwIfAborted();
     throw error;

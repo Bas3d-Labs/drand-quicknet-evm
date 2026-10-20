@@ -19,15 +19,11 @@ const ENDPOINTS = [
 
 const SIGNATURE = 'ab'.repeat(48);
 
-function response() {
-  return {
-    ok: true,
-    status: 200,
-    json: async () => ({
-      round: 100,
-      signature: SIGNATURE,
-    }),
-  };
+function response(): Response {
+  return new Response(JSON.stringify({
+    round: 100,
+    signature: SIGNATURE,
+  }));
 }
 
 function rejectWhenAborted(signal: AbortSignal): Promise<never> {
@@ -91,23 +87,26 @@ describe('Quicknet endpoint deadlines', () => {
 
   it('uses one deadline across headers and body consumption', async () => {
     const bodyStarted = vi.fn();
+    const cancel = vi.fn();
+
+    const bodyResponse = new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
+          bodyStarted();
+        },
+        cancel,
+      }, {
+        highWaterMark: 0,
+      }),
+    );
 
     const fetchMock = vi.fn(
-      async (_url: string, init?: RequestInit) => {
-        const signal = requestSignal(init);
-
+      async (_url: string, _init?: RequestInit) => {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 60);
         });
 
-        return {
-          ok: true,
-          status: 200,
-          json() {
-            bodyStarted();
-            return rejectWhenAborted(signal);
-          },
-        };
+        return bodyResponse;
       },
     );
 
@@ -131,6 +130,8 @@ describe('Quicknet endpoint deadlines', () => {
     await vi.advanceTimersByTimeAsync(1);
     await result;
 
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(bodyResponse.body!.locked).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -288,19 +289,20 @@ describe('Quicknet endpoint deadlines', () => {
     const controller = new AbortController();
     const reason = { code: 'TEST_CANCELLED' };
     const bodyStarted = Promise.withResolvers<void>();
+    const cancel = vi.fn();
 
-    const fetchMock = vi.fn(
-      async (_url: string, init?: RequestInit) => ({
-        ok: true,
-        status: 200,
-        json() {
-          const signal = requestSignal(init);
+    const bodyResponse = new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
           bodyStarted.resolve();
-          return rejectWhenAborted(signal);
         },
+        cancel,
+      }, {
+        highWaterMark: 0,
       }),
     );
 
+    const fetchMock = vi.fn().mockResolvedValue(bodyResponse);
     vi.stubGlobal('fetch', fetchMock);
 
     const result = expect(fetchBeacon(100n, ENDPOINTS, {
@@ -309,13 +311,14 @@ describe('Quicknet endpoint deadlines', () => {
     })).rejects.toBe(reason);
 
     await bodyStarted.promise;
-
     expect(vi.getTimerCount()).toBe(1);
 
     controller.abort(reason);
     await result;
 
     expect(fetchMock).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(bodyResponse.body!.locked).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
 });
