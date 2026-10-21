@@ -105,6 +105,7 @@ export async function runRoundImportCommand(
         deployment: config.deployment,
         round: command.round,
         receiptTimeoutMs: config.receiptTimeoutMs,
+        fetchTimeoutMs: config.fetchTimeoutMs,
         onProgress(current) {
           progress = current;
         },
@@ -118,6 +119,7 @@ export async function runRoundImportCommand(
         deployment: config.deployment,
         round: command.round,
         receiptTimeoutMs: config.receiptTimeoutMs,
+        fetchTimeoutMs: config.fetchTimeoutMs,
         onProgress(current) {
           progress = current;
         },

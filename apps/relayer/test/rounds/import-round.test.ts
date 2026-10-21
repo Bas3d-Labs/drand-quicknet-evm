@@ -45,7 +45,16 @@ vi.mock(
 
 vi.mock(
   '@based-labs/drand-quicknet',
-  () => quicknetMocks,
+  async (importOriginal) => {
+    const actual = await importOriginal<
+      typeof import('@based-labs/drand-quicknet')
+    >();
+
+    return {
+      ...actual,
+      fetchBeacon: quicknetMocks.fetchBeacon,
+    };
+  },
 );
 
 vi.mock(
@@ -1016,6 +1025,49 @@ describe('importQuicknetRound', () => {
       }
     },
   );
+
+  it.each([false, true])(
+    'forwards the fetch timeout with caller signal: %s',
+    async (withSignal) => {
+      const controller = new AbortController();
+
+      await importQuicknetRound({
+        publicClient,
+        account,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        fetchTimeoutMs: 12_000,
+        ...(withSignal ? { signal: controller.signal } : {}),
+      });
+
+      expect(quicknetMocks.fetchBeacon)
+        .toHaveBeenCalledExactlyOnceWith(
+          ROUND,
+          undefined,
+          {
+            timeoutMs: 12_000,
+            ...(withSignal ? { signal: controller.signal } : {}),
+          },
+        );
+    },
+  );
+
+  it('rejects an invalid fetch timeout before performing work', async () => {
+    await expect(importQuicknetRound({
+      publicClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      fetchTimeoutMs: 60_001,
+    })).rejects.toThrow(RangeError);
+
+    expect(registryMocks.createRegistryReader).not.toHaveBeenCalled();
+    expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
+    expect(submitTransaction).not.toHaveBeenCalled();
+    expect(waitForTransactionReceipt).not.toHaveBeenCalled();
+  });
 });
 
 function firstInvocationOrder(

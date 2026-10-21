@@ -107,853 +107,890 @@ const BEACON: QuicknetBeacon = {
   signature: COMPRESSED_SIGNATURE,
 };
 
-describe(
-  'importQuicknetRoundWhenAvailable',
-  () => {
-    let verifyDeployment: ReturnType<typeof vi.fn>;
-    let isStored: ReturnType<typeof vi.fn>;
-    let getBeacon: ReturnType<typeof vi.fn>;
-    let publicClient: PublicClient;
-    let account: Account;
-    let submitter: BeaconSubmitter;
+describe('importQuicknetRoundWhenAvailable', () => {
+  let verifyDeployment: ReturnType<typeof vi.fn>;
+  let isStored: ReturnType<typeof vi.fn>;
+  let getBeacon: ReturnType<typeof vi.fn>;
+  let publicClient: PublicClient;
+  let account: Account;
+  let submitter: BeaconSubmitter;
 
-    beforeEach(() => {
-      vi.clearAllMocks();
+  beforeEach(() => {
+    vi.clearAllMocks();
 
-      verifyDeployment =
-        vi.fn().mockResolvedValue(
-          undefined,
-        );
-
-      isStored =
-        vi.fn().mockResolvedValue(
-          false,
-        );
-
-      getBeacon =
-        vi.fn().mockResolvedValue(
-          RANDOMNESS,
-        );
-
-      registryMocks
-        .createRegistryReader
-        .mockReturnValue({
-          verifyDeployment,
-          isStored,
-          getBeacon,
-        });
-
-      waitMocks
-        .waitForQuicknetRound
-        .mockResolvedValue(
-          undefined,
-        );
-
-      fetchMocks
-        .fetchQuicknetBeaconWithRetry
-        .mockResolvedValue(
-          BEACON,
-        );
-
-      importMocks
-        .importQuicknetRound
-        .mockResolvedValue({
-          status: 'imported',
-          submission: 'witness',
-          round: ROUND,
-          randomness: RANDOMNESS,
-          transactionHash:
-            TRANSACTION_HASH,
-        });
-
-      publicClient =
-        {} as unknown as PublicClient;
-
-      account = {
-        address: ACCOUNT_ADDRESS,
-      } as unknown as Account;
-
-      submitter = {
-        recover: vi.fn<BeaconSubmitter['recover']>(),
-        submit: vi.fn<BeaconSubmitter['submit']>(),
-      };
-    });
-
-    function importRound(
-      options: {
-        round?: bigint;
-        maxFetchAttempts?: number;
-        fetchRetryDelayMs?: number;
-      } = {},
-    ) {
-      const round =
-        options.round ??
-        ROUND;
-
-      const importOptions = {
-        publicClient,
-        account,
-        submitter,
-        deployment: DEPLOYMENT,
-        round,
-      };
-
-      if (
-        options.maxFetchAttempts !==
-        undefined
-      ) {
-        return importQuicknetRoundWhenAvailable({
-          ...importOptions,
-          maxFetchAttempts:
-            options.maxFetchAttempts,
-          ...(options.fetchRetryDelayMs ===
-          undefined
-            ? {}
-            : {
-                fetchRetryDelayMs:
-                  options.fetchRetryDelayMs,
-              }),
-        });
-      }
-
-      if (
-        options.fetchRetryDelayMs !==
-        undefined
-      ) {
-        return importQuicknetRoundWhenAvailable({
-          ...importOptions,
-          fetchRetryDelayMs: options.fetchRetryDelayMs,
-        });
-      }
-
-      return importQuicknetRoundWhenAvailable(
-        importOptions,
-      );
-    }
-
-    it('rejects round zero before doing any work', async () => {
-      await expect(
-        importRound({
-          round: 0n,
-        }),
-      ).rejects.toThrow(
-        'Quicknet round must be greater than zero.',
+    verifyDeployment =
+      vi.fn().mockResolvedValue(
+        undefined,
       );
 
-      expect(
-        registryMocks
-          .createRegistryReader,
-      ).not.toHaveBeenCalled();
-
-      expect(
-        waitMocks
-          .waitForQuicknetRound,
-      ).not.toHaveBeenCalled();
-
-      expect(
-        fetchMocks
-          .fetchQuicknetBeaconWithRetry,
-      ).not.toHaveBeenCalled();
-
-      expect(
-        importMocks
-          .importQuicknetRound,
-      ).not.toHaveBeenCalled();
-    });
-
-    it('rejects a negative round before doing any work', async () => {
-      await expect(
-        importRound({
-          round: -1n,
-        }),
-      ).rejects.toThrow(
-        RangeError,
+    isStored =
+      vi.fn().mockResolvedValue(
+        false,
       );
 
-      expect(
-        registryMocks
-          .createRegistryReader,
-      ).not.toHaveBeenCalled();
-    });
+    getBeacon =
+      vi.fn().mockResolvedValue(
+        RANDOMNESS,
+      );
 
-    it('creates a reader for the configured registry', async () => {
-      await importRound();
-
-      expect(
-        registryMocks
-          .createRegistryReader,
-      ).toHaveBeenCalledOnce();
-
-      expect(
-        registryMocks
-          .createRegistryReader,
-      ).toHaveBeenCalledWith({
-        client:
-          publicClient,
-        deployment:
-          DEPLOYMENT,
-      });
-    });
-
-    it('verifies the registry deployment before checking storage', async () => {
-      await importRound();
-
-      expect(
+    registryMocks
+      .createRegistryReader
+      .mockReturnValue({
         verifyDeployment,
-      ).toHaveBeenCalledOnce();
-
-      expect(
-        firstInvocationOrder(
-          verifyDeployment,
-        ),
-      ).toBeLessThan(
-        firstInvocationOrder(
-          isStored,
-        ),
-      );
-    });
-
-    it('propagates deployment verification failures', async () => {
-      const error =
-        new Error(
-          'Invalid registry deployment.',
-        );
-
-      verifyDeployment
-        .mockRejectedValue(
-          error,
-        );
-
-      await expect(
-        importRound(),
-      ).rejects.toBe(
-        error,
-      );
-
-      expect(
         isStored,
-      ).not.toHaveBeenCalled();
-
-      expect(
-        waitMocks
-          .waitForQuicknetRound,
-      ).not.toHaveBeenCalled();
-
-      expect(
-        fetchMocks
-          .fetchQuicknetBeaconWithRetry,
-      ).not.toHaveBeenCalled();
-
-      expect(
-        importMocks
-          .importQuicknetRound,
-      ).not.toHaveBeenCalled();
-    });
-
-    it('returns immediately when the round is already stored', async () => {
-      isStored
-        .mockResolvedValue(
-          true,
-        );
-
-      const result =
-        await importRound();
-
-      expect(result).toEqual({
-        status:
-          'already-stored',
-        round: ROUND,
-        randomness:
-          RANDOMNESS,
-      });
-
-      expect(
-        isStored,
-      ).toHaveBeenCalledWith(
-        ROUND,
-      );
-
-      expect(
         getBeacon,
-      ).toHaveBeenCalledWith(
-        ROUND,
+      });
+
+    waitMocks
+      .waitForQuicknetRound
+      .mockResolvedValue(
+        undefined,
       );
 
-      expect(
-        waitMocks
-          .waitForQuicknetRound,
-      ).not.toHaveBeenCalled();
-
-      expect(
-        fetchMocks
-          .fetchQuicknetBeaconWithRetry,
-      ).not.toHaveBeenCalled();
-
-      expect(
-        importMocks
-          .importQuicknetRound,
-      ).not.toHaveBeenCalled();
-    });
-
-    it('propagates a failure reading an already-stored beacon', async () => {
-      const error =
-        new Error(
-          'Beacon read failed.',
-        );
-
-      isStored
-        .mockResolvedValue(
-          true,
-        );
-
-      getBeacon
-        .mockRejectedValue(
-          error,
-        );
-
-      await expect(
-        importRound(),
-      ).rejects.toBe(
-        error,
+    fetchMocks
+      .fetchQuicknetBeaconWithRetry
+      .mockResolvedValue(
+        BEACON,
       );
 
-      expect(
-        waitMocks
-          .waitForQuicknetRound,
-      ).not.toHaveBeenCalled();
-    });
-
-    it('waits for the exact requested round', async () => {
-      await importRound();
-
-      expect(
-        waitMocks
-          .waitForQuicknetRound,
-      ).toHaveBeenCalledOnce();
-
-      expect(
-        waitMocks
-          .waitForQuicknetRound,
-      ).toHaveBeenCalledWith({
-        round: ROUND,
-      });
-    });
-
-    it('does not fetch before waiting completes', async () => {
-      await importRound();
-
-      expect(
-        firstInvocationOrder(
-          waitMocks
-            .waitForQuicknetRound,
-        ),
-      ).toBeLessThan(
-        firstInvocationOrder(
-          fetchMocks
-            .fetchQuicknetBeaconWithRetry,
-        ),
-      );
-    });
-
-    it('propagates wait failures without fetching', async () => {
-      const error =
-        new Error(
-          'Wait interrupted.',
-        );
-
-      waitMocks
-        .waitForQuicknetRound
-        .mockRejectedValue(
-          error,
-        );
-
-      await expect(
-        importRound(),
-      ).rejects.toBe(
-        error,
-      );
-
-      expect(
-        fetchMocks
-          .fetchQuicknetBeaconWithRetry,
-      ).not.toHaveBeenCalled();
-
-      expect(
-        importMocks
-          .importQuicknetRound,
-      ).not.toHaveBeenCalled();
-    });
-
-    it('fetches the exact requested round after waiting', async () => {
-      await importRound();
-
-      expect(
-        fetchMocks
-          .fetchQuicknetBeaconWithRetry,
-      ).toHaveBeenCalledOnce();
-
-      expect(
-        fetchMocks
-          .fetchQuicknetBeaconWithRetry,
-      ).toHaveBeenCalledWith({
-        round: ROUND,
-      });
-    });
-
-    it('forwards maxFetchAttempts to the fetch retry layer', async () => {
-      await importRound({
-        maxFetchAttempts:
-          12,
-      });
-
-      expect(
-        fetchMocks
-          .fetchQuicknetBeaconWithRetry,
-      ).toHaveBeenCalledWith({
-        round: ROUND,
-        maxAttempts: 12,
-      });
-    });
-
-    it('forwards fetchRetryDelayMs to the fetch retry layer', async () => {
-      await importRound({
-        fetchRetryDelayMs:
-          125,
-      });
-
-      expect(
-        fetchMocks
-          .fetchQuicknetBeaconWithRetry,
-      ).toHaveBeenCalledWith({
-        round: ROUND,
-        retryDelayMs: 125,
-      });
-    });
-
-    it('forwards both fetch retry options', async () => {
-      await importRound({
-        maxFetchAttempts:
-          12,
-        fetchRetryDelayMs:
-          125,
-      });
-
-      expect(
-        fetchMocks
-          .fetchQuicknetBeaconWithRetry,
-      ).toHaveBeenCalledWith({
-        round: ROUND,
-        maxAttempts: 12,
-        retryDelayMs: 125,
-      });
-    });
-
-    it('does not explicitly pass undefined fetch options', async () => {
-      await importRound();
-
-      expect(
-        fetchMocks
-          .fetchQuicknetBeaconWithRetry,
-      ).toHaveBeenCalledWith({
-        round: ROUND,
-      });
-    });
-
-    it('propagates fetch exhaustion without importing', async () => {
-      const error =
-        new Error(
-          `Failed to fetch Quicknet round ${ROUND} after 8 attempts.`,
-        );
-
-      fetchMocks
-        .fetchQuicknetBeaconWithRetry
-        .mockRejectedValue(
-          error,
-        );
-
-      await expect(
-        importRound(),
-      ).rejects.toBe(
-        error,
-      );
-
-      expect(
-        importMocks
-          .importQuicknetRound,
-      ).not.toHaveBeenCalled();
-    });
-
-    it('passes the fetched beacon and shared submitter into importQuicknetRound', async () => {
-      await importRound();
-
-      expect(importMocks.importQuicknetRound)
-        .toHaveBeenCalledExactlyOnceWith({
-          publicClient,
-          account,
-          submitter,
-          deployment: DEPLOYMENT,
-          round: ROUND,
-          beacon: BEACON,
-          receiptTimeoutMs: 30_000,
-          onProgress: undefined,
-        });
-
-      expect(
-        importMocks.importQuicknetRound.mock.calls[0]?.[0].submitter,
-      ).toBe(submitter);
-
-      expect(submitter.recover).not.toHaveBeenCalled();
-      expect(submitter.submit).not.toHaveBeenCalled();
-    });
-
-    it('does not fetch the beacon a second time itself', async () => {
-      await importRound();
-
-      expect(
-        fetchMocks
-          .fetchQuicknetBeaconWithRetry,
-      ).toHaveBeenCalledOnce();
-
-      expect(
-        importMocks
-          .importQuicknetRound,
-      ).toHaveBeenCalledOnce();
-    });
-
-    it('returns the imported result unchanged', async () => {
-      const result =
-        await importRound();
-
-      expect(result).toEqual({
+    importMocks
+      .importQuicknetRound
+      .mockResolvedValue({
         status: 'imported',
         submission: 'witness',
         round: ROUND,
         randomness: RANDOMNESS,
-        transactionHash: TRANSACTION_HASH,
+        transactionHash:
+          TRANSACTION_HASH,
       });
+
+    publicClient =
+      {} as unknown as PublicClient;
+
+    account = {
+      address: ACCOUNT_ADDRESS,
+    } as unknown as Account;
+
+    submitter = {
+      recover: vi.fn<BeaconSubmitter['recover']>(),
+      submit: vi.fn<BeaconSubmitter['submit']>(),
+    };
+  });
+
+  function importRound(
+    options: {
+      round?: bigint;
+      maxFetchAttempts?: number;
+      fetchRetryDelayMs?: number;
+    } = {},
+  ) {
+    const round =
+      options.round ??
+      ROUND;
+
+    const importOptions = {
+      publicClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round,
+    };
+
+    if (
+      options.maxFetchAttempts !==
+      undefined
+    ) {
+      return importQuicknetRoundWhenAvailable({
+        ...importOptions,
+        maxFetchAttempts:
+          options.maxFetchAttempts,
+        ...(options.fetchRetryDelayMs ===
+        undefined
+          ? {}
+          : {
+              fetchRetryDelayMs:
+                options.fetchRetryDelayMs,
+            }),
+      });
+    }
+
+    if (
+      options.fetchRetryDelayMs !==
+      undefined
+    ) {
+      return importQuicknetRoundWhenAvailable({
+        ...importOptions,
+        fetchRetryDelayMs: options.fetchRetryDelayMs,
+      });
+    }
+
+    return importQuicknetRoundWhenAvailable(
+      importOptions,
+    );
+  }
+
+  it('rejects round zero before doing any work', async () => {
+    await expect(
+      importRound({
+        round: 0n,
+      }),
+    ).rejects.toThrow(
+      'Quicknet round must be greater than zero.',
+    );
+
+    expect(
+      registryMocks
+        .createRegistryReader,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      waitMocks
+        .waitForQuicknetRound,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      fetchMocks
+        .fetchQuicknetBeaconWithRetry,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      importMocks
+        .importQuicknetRound,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('rejects a negative round before doing any work', async () => {
+    await expect(
+      importRound({
+        round: -1n,
+      }),
+    ).rejects.toThrow(
+      RangeError,
+    );
+
+    expect(
+      registryMocks
+        .createRegistryReader,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('creates a reader for the configured registry', async () => {
+    await importRound();
+
+    expect(
+      registryMocks
+        .createRegistryReader,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      registryMocks
+        .createRegistryReader,
+    ).toHaveBeenCalledWith({
+      client:
+        publicClient,
+      deployment:
+        DEPLOYMENT,
+    });
+  });
+
+  it('verifies the registry deployment before checking storage', async () => {
+    await importRound();
+
+    expect(
+      verifyDeployment,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      firstInvocationOrder(
+        verifyDeployment,
+      ),
+    ).toBeLessThan(
+      firstInvocationOrder(
+        isStored,
+      ),
+    );
+  });
+
+  it('propagates deployment verification failures', async () => {
+    const error =
+      new Error(
+        'Invalid registry deployment.',
+      );
+
+    verifyDeployment
+      .mockRejectedValue(
+        error,
+      );
+
+    await expect(
+      importRound(),
+    ).rejects.toBe(
+      error,
+    );
+
+    expect(
+      isStored,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      waitMocks
+        .waitForQuicknetRound,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      fetchMocks
+        .fetchQuicknetBeaconWithRetry,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      importMocks
+        .importQuicknetRound,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('returns immediately when the round is already stored', async () => {
+    isStored
+      .mockResolvedValue(
+        true,
+      );
+
+    const result =
+      await importRound();
+
+    expect(result).toEqual({
+      status:
+        'already-stored',
+      round: ROUND,
+      randomness:
+        RANDOMNESS,
     });
 
-    it('returns already-stored when another relayer wins the race during import', async () => {
+    expect(
+      isStored,
+    ).toHaveBeenCalledWith(
+      ROUND,
+    );
+
+    expect(
+      getBeacon,
+    ).toHaveBeenCalledWith(
+      ROUND,
+    );
+
+    expect(
+      waitMocks
+        .waitForQuicknetRound,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      fetchMocks
+        .fetchQuicknetBeaconWithRetry,
+    ).not.toHaveBeenCalled();
+
+    expect(
       importMocks
-        .importQuicknetRound
-        .mockResolvedValue({
-          status: 'already-stored',
-          round: ROUND,
-          randomness: RANDOMNESS,
-        });
+        .importQuicknetRound,
+    ).not.toHaveBeenCalled();
+  });
 
-      const result =
-        await importRound();
+  it('propagates a failure reading an already-stored beacon', async () => {
+    const error =
+      new Error(
+        'Beacon read failed.',
+      );
 
-      expect(result).toEqual({
+    isStored
+      .mockResolvedValue(
+        true,
+      );
+
+    getBeacon
+      .mockRejectedValue(
+        error,
+      );
+
+    await expect(
+      importRound(),
+    ).rejects.toBe(
+      error,
+    );
+
+    expect(
+      waitMocks
+        .waitForQuicknetRound,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('waits for the exact requested round', async () => {
+    await importRound();
+
+    expect(
+      waitMocks
+        .waitForQuicknetRound,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      waitMocks
+        .waitForQuicknetRound,
+    ).toHaveBeenCalledWith({
+      round: ROUND,
+    });
+  });
+
+  it('does not fetch before waiting completes', async () => {
+    await importRound();
+
+    expect(
+      firstInvocationOrder(
+        waitMocks
+          .waitForQuicknetRound,
+      ),
+    ).toBeLessThan(
+      firstInvocationOrder(
+        fetchMocks
+          .fetchQuicknetBeaconWithRetry,
+      ),
+    );
+  });
+
+  it('propagates wait failures without fetching', async () => {
+    const error =
+      new Error(
+        'Wait interrupted.',
+      );
+
+    waitMocks
+      .waitForQuicknetRound
+      .mockRejectedValue(
+        error,
+      );
+
+    await expect(
+      importRound(),
+    ).rejects.toBe(
+      error,
+    );
+
+    expect(
+      fetchMocks
+        .fetchQuicknetBeaconWithRetry,
+    ).not.toHaveBeenCalled();
+
+    expect(
+      importMocks
+        .importQuicknetRound,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('fetches the exact requested round after waiting', async () => {
+    await importRound();
+
+    expect(
+      fetchMocks
+        .fetchQuicknetBeaconWithRetry,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      fetchMocks
+        .fetchQuicknetBeaconWithRetry,
+    ).toHaveBeenCalledWith({
+      round: ROUND,
+    });
+  });
+
+  it('forwards maxFetchAttempts to the fetch retry layer', async () => {
+    await importRound({
+      maxFetchAttempts:
+        12,
+    });
+
+    expect(
+      fetchMocks
+        .fetchQuicknetBeaconWithRetry,
+    ).toHaveBeenCalledWith({
+      round: ROUND,
+      maxAttempts: 12,
+    });
+  });
+
+  it('forwards fetchRetryDelayMs to the fetch retry layer', async () => {
+    await importRound({
+      fetchRetryDelayMs:
+        125,
+    });
+
+    expect(
+      fetchMocks
+        .fetchQuicknetBeaconWithRetry,
+    ).toHaveBeenCalledWith({
+      round: ROUND,
+      retryDelayMs: 125,
+    });
+  });
+
+  it('forwards both fetch retry options', async () => {
+    await importRound({
+      maxFetchAttempts:
+        12,
+      fetchRetryDelayMs:
+        125,
+    });
+
+    expect(
+      fetchMocks
+        .fetchQuicknetBeaconWithRetry,
+    ).toHaveBeenCalledWith({
+      round: ROUND,
+      maxAttempts: 12,
+      retryDelayMs: 125,
+    });
+  });
+
+  it('does not explicitly pass undefined fetch options', async () => {
+    await importRound();
+
+    expect(
+      fetchMocks
+        .fetchQuicknetBeaconWithRetry,
+    ).toHaveBeenCalledWith({
+      round: ROUND,
+    });
+  });
+
+  it('propagates fetch exhaustion without importing', async () => {
+    const error =
+      new Error(
+        `Failed to fetch Quicknet round ${ROUND} after 8 attempts.`,
+      );
+
+    fetchMocks
+      .fetchQuicknetBeaconWithRetry
+      .mockRejectedValue(
+        error,
+      );
+
+    await expect(
+      importRound(),
+    ).rejects.toBe(
+      error,
+    );
+
+    expect(
+      importMocks
+        .importQuicknetRound,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('passes the fetched beacon and shared submitter into importQuicknetRound', async () => {
+    await importRound();
+
+    expect(importMocks.importQuicknetRound)
+      .toHaveBeenCalledExactlyOnceWith({
+        publicClient,
+        account,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        beacon: BEACON,
+        receiptTimeoutMs: 30_000,
+        onProgress: undefined,
+      });
+
+    expect(
+      importMocks.importQuicknetRound.mock.calls[0]?.[0].submitter,
+    ).toBe(submitter);
+
+    expect(submitter.recover).not.toHaveBeenCalled();
+    expect(submitter.submit).not.toHaveBeenCalled();
+  });
+
+  it('does not fetch the beacon a second time itself', async () => {
+    await importRound();
+
+    expect(
+      fetchMocks
+        .fetchQuicknetBeaconWithRetry,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      importMocks
+        .importQuicknetRound,
+    ).toHaveBeenCalledOnce();
+  });
+
+  it('returns the imported result unchanged', async () => {
+    const result =
+      await importRound();
+
+    expect(result).toEqual({
+      status: 'imported',
+      submission: 'witness',
+      round: ROUND,
+      randomness: RANDOMNESS,
+      transactionHash: TRANSACTION_HASH,
+    });
+  });
+
+  it('returns already-stored when another relayer wins the race during import', async () => {
+    importMocks
+      .importQuicknetRound
+      .mockResolvedValue({
         status: 'already-stored',
         round: ROUND,
         randomness: RANDOMNESS,
       });
 
-      expect(
-        waitMocks
-          .waitForQuicknetRound,
-      ).toHaveBeenCalledOnce();
+    const result =
+      await importRound();
 
-      expect(
-        fetchMocks
-          .fetchQuicknetBeaconWithRetry,
-      ).toHaveBeenCalledOnce();
-
-      expect(
-        importMocks
-          .importQuicknetRound,
-      ).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      status: 'already-stored',
+      round: ROUND,
+      randomness: RANDOMNESS,
     });
 
-    it('propagates import failures without retrying them', async () => {
-      const error =
-        new Error(
-          'Transaction submission failed.',
-        );
+    expect(
+      waitMocks
+        .waitForQuicknetRound,
+    ).toHaveBeenCalledOnce();
 
+    expect(
+      fetchMocks
+        .fetchQuicknetBeaconWithRetry,
+    ).toHaveBeenCalledOnce();
+
+    expect(
       importMocks
-        .importQuicknetRound
-        .mockRejectedValue(
-          error,
-        );
+        .importQuicknetRound,
+    ).toHaveBeenCalledOnce();
+  });
 
-      await expect(
-        importRound(),
-      ).rejects.toBe(
+  it('propagates import failures without retrying them', async () => {
+    const error =
+      new Error(
+        'Transaction submission failed.',
+      );
+
+    importMocks
+      .importQuicknetRound
+      .mockRejectedValue(
         error,
       );
 
-      expect(
-        importMocks
-          .importQuicknetRound,
-      ).toHaveBeenCalledOnce();
+    await expect(
+      importRound(),
+    ).rejects.toBe(
+      error,
+    );
 
-      expect(
+    expect(
+      importMocks
+        .importQuicknetRound,
+    ).toHaveBeenCalledOnce();
+
+    expect(
+      fetchMocks
+        .fetchQuicknetBeaconWithRetry,
+    ).toHaveBeenCalledOnce();
+  });
+
+  it('performs the operation in the expected order', async () => {
+    await importRound();
+
+    const verifyOrder =
+      firstInvocationOrder(
+        verifyDeployment,
+      );
+
+    const storedOrder =
+      firstInvocationOrder(
+        isStored,
+      );
+
+    const waitOrder =
+      firstInvocationOrder(
+        waitMocks
+          .waitForQuicknetRound,
+      );
+
+    const fetchOrder =
+      firstInvocationOrder(
         fetchMocks
           .fetchQuicknetBeaconWithRetry,
-      ).toHaveBeenCalledOnce();
+      );
+
+    const importOrder =
+      firstInvocationOrder(
+        importMocks
+          .importQuicknetRound,
+      );
+
+    expect(
+      verifyOrder,
+    ).toBeLessThan(
+      storedOrder,
+    );
+
+    expect(
+      storedOrder,
+    ).toBeLessThan(
+      waitOrder,
+    );
+
+    expect(
+      waitOrder,
+    ).toBeLessThan(
+      fetchOrder,
+    );
+
+    expect(
+      fetchOrder,
+    ).toBeLessThan(
+      importOrder,
+    );
+  });
+
+  it('forwards a custom receipt timeout', async () => {
+    await importQuicknetRoundWhenAvailable({
+      publicClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      receiptTimeoutMs: 45_000,
     });
 
-    it('performs the operation in the expected order', async () => {
-      await importRound();
+    expect(importMocks.importQuicknetRound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        receiptTimeoutMs: 45_000,
+      }),
+    );
+  });
 
-      const verifyOrder =
-        firstInvocationOrder(
-          verifyDeployment,
-        );
+  it('rejects an invalid timeout before waiting or fetching', async () => {
+    await expect(importQuicknetRoundWhenAvailable({
+      publicClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      receiptTimeoutMs: 0,
+    })).rejects.toThrow('Invalid receipt timeout.');
 
-      const storedOrder =
-        firstInvocationOrder(
-          isStored,
-        );
+    expect(registryMocks.createRegistryReader).not.toHaveBeenCalled();
+    expect(waitMocks.waitForQuicknetRound).not.toHaveBeenCalled();
+    expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
+    expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
+  });
 
-      const waitOrder =
-        firstInvocationOrder(
-          waitMocks
-            .waitForQuicknetRound,
-        );
+  it('rejects an already-aborted signal before doing work', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
 
-      const fetchOrder =
-        firstInvocationOrder(
-          fetchMocks
-            .fetchQuicknetBeaconWithRetry,
-        );
+    controller.abort(reason);
 
-      const importOrder =
-        firstInvocationOrder(
-          importMocks
-            .importQuicknetRound,
-        );
+    await expect(importQuicknetRoundWhenAvailable({
+      publicClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
 
-      expect(
-        verifyOrder,
-      ).toBeLessThan(
-        storedOrder,
-      );
+    expect(registryMocks.createRegistryReader).not.toHaveBeenCalled();
+    expect(waitMocks.waitForQuicknetRound).not.toHaveBeenCalled();
+    expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
+    expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
+  });
 
-      expect(
-        storedOrder,
-      ).toBeLessThan(
-        waitOrder,
-      );
+  it('forwards cancellation to the round wait and stops before fetching', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
 
-      expect(
-        waitOrder,
-      ).toBeLessThan(
-        fetchOrder,
-      );
-
-      expect(
-        fetchOrder,
-      ).toBeLessThan(
-        importOrder,
-      );
+    waitMocks.waitForQuicknetRound.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      controller.signal.throwIfAborted();
     });
 
-    it('forwards a custom receipt timeout', async () => {
+    await expect(importQuicknetRoundWhenAvailable({
+      publicClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(waitMocks.waitForQuicknetRound)
+      .toHaveBeenCalledExactlyOnceWith({
+        round: ROUND,
+        signal: controller.signal,
+      });
+
+    expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
+    expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
+  });
+
+  it('forwards cancellation to beacon fetching without entering import', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    fetchMocks.fetchQuicknetBeaconWithRetry.mockImplementationOnce(
+      async () => {
+        controller.abort(reason);
+        controller.signal.throwIfAborted();
+      },
+    );
+
+    await expect(importQuicknetRoundWhenAvailable({
+      publicClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(fetchMocks.fetchQuicknetBeaconWithRetry)
+      .toHaveBeenCalledExactlyOnceWith({
+        round: ROUND,
+        signal: controller.signal,
+      });
+
+    expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
+  });
+
+  it('does not enter import when cancellation accompanies a fetched beacon', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Shutdown requested.');
+
+    fetchMocks.fetchQuicknetBeaconWithRetry.mockImplementationOnce(
+      async () => {
+        controller.abort(reason);
+        return BEACON;
+      },
+    );
+
+    await expect(importQuicknetRoundWhenAvailable({
+      publicClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
+  });
+
+  it('forwards the same abort signal into direct import', async () => {
+    const controller = new AbortController();
+
+    await importQuicknetRoundWhenAvailable({
+      publicClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      signal: controller.signal,
+    });
+
+    expect(importMocks.importQuicknetRound)
+      .toHaveBeenCalledExactlyOnceWith({
+        publicClient,
+        account,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        beacon: BEACON,
+        receiptTimeoutMs: 30_000,
+        onProgress: undefined,
+        signal: controller.signal,
+      });
+  });
+
+  it.each(['deployment', 'storage'] as const)(
+    'stops after cancellation during the %s read',
+    async (stage) => {
+      const controller = new AbortController();
+      const reason = new Error('Shutdown requested.');
+
+      if (stage === 'deployment') {
+        verifyDeployment.mockImplementationOnce(async () => {
+          controller.abort(reason);
+        });
+      } else {
+        isStored.mockImplementationOnce(async () => {
+          controller.abort(reason);
+          return true;
+        });
+      }
+
+      await expect(importQuicknetRoundWhenAvailable({
+        publicClient,
+        account,
+        submitter,
+        deployment: DEPLOYMENT,
+        round: ROUND,
+        signal: controller.signal,
+      })).rejects.toBe(reason);
+
+      expect(verifyDeployment).toHaveBeenCalledOnce();
+
+      if (stage === 'deployment') {
+        expect(isStored).not.toHaveBeenCalled();
+      } else {
+        expect(isStored).toHaveBeenCalledOnce();
+      }
+
+      expect(getBeacon).not.toHaveBeenCalled();
+      expect(waitMocks.waitForQuicknetRound).not.toHaveBeenCalled();
+      expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
+      expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    'forwards the fetch timeout with caller signal: %s',
+    async (withSignal) => {
+      const controller = new AbortController();
+
       await importQuicknetRoundWhenAvailable({
         publicClient,
         account,
         submitter,
         deployment: DEPLOYMENT,
         round: ROUND,
-        receiptTimeoutMs: 45_000,
+        fetchTimeoutMs: 12_000,
+        ...(withSignal ? { signal: controller.signal } : {}),
       });
-
-      expect(importMocks.importQuicknetRound).toHaveBeenCalledWith(
-        expect.objectContaining({
-          receiptTimeoutMs: 45_000,
-        }),
-      );
-    });
-
-    it('rejects an invalid timeout before waiting or fetching', async () => {
-      await expect(importQuicknetRoundWhenAvailable({
-        publicClient,
-        account,
-        submitter,
-        deployment: DEPLOYMENT,
-        round: ROUND,
-        receiptTimeoutMs: 0,
-      })).rejects.toThrow('Invalid receipt timeout.');
-
-      expect(registryMocks.createRegistryReader).not.toHaveBeenCalled();
-      expect(waitMocks.waitForQuicknetRound).not.toHaveBeenCalled();
-      expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
-      expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
-    });
-
-    it('rejects an already-aborted signal before doing work', async () => {
-      const controller = new AbortController();
-      const reason = new Error('Shutdown requested.');
-
-      controller.abort(reason);
-
-      await expect(importQuicknetRoundWhenAvailable({
-        publicClient,
-        account,
-        submitter,
-        deployment: DEPLOYMENT,
-        round: ROUND,
-        signal: controller.signal,
-      })).rejects.toBe(reason);
-
-      expect(registryMocks.createRegistryReader).not.toHaveBeenCalled();
-      expect(waitMocks.waitForQuicknetRound).not.toHaveBeenCalled();
-      expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
-      expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
-    });
-
-    it('forwards cancellation to the round wait and stops before fetching', async () => {
-      const controller = new AbortController();
-      const reason = new Error('Shutdown requested.');
-
-      waitMocks.waitForQuicknetRound.mockImplementationOnce(async () => {
-        controller.abort(reason);
-        controller.signal.throwIfAborted();
-      });
-
-      await expect(importQuicknetRoundWhenAvailable({
-        publicClient,
-        account,
-        submitter,
-        deployment: DEPLOYMENT,
-        round: ROUND,
-        signal: controller.signal,
-      })).rejects.toBe(reason);
-
-      expect(waitMocks.waitForQuicknetRound)
-        .toHaveBeenCalledExactlyOnceWith({
-          round: ROUND,
-          signal: controller.signal,
-        });
-
-      expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
-      expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
-    });
-
-    it('forwards cancellation to beacon fetching without entering import', async () => {
-      const controller = new AbortController();
-      const reason = new Error('Shutdown requested.');
-
-      fetchMocks.fetchQuicknetBeaconWithRetry.mockImplementationOnce(
-        async () => {
-          controller.abort(reason);
-          controller.signal.throwIfAborted();
-        },
-      );
-
-      await expect(importQuicknetRoundWhenAvailable({
-        publicClient,
-        account,
-        submitter,
-        deployment: DEPLOYMENT,
-        round: ROUND,
-        signal: controller.signal,
-      })).rejects.toBe(reason);
 
       expect(fetchMocks.fetchQuicknetBeaconWithRetry)
         .toHaveBeenCalledExactlyOnceWith({
           round: ROUND,
-          signal: controller.signal,
+          timeoutMs: 12_000,
+          ...(withSignal ? { signal: controller.signal } : {}),
         });
+    },
+  );
 
-      expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
-    });
+  it('rejects an invalid fetch timeout before performing work', async () => {
+    await expect(importQuicknetRoundWhenAvailable({
+      publicClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      fetchTimeoutMs: 60_001,
+    })).rejects.toThrow(RangeError);
 
-    it('does not enter import when cancellation accompanies a fetched beacon', async () => {
-      const controller = new AbortController();
-      const reason = new Error('Shutdown requested.');
-
-      fetchMocks.fetchQuicknetBeaconWithRetry.mockImplementationOnce(
-        async () => {
-          controller.abort(reason);
-          return BEACON;
-        },
-      );
-
-      await expect(importQuicknetRoundWhenAvailable({
-        publicClient,
-        account,
-        submitter,
-        deployment: DEPLOYMENT,
-        round: ROUND,
-        signal: controller.signal,
-      })).rejects.toBe(reason);
-
-      expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
-    });
-
-    it('forwards the same abort signal into direct import', async () => {
-      const controller = new AbortController();
-
-      await importQuicknetRoundWhenAvailable({
-        publicClient,
-        account,
-        submitter,
-        deployment: DEPLOYMENT,
-        round: ROUND,
-        signal: controller.signal,
-      });
-
-      expect(importMocks.importQuicknetRound)
-        .toHaveBeenCalledExactlyOnceWith({
-          publicClient,
-          account,
-          submitter,
-          deployment: DEPLOYMENT,
-          round: ROUND,
-          beacon: BEACON,
-          receiptTimeoutMs: 30_000,
-          onProgress: undefined,
-          signal: controller.signal,
-        });
-    });
-
-    it.each(['deployment', 'storage'] as const)(
-      'stops after cancellation during the %s read',
-      async (stage) => {
-        const controller = new AbortController();
-        const reason = new Error('Shutdown requested.');
-
-        if (stage === 'deployment') {
-          verifyDeployment.mockImplementationOnce(async () => {
-            controller.abort(reason);
-          });
-        } else {
-          isStored.mockImplementationOnce(async () => {
-            controller.abort(reason);
-            return true;
-          });
-        }
-
-        await expect(importQuicknetRoundWhenAvailable({
-          publicClient,
-          account,
-          submitter,
-          deployment: DEPLOYMENT,
-          round: ROUND,
-          signal: controller.signal,
-        })).rejects.toBe(reason);
-
-        expect(verifyDeployment).toHaveBeenCalledOnce();
-
-        if (stage === 'deployment') {
-          expect(isStored).not.toHaveBeenCalled();
-        } else {
-          expect(isStored).toHaveBeenCalledOnce();
-        }
-
-        expect(getBeacon).not.toHaveBeenCalled();
-        expect(waitMocks.waitForQuicknetRound).not.toHaveBeenCalled();
-        expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
-        expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
-      },
-    );
+    expect(registryMocks.createRegistryReader).not.toHaveBeenCalled();
+    expect(waitMocks.waitForQuicknetRound).not.toHaveBeenCalled();
+    expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
+    expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
+  });
 });
-
 
 function firstInvocationOrder(
   mock: {

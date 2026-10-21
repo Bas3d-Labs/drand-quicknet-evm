@@ -316,6 +316,17 @@ configuration. Set it in the launching environment, service definition,
 or container environment. Setting it only in the application's `.env`
 does not select the directory that the launcher locks.
 
+`QUICKNET_FETCH_TIMEOUT_MS` sets the deadline for each Quicknet endpoint
+request, including response body consumption. It defaults to `5000` and
+accepts decimal integers from `1` through `60000`. It applies to `import`,
+`import-when-available`, and daemon imports.
+
+Each endpoint gets a fresh deadline. With two endpoints, an attempt where
+both stall has a nominal timeout budget of twice this setting, 10 seconds
+by default, plus scheduling overhead. Retries and retry delays extend the
+total duration. Caller cancellation stops the operation without trying
+another endpoint.
+
 Existing environment variables take precedence over the application
 env file. The launcher exports the canonical state-directory path so
 application configuration cannot select a different directory afterward.

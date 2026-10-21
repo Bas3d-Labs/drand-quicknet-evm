@@ -21,7 +21,16 @@ const quicknetMocks = vi.hoisted(() => ({
 
 vi.mock(
   '@based-labs/drand-quicknet',
-  () => quicknetMocks,
+  async (importOriginal) => {
+    const actual = await importOriginal<
+      typeof import('@based-labs/drand-quicknet')
+    >();
+
+    return {
+      ...actual,
+      fetchBeacon: quicknetMocks.fetchBeacon,
+    };
+  },
 );
 
 import {
@@ -785,5 +794,80 @@ describe('fetchQuicknetBeaconWithRetry', () => {
     await assertion;
 
     expect(quicknetMocks.fetchBeacon).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])(
+    'forwards the timeout on every attempt with caller signal: %s',
+    async (withSignal) => {
+      const controller = new AbortController();
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      quicknetMocks.fetchBeacon
+        .mockRejectedValueOnce(new Error('Endpoint failed'))
+        .mockResolvedValueOnce(BEACON);
+
+      const result = await fetchQuicknetBeaconWithRetry({
+        round: ROUND,
+        maxAttempts: 2,
+        timeoutMs: 1_000,
+        sleep,
+        ...(withSignal ? { signal: controller.signal } : {}),
+      });
+
+      expect(result).toBe(BEACON);
+      expect(quicknetMocks.fetchBeacon).toHaveBeenCalledTimes(2);
+
+      for (const attempt of [1, 2]) {
+        expect(quicknetMocks.fetchBeacon).toHaveBeenNthCalledWith(
+          attempt,
+          ROUND,
+          undefined,
+          {
+            timeoutMs: 1_000,
+            ...(withSignal ? { signal: controller.signal } : {}),
+          },
+        );
+      }
+
+      expect(sleep).toHaveBeenCalledOnce();
+      expect(controller.signal.aborted).toBe(false);
+    },
+  );
+
+  it.each([
+    0,
+    -1,
+    1.5,
+    NaN,
+    Infinity,
+    60_001,
+  ])('rejects invalid timeout %s before fetching or sleeping', async (timeoutMs) => {
+    const sleep = vi.fn();
+
+    await expect(
+      fetchQuicknetBeaconWithRetry({
+        round: ROUND,
+        timeoutMs,
+        sleep,
+      }),
+    ).rejects.toThrow(RangeError);
+
+    expect(quicknetMocks.fetchBeacon).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('accepts the maximum endpoint timeout', async () => {
+    await expect(
+      fetchQuicknetBeaconWithRetry({
+        round: ROUND,
+        timeoutMs: 60_000,
+      }),
+    ).resolves.toBe(BEACON);
+
+    expect(quicknetMocks.fetchBeacon).toHaveBeenCalledExactlyOnceWith(
+      ROUND,
+      undefined,
+      { timeoutMs: 60_000 },
+    );
   });
 });

@@ -68,6 +68,7 @@ export interface RunDaemonOptions {
   finality: FinalityPolicy;
   pollIntervalMs: number;
   receiptTimeoutMs?: number;
+  fetchTimeoutMs?: number;
   signal?: AbortSignal;
   readChainHeads?: () => Promise<ChainHeads>;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
@@ -91,6 +92,10 @@ export async function runDaemon(
 
     ...(options.receiptTimeoutMs !== undefined
       ? { receiptTimeoutMs: options.receiptTimeoutMs }
+      : {}),
+
+    ...(options.fetchTimeoutMs !== undefined
+      ? { fetchTimeoutMs: options.fetchTimeoutMs }
       : {}),
   });
 

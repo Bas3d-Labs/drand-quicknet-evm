@@ -53,6 +53,10 @@ import {
 } from './deployment.js';
 
 import {
+  loadFetchTimeoutMs,
+} from './fetch-config.js';
+
+import {
   RELAYER_NETWORK_PRESETS,
   type RelayerNetworkPreset,
 } from './network-presets.js';
@@ -119,6 +123,7 @@ export interface RelayerConfig extends ResolvedNetworkConfig {
   account: ReturnType<typeof privateKeyToAccount>;
   broadcastRetry?: Readonly<BroadcastRetryConfig>;
   receiptTimeoutMs?: number;
+  fetchTimeoutMs?: number;
 
   // Configs constructed by callers may omit configured diagnostics.
   errorSummary?: SummarizeErrorOptions;
@@ -128,6 +133,7 @@ export interface RelayerConfig extends ResolvedNetworkConfig {
 export interface LoadedRelayerConfig extends RelayerConfig {
   broadcastRetry: Readonly<BroadcastRetryConfig>;
   receiptTimeoutMs: number;
+  fetchTimeoutMs: number;
   errorSummary: Readonly<SummarizeErrorOptions>;
   createErrorSummary: ErrorSummaryFactory;
 }
@@ -205,6 +211,7 @@ export async function loadRelayerConfig(
 
   const broadcastRetry = loadBroadcastRetryConfig(env);
   const receiptTimeoutMs = loadReceiptTimeoutMs(env);
+  const fetchTimeoutMs = loadFetchTimeoutMs(env);
   const network = await resolveNetworkConfig(source, rpcUrl, env);
 
   return {
@@ -212,6 +219,7 @@ export async function loadRelayerConfig(
     account,
     broadcastRetry,
     receiptTimeoutMs,
+    fetchTimeoutMs,
     errorSummary,
     createErrorSummary,
   };

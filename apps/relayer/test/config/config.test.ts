@@ -1068,3 +1068,35 @@ describe('receipt timeout loading', () => {
     expect(loadRegistryDeployment).not.toHaveBeenCalled();
   });
 });
+
+describe('fetch timeout loading', () => {
+  it.each([
+    [undefined, 5_000],
+    ['12000', 12_000],
+    ['60000', 60_000],
+  ] as const)('loads setting %s', async (value, expected) => {
+    const config = await loadRelayerConfig({
+      source: PRESET_SOURCE,
+      env: createEnvironment({
+        QUICKNET_FETCH_TIMEOUT_MS: value,
+      }),
+    });
+
+    expect(config.fetchTimeoutMs).toBe(expected);
+  });
+
+  it('rejects an invalid timeout before deployment loading', async () => {
+    await expectConfigRejection(
+      loadRelayerConfig({
+        source: PRESET_SOURCE,
+        env: createEnvironment({
+          QUICKNET_FETCH_TIMEOUT_MS: '60001',
+        }),
+      }),
+      'INVALID_FETCH_TIMEOUT',
+      'QUICKNET_FETCH_TIMEOUT_MS',
+    );
+
+    expect(loadRegistryDeployment).not.toHaveBeenCalled();
+  });
+});

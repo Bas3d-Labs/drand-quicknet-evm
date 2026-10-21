@@ -89,6 +89,7 @@ const RELAYER_CONFIG: LoadedRelayerConfig = {
     maxDelayMs: 60_000,
   },
   receiptTimeoutMs: 45_000,
+  fetchTimeoutMs: 5_000,
   errorSummary: ERROR_SUMMARY,
   createErrorSummary: () => ERROR_SUMMARY,
 };

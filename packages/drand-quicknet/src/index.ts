@@ -5,8 +5,10 @@ export {
 } from './constants.js';
 
 export {
+  MAX_FETCH_TIMEOUT_MS,
   fetchBeacon,
   fetchBeaconFromEndpoint,
+  type FetchBeaconOptions,
 } from './fetch.js';
 
 export {
