@@ -1001,6 +1001,7 @@ describe('daemon cycle correlation', () => {
 
     await runDaemon(daemonOptions({
       receiptTimeoutMs: 45_000,
+      fetchTimeoutMs: 12_000,
       signal: controller.signal,
       sleep: async () => {},
       onCycle(_result, context) {
@@ -1030,6 +1031,7 @@ describe('daemon cycle correlation', () => {
         expect(options.account).toBe(ACCOUNT);
         expect(options.deployment).toBe(DEPLOYMENT);
         expect(options.receiptTimeoutMs).toBe(45_000);
+        expect(options.fetchTimeoutMs).toBe(12_000);
         expect(options.onProgress).toBe(onProgress);
         expect(options.signal).toBe(controller.signal);
 

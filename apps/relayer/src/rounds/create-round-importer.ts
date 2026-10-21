@@ -1,4 +1,8 @@
 import {
+  validateFetchTimeoutMs,
+} from '../config/fetch-config.js'; 
+
+import {
   DEFAULT_RECEIPT_TIMEOUT_MS,
   validateReceiptTimeoutMs,
 } from '../config/receipt-config.js';
@@ -18,6 +22,7 @@ export type CreateRoundImporterOptions = Readonly<Pick<
   | 'account'
   | 'deployment'
   | 'receiptTimeoutMs'
+  | 'fetchTimeoutMs'
 >>;
 
 export type BindRoundImporterOptions = Readonly<Pick<
@@ -49,11 +54,16 @@ export function createRoundImporter(
     account,
     deployment,
     receiptTimeoutMs,
+    fetchTimeoutMs,
   } = options;
 
   validateReceiptTimeoutMs(
     receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS,
   );
+
+  if (fetchTimeoutMs !== undefined) {
+    validateFetchTimeoutMs(fetchTimeoutMs);
+  }
 
   return function bindRoundImporter(
     binding: BindRoundImporterOptions,
@@ -78,6 +88,10 @@ export function createRoundImporter(
 
       if (receiptTimeoutMs !== undefined) {
         importOptions.receiptTimeoutMs = receiptTimeoutMs;
+      }
+
+      if (fetchTimeoutMs !== undefined) {
+        importOptions.fetchTimeoutMs = fetchTimeoutMs;
       }
 
       if (signal !== undefined) {

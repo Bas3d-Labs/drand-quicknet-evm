@@ -21,6 +21,10 @@ import {
 } from '@based-labs/drand-quicknet';
 
 import {
+  validateFetchTimeoutMs,
+} from '../config/fetch-config.js';
+
+import {
   DEFAULT_RECEIPT_TIMEOUT_MS,
   validateReceiptTimeoutMs,
 } from '../config/receipt-config.js';
@@ -51,6 +55,9 @@ export interface ImportQuicknetRoundOptions {
   submitter: BeaconSubmitter;
   beacon?: QuicknetBeacon;
   receiptTimeoutMs?: number;
+
+  /** Deadline per endpoint, including response body consumption. */
+  fetchTimeoutMs?: number;
   onProgress?: ((progress: RoundImportProgress) => void) | undefined;
   signal?: AbortSignal;
 }
@@ -123,6 +130,10 @@ export async function importQuicknetRound(
     options.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS,
   );
 
+  if (options.fetchTimeoutMs !== undefined) {
+    validateFetchTimeoutMs(options.fetchTimeoutMs);
+  }
+
   options.signal?.throwIfAborted();
 
   reportImportProgress(options.onProgress, {
@@ -166,7 +177,14 @@ export async function importQuicknetRound(
 
     options.signal?.throwIfAborted();
 
-    if (options.signal === undefined) {
+    if (options.fetchTimeoutMs !== undefined) {
+      beacon = await fetchBeacon(round, undefined, {
+        timeoutMs: options.fetchTimeoutMs,
+        ...(options.signal === undefined
+          ? {}
+          : { signal: options.signal }),
+      });
+    } else if (options.signal === undefined) {
       beacon = await fetchBeacon(round);
     } else {
       beacon = await fetchBeacon(round, undefined, {

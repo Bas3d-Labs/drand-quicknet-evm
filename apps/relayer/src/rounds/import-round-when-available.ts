@@ -9,6 +9,10 @@ import {
 } from '@based-labs/drand-quicknet-registry';
 
 import {
+  validateFetchTimeoutMs,
+} from '../config/fetch-config.js';
+
+import {
   DEFAULT_RECEIPT_TIMEOUT_MS,
   validateReceiptTimeoutMs,
 } from '../config/receipt-config.js';
@@ -46,6 +50,9 @@ export interface ImportQuicknetRoundWhenAvailableOptions {
   maxFetchAttempts?: number;
   fetchRetryDelayMs?: number;
   receiptTimeoutMs?: number;
+
+  /** Deadline per endpoint, including response body consumption. */
+  fetchTimeoutMs?: number;
   onProgress?: ((progress: RoundImportProgress) => void) | undefined;
   signal?: AbortSignal;
 }
@@ -69,6 +76,10 @@ export async function importQuicknetRoundWhenAvailable(
   const receiptTimeoutMs = validateReceiptTimeoutMs(
     options.receiptTimeoutMs ?? DEFAULT_RECEIPT_TIMEOUT_MS,
   );
+
+  if (options.fetchTimeoutMs !== undefined) {
+    validateFetchTimeoutMs(options.fetchTimeoutMs);
+  }
 
   options.signal?.throwIfAborted();
 
@@ -133,6 +144,10 @@ export async function importQuicknetRoundWhenAvailable(
 
   if (fetchRetryDelayMs !== undefined) {
     fetchOptions.retryDelayMs = fetchRetryDelayMs;
+  }
+
+  if (options.fetchTimeoutMs !== undefined) {
+    fetchOptions.timeoutMs = options.fetchTimeoutMs;
   }
 
   reportImportProgress(options.onProgress, {

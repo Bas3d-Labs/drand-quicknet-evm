@@ -122,6 +122,7 @@ describe('createRoundImporter', () => {
     const options = forwardedOptions();
 
     expect(Object.hasOwn(options, 'receiptTimeoutMs')).toBe(false);
+    expect(Object.hasOwn(options, 'fetchTimeoutMs')).toBe(false);
     expect(Object.hasOwn(options, 'signal')).toBe(false);
     expect(Object.hasOwn(options, 'onProgress')).toBe(true);
     expect(options.onProgress).toBeUndefined();
@@ -134,6 +135,7 @@ describe('createRoundImporter', () => {
     const importRound = createRoundImporter({
       ...STABLE_OPTIONS,
       receiptTimeoutMs: 45_000,
+      fetchTimeoutMs: 12_000,
     })({
       submitter,
       onProgress,
@@ -151,6 +153,7 @@ describe('createRoundImporter', () => {
         round: ROUND,
         onProgress,
         receiptTimeoutMs: 45_000,
+        fetchTimeoutMs: 12_000,
         signal: controller.signal,
       });
 
@@ -235,4 +238,17 @@ describe('createRoundImporter', () => {
 
     expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(1);
   });
+
+  it.each([0, 1.5, 60_001])(
+    'rejects fetch timeout %s during construction without importing',
+    (fetchTimeoutMs) => {
+      expect(() => createRoundImporter({
+        ...STABLE_OPTIONS,
+        fetchTimeoutMs,
+      })).toThrow(RangeError);
+
+      expect(importQuicknetRoundWhenAvailable)
+        .not.toHaveBeenCalled();
+    },
+  );
 });

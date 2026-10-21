@@ -237,10 +237,17 @@ export async function runDaemonCommand(
     maxBlockRange: config.maxBlockRange,
     finality: config.finality,
     pollIntervalMs: config.pollIntervalMs,
+
     ...(config.receiptTimeoutMs !== undefined
       ? { receiptTimeoutMs: config.receiptTimeoutMs }
       : {}),
+
+    ...(config.fetchTimeoutMs !== undefined
+      ? { fetchTimeoutMs: config.fetchTimeoutMs }
+      : {}),
+
     readChainHeads,
+    
     async onCycle(result, context) {
       statusPublisher.onCycleCompleted(context.cycle);
 

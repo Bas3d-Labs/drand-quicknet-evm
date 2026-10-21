@@ -685,6 +685,7 @@ describe('main', () => {
           deployment: CONFIG.deployment,
           round: ROUND,
           receiptTimeoutMs: CONFIG.receiptTimeoutMs,
+          fetchTimeoutMs: CONFIG.fetchTimeoutMs,
           onProgress: expect.any(Function),
           signal: expect.any(AbortSignal),
         });
