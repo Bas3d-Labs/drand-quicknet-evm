@@ -994,6 +994,9 @@ describe('RPC usage report', () => {
           ...previous.snapshot,
           [kind]: previous.snapshot[kind].map((row) => ({
             ...row,
+
+            // The fixture uses 1.25 ms, where subtracting Number.EPSILON
+            // produces a distinct, smaller representable value.
             durationMs: row.durationMs - Number.EPSILON,
           })),
         },

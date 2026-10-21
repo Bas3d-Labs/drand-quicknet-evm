@@ -69,8 +69,8 @@ interface HttpCounters extends Counters {
 export interface RpcMetricsSnapshot {
   readonly collectorId: string;
   readonly startedAt: string;
-  logical: readonly Readonly<LogicalCounters>[];
-  http: (
+  readonly logical: readonly Readonly<LogicalCounters>[];
+  readonly http: readonly (
     Readonly<Omit<HttpCounters, 'statuses'>> & {
       readonly statuses: Readonly<HttpCounters['statuses']>;
     }
@@ -112,7 +112,7 @@ function methodLabel(method: string): RpcMethod {
   return 'other';
 }
 
-// Unexpected statuses remain unclassified. Masurement must not reject them.
+// Unexpected statuses remain unclassified. Measurement must not reject them.
 function statusClass(status: number): StatusClass | undefined {
   if (!Number.isInteger(status)) {
     return undefined;
@@ -235,7 +235,7 @@ export function createRpcMetrics(): RpcMetrics {
         const category = statusClass(response.status);
 
         if (category !== undefined) {
-          row.statuses[category] += 1;
+          current.statuses[category] += 1;
         }
 
         return response;
