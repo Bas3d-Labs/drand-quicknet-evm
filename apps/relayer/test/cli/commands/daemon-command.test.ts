@@ -201,7 +201,7 @@ import {
 
 import {
   createRpcMetrics,
-} from '../../../src/diagnostics/rpc-metrics.js';
+} from '../../../src/diagnostics/rpc/rpc-metrics.js';
 
 import {
   validateQuicknetConsumers

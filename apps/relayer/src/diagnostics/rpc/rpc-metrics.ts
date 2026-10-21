@@ -66,11 +66,15 @@ interface HttpCounters extends Counters {
  * HTTP duration ends at response headers or fetch rejection, not 
  * body completion.
  */
-interface RpcMetricsSnapshot {
+export interface RpcMetricsSnapshot {
   readonly collectorId: string;
   readonly startedAt: string;
-  logical: LogicalCounters[];
-  http: HttpCounters[];
+  logical: readonly Readonly<LogicalCounters>[];
+  http: (
+    Readonly<Omit<HttpCounters, 'statuses'>> & {
+      readonly statuses: Readonly<HttpCounters['statuses']>;
+    }
+  )[];
 }
 
 export interface RpcMetrics {
