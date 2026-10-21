@@ -29,6 +29,11 @@ import {
 } from '../state/file-transaction-journal-store.js';
 
 import {
+  DEFAULT_JOURNAL_BOUNDS,
+  validateJournalBounds,
+} from '../state/journal-bounds.js';
+
+import {
   captureJournalIdentity,
   journalFilename,
 } from '../state/journal-identity.js';
@@ -48,10 +53,6 @@ import {
 import type {
   JournalIdentity,
 } from '../state/transaction-journal.js';
-
-// Preserve one-at-a-time inclusion allocation until command-level queue
-// configuration and head inclusion orchestration are wired.
-const MAX_RETAINED_ATTEMPTS = 1;
 
 export interface OpenSignerRuntimeOptions {
   readonly identity: JournalIdentity;
@@ -79,6 +80,10 @@ export interface SignerRuntime {
 export async function openSignerRuntime(
   options: OpenSignerRuntimeOptions,
 ): Promise<SignerRuntime> {
+  const bounds = DEFAULT_JOURNAL_BOUNDS;
+
+  validateJournalBounds(bounds);
+
   const identity = captureJournalIdentity(options.identity);
 
   const {
@@ -132,7 +137,7 @@ export async function openSignerRuntime(
   const coordinator = await SignerCoordinator.create({
     identity,
     store,
-    maxRetainedAttempts: MAX_RETAINED_ATTEMPTS,
+    maxRetainedAttempts: bounds.maxRetainedAttempts,
     log,
     createErrorSummary,
   });
