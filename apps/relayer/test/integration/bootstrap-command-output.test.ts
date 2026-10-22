@@ -200,7 +200,18 @@ it.skipIf(process.platform !== 'linux').each(COMMAND_OUTPUT_CASES)(
         'clients',
         `
           export function createRelayerClients() {
-            return {};
+            return {
+              rpcMetrics: {
+                snapshot() {
+                  return {
+                    collectorId: '11111111-1111-4111-8111-111111111111',
+                    startedAt: '2026-10-22T12:00:00.000Z',
+                    logical: [],
+                    http: [],
+                  };
+                },
+              },
+            };
           }
         `,
       ],
@@ -497,9 +508,42 @@ it.skipIf(process.platform !== 'linux').each(COMMAND_OUTPUT_CASES)(
       expect(child.stdout).toBe('');
       expect(child.stderr).not.toContain('cli_failed');
       expect(child.stderr.endsWith('\n')).toBe(true);
-      expect(child.stderr.trimEnd().split('\n')).toHaveLength(1);
 
-      failure = JSON.parse(child.stderr);
+      const records: Record<string, unknown>[] = child.stderr
+        .trimEnd()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+
+      const outputFailures = records.filter(
+        (record) => record.event === 'output_failed',
+      );
+
+      expect(outputFailures).toHaveLength(1);
+      failure = outputFailures[0]!;
+
+      if (command === 'daemon') {
+        expect(records).toHaveLength(2);
+
+        const loggingFailures = records.filter(
+          (record) => record.event === 'logging_failed',
+        );
+
+        expect(loggingFailures).toHaveLength(1);
+
+        // Destination errors may arrive without event attribution.
+        const diagnostic = loggingFailures[0]!;
+
+        expect(diagnostic).toMatchObject({
+          event: 'logging_failed',
+          code: 'LOG_OUTPUT_FAILED',
+        });
+
+        if (Object.hasOwn(diagnostic, 'rejected')) {
+          expect(diagnostic.rejected).toBe('rpc_usage');
+        }
+      } else {
+        expect(records).toHaveLength(1);
+      }
 
       expect(failure).toMatchObject({
         event: 'output_failed',

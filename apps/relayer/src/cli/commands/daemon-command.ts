@@ -58,6 +58,10 @@ import {
 } from '../../diagnostics/relayer-log.js';
 
 import {
+  createRpcUsageSession,
+} from '../../diagnostics/rpc/rpc-usage-session.js';
+
+import {
   createRpcUsageSnapshot,
 } from '../../diagnostics/rpc/rpc-usage-snapshot.js';
 
@@ -164,116 +168,134 @@ export async function runDaemonCommand(
 
   const clients = createRelayerClients(config);
 
-  await verifyRegistryDeployment(
-    clients.publicClient,
-    config.deployment,
-  );
-
-  options.signal?.throwIfAborted();
-  
-  const validatedConsumers = await validateQuicknetConsumers({
-    publicClient: clients.publicClient,
-    deployment: config.deployment,
-    consumers: config.consumers,
+  const rpcUsageSession = createRpcUsageSession({
+    readSnapshot: () => clients.rpcMetrics.snapshot(),
+    emit(context) {
+      logger.rpcUsage(context);
+    },
+    onFailure(error) {
+      logger.loggingFailed({ error });
+    },
   });
 
-  options.signal?.throwIfAborted();
+  try {
+    await verifyRegistryDeployment(
+      clients.publicClient,
+      config.deployment,
+    );
 
-  const readChainHeads = createChainHeadsReader({
-    publicClient: clients.publicClient,
-    finality: config.finality,
-    durableHeadPollIntervalMs: 30_000,
-  });
-
-  const submitter = await openBeaconSubmitter({
-    config,
-    publicClient: clients.publicClient,
-    walletClient: clients.walletClient,
-    log: logger,
-    readChainHeads,
-    maxBlockRange: config.maxBlockRange,
-    checkpointFile: config.checkpointFile,
-    startupPollIntervalMs: config.pollIntervalMs,
-    onInitialized: statusPublisher.onInitialized,
-    onRecoveryCompleted: statusPublisher.onRecoveryCompleted,
-    signal: options.signal,
-    env,
-  });
-
-  options.signal?.throwIfAborted();
-
-  const checkpointStore = await FileCheckpointStore.open({
-    filePath: config.checkpointFile,
-    deployment: config.deployment,
-  });
-
-  options.signal?.throwIfAborted();
-  
-  const durableNextBlocks = new Map<Address, bigint>();
-  for (const consumer of validatedConsumers) {
-    const nextBlock = await checkpointStore.load(consumer.address);
+    options.signal?.throwIfAborted();
+    
+    const validatedConsumers = await validateQuicknetConsumers({
+      publicClient: clients.publicClient,
+      deployment: config.deployment,
+      consumers: config.consumers,
+    });
 
     options.signal?.throwIfAborted();
 
-    if (nextBlock !== undefined) {
-      durableNextBlocks.set(consumer.address, nextBlock);
-    }
-  }
+    const readChainHeads = createChainHeadsReader({
+      publicClient: clients.publicClient,
+      finality: config.finality,
+      durableHeadPollIntervalMs: 30_000,
+    });
 
-  const startupSummary = await collectDaemonStartupSummary({
-    publicClient: clients.publicClient,
-    config,
-    durableNextBlocks,
-  });
+    const submitter = await openBeaconSubmitter({
+      config,
+      publicClient: clients.publicClient,
+      walletClient: clients.walletClient,
+      log: logger,
+      readChainHeads,
+      maxBlockRange: config.maxBlockRange,
+      checkpointFile: config.checkpointFile,
+      startupPollIntervalMs: config.pollIntervalMs,
+      onInitialized: statusPublisher.onInitialized,
+      onRecoveryCompleted: statusPublisher.onRecoveryCompleted,
+      signal: options.signal,
+      env,
+    });
 
-  options.signal?.throwIfAborted();
-  
-  options.onStartup?.(startupSummary);
+    options.signal?.throwIfAborted();
 
-  options.signal?.throwIfAborted();
+    const checkpointStore = await FileCheckpointStore.open({
+      filePath: config.checkpointFile,
+      deployment: config.deployment,
+    });
 
-  await statusPublisher.publish();
-
-  options.signal?.throwIfAborted();
-
-  await runDaemon({
-    publicClient: clients.publicClient,
-    account: config.account,
-    submitter,
-    deployment: config.deployment,
-    checkpointStore,
-    consumers: validatedConsumers,
-    startBlock: config.startBlock,
-    maxBlockRange: config.maxBlockRange,
-    finality: config.finality,
-    pollIntervalMs: config.pollIntervalMs,
-
-    ...(config.receiptTimeoutMs !== undefined
-      ? { receiptTimeoutMs: config.receiptTimeoutMs }
-      : {}),
-
-    ...(config.fetchTimeoutMs !== undefined
-      ? { fetchTimeoutMs: config.fetchTimeoutMs }
-      : {}),
-
-    readChainHeads,
+    options.signal?.throwIfAborted();
     
-    async onCycle(result, context) {
-      statusPublisher.onCycleCompleted(context.cycle);
+    const durableNextBlocks = new Map<Address, bigint>();
+    for (const consumer of validatedConsumers) {
+      const nextBlock = await checkpointStore.load(consumer.address);
 
-      try {
-        const cycleLogger = logger.withContext({
-          cycle: context.cycle,
-          signer: config.account.address,
-        });
+      options.signal?.throwIfAborted();
 
-        daemonLogger.onCycle(result, cycleLogger);
-      } finally {
-        await statusPublisher.publish();
+      if (nextBlock !== undefined) {
+        durableNextBlocks.set(consumer.address, nextBlock);
       }
-    },
-    ...(options.signal !== undefined
-      ? { signal: options.signal }
-      : {}),
-  });
+    }
+
+    const startupSummary = await collectDaemonStartupSummary({
+      publicClient: clients.publicClient,
+      config,
+      durableNextBlocks,
+    });
+
+    options.signal?.throwIfAborted();
+    
+    options.onStartup?.(startupSummary);
+
+    options.signal?.throwIfAborted();
+
+    await statusPublisher.publish();
+
+    options.signal?.throwIfAborted();
+
+    await runDaemon({
+      publicClient: clients.publicClient,
+      account: config.account,
+      submitter,
+      deployment: config.deployment,
+      checkpointStore,
+      consumers: validatedConsumers,
+      startBlock: config.startBlock,
+      maxBlockRange: config.maxBlockRange,
+      finality: config.finality,
+      pollIntervalMs: config.pollIntervalMs,
+
+      ...(config.receiptTimeoutMs !== undefined
+        ? { receiptTimeoutMs: config.receiptTimeoutMs }
+        : {}),
+
+      ...(config.fetchTimeoutMs !== undefined
+        ? { fetchTimeoutMs: config.fetchTimeoutMs }
+        : {}),
+
+      readChainHeads,
+      
+      async onCycle(result, context) {
+        statusPublisher.onCycleCompleted(context.cycle);
+
+        try {
+          const cycleLogger = logger.withContext({
+            cycle: context.cycle,
+            signer: config.account.address,
+          });
+
+          daemonLogger.onCycle(result, cycleLogger);
+        } finally {
+          try {
+            await statusPublisher.publish();
+          } finally {
+            rpcUsageSession.onCycle();
+          }
+        }
+      },
+      ...(options.signal !== undefined
+        ? { signal: options.signal }
+        : {}),
+    });
+  } finally {
+    rpcUsageSession.finish();
+  }
 }
