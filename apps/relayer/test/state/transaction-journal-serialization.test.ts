@@ -185,7 +185,6 @@ describe('transaction journal serialization', () => {
     { name: 'NFD representation', workId: 'work:e\u0301' },
     { name: 'maximum length', workId: 'x'.repeat(256) },
     { name: 'astral characters', workId: '😀'.repeat(128) },
-    { name: 'lone surrogate', workId: 'work:\ud800' },
   ])('round-trips work identity exactly: $name', async ({ workId }) => {
     const input = await fixture();
 
@@ -208,6 +207,8 @@ describe('transaction journal serialization', () => {
     { name: 'overlong string', value: 'x'.repeat(257) },
     { name: 'C0 control', value: 'work\nother' },
     { name: 'C1 control', value: 'work\u0085other' },
+    { name: 'lone high surrogate', value: 'work:\ud800' },
+    { name: 'lone low surrogate', value: 'work:\udc00' },
   ])('rejects persisted invalid work identity: $name', async ({ value }) => {
     const raw = await encodedFixture();
     raw.attempts[0].workId = value;
@@ -215,6 +216,21 @@ describe('transaction journal serialization', () => {
     await expect(
       decodeJournalSnapshot(JSON.stringify(raw), IDENTITY),
     ).rejects.toThrow(new TypeError(FAILURE));
+  });
+
+  it.each([
+    { name: 'lone high surrogate', workId: 'work:\ud800' },
+    { name: 'lone low surrogate', workId: 'work:\udc00' },
+  ])('rejects encoding work identity with $name', async ({ workId }) => {
+    const input = await fixture();
+
+    await expect(encodeJournalSnapshot({
+      ...input,
+      attempts: [{
+        ...input.attempts[0]!,
+        workId,
+      }],
+    }, IDENTITY)).rejects.toThrow(FAILURE);
   });
 
   it('round-trips a signed attempt without a replacement search', async () => {

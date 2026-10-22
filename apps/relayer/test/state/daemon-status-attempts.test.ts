@@ -161,6 +161,8 @@ describe('daemon status retained attempts', () => {
     { workId: 'x'.repeat(257) },
     { workId: 'work\nforged' },
     { workId: 'work\u0085forged' },
+    { workId: 'work:\ud800' },
+    { workId: 'work:\udc00' },
     { phase: 'confirmed' },
     { transactionHashes: [] },
     { transactionHashes: ['0x1234'] },
@@ -195,18 +197,6 @@ describe('daemon status retained attempts', () => {
     }, IDENTITY)).toThrow('Invalid daemon status snapshot.');
   });
 
-  it('rejects duplicate attempt IDs', () => {
-    expect(() => readAttempts([
-      attempt(),
-      {
-        ...attempt(),
-        workId: OTHER_WORK_ID,
-        nonce: '5',
-        transactionHashes: [THIRD_HASH],
-      },
-    ])).toThrow('Invalid daemon status snapshot.');
-  });
-
   it('rejects a missing work identity', () => {
     const source = { ...attempt() };
     Reflect.deleteProperty(source, 'workId');
@@ -224,30 +214,6 @@ describe('daemon status retained attempts', () => {
   });
 
   it.each([
-    'signed',
-    'broadcast-may-have-occurred',
-    'included',
-  ] as const)('rejects duplicate work identities in phase %s', (phase) => {
-    const first = { ...attempt(), phase };
-    const second = {
-      ...attempt(),
-      attemptId: SECOND_ID,
-      workId: OTHER_WORK_ID,
-      nonce: '5',
-      phase,
-      transactionHashes: [THIRD_HASH],
-    };
-
-    // Establish that the pair is valid before introducing the duplicate.
-    expect(readAttempts([first, second]).attempts).toHaveLength(2);
-
-    expect(() => readAttempts([
-      first,
-      { ...second, workId: first.workId },
-    ])).toThrow('Invalid daemon status snapshot.');
-  });
-
-  it.each([
     { name: 'case', first: 'work:A', second: 'work:a' },
     { name: 'spacing', first: 'work:a', second: ' work:a ' },
     {
@@ -255,49 +221,51 @@ describe('daemon status retained attempts', () => {
       first: 'work:\u00e9',
       second: 'work:e\u0301',
     },
-  ])('keeps work identities distinct by $name', ({ first, second }) => {
-    const attempts = [
-      { ...attempt(), workId: first },
-      {
-        ...attempt(),
-        attemptId: SECOND_ID,
-        workId: second,
-        nonce: '5',
-        transactionHashes: [THIRD_HASH],
-      },
-    ];
+  ])(
+    'preserves work identity differences in $name across snapshots',
+    ({ first, second }) => {
+      const firstResult = readAttempts([
+        { ...attempt(), workId: first },
+      ]);
 
-    expect(readAttempts(attempts).attempts).toEqual(attempts);
-  });
+      const secondResult = readAttempts([
+        { ...attempt(), workId: second },
+      ]);
 
-  it.each(['4', '3'])(
-    'rejects a non-increasing second nonce: %s',
-    (nonce) => {
-      expect(() => readAttempts([
-        attempt(),
-        {
-          ...attempt(),
-          attemptId: SECOND_ID,
-          workId: OTHER_WORK_ID,
-          nonce,
-          transactionHashes: [THIRD_HASH],
-        },
-      ])).toThrow('Invalid daemon status snapshot.');
+      expect(firstResult.attempts[0]!.workId).toBe(first);
+      expect(secondResult.attempts[0]!.workId).toBe(second);
+      expect(firstResult.attempts[0]!.workId)
+        .not.toBe(secondResult.attempts[0]!.workId);
     },
   );
 
-  it('compares nonce ordering numerically rather than lexically', () => {
-    const attempts = [
-      { ...attempt(), nonce: '9' },
-      {
+  it.each([
+    'signed',
+    'broadcast-may-have-occurred',
+    'included',
+  ] as const)(
+    'rejects two otherwise valid retained attempts in phase %s',
+    (phase) => {
+      const first: DaemonStatusAttempt = {
+        ...attempt(),
+        phase,
+      };
+
+      const second: DaemonStatusAttempt = {
         ...attempt(),
         attemptId: SECOND_ID,
         workId: OTHER_WORK_ID,
-        nonce: '10',
+        nonce: '5',
+        phase,
         transactionHashes: [THIRD_HASH],
-      },
-    ];
+      };
 
-    expect(readAttempts(attempts).attempts).toEqual(attempts);
-  });
+      // Each row is valid independently; their combined count is unsupported.
+      expect(readAttempts([first]).attempts).toEqual([first]);
+      expect(readAttempts([second]).attempts).toEqual([second]);
+
+      expect(() => readAttempts([first, second]))
+        .toThrow('Invalid daemon status snapshot.');
+    },
+  );
 });
