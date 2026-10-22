@@ -3,6 +3,11 @@ import type {
 } from 'viem';
 
 import {
+  readRpcUsageSnapshot,
+  type RpcUsageSnapshot,
+} from '../diagnostics/rpc/rpc-usage-snapshot.js';
+
+import {
   isWorkId,
 } from '../execution/work-identity.js';
 
@@ -105,6 +110,7 @@ export interface DaemonStatusSnapshot {
      */
     readonly blockedSince: string | null;
   };
+  readonly rpcUsage?: RpcUsageSnapshot;
 }
 
 export type SnapshotAge =
@@ -200,6 +206,14 @@ export function readDaemonStatusSnapshot(
     throw new TypeError(INVALID);
   }
 
+  let rpcFields: Pick<DaemonStatusSnapshot, 'rpcUsage'> = {};
+
+  if (root.rpcUsage !== undefined) {
+    rpcFields = {
+      rpcUsage: readRpcUsageSnapshot(root.rpcUsage),
+    };
+  }
+
   // A closed gate without reported blockers is valid.
   // These fields alone do not establish why the gate is closed.
   return Object.freeze({
@@ -223,6 +237,7 @@ export function readDaemonStatusSnapshot(
       persistenceState,
       blockedSince,
     }),
+    ...rpcFields,
   });
 }
 

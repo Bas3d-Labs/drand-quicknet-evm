@@ -26,7 +26,12 @@ const METHODS = [
   'eth_sendRawTransaction',
 ] as const;
 
-type RpcMethod = typeof METHODS[number] | 'other';
+export const RPC_METHOD_LABELS = Object.freeze([
+  ...METHODS,
+  'other',
+] as const);
+
+type RpcMethod = typeof RPC_METHOD_LABELS[number];
 
 type StatusClass =
   | '2xx'

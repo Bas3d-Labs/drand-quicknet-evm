@@ -45,6 +45,29 @@ function snapshot() {
   };
 }
 
+function rpcUsage() {
+  return {
+    collectorId: '22222222-2222-4222-8222-222222222222',
+    startedAt: '2026-10-12T11:00:00.000Z',
+    observedAt: '2026-10-12T12:00:00.000Z',
+    logical: [],
+    http: [{
+      client: 'public' as const,
+      started: 3,
+      responses: 2,
+      transportFailures: 1,
+      inFlight: 0,
+      statuses: {
+        '2xx': 1,
+        '3xx': 0,
+        '4xx': 0,
+        '5xx': 1,
+      },
+      durationMs: 12.3456789,
+    }],
+  };
+}
+
 function statusAttempts(
   count: number,
   hashesPerAttempt: number,
@@ -292,6 +315,60 @@ describe('readDaemonStatusSnapshot', () => {
     expect(() => readDaemonStatusSnapshot(input, IDENTITY)).toThrow(
       'Invalid daemon status snapshot.',
     );
+  });
+
+  it('preserves compatibility with snapshots without RPC usage', () => {
+    const input = snapshot();
+    const result = readDaemonStatusSnapshot(input, IDENTITY);
+
+    expect(result).toEqual(input);
+    expect(Object.hasOwn(result, 'rpcUsage')).toBe(false);
+  });
+
+  it('retains detached and frozen RPC usage when present', () => {
+    const usage = rpcUsage();
+    const input = {
+      ...snapshot(),
+      rpcUsage: usage,
+    };
+
+    const result = readDaemonStatusSnapshot(input, IDENTITY);
+
+    expect(result.rpcUsage).toEqual(usage);
+    expect(result.rpcUsage).not.toBe(usage);
+    expect(result.rpcUsage?.http).not.toBe(usage.http);
+    expect(result.rpcUsage?.http[0]?.statuses)
+      .not.toBe(usage.http[0]!.statuses);
+
+    expect(Object.isFrozen(result.rpcUsage)).toBe(true);
+    expect(Object.isFrozen(result.rpcUsage?.http)).toBe(true);
+    expect(Object.isFrozen(result.rpcUsage?.http[0])).toBe(true);
+    expect(Object.isFrozen(result.rpcUsage?.http[0]?.statuses))
+      .toBe(true);
+
+    usage.http[0]!.statuses['2xx'] = 0;
+
+    expect(result.rpcUsage?.http[0]?.statuses['2xx']).toBe(1);
+  });
+
+  it.each([
+    { name: 'null', value: null },
+    { name: 'missing fields', value: {} },
+    {
+      name: 'invalid counters',
+      value: {
+        ...rpcUsage(),
+        http: [{
+          ...rpcUsage().http[0]!,
+          responses: 4,
+        }],
+      },
+    },
+  ])('rejects RPC usage with $name', ({ value }) => {
+    expect(() => readDaemonStatusSnapshot({
+      ...snapshot(),
+      rpcUsage: value,
+    }, IDENTITY)).toThrow('Invalid RPC usage snapshot.');
   });
 });
 

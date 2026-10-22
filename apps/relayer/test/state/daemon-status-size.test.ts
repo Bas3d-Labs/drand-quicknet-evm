@@ -8,6 +8,10 @@ import type {
   RpcMetricsSnapshot,
 } from '../../src/diagnostics/rpc/rpc-metrics.js';
 
+import {
+  readRpcUsageSnapshot,
+} from '../../src/diagnostics/rpc/rpc-usage-snapshot.js';
+
 import type {
   RpcHttpUsageSnapshotRow,
   RpcLogicalUsageSnapshotRow,
@@ -276,15 +280,16 @@ describe('daemon status size budget', () => {
     );
   });
 
-  it('RPC19: budgets complete recovery data and every RPC row with margin', () => {
+  it('fits complete recovery data and every RPC row within the size limit with margin', () => {
     const recovery = recoverySnapshot();
-    const rpcUsage = metricsFixture();
+    const rpcUsage = readRpcUsageSnapshot(metricsFixture());
 
-    // Candidate publication shape; averages are reconstructed on read.
-    const candidate = {
+    const candidate = readDaemonStatusSnapshot({
       ...recovery,
       rpcUsage,
-    };
+    }, IDENTITY);
+
+    expect(candidate.rpcUsage).toEqual(rpcUsage);
 
     const serialized = JSON.stringify(candidate) + '\n';
     const actualBytes = Buffer.byteLength(serialized, 'utf8');
