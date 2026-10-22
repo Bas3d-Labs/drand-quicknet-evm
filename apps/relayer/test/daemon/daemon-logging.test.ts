@@ -32,6 +32,7 @@ import type {
 import {
   createRelayerLog,
   type RelayerLog,
+  type ScopedRelayerLog,
 } from '../../src/diagnostics/relayer-log.js';
 
 import type {
@@ -74,6 +75,7 @@ const loggerMocks = {
   roundDeferred: vi.fn<RelayerLog['roundDeferred']>(),
   roundPending: vi.fn<RelayerLog['roundPending']>(),
   heartbeat: vi.fn<RelayerLog['heartbeat']>(),
+  rpcUsage: vi.fn<ScopedRelayerLog['rpcUsage']>(),
   loggingFailed: vi.fn<RelayerLog['loggingFailed']>(),
   statusPublicationFailed:
     vi.fn<RelayerLog['statusPublicationFailed']>(),

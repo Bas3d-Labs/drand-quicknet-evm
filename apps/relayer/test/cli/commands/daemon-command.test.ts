@@ -1,4 +1,8 @@
 import {
+  performance,
+} from 'node:perf_hooks';
+
+import {
   afterEach,
   beforeEach,
   describe,
@@ -71,6 +75,7 @@ const relayerLogMocks = vi.hoisted(() => ({
   roundImported: vi.fn(),
   roundAlreadyStored: vi.fn(),
   heartbeat: vi.fn(),
+  rpcUsage: vi.fn(),
   loggingFailed: vi.fn(),
   durableFulfillmentPending: vi.fn(),
   durableFulfillmentUnavailable: vi.fn(),
@@ -1740,7 +1745,7 @@ describe('runDaemonCommand', () => {
 
     await runDaemonCommand({ source: SOURCE });
 
-    expect(capture).toHaveBeenCalledTimes(2);
+    expect(capture).toHaveBeenCalledTimes(3);
     expect(writeDaemonStatusFile).toHaveBeenCalledTimes(2);
     expect(relayerLogMocks.statusPublicationFailed).not.toHaveBeenCalled();
 
@@ -1815,7 +1820,7 @@ describe('runDaemonCommand', () => {
     })).resolves.toBeUndefined();
 
     expect(runDaemon).toHaveBeenCalledOnce();
-    expect(capture).toHaveBeenCalledTimes(2);
+    expect(capture).toHaveBeenCalledTimes(3);
     expect(writeDaemonStatusFile).toHaveBeenCalledTimes(2);
 
     expect(relayerLogMocks.statusPublicationFailed)
@@ -1841,5 +1846,154 @@ describe('runDaemonCommand', () => {
     });
 
     expect(completed.lastCompletedCycle?.cycle).toBe(1);
+  });
+
+  it('reports at cycle boundaries and emits a final interval', async () => {
+    let monotonicMs = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => monotonicMs);
+
+    enableStatusObservation();
+
+    vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
+      monotonicMs = 59_999;
+      await onCycle?.({ consumers: [] }, { cycle: 1 });
+
+      expect(relayerLogMocks.rpcUsage).not.toHaveBeenCalled();
+
+      monotonicMs = 60_000;
+      await onCycle?.({ consumers: [] }, { cycle: 2 });
+
+      expect(relayerLogMocks.rpcUsage).toHaveBeenCalledOnce();
+      expect(relayerLogMocks.rpcUsage.mock.calls[0]![0].report.interval)
+        .toEqual({
+          available: false,
+          reason: 'no-baseline',
+        });
+
+      monotonicMs = 135_000;
+      await onCycle?.({ consumers: [] }, { cycle: 3 });
+
+      expect(relayerLogMocks.rpcUsage).toHaveBeenCalledTimes(2);
+      expect(relayerLogMocks.rpcUsage.mock.calls[1]![0].report.interval)
+        .toMatchObject({
+          available: true,
+          elapsedMs: 75_000,
+        });
+
+      monotonicMs = 135_250;
+    });
+
+    await runDaemonCommand({ source: SOURCE });
+
+    expect(relayerLogMocks.rpcUsage).toHaveBeenCalledTimes(3);
+    expect(relayerLogMocks.rpcUsage.mock.calls[2]![0].report.interval)
+      .toMatchObject({
+        available: true,
+        elapsedMs: 250,
+      });
+
+    // Startup plus each of the three cycles still publishes status.
+    expect(writeDaemonStatusFile).toHaveBeenCalledTimes(4);
+    expect(relayerLogMocks.loggingFailed).not.toHaveBeenCalled();
+  });
+
+  it('emits a cumulative-only final report when the daemon ends before the threshold', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+
+    await runDaemonCommand({ source: SOURCE });
+
+    expect(relayerLogMocks.rpcUsage).toHaveBeenCalledOnce();
+    expect(relayerLogMocks.rpcUsage.mock.calls[0]![0].report.interval)
+      .toEqual({
+        available: false,
+        reason: 'no-baseline',
+      });
+  });
+
+  it.each(['deployment', 'daemon'] as const)(
+    'preserves a %s failure while attempting the final RPC report',
+    async (stage) => {
+      vi.spyOn(performance, 'now').mockReturnValue(0);
+
+      const failure = new Error('Original command failure');
+
+      if (stage === 'deployment') {
+        vi.mocked(verifyRegistryDeployment).mockRejectedValueOnce(failure);
+      } else {
+        vi.mocked(runDaemon).mockRejectedValueOnce(failure);
+      }
+
+      await expect(runDaemonCommand({
+        source: SOURCE,
+      })).rejects.toBe(failure);
+
+      expect(relayerLogMocks.rpcUsage).toHaveBeenCalledOnce();
+      expect(relayerLogMocks.rpcUsage.mock.calls[0]![0].report.interval)
+        .toEqual({
+          available: false,
+          reason: 'no-baseline',
+        });
+    },
+  );
+
+  it('emits a final report when startup is cancelled after client creation', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+
+    const controller = new AbortController();
+    const reason = new Error('Startup cancelled');
+
+    vi.mocked(verifyRegistryDeployment).mockImplementationOnce(async () => {
+      controller.abort(reason);
+    });
+
+    await expect(runDaemonCommand({
+      source: SOURCE,
+      signal: controller.signal,
+    })).rejects.toBe(reason);
+
+    expect(runDaemon).not.toHaveBeenCalled();
+    expect(relayerLogMocks.rpcUsage).toHaveBeenCalledOnce();
+  });
+
+  it('does not fabricate a final report when client creation fails', async () => {
+    const failure = new Error('Client creation failed');
+
+    vi.mocked(createRelayerClients).mockImplementationOnce(() => {
+      throw failure;
+    });
+
+    await expect(runDaemonCommand({
+      source: SOURCE,
+    })).rejects.toBe(failure);
+
+    expect(relayerLogMocks.rpcUsage).not.toHaveBeenCalled();
+    expect(verifyRegistryDeployment).not.toHaveBeenCalled();
+  });
+
+  it('preserves the daemon failure when final reporting and its diagnostic both throw', async () => {
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+
+    const daemonFailure = new Error('Daemon failed');
+    const reportFailure = new Error('RPC reporting failed');
+
+    vi.mocked(runDaemon).mockRejectedValueOnce(daemonFailure);
+
+    relayerLogMocks.rpcUsage.mockImplementationOnce(() => {
+      throw reportFailure;
+    });
+
+    relayerLogMocks.loggingFailed.mockImplementationOnce(() => {
+      throw new Error('Diagnostic delivery failed');
+    });
+
+    await expect(runDaemonCommand({
+      source: SOURCE,
+    })).rejects.toBe(daemonFailure);
+
+    expect(relayerLogMocks.rpcUsage).toHaveBeenCalledOnce();
+    expect(relayerLogMocks.loggingFailed)
+      .toHaveBeenCalledExactlyOnceWith({
+        error: reportFailure,
+      });
   });
 });
