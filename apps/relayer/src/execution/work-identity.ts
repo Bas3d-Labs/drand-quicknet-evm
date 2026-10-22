@@ -10,7 +10,8 @@ export const MAX_WORK_ID_LENGTH = 256;
  * Adapters own their namespace, scope, and canonical representation.
  * Execution compares identities exactly, without trimming, case folding,
  * normalization, or parsing adapter-specific fields.
- * 
+ *  
+ * Work identifiers must be well-formed UTF-16.
  * C0/C1 control characters are forbidden because identities appear in
  * diagnostics. This does not establish general Unicode display safety.
  * 
@@ -23,7 +24,8 @@ export function isWorkId(
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
-    value.length > MAX_WORK_ID_LENGTH
+    value.length > MAX_WORK_ID_LENGTH ||
+    !value.isWellFormed()
   ) {
     return false;
   }

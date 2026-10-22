@@ -99,8 +99,50 @@ describe('work identity validation', () => {
   it.each([
     '\ud800',
     '\udfff',
-  ])('accepts lone surrogates without imposing Unicode normalization', (value) => {
-    expect(isWorkId(value)).toBe(true);
-    expect(JSON.parse(JSON.stringify(value))).toBe(value);
+    'before\ud800after',
+    'before\udfffafter',
+    '\ud800\ud800',
+    '\udfff\ud800',
+  ])('rejects malformed UTF-16: %j', (value) => {
+    expect(isWorkId(value)).toBe(false);
   });
+
+  it('accepts paired surrogates without normalizing work identities', () => {
+    const paired = 'work:\ud83d\ude00';
+    const composed = 'work:\u00e9';
+    const decomposed = 'work:e\u0301';
+
+    expect(isWorkId(paired)).toBe(true);
+    expect(isWorkId(composed)).toBe(true);
+    expect(isWorkId(decomposed)).toBe(true);
+
+    expect(composed).not.toBe(decomposed);
+    expect(JSON.parse(JSON.stringify(paired))).toBe(paired);
+    expect(JSON.parse(JSON.stringify(composed))).toBe(composed);
+    expect(JSON.parse(JSON.stringify(decomposed))).toBe(decomposed);
+  });
+
+  it('reaches the maximum serialized work-ID size with valid BMP characters', () => {
+    const value = '\u0800'.repeat(MAX_WORK_ID_LENGTH);
+
+    expect(MAX_WORK_ID_LENGTH).toBe(256);
+    expect(value.length).toBe(MAX_WORK_ID_LENGTH);
+    expect(isWorkId(value)).toBe(true);
+
+    // Three UTF-8 bytes per UTF-16 code unit, plus JSON's two quotes.
+    expect(Buffer.byteLength(value, 'utf8')).toBe(768);
+    expect(Buffer.byteLength(JSON.stringify(value), 'utf8')).toBe(770);
+  });
+
+  it.each(['"', '\\'])(
+    'keeps escaped ASCII within the serialized work-ID budget: %j',
+    (character) => {
+      const value = character.repeat(MAX_WORK_ID_LENGTH);
+
+      expect(isWorkId(value)).toBe(true);
+      expect(Buffer.byteLength(JSON.stringify(value), 'utf8')).toBe(
+        MAX_WORK_ID_LENGTH * 2 + 2,
+      );
+    },
+  );
 });
