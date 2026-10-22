@@ -5,11 +5,16 @@ import {
 } from 'vitest';
 
 import {
+  createRelayerLog,
+} from '../../../src/diagnostics/relayer-log.js';
+
+import {
   RPC_METHOD_LABELS,
   type RpcMetricsSnapshot,
 } from '../../../src/diagnostics/rpc/rpc-metrics.js';
 
 import {
+  MAX_RPC_USAGE_LOG_BYTES,
   MAX_RPC_USAGE_LOG_RECORD_BYTES,
   RPC_USAGE_LOG_ENVELOPE_BYTES,
   projectRpcUsageLogContext,
@@ -237,5 +242,66 @@ describe('RPC usage log size measurement', () => {
       projectedHeadroom:
         MAX_RPC_USAGE_LOG_RECORD_BYTES - conservativeBytes,
     });
+  });
+
+  it('emits both complete views through the logger within the total budget', () => {
+    const completedPart = Math.floor(Number.MAX_SAFE_INTEGER / 3);
+
+    const candidate = record(measurements(
+      Number.MAX_SAFE_INTEGER,
+      completedPart,
+      completedPart,
+      LONG_DURATION,
+    ));
+
+    const lines: string[] = [];
+
+    const logger = createRelayerLog({
+      chainId: Number.MAX_SAFE_INTEGER,
+      runId: '22222222-2222-4222-8222-222222222222',
+      level: 'info',
+      destination: {
+        write(line) {
+          lines.push(line);
+        },
+      },
+    }).withContext({
+      cycle: candidate.cycle,
+      signer: candidate.signer as `0x${string}`,
+    });
+
+    logger.rpcUsage({
+      observedAt: candidate.observedAt,
+      report: candidate.report,
+    });
+
+    expect(lines).toHaveLength(1);
+
+    const line = lines[0]!;
+    const emitted = JSON.parse(line);
+
+    expect(emitted).toMatchObject({
+      level: 30,
+      event: 'rpc_usage',
+      msg: 'Relayer RPC usage',
+      chainId: Number.MAX_SAFE_INTEGER,
+      runId: '22222222-2222-4222-8222-222222222222',
+      cycle: candidate.cycle,
+      signer: candidate.signer,
+      observedAt: candidate.observedAt,
+    });
+
+    expect(emitted.report).toEqual(candidate.report);
+    expect(emitted.report.cumulative.logical)
+      .toHaveLength(RPC_METHOD_LABELS.length * 2);
+    expect(emitted.report.cumulative.http).toHaveLength(2);
+    expect(emitted.report.interval.logical)
+      .toHaveLength(RPC_METHOD_LABELS.length * 2);
+    expect(emitted.report.interval.http).toHaveLength(2);
+
+    expect(line.endsWith('\n')).toBe(true);
+    expect(Buffer.byteLength(line, 'utf8'))
+      .toBeLessThanOrEqual(MAX_RPC_USAGE_LOG_BYTES);
+    expect(line).not.toContain('observedAtMs');
   });
 });

@@ -29,6 +29,19 @@ import {
 } from '../shared/uint.js';
 
 import {
+  isUuidV4,
+} from '../shared/uuid.js';
+
+import {
+  MAX_RPC_USAGE_LOG_RECORD_BYTES,
+  projectRpcUsageLogContext,
+} from './rpc/rpc-usage-log.js';
+
+import type {
+  RpcUsageReport,
+} from './rpc/rpc-usage-report.js';
+
+import {
   type SummarizeErrorOptions,
 } from './error-summary.js';
 
@@ -44,10 +57,6 @@ import {
 import type {
   AttemptResolutionEvidence,
 } from './transaction-evidence.js';
-
-import {
-  isUuidV4,
-} from '../shared/uuid.js';
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
 type ScanType = 'durable' | 'soft';
@@ -88,6 +97,7 @@ interface Values {
   address: Address;
   hash: Hash;
   uint: bigint;
+  timestamp: string;
   scanType: ScanType;
   error: unknown;
   consumers: readonly ConsumerHealth[];
@@ -109,7 +119,7 @@ interface Values {
   resolution: AttemptResolutionEvidence;
   blocker: SignerBlocker;
   blockers: readonly SignerBlocker[];
-  timestamp: string;
+  rpcReport: RpcUsageReport;
 }
 
 type Kind = keyof Values;
@@ -243,6 +253,15 @@ const EVENTS = {
     'Relayer daemon heartbeat',
     {
       consumers: 'consumers',
+    },
+  ],
+  rpcUsage: [
+    'info',
+    'rpc_usage',
+    'Relayer RPC usage',
+    {
+      observedAt: 'timestamp',
+      report: 'rpcReport',
     },
   ],
   statusPublicationFailed: [
@@ -598,7 +617,15 @@ export function createRelayerLog(
     let record: Record<string, unknown>;
 
     try {
-      const projected = project(schema, context, policy);
+      let projected: Record<string, unknown>;
+
+      if (event === 'rpc_usage') {
+        projected = {
+          ...projectRpcUsageLogContext(context),
+        };
+      } else {
+        projected = project(schema, context, policy);
+      }
 
       if (event === 'round_deferred') {
         if (typeof context !== 'object' || context === null) {
@@ -1273,6 +1300,17 @@ function validateResolutionRecord(
 function fitRecord(
   record: Record<string, unknown>,
 ): void {
+  if (record.event === 'rpc_usage') {
+    if (
+      Buffer.byteLength(JSON.stringify(record)) >
+      MAX_RPC_USAGE_LOG_RECORD_BYTES
+    ) {
+      throw new RangeError('RPC usage log record too large.');
+    }
+
+    return;
+  }
+
   while (Buffer.byteLength(JSON.stringify(record)) > MAX_RECORD_BYTES) {
     // Only a bounded, freshly projected heartbeat array may be trimmed.
     if (

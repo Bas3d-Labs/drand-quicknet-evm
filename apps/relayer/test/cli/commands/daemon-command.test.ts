@@ -71,6 +71,7 @@ const relayerLogMocks = vi.hoisted(() => ({
   roundImported: vi.fn(),
   roundAlreadyStored: vi.fn(),
   heartbeat: vi.fn(),
+  rpcUsage: vi.fn(),
   loggingFailed: vi.fn(),
   durableFulfillmentPending: vi.fn(),
   durableFulfillmentUnavailable: vi.fn(),
