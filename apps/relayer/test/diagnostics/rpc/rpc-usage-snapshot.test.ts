@@ -8,7 +8,12 @@ import {
   RPC_METHOD_LABELS,
 } from '../../../src/diagnostics/rpc/rpc-metrics.js';
 
+import type {
+  RpcMetricsSnapshot,
+} from '../../../src/diagnostics/rpc/rpc-metrics.js';
+
 import {
+  createRpcUsageSnapshot,
   readRpcUsageSnapshot,
 } from '../../../src/diagnostics/rpc/rpc-usage-snapshot.js';
 
@@ -449,5 +454,132 @@ describe('persisted RPC usage reader', () => {
         },
       }],
     })).toThrow(INVALID);
+  });
+});
+
+describe('collector RPC usage projection', () => {
+  const observedAt = '2026-10-12T12:00:00.000Z';
+
+  function measurements(): RpcMetricsSnapshot {
+    return {
+      collectorId: '33333333-3333-4333-8333-333333333333',
+      startedAt: '2026-10-12T11:00:00.000Z',
+      logical: [{
+        client: 'public',
+        method: 'eth_call',
+        started: 5,
+        succeeded: 2,
+        failed: 1,
+        inFlight: 2,
+        durationMs: 12.3456789,
+      }],
+      http: [{
+        client: 'public',
+        started: 6,
+        succeeded: 3,
+        failed: 1,
+        inFlight: 2,
+        statuses: {
+          '2xx': 1,
+          '3xx': 0,
+          '4xx': 0,
+          '5xx': 1,
+        },
+        durationMs: 8.7654321,
+      }],
+    };
+  }
+
+  it('maps collector counters into cumulative operator-facing fields', () => {
+    const input = measurements();
+    const result = createRpcUsageSnapshot(input, observedAt);
+
+    expect(result).toEqual({
+      collectorId: input.collectorId,
+      startedAt: input.startedAt,
+      observedAt,
+      logical: [{
+        client: 'public',
+        method: 'eth_call',
+        started: 5,
+        completed: 3,
+        failed: 1,
+        inFlight: 2,
+        durationMs: 12.3456789,
+      }],
+      http: [{
+        client: 'public',
+        started: 6,
+        responses: 3,
+        transportFailures: 1,
+        inFlight: 2,
+        statuses: {
+          '2xx': 1,
+          '3xx': 0,
+          '4xx': 0,
+          '5xx': 1,
+        },
+        durationMs: 8.7654321,
+      }],
+    });
+
+    expect(JSON.stringify(result)).not.toContain('averageDurationMs');
+    expect(JSON.stringify(result)).not.toContain('succeeded');
+  });
+
+  it('preserves inputs and returns detached frozen measurements', () => {
+    const input = measurements();
+    const before = structuredClone(input);
+
+    const result = createRpcUsageSnapshot(input, observedAt);
+
+    expect(input).toEqual(before);
+    expect(Object.isFrozen(input)).toBe(false);
+    expect(Object.isFrozen(input.logical[0])).toBe(false);
+    expect(Object.isFrozen(input.http[0]!.statuses)).toBe(false);
+
+    expect(result.logical).not.toBe(input.logical);
+    expect(result.logical[0]).not.toBe(input.logical[0]);
+    expect(result.http).not.toBe(input.http);
+    expect(result.http[0]).not.toBe(input.http[0]);
+    expect(result.http[0]!.statuses).not.toBe(input.http[0]!.statuses);
+
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.logical)).toBe(true);
+    expect(Object.isFrozen(result.logical[0])).toBe(true);
+    expect(Object.isFrozen(result.http)).toBe(true);
+    expect(Object.isFrozen(result.http[0])).toBe(true);
+    expect(Object.isFrozen(result.http[0]!.statuses)).toBe(true);
+  });
+
+  it('preserves empty collectors without fabricating rows', () => {
+    const input: RpcMetricsSnapshot = {
+      ...measurements(),
+      logical: [],
+      http: [],
+    };
+
+    expect(createRpcUsageSnapshot(input, observedAt)).toEqual({
+      collectorId: input.collectorId,
+      startedAt: input.startedAt,
+      observedAt,
+      logical: [],
+      http: [],
+    });
+  });
+
+  it('rejects collector counts outside the persisted numeric range', () => {
+    const input = measurements();
+
+    const oversized: RpcMetricsSnapshot = {
+      ...input,
+      logical: [{
+        ...input.logical[0]!,
+        started: Number.MAX_SAFE_INTEGER + 1,
+      }],
+    };
+
+    expect(() => createRpcUsageSnapshot(oversized, observedAt))
+      .toThrow('Invalid RPC usage snapshot.');
   });
 });

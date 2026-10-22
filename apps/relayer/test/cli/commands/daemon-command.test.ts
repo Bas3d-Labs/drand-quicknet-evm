@@ -1685,4 +1685,161 @@ describe('runDaemonCommand', () => {
       expect(writeDaemonStatusFile).toHaveBeenCalledTimes(2);
     },
   );
+
+  it('publishes fresh cumulative measurements from the clients collector', async () => {
+    enableStatusObservation();
+
+    const metrics = createRpcMetrics();
+    const initial = metrics.snapshot();
+
+    const startupMetrics: ReturnType<typeof metrics.snapshot> = {
+      ...initial,
+      logical: [{
+        client: 'public',
+        method: 'eth_call',
+        started: 2,
+        succeeded: 1,
+        failed: 0,
+        inFlight: 1,
+        durationMs: 4.25,
+      }],
+      http: [],
+    };
+
+    const cycleMetrics: ReturnType<typeof metrics.snapshot> = {
+      ...initial,
+      logical: [{
+        client: 'public',
+        method: 'eth_call',
+        started: 2,
+        succeeded: 1,
+        failed: 1,
+        inFlight: 0,
+        durationMs: 10.75,
+      }],
+      http: [],
+    };
+
+    const capture = vi.fn<typeof metrics.snapshot>()
+      .mockReturnValueOnce(startupMetrics)
+      .mockReturnValue(cycleMetrics);
+
+    vi.mocked(createRelayerClients).mockReturnValueOnce({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      rpcMetrics: {
+        ...metrics,
+        snapshot: capture,
+      },
+    });
+
+    vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
+      expect(capture).toHaveBeenCalledOnce();
+      await onCycle?.({ consumers: [] }, { cycle: 1 });
+    });
+
+    await runDaemonCommand({ source: SOURCE });
+
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(writeDaemonStatusFile).toHaveBeenCalledTimes(2);
+    expect(relayerLogMocks.statusPublicationFailed).not.toHaveBeenCalled();
+
+    const calls = vi.mocked(writeDaemonStatusFile).mock.calls;
+    const startup = calls[0]![0].snapshot;
+    const completed = calls[1]![0].snapshot;
+
+    expect(startup.rpcUsage).toEqual({
+      collectorId: initial.collectorId,
+      startedAt: initial.startedAt,
+      observedAt: startup.observedAt,
+      logical: [{
+        client: 'public',
+        method: 'eth_call',
+        started: 2,
+        completed: 1,
+        failed: 0,
+        inFlight: 1,
+        durationMs: 4.25,
+      }],
+      http: [],
+    });
+
+    expect(completed.rpcUsage).toEqual({
+      collectorId: initial.collectorId,
+      startedAt: initial.startedAt,
+      observedAt: completed.observedAt,
+      logical: [{
+        client: 'public',
+        method: 'eth_call',
+        started: 2,
+        completed: 2,
+        failed: 1,
+        inFlight: 0,
+        durationMs: 10.75,
+      }],
+      http: [],
+    });
+
+    // Later capture must not change the already-published observation.
+    expect(startup.rpcUsage?.logical[0]?.completed).toBe(1);
+  });
+
+  it('continues after RPC capture failure and includes usage in later publications', async () => {
+    enableStatusObservation();
+
+    const metrics = createRpcMetrics();
+    const initial = metrics.snapshot();
+    const failure = new Error('RPC snapshot capture failed');
+
+    const capture = vi.fn<typeof metrics.snapshot>()
+      .mockImplementationOnce(() => {
+        throw failure;
+      })
+      .mockReturnValue(initial);
+
+    vi.mocked(createRelayerClients).mockReturnValueOnce({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      rpcMetrics: {
+        ...metrics,
+        snapshot: capture,
+      },
+    });
+
+    vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
+      await onCycle?.({ consumers: [] }, { cycle: 1 });
+    });
+
+    await expect(runDaemonCommand({
+      source: SOURCE,
+    })).resolves.toBeUndefined();
+
+    expect(runDaemon).toHaveBeenCalledOnce();
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(writeDaemonStatusFile).toHaveBeenCalledTimes(2);
+
+    expect(relayerLogMocks.statusPublicationFailed)
+      .toHaveBeenCalledExactlyOnceWith({
+        signer: ACCOUNT.address,
+        error: failure,
+      });
+
+    const calls = vi.mocked(writeDaemonStatusFile).mock.calls;
+    const startup = calls[0]![0].snapshot;
+    const completed = calls[1]![0].snapshot;
+
+    expect(Object.hasOwn(startup, 'rpcUsage')).toBe(false);
+    expect(startup.journalInitialized).toBe(true);
+    expect(startup.lastObservedGate.open).toBe(true);
+
+    expect(completed.rpcUsage).toEqual({
+      collectorId: initial.collectorId,
+      startedAt: initial.startedAt,
+      observedAt: completed.observedAt,
+      logical: [],
+      http: [],
+    });
+
+    expect(completed.lastCompletedCycle?.cycle).toBe(1);
+  });
 });

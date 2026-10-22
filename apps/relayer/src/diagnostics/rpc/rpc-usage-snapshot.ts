@@ -12,6 +12,10 @@ import {
 } from './rpc-metrics.js';
 
 import type {
+  RpcMetricsSnapshot,
+} from './rpc-metrics.js';
+
+import type {
   RpcHttpUsageRow,
   RpcLogicalUsageRow,
 } from './rpc-usage-report.js';
@@ -210,6 +214,43 @@ function compareLabels(
   }
 
   return 0;
+}
+
+/**
+ * Projects collector measurements into validated persisted cumulative usage.
+ */
+export function createRpcUsageSnapshot(
+  snapshot: RpcMetricsSnapshot,
+  observedAt: string,
+): RpcUsageSnapshot {
+  return readRpcUsageSnapshot({
+    collectorId: snapshot.collectorId,
+    startedAt: snapshot.startedAt,
+    observedAt,
+    logical: snapshot.logical.map((row) => ({
+      client: row.client,
+      method: row.method,
+      started: row.started,
+      completed: row.succeeded + row.failed,
+      failed: row.failed,
+      inFlight: row.inFlight,
+      durationMs: row.durationMs,
+    })),
+    http: snapshot.http.map((row) => ({
+      client: row.client,
+      started: row.started,
+      responses: row.succeeded,
+      transportFailures: row.failed,
+      inFlight: row.inFlight,
+      statuses: {
+        '2xx': row.statuses['2xx'],
+        '3xx': row.statuses['3xx'],
+        '4xx': row.statuses['4xx'],
+        '5xx': row.statuses['5xx'],
+      },
+      durationMs: row.durationMs,
+    })),
+  });
 }
 
 /**
