@@ -12,7 +12,7 @@ import type {
 import {
   createRpcMetrics,
   type RpcMetrics,
-} from '../diagnostics/rpc-metrics.js';
+} from '../diagnostics/rpc/rpc-metrics.js';
 
 import {
   measuredHttp,

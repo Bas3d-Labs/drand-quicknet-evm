@@ -7,7 +7,7 @@ import {
 import type {
   RpcClientRole,
   RpcMetrics,
-} from '../diagnostics/rpc-metrics.js';
+} from '../diagnostics/rpc/rpc-metrics.js';
 
 export function measuredHttp(
   url: string,

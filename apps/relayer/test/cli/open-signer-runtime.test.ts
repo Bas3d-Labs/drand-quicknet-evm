@@ -26,9 +26,17 @@ import {
   vi,
 } from 'vitest';
 
+import {
+  keccak256,
+} from 'viem';
+
 import type {
   PublicClient
 } from 'viem';
+
+import {
+  privateKeyToAccount,
+} from 'viem/accounts';
 
 import {
   openSignerRuntime,
@@ -47,11 +55,27 @@ import {
 } from '../../src/diagnostics/signer-journal-errors.js';
 
 import {
+  DEFAULT_JOURNAL_BOUNDS,
+  MAX_RETAINED_ATTEMPTS,
+  MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+} from '../../src/state/journal-bounds.js';
+
+import {
+  JournalBoundsExceededError,
+} from '../../src/state/journal-bounds-error.js';
+
+import {
+  journalFilename,
+} from '../../src/state/journal-identity.js';
+
+import {
   assertServiceLockHeld,
   serviceLockReason,
 } from '../../src/state/service-lock.js';
 
 import type {
+  JournalAttempt,
+  JournalSignedTransaction,
   TransactionJournalSnapshot,
 } from '../../src/state/transaction-journal.js';
 
@@ -77,6 +101,87 @@ const IDENTITY = {
 };
 
 const HASH = `0x${'aa'.repeat(32)}` as const;
+
+async function runtimeBoundsFixture(
+  transactionCounts: readonly number[],
+): Promise<TransactionJournalSnapshot> {
+  // Public test fixture only.
+  const account = privateKeyToAccount(`0x${'11'.repeat(32)}`);
+
+  const identity = {
+    chainId: IDENTITY.chainId,
+    signer: account.address,
+  };
+
+  const observation = {
+    anchor: {
+      blockNumber: 100n,
+      blockHash: HASH,
+    },
+    nonce: 4n,
+  };
+
+  const attempts: JournalAttempt[] = [];
+
+  for (const [index, count] of transactionCounts.entries()) {
+    if (!Number.isSafeInteger(count) || count < 1) {
+      throw new Error('Fixture requires a positive transaction count.');
+    }
+
+    const nonce = 4 + index;
+
+    async function sign(
+      replacementIndex: number,
+    ): Promise<JournalSignedTransaction> {
+      const signedTransaction = await account.signTransaction({
+        type: 'eip1559',
+        chainId: identity.chainId,
+        nonce,
+        gas: 21_000n,
+        to: account.address,
+        value: 0n,
+        maxFeePerGas: 2n + BigInt(replacementIndex),
+        maxPriorityFeePerGas: 1n,
+      });
+
+      return {
+        transactionHash: keccak256(signedTransaction),
+        signedTransaction,
+      };
+    }
+
+    const first = await sign(0);
+    const remaining: JournalSignedTransaction[] = [];
+
+    for (let replacement = 1; replacement < count; replacement += 1) {
+      remaining.push(await sign(replacement));
+    }
+
+    attempts.push({
+      attemptId:
+        '00000000-0000-4000-8000-'
+        + (index + 1).toString(16).padStart(12, '0'),
+      workId: 'runtime-bounds:' + index,
+      nonce: BigInt(nonce),
+      createdAt: '2026-10-21T00:00:00.000Z',
+      signedTransactions: [first, ...remaining],
+      replacementSearch: null,
+      phase: 'signed',
+      inclusion: null,
+    });
+  }
+
+  return {
+    version: 1,
+    identity,
+    baseline: observation,
+    lastObservation: observation,
+    nextNonce: 4n + BigInt(attempts.length),
+    durableNextNonce: 4n,
+    repairs: [],
+    attempts,
+  };
+}
 
 describe('command signer runtime', () => {
   let directory: string;
@@ -643,5 +748,130 @@ describe('command signer runtime', () => {
 
     expect(reopened.coordinator.status.open).toBe(true);
     expect(await stateEntries()).toEqual([journalName]);
+  });
+
+  it.each([
+    {
+      name: 'retained attempts',
+      counts: Array.from(
+        { length: MAX_RETAINED_ATTEMPTS + 1 },
+        () => 1,
+      ),
+      bound: 'retained-attempts',
+      maximum: MAX_RETAINED_ATTEMPTS,
+      observed: MAX_RETAINED_ATTEMPTS + 1,
+    },
+    {
+      name: 'signed transactions',
+      counts: [MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT + 1],
+      bound: 'signed-transactions-per-attempt',
+      maximum: MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+      observed: MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT + 1,
+    },
+  ])(
+    'refuses over-bound $name without changing retained state',
+    async (testCase) => {
+      const snapshot = await runtimeBoundsFixture(testCase.counts);
+      const filePath = join(
+        directory,
+        journalFilename(snapshot.identity),
+      );
+
+      const contents = await encodeJournalSnapshot(
+        snapshot,
+        snapshot.identity,
+      );
+
+      const orphan =
+        `${filePath}.123.11111111-1111-4111-8111-111111111111.tmp`;
+
+      await writeFile(filePath, contents);
+      await writeFile(orphan, 'retained recovery evidence');
+
+      const entriesBefore = await stateEntries();
+      const statBefore = await lstat(filePath, { bigint: true });
+      const onPersistenceBoundary = vi.fn();
+
+      const opening = openSignerRuntime({
+        ...options(),
+        identity: snapshot.identity,
+        onPersistenceBoundary,
+      });
+
+      await expect(opening).rejects.toBeInstanceOf(
+        JournalBoundsExceededError,
+      );
+
+      await expect(opening).rejects.toMatchObject({
+        violations: [
+          {
+            bound: testCase.bound,
+            maximum: testCase.maximum,
+            observed: testCase.observed,
+          },
+        ],
+      });
+
+      expect(onPersistenceBoundary).not.toHaveBeenCalled();
+      expect(await readFile(filePath, 'utf8')).toBe(contents);
+      expect(await readFile(orphan, 'utf8'))
+        .toBe('retained recovery evidence');
+      expect(await stateEntries()).toEqual(entriesBefore);
+
+      const statAfter = await lstat(filePath, { bigint: true });
+
+      expect(statAfter.dev).toBe(statBefore.dev);
+      expect(statAfter.ino).toBe(statBefore.ino);
+      expect(statAfter.mtimeNs).toBe(statBefore.mtimeNs);
+    },
+  );
+
+  it('opens a journal at the runtime bounds and retains every transaction hash', async () => {
+    const snapshot = await runtimeBoundsFixture(
+      Array.from(
+        { length: DEFAULT_JOURNAL_BOUNDS.maxRetainedAttempts },
+        () => DEFAULT_JOURNAL_BOUNDS.maxSignedTransactionsPerAttempt,
+      ),
+    );
+
+    const filePath = join(
+      directory,
+      journalFilename(snapshot.identity),
+    );
+
+    await writeFile(
+      filePath,
+      await encodeJournalSnapshot(snapshot, snapshot.identity),
+    );
+
+    const runtime = await openSignerRuntime({
+      ...options(),
+      identity: snapshot.identity,
+    });
+
+    expect(runtime.coordinator.attempts).toEqual(
+      snapshot.attempts.map((attempt) => ({
+        attemptId: attempt.attemptId,
+        workId: attempt.workId,
+        nonce: attempt.nonce,
+        phase: attempt.phase,
+        transactionHashes: attempt.signedTransactions.map(
+          (transaction) => transaction.transactionHash,
+        ),
+      })),
+    );
+
+    expect(runtime.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
+
+    const retained = await decodeJournalSnapshot(
+      await readFile(filePath, 'utf8'),
+      snapshot.identity,
+    );
+
+    expect(retained).toEqual(snapshot);
   });
 });

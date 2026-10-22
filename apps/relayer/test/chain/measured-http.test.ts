@@ -16,7 +16,7 @@ import {
 
 import {
   createRpcMetrics,
-} from '../../src/diagnostics/rpc-metrics.js';
+} from '../../src/diagnostics/rpc/rpc-metrics.js';
 
 const SECRET = 'rpc-metrics-credential-canary';
 const RPC_URL = `https://rpc.example/${SECRET}`;
@@ -327,7 +327,11 @@ describe('measured HTTP transport', () => {
       succeeded: 1,
     });
 
+    // Deliberately mutate the copied snapshot to verify collector isolation.
+    // @ts-expect-error snapshot rows are readonly
     snapshot.logical[0]!.started = 999;
+
+    // @ts-expect-error snapshot status counters are readonly
     snapshot.http[0]!.statuses['2xx'] = 999;
 
     expect(metrics.snapshot().logical[0]!.started).toBe(2);

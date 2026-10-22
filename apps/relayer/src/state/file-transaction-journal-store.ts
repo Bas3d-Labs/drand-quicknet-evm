@@ -25,6 +25,16 @@ import {
 } from './durable-replace.js';
 
 import {
+  inspectJournalBounds,
+  validateJournalBounds,
+  type JournalBounds,
+} from './journal-bounds.js';
+
+import {
+  JournalBoundsExceededError,
+} from './journal-bounds-error.js';
+
+import {
   captureJournalIdentity,
 } from './journal-identity.js';
 
@@ -52,6 +62,7 @@ import {
 export interface FileTransactionJournalStoreOptions {
   readonly filePath: string;
   readonly identity: JournalIdentity;
+  readonly bounds?: JournalBounds;
   readonly onPersistenceBoundary?: PersistenceBoundaryHook;
 }
 
@@ -71,8 +82,10 @@ export class FileTransactionJournalStore
 {
   private readonly filePath: string;
   private readonly identity: JournalIdentity;
+  private readonly bounds: JournalBounds | undefined;
   private readonly onPersistenceBoundary:
     PersistenceBoundaryHook | undefined;
+
   private operations: Promise<void> = Promise.resolve();
 
   private constructor(
@@ -83,6 +96,19 @@ export class FileTransactionJournalStore
       options.filePath.length === 0
     ) {
       throw new TypeError('Invalid journal file path.');
+    }
+
+    if (options.bounds === undefined) {
+      this.bounds = undefined;
+    } else {
+      const bounds = Object.freeze({
+        maxRetainedAttempts: options.bounds.maxRetainedAttempts,
+        maxSignedTransactionsPerAttempt:
+          options.bounds.maxSignedTransactionsPerAttempt,
+      });
+
+      validateJournalBounds(bounds);
+      this.bounds = bounds;
     }
 
     const identity = captureJournalIdentity(options.identity);
@@ -150,22 +176,32 @@ export class FileTransactionJournalStore
         };
       }
 
+      let snapshot: TransactionJournalSnapshot;
+
       try {
-        const snapshot = await decodeJournalSnapshot(
+        snapshot = await decodeJournalSnapshot(
           contents,
           this.identity,
         );
-
-        return {
-          kind: 'present',
-          snapshot,
-        };
       } catch (cause) {
         throw new Error(
           'Transaction journal could not be decoded.',
           { cause },
         );
       }
+
+      if (this.bounds !== undefined) {
+        const violations = inspectJournalBounds(snapshot, this.bounds);
+
+        if (violations.length !== 0) {
+          throw new JournalBoundsExceededError(violations);
+        }
+      }
+
+      return {
+        kind: 'present',
+        snapshot,
+      };
     });
   }
 
