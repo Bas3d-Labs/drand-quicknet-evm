@@ -716,6 +716,133 @@ describe('bootstrap process boundary', () => {
     expect(result.stdout).toBe('');
     expect(result.stderr).toBe('');
   });
+
+  it('exits with code 6 for a registered journal bounds failure', () => {
+    setModule('cli', `
+      import {
+        JournalBoundsExceededError,
+      } from '../state/journal-bounds-error.js';
+
+      export async function main() {
+        const error = new JournalBoundsExceededError([
+          {
+            bound: 'retained-attempts',
+            maximum: 1,
+            observed: 2,
+            attemptId: null,
+            message: 'Journal contains two retained attempts.',
+          },
+        ]);
+
+        error.message = ${JSON.stringify(RPC_URL)};
+
+        throw error;
+      }
+    `);
+
+    const result = launch();
+
+    expect(result.status, result.stderr).toBe(6);
+    expect(result.stdout).toBe('');
+
+    expect(diagnostic(result.stderr)).toMatchObject({
+      event: 'cli_failed',
+      kind: 'signer-journal',
+      code: 'journal-bounds-exceeded',
+      violations: [
+        {
+          bound: 'retained-attempts',
+          maximum: 1,
+          observed: 2,
+          attemptId: null,
+        },
+      ],
+    });
+  });
+
+  it('preserves bounds failure exit code when stderr is unavailable', () => {
+    setModule('cli', `
+      import { closeSync } from 'node:fs';
+
+      import {
+        JournalBoundsExceededError,
+      } from '../state/journal-bounds-error.js';
+
+      export async function main() {
+        const error = new JournalBoundsExceededError([
+          {
+            bound: 'retained-attempts',
+            maximum: 1,
+            observed: 2,
+            attemptId: null,
+            message: 'Journal contains two retained attempts.',
+          },
+        ]);
+
+        closeSync(2);
+
+        throw error;
+      }
+    `);
+
+    const result = launch();
+
+    expect(result.status).toBe(6);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
+  });
+
+  it('keeps exit code 1 for an ordinary startup failure', () => {
+    setModule('cli', `
+      export async function main() {
+        throw new Error(${JSON.stringify(RPC_URL)});
+      }
+    `);
+
+    const result = launch();
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stdout).toBe('');
+
+    expect(diagnostic(result.stderr)).toMatchObject({
+      event: 'cli_failed',
+      kind: 'operation',
+    });
+  });
+
+  it('does not assign exit code 6 to a spoofed bounds error', () => {
+    setModule('cli', `
+      export async function main() {
+        const error = Object.assign(
+          new Error(${JSON.stringify(RPC_URL)}),
+          {
+            name: 'JournalBoundsExceededError',
+            code: 'journal-bounds-exceeded',
+            violations: [
+              {
+                bound: 'retained-attempts',
+                maximum: 1,
+                observed: 2,
+                attemptId: null,
+              },
+            ],
+          },
+        );
+
+        throw error;
+      }
+    `);
+
+    const result = launch();
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stdout).toBe('');
+
+    expect(diagnostic(result.stderr)).toMatchObject({
+      event: 'cli_failed',
+      kind: 'operation',
+    });
+  });
 });
 
 describe('bootstrap write policy', () => {

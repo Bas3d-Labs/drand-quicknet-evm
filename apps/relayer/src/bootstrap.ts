@@ -24,6 +24,7 @@ const EXIT_CODE = {
   IMPORT_PENDING: 3,
   IMPORT_DEFERRED: 4,
   IMPORT_INTERRUPTED: 5,
+  JOURNAL_BOUNDS_EXCEEDED: 6,
 } as const;
 
 const WRITE_BUDGET_MS = 250;
@@ -49,6 +50,10 @@ let importFailure: {
 } | undefined;
 
 let renderDiagnostic: RenderDiagnostic | undefined;
+
+let isJournalBoundsFailure:
+  | ((error: unknown) => boolean)
+  | undefined;
 
 function retryableWrite(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) {
@@ -192,6 +197,7 @@ try {
 
   const diagnostics = await import('./diagnostics/diagnostics.js');
   renderDiagnostic = diagnostics.renderDiagnostic;
+  isJournalBoundsFailure = diagnostics.isJournalBoundsFailure;
 
   const {
     renderCliOutput,
@@ -237,6 +243,13 @@ try {
     process.exitCode = EXIT_CODE.OUTPUT_FAILURE;
   } else {
     process.exitCode = EXIT_CODE.FAILURE;
+
+    if (
+      isJournalBoundsFailure !== undefined &&
+      isJournalBoundsFailure(error)
+    ) {
+      process.exitCode = EXIT_CODE.JOURNAL_BOUNDS_EXCEEDED;
+    }
 
     try {
       if (renderDiagnostic === undefined) {

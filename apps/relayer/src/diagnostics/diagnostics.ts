@@ -139,3 +139,9 @@ export function renderDiagnostic(
     err: summarizeErrorForOutput(error, errorSummary),
   });
 }
+
+export function isJournalBoundsFailure(
+  error: unknown,
+): boolean {
+  return journalBoundsViolations(error) !== undefined;
+}

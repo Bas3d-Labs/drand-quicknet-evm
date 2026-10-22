@@ -129,6 +129,7 @@ export async function openSignerRuntime(
   const store = await FileTransactionJournalStore.open({
     filePath,
     identity,
+    bounds,
     ...(options.onPersistenceBoundary === undefined
       ? {}
       : { onPersistenceBoundary: options.onPersistenceBoundary }),
