@@ -1,3 +1,7 @@
+import type {
+  RpcUsageSnapshot,
+} from '../../diagnostics/rpc/rpc-usage-snapshot.js';
+
 import {
   isFixedHex,
 } from '../../shared/hex.js';
@@ -69,6 +73,8 @@ export function projectDaemonSnapshotStatusOutput(
     throw new TypeError(INVALID);
   }
 
+  const rpcFields = projectOptionalRpcUsage(raw);
+
   // Copy only declared data properties before calling the shared validator.
   const observation = readDaemonStatusSnapshot({
     ...fields(raw, [
@@ -103,6 +109,7 @@ export function projectDaemonSnapshotStatusOutput(
       own(raw, 'lastRetryObservation'),
       ['observedAt', 'retryDelayMs'],
     ),
+    ...rpcFields,
   }, { chainId, signer });
 
   return {
@@ -218,6 +225,8 @@ export function renderDaemonSnapshotStatusOutput(
     );
   }
 
+  lines.push(...renderRpcUsage(observation.rpcUsage));
+
   lines.push(
     'A fresh snapshot does not authorize signing or establish daemon health.',
   )
@@ -241,6 +250,133 @@ function readAge(input: unknown): SnapshotAge {
   }
 
   throw new TypeError(INVALID);
+}
+
+function projectOptionalRpcUsage(
+  input: unknown,
+): Record<string, unknown> {
+  if (typeof input !== 'object' || input === null) {
+    throw new TypeError(INVALID);
+  }
+
+  const descriptor = Object.getOwnPropertyDescriptor(input, 'rpcUsage');
+  if (descriptor === undefined) {
+    return {};
+  }
+
+  if (!Object.hasOwn(descriptor, 'value')) {
+    throw new TypeError(INVALID);
+  }
+
+  const usage: unknown = descriptor.value;
+  if (usage === undefined) {
+    return {};
+  }
+
+  return {
+    rpcUsage: {
+      ...fields(usage, [
+        'collectorId',
+        'startedAt',
+        'observedAt',
+      ]),
+      logical: elements(own(usage, 'logical')).map((row) => (
+        fields(row, [
+          'client',
+          'method',
+          'started',
+          'completed',
+          'failed',
+          'inFlight',
+          'durationMs',
+        ])
+      )),
+      http: elements(own(usage, 'http')).map((row) => ({
+        ...fields(row, [
+          'client',
+          'started',
+          'responses',
+          'transportFailures',
+          'inFlight',
+          'durationMs',
+        ]),
+        statuses: fields(own(row, 'statuses'), [
+          '2xx',
+          '3xx',
+          '4xx',
+          '5xx',
+        ]),
+      })),
+    },
+  };
+}
+
+function renderAverageDuration(
+  durationMs: number,
+  completed: number,
+): string {
+  if (completed === 0) {
+    return 'unavailable (no completions)';
+  }
+
+  return String(durationMs / completed);
+}
+
+function renderRpcUsage(
+  usage: RpcUsageSnapshot | undefined,
+): string[] {
+  if (usage === undefined) {
+    return ['RPC usage: not reported'];
+  }
+
+  const lines = [
+    'RPC usage: cumulative',
+    'RPC collector ID: ' + usage.collectorId,
+    'RPC collector started at: ' + usage.startedAt,
+    'RPC usage observed at: ' + usage.observedAt,
+    'RPC scope: JSON-RPC only',
+    'Counts: logical calls and HTTP requests are independent',
+    'Durations: logical completion or HTTP headers/rejection',
+    'Logical RPC rows: ' + usage.logical.length,
+  ];
+
+  for (const row of usage.logical) {
+    lines.push(
+      '  Logical RPC: ' + row.client + ' / ' + row.method,
+      '    Started: ' + row.started,
+      '    Completed: ' + row.completed,
+      '    Failed: ' + row.failed,
+      '    In flight: ' + row.inFlight,
+      '    Total duration (ms): ' + row.durationMs,
+      '    Average duration (ms): ' + renderAverageDuration(
+        row.durationMs,
+        row.completed,
+      ),
+    );
+  }
+
+  lines.push('HTTP RPC rows: ' + usage.http.length);
+
+  for (const row of usage.http) {
+    lines.push(
+      '  HTTP RPC: ' + row.client,
+      '    Started: ' + row.started,
+      '    Responses: ' + row.responses,
+      '    Transport failures: ' + row.transportFailures,
+      '    In flight: ' + row.inFlight,
+      '    Status 2xx: ' + row.statuses['2xx'],
+      '    Status 3xx: ' + row.statuses['3xx'],
+      '    Status 4xx: ' + row.statuses['4xx'],
+      '    Status 5xx: ' + row.statuses['5xx'],
+      '    Total duration (ms): ' + row.durationMs,
+      '    Average duration (ms): ' + renderAverageDuration(
+        row.durationMs,
+        row.responses + row.transportFailures,
+      ),
+    );
+  }
+
+  return lines;
 }
 
 function own(
