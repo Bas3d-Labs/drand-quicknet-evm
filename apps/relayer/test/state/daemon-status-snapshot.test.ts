@@ -9,6 +9,11 @@ import {
   readDaemonStatusSnapshot,
 } from '../../src/state/daemon-status-snapshot.js';
 
+import {
+  MAX_RETAINED_ATTEMPTS,
+  MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+} from '../../src/state/journal-bounds.js';
+
 const IDENTITY = {
   chainId: 4663,
   signer: `0x${'ab'.repeat(20)}` as const,
@@ -38,6 +43,30 @@ function snapshot() {
       blockedSince: null,
     },
   };
+}
+
+function statusAttempts(
+  count: number,
+  hashesPerAttempt: number,
+) {
+  let hashNumber = 1;
+
+  return Array.from({ length: count }, (_, index) => ({
+    attemptId:
+      '00000000-0000-4000-8000-'
+      + (index + 1).toString(16).padStart(12, '0'),
+    workId: 'status-bounds:' + index,
+    nonce: String(index),
+    phase: 'broadcast-may-have-occurred',
+    transactionHashes: Array.from(
+      { length: hashesPerAttempt },
+      () => {
+        const hash = '0x' + hashNumber.toString(16).padStart(64, '0');
+        hashNumber += 1;
+        return hash;
+      },
+    ),
+  }));
 }
 
 describe('readDaemonStatusSnapshot', () => {
@@ -170,6 +199,99 @@ describe('readDaemonStatusSnapshot', () => {
 
     expect(() => readDaemonStatusSnapshot(input, IDENTITY))
       .toThrow('Invalid daemon status snapshot.');
+  });
+
+  it('accepts both supported bounds without dropping attempt or gate information', () => {
+    const input = {
+      ...snapshot(),
+      attempts: statusAttempts(
+        MAX_RETAINED_ATTEMPTS,
+        MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+      ),
+    };
+    const before = structuredClone(input);
+
+    const result = readDaemonStatusSnapshot(input, IDENTITY);
+
+    expect(result).toEqual(before);
+    expect(input).toEqual(before);
+    expect(result.attempts).toHaveLength(MAX_RETAINED_ATTEMPTS);
+    expect(result.attempts).not.toBe(input.attempts);
+    expect(Object.isFrozen(result.attempts)).toBe(true);
+
+    for (const [index, attempt] of result.attempts.entries()) {
+      expect(attempt.transactionHashes).toHaveLength(
+        MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+      );
+
+      expect(attempt).not.toBe(input.attempts[index]);
+      expect(attempt.transactionHashes).not.toBe(
+        input.attempts[index]!.transactionHashes,
+      );
+
+      expect(Object.isFrozen(attempt)).toBe(true);
+      expect(Object.isFrozen(attempt.transactionHashes)).toBe(true);
+    }
+
+    expect(result.lastObservedGate).toEqual(input.lastObservedGate);
+  });
+
+  it('rejects one retained attempt above the supported maximum', () => {
+    const input = {
+      ...snapshot(),
+      attempts: statusAttempts(MAX_RETAINED_ATTEMPTS + 1, 1),
+    };
+    const before = structuredClone(input);
+
+    expect(() => readDaemonStatusSnapshot(input, IDENTITY)).toThrow(
+      'Invalid daemon status snapshot.',
+    );
+
+    expect(input).toEqual(before);
+  });
+
+  it('rejects one transaction hash above the per-attempt maximum', () => {
+    const input = {
+      ...snapshot(),
+      attempts: statusAttempts(
+        1,
+        MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT + 1,
+      ),
+    };
+    const before = structuredClone(input);
+
+    expect(() => readDaemonStatusSnapshot(input, IDENTITY)).toThrow(
+      'Invalid daemon status snapshot.',
+    );
+
+    expect(input).toEqual(before);
+  });
+
+  it('counts included attempts toward the supported maximum', () => {
+    const input = {
+      ...snapshot(),
+      attempts: statusAttempts(MAX_RETAINED_ATTEMPTS + 1, 1).map(
+        (attempt) => ({
+          ...attempt,
+          phase: 'included',
+        }),
+      ),
+    };
+
+    expect(() => readDaemonStatusSnapshot(input, IDENTITY)).toThrow(
+      'Invalid daemon status snapshot.',
+    );
+  });
+
+  it('still rejects an empty transaction-hash list', () => {
+    const input = {
+      ...snapshot(),
+      attempts: statusAttempts(1, 0),
+    };
+
+    expect(() => readDaemonStatusSnapshot(input, IDENTITY)).toThrow(
+      'Invalid daemon status snapshot.',
+    );
   });
 });
 

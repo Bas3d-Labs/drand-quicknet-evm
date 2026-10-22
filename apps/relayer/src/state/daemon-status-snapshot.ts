@@ -28,6 +28,11 @@ import {
 } from '../shared/uuid.js';
 
 import {
+  MAX_RETAINED_ATTEMPTS,
+  MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+} from './journal-bounds.js';
+
+import {
   captureJournalIdentity,
 } from './journal-identity.js';
 
@@ -333,7 +338,10 @@ function readRetryObservation(
 function readAttempts(
   input: unknown,
 ): readonly DaemonStatusAttempt[] {
-  if (!Array.isArray(input)) {
+  if (
+    !Array.isArray(input) ||
+    input.length > MAX_RETAINED_ATTEMPTS
+  ) {
     throw new TypeError(INVALID);
   }
 
@@ -418,7 +426,12 @@ function readAttemptPhase(
 function readTransactionHashes(
   input: unknown,
 ): readonly [Hash, ...Hash[]] {
-  if (!Array.isArray(input) || input.length === 0) {
+  if (
+    !Array.isArray(input) ||
+    input.length === 0 ||
+    input.length > MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT
+  )
+  {
     throw new TypeError(INVALID);
   }
 
