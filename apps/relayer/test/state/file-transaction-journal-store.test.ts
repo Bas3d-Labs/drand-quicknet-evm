@@ -43,7 +43,19 @@ import {
   FileTransactionJournalStore,
 } from '../../src/state/file-transaction-journal-store.js';
 
+import {
+  DEFAULT_JOURNAL_BOUNDS,
+  MAX_RETAINED_ATTEMPTS,
+  MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+} from '../../src/state/journal-bounds.js';
+
+import {
+  JournalBoundsExceededError,
+} from '../../src/state/journal-bounds-error.js';
+
 import type {
+  JournalAttempt,
+  JournalSignedTransaction,
   TransactionJournalSnapshot,
 } from '../../src/state/transaction-journal.js';
 
@@ -88,6 +100,75 @@ function fixture(): TransactionJournalSnapshot {
     durableNextNonce: 4n,
     repairs: [],
     attempts: [],
+  };
+}
+
+async function signedBoundsFixture(
+  transactionCounts: readonly number[],
+): Promise<TransactionJournalSnapshot> {
+  // Public test fixture only.
+  const account = privateKeyToAccount(`0x${'11'.repeat(32)}`);
+  const base = fixture();
+  const identity = {
+    chainId: base.identity.chainId,
+    signer: account.address,
+  };
+
+  const attempts: JournalAttempt[] = [];
+
+  for (const [index, count] of transactionCounts.entries()) {
+    if (!Number.isSafeInteger(count) || count < 1) {
+      throw new Error('Fixture requires a positive transaction count.');
+    }
+
+    const nonce = base.durableNextNonce + BigInt(index);
+
+    async function sign(
+      replacementIndex: number,
+    ): Promise<JournalSignedTransaction> {
+      const signedTransaction = await account.signTransaction({
+        type: 'eip1559',
+        chainId: identity.chainId,
+        nonce: Number(nonce),
+        gas: 21_000n,
+        to: account.address,
+        value: 0n,
+        maxFeePerGas: 2n + BigInt(replacementIndex),
+        maxPriorityFeePerGas: 1n,
+      });
+
+      return {
+        transactionHash: keccak256(signedTransaction),
+        signedTransaction,
+      };
+    }
+
+    const first = await sign(0);
+    const remaining: JournalSignedTransaction[] = [];
+
+    for (let replacementIndex = 1; replacementIndex < count; replacementIndex += 1) {
+      remaining.push(await sign(replacementIndex));
+    }
+
+    attempts.push({
+      attemptId:
+        '00000000-0000-4000-8000-'
+        + (index + 1).toString(16).padStart(12, '0'),
+      workId: 'bounds-test:' + index,
+      nonce,
+      createdAt: '2026-10-21T00:00:00.000Z',
+      signedTransactions: [first, ...remaining],
+      replacementSearch: null,
+      phase: 'signed',
+      inclusion: null,
+    });
+  }
+
+  return {
+    ...base,
+    identity,
+    nextNonce: base.durableNextNonce + BigInt(attempts.length),
+    attempts,
   };
 }
 
@@ -510,5 +591,165 @@ describe('file transaction journal store', () => {
 
     expect(await readFile(filePath, 'utf8')).toBe(contents);
     expect(durableReplace).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: 'retained attempts',
+      counts: Array.from(
+        { length: MAX_RETAINED_ATTEMPTS + 1 },
+        () => 1,
+      ),
+      bound: 'retained-attempts',
+      maximum: MAX_RETAINED_ATTEMPTS,
+      observed: MAX_RETAINED_ATTEMPTS + 1,
+    },
+    {
+      name: 'signed transactions',
+      counts: [MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT + 1],
+      bound: 'signed-transactions-per-attempt',
+      maximum: MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+      observed: MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT + 1,
+    },
+  ])(
+    'rejects over-bound $name before cleanup or rewriting, while inspection remains available',
+    async (testCase) => {
+      const snapshot = await signedBoundsFixture(testCase.counts);
+      const contents = await encodeJournalSnapshot(
+        snapshot,
+        snapshot.identity,
+      );
+
+      const orphan =
+        `${filePath}.123.11111111-1111-4111-8111-111111111111.tmp`;
+
+      await writeFile(filePath, contents);
+      await writeFile(orphan, 'retained recovery evidence');
+
+      const entriesBefore = (await readdir(directory)).sort();
+      const statBefore = await stat(filePath, { bigint: true });
+
+      const opening = FileTransactionJournalStore.open({
+        filePath,
+        identity: snapshot.identity,
+        bounds: DEFAULT_JOURNAL_BOUNDS,
+      });
+
+      await expect(opening).rejects.toBeInstanceOf(
+        JournalBoundsExceededError,
+      );
+
+      await expect(opening).rejects.toMatchObject({
+        violations: [
+          {
+            bound: testCase.bound,
+            maximum: testCase.maximum,
+            observed: testCase.observed,
+          },
+        ],
+      });
+
+      expect(durableReplace).not.toHaveBeenCalled();
+      expect(await readFile(filePath, 'utf8')).toBe(contents);
+      expect(await readFile(orphan, 'utf8'))
+        .toBe('retained recovery evidence');
+      expect((await readdir(directory)).sort()).toEqual(entriesBefore);
+
+      const statAfter = await stat(filePath, { bigint: true });
+
+      expect(statAfter.dev).toBe(statBefore.dev);
+      expect(statAfter.ino).toBe(statBefore.ino);
+      expect(statAfter.mtimeNs).toBe(statBefore.mtimeNs);
+
+      // Inspection retains full structural and cryptographic validation,
+      // but does not apply command-runtime capacity limits.
+      const inspected = await FileTransactionJournalStore.read({
+        filePath,
+        identity: snapshot.identity,
+      });
+
+      expect(inspected).toEqual({
+        kind: 'present',
+        snapshot,
+      });
+
+      expect(durableReplace).not.toHaveBeenCalled();
+      expect(await readFile(filePath, 'utf8')).toBe(contents);
+      expect(await readFile(orphan, 'utf8'))
+        .toBe('retained recovery evidence');
+      expect((await readdir(directory)).sort()).toEqual(entriesBefore);
+    },
+  );
+
+  it('opens and reloads a journal exactly at both supported bounds', async () => {
+    const snapshot = await signedBoundsFixture(
+      Array.from(
+        { length: MAX_RETAINED_ATTEMPTS },
+        () => MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+      ),
+    );
+
+    await writeFile(
+      filePath,
+      await encodeJournalSnapshot(snapshot, snapshot.identity),
+    );
+
+    const store = await FileTransactionJournalStore.open({
+      filePath,
+      identity: snapshot.identity,
+      bounds: {
+        maxRetainedAttempts: MAX_RETAINED_ATTEMPTS,
+        maxSignedTransactionsPerAttempt:
+          MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+      },
+    });
+
+    expect(durableReplace).toHaveBeenCalledTimes(1);
+    expect(await store.load()).toEqual({
+      kind: 'present',
+      snapshot,
+    });
+  });
+
+  it('captures bounds and enforces them on subsequent loads', async () => {
+    const snapshot = await signedBoundsFixture([2]);
+    const bounds = {
+      maxRetainedAttempts: DEFAULT_JOURNAL_BOUNDS.maxRetainedAttempts,
+      maxSignedTransactionsPerAttempt: 1,
+    };
+
+    const store = await FileTransactionJournalStore.open({
+      filePath,
+      identity: snapshot.identity,
+      bounds,
+    });
+
+    expect(await store.load()).toEqual({ kind: 'missing' });
+
+    bounds.maxSignedTransactionsPerAttempt =
+      MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT;
+
+    const contents = await encodeJournalSnapshot(
+      snapshot,
+      snapshot.identity,
+    );
+
+    // Simulate changed disk content to exercise this store's load policy.
+    await writeFile(filePath, contents);
+
+    await expect(store.load()).rejects.toMatchObject({
+      name: 'JournalBoundsExceededError',
+      violations: [
+        {
+          bound: 'signed-transactions-per-attempt',
+          maximum: 1,
+          observed: 2,
+          attemptId: snapshot.attempts[0]!.attemptId,
+        },
+      ],
+    });
+
+    expect(durableReplace).not.toHaveBeenCalled();
+    expect(await readFile(filePath, 'utf8')).toBe(contents);
   });
 });

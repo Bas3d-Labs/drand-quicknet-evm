@@ -32,6 +32,7 @@ import {
 import {
   isPriorSignerStateError,
 } from './signer-journal-errors.js';
+import { journalBoundsViolations } from '../state/journal-bounds-error.js';
 
 export function renderDiagnostic(
   error: unknown,
@@ -72,6 +73,25 @@ export function renderDiagnostic(
           'Use the relayer launcher with util-linux flock on Linux. ' +
           'For daemon mode, the checkpoint must be a direct ' +
           'child of the configured state directory.',
+      });
+    }
+
+    const violations = journalBoundsViolations(error);
+    if (violations !== undefined) {
+      return JSON.stringify({
+        event: 'cli_failed',
+        kind: 'signer-journal',
+        code: 'journal-bounds-exceeded',
+        message:
+          'Retained journal state exceeds the configured runtime bounds. ' +
+          'Inspect the journal before restarting. Do not delete it ' +
+          'or initialize a replacement.',
+        violations: violations.map((violation) => ({
+          bound: violation.bound,
+          maximum: violation.maximum,
+          observed: violation.observed,
+          attemptId: violation.attemptId,
+        })),
       });
     }
 
