@@ -16,10 +16,6 @@ import {
   verifyRegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
-import type {
-  NetworkSource,
-} from '../../config/config.js';
-
 import {
   createChainHeadsReader,
 } from '../../chain/chain-heads-reader.js';
@@ -28,6 +24,14 @@ import {
   createRelayerClients,
 } from '../../chain/clients.js';
 
+import type {
+  NetworkSource,
+} from '../../config/config.js';
+
+import {
+  loadDaemonConfig,
+} from '../../config/daemon-config.js';
+
 import {
   runDaemon,
 } from '../../daemon/daemon.js';
@@ -35,10 +39,6 @@ import {
 import {
   createDaemonLogger,
 } from '../../daemon/daemon-logging.js';
-
-import {
-  loadDaemonConfig,
-} from '../../config/daemon-config.js';
 
 import {
   collectDaemonStartupSummary,
@@ -56,6 +56,10 @@ import type {
 import {
   createRelayerLog,
 } from '../../diagnostics/relayer-log.js';
+
+import {
+  createRpcUsageSnapshot,
+} from '../../diagnostics/rpc/rpc-usage-snapshot.js';
 
 import {
   FileCheckpointStore,
@@ -139,6 +143,12 @@ export async function runDaemonCommand(
     env: {
       ...env,
       QUICKNET_STATE_DIR: stateDirectory,
+    },
+    readRpcUsage(observedAt) {
+      return createRpcUsageSnapshot(
+        clients.rpcMetrics.snapshot(),
+        observedAt,
+      );
     },
     onFailure(error) {
       logger.statusPublicationFailed({

@@ -1,7 +1,13 @@
 import {
+  readRpcUsageSnapshot,
+  type RpcUsageSnapshot,
+} from '../diagnostics/rpc/rpc-usage-snapshot.js';
+
+import {
   readDaemonStatusSnapshot,
   type DaemonStatusCompletedCycle,
   type DaemonStatusRetryObservation,
+  type DaemonStatusSnapshot,
 } from '../state/daemon-status-snapshot.js';
 
 import {
@@ -22,6 +28,9 @@ export interface DaemonStatusPublisherOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly now?: () => number;
   readonly write?: typeof writeDaemonStatusFile;
+  
+  /** Captures cumulative RPC usage synchronously at publication time. */
+  readonly readRpcUsage?: (observedAt: string) => RpcUsageSnapshot;
 
   /** Synchronous diagnostic callback. Must not perform transaction work. */
   readonly onFailure: (error: unknown) => void;
@@ -57,6 +66,7 @@ export function createDaemonStatusPublisher(
   const env = Object.freeze({ ...(options.env ?? process.env) });
   const now = options.now ?? Date.now;
   const write = options.write ?? writeDaemonStatusFile;
+  const readRpcUsage = options.readRpcUsage;
   const onFailure = options.onFailure;
 
   let readObservation: (() => SignerRuntimeObservation) | undefined;
@@ -143,11 +153,33 @@ export function createDaemonStatusPublisher(
         return;
       }
 
+      const observedAt = timestamp();
+
+      let rpcFields: Pick<DaemonStatusSnapshot, 'rpcUsage'> = {};
+
+      if (readRpcUsage !== undefined) {
+        try {
+          const rpcUsage = readRpcUsageSnapshot(
+            readRpcUsage(observedAt),
+          );
+
+          if (rpcUsage.observedAt !== observedAt) {
+            throw new TypeError(
+              'RPC usage observation time does not match publication capture.'
+            );
+          }
+
+          rpcFields = { rpcUsage };
+        } catch (error) {
+          reportFailure(error);
+        }
+      }
+
       const snapshot = readDaemonStatusSnapshot({
         version: 1,
         identity,
         runId,
-        observedAt: timestamp(),
+        observedAt,
         journalInitialized: runtime.journalInitialized,
         lastCompletedCycle,
         lastRetryObservation,
@@ -159,6 +191,7 @@ export function createDaemonStatusPublisher(
           phase: attempt.phase,
           transactionHashes: attempt.transactionHashes,
         })),
+        ...rpcFields,
       }, identity);
 
       await write({

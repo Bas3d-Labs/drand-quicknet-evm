@@ -3,6 +3,11 @@ import type {
 } from 'viem';
 
 import {
+  readRpcUsageSnapshot,
+  type RpcUsageSnapshot,
+} from '../diagnostics/rpc/rpc-usage-snapshot.js';
+
+import {
   isWorkId,
 } from '../execution/work-identity.js';
 
@@ -26,6 +31,11 @@ import {
 import {
   isUuidV4,
 } from '../shared/uuid.js';
+
+import {
+  MAX_RETAINED_ATTEMPTS,
+  MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+} from './journal-bounds.js';
 
 import {
   captureJournalIdentity,
@@ -100,6 +110,7 @@ export interface DaemonStatusSnapshot {
      */
     readonly blockedSince: string | null;
   };
+  readonly rpcUsage?: RpcUsageSnapshot;
 }
 
 export type SnapshotAge =
@@ -195,6 +206,14 @@ export function readDaemonStatusSnapshot(
     throw new TypeError(INVALID);
   }
 
+  let rpcFields: Pick<DaemonStatusSnapshot, 'rpcUsage'> = {};
+
+  if (root.rpcUsage !== undefined) {
+    rpcFields = {
+      rpcUsage: readRpcUsageSnapshot(root.rpcUsage),
+    };
+  }
+
   // A closed gate without reported blockers is valid.
   // These fields alone do not establish why the gate is closed.
   return Object.freeze({
@@ -218,6 +237,7 @@ export function readDaemonStatusSnapshot(
       persistenceState,
       blockedSince,
     }),
+    ...rpcFields,
   });
 }
 
@@ -333,7 +353,10 @@ function readRetryObservation(
 function readAttempts(
   input: unknown,
 ): readonly DaemonStatusAttempt[] {
-  if (!Array.isArray(input)) {
+  if (
+    !Array.isArray(input) ||
+    input.length > MAX_RETAINED_ATTEMPTS
+  ) {
     throw new TypeError(INVALID);
   }
 
@@ -418,7 +441,12 @@ function readAttemptPhase(
 function readTransactionHashes(
   input: unknown,
 ): readonly [Hash, ...Hash[]] {
-  if (!Array.isArray(input) || input.length === 0) {
+  if (
+    !Array.isArray(input) ||
+    input.length === 0 ||
+    input.length > MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT
+  )
+  {
     throw new TypeError(INVALID);
   }
 

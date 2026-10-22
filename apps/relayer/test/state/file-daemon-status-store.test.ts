@@ -80,6 +80,29 @@ function snapshot(): DaemonStatusSnapshot {
   };
 }
 
+function rpcUsage() {
+  return {
+    collectorId: '22222222-2222-4222-8222-222222222222',
+    startedAt: '2026-10-12T11:00:00.000Z',
+    observedAt: '2026-10-12T12:00:00.000Z',
+    logical: [],
+    http: [{
+      client: 'public' as const,
+      started: 3,
+      responses: 2,
+      transportFailures: 1,
+      inFlight: 0,
+      statuses: {
+        '2xx': 1,
+        '3xx': 0,
+        '4xx': 0,
+        '5xx': 1,
+      },
+      durationMs: 12.3456789,
+    }],
+  };
+}
+
 describe('daemon status file storage', () => {
   let directory: string;
   let filePath: string;
@@ -217,6 +240,13 @@ describe('daemon status file storage', () => {
         identity: { ...IDENTITY, chainId: 1 },
       }),
     },
+    {
+      name: 'invalid RPC usage',
+      contents: JSON.stringify({
+        ...snapshot(),
+        rpcUsage: null,
+      }),
+    },
   ])('rejects $name without replacing the file', async ({ contents }) => {
     await writeFile(filePath, contents);
     const before = await readFile(filePath);
@@ -249,4 +279,57 @@ describe('daemon status file storage', () => {
       expect(await readFile(target, 'utf8')).toBe(contents);
     },
   );
+
+  it('round-trips RPC usage without adding derived averages', async () => {
+    const input: DaemonStatusSnapshot = {
+      ...snapshot(),
+      rpcUsage: rpcUsage(),
+    };
+
+    await writeDaemonStatusFile({
+      ...options(),
+      snapshot: input,
+    });
+
+    expect(await readDaemonStatusFile(options())).toEqual(input);
+
+    const contents = await readFile(filePath, 'utf8');
+
+    expect(JSON.parse(contents)).toEqual(input);
+    expect(contents.endsWith('\n')).toBe(true);
+    expect(contents).not.toContain('averageDurationMs');
+  });
+
+  it('preserves the published snapshot when RPC usage validation fails', async () => {
+    const valid: DaemonStatusSnapshot = {
+      ...snapshot(),
+      rpcUsage: rpcUsage(),
+    };
+
+    await writeDaemonStatusFile({
+      ...options(),
+      snapshot: valid,
+    });
+
+    const before = await readFile(filePath);
+
+    const invalid: DaemonStatusSnapshot = {
+      ...valid,
+      rpcUsage: {
+        ...rpcUsage(),
+        http: [{
+          ...rpcUsage().http[0]!,
+          responses: 4,
+        }],
+      },
+    };
+
+    await expect(writeDaemonStatusFile({
+      ...options(),
+      snapshot: invalid,
+    })).rejects.toThrow();
+
+    expect(await readFile(filePath)).toEqual(before);
+    expect(await readDaemonStatusFile(options())).toEqual(valid);
+  });
 });

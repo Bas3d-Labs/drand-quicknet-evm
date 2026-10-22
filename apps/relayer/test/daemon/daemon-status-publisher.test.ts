@@ -10,6 +10,14 @@ import {
 } from '../../src/daemon/daemon-status-publisher.js';
 
 import type {
+  DaemonStatusPublisherOptions,
+} from '../../src/daemon/daemon-status-publisher.js';
+
+import type {
+  RpcUsageSnapshot,
+} from '../../src/diagnostics/rpc/rpc-usage-snapshot.js';
+
+import type {
   writeDaemonStatusFile,
 } from '../../src/state/file-daemon-status-store.js';
 
@@ -53,7 +61,32 @@ function runtime(): SignerRuntimeObservation {
   };
 }
 
-function fixture() {
+function rpcUsage(observedAt: string): RpcUsageSnapshot {
+  return {
+    collectorId: '33333333-3333-4333-8333-333333333333',
+    startedAt: new Date(START - 60_000).toISOString(),
+    observedAt,
+    logical: [],
+    http: [{
+      client: 'public',
+      started: 3,
+      responses: 2,
+      transportFailures: 1,
+      inFlight: 0,
+      statuses: {
+        '2xx': 1,
+        '3xx': 0,
+        '4xx': 0,
+        '5xx': 1,
+      },
+      durationMs: 12.3456789,
+    }],
+  };
+}
+
+function fixture(
+  options: Pick<DaemonStatusPublisherOptions, 'readRpcUsage'> = {},
+) {
   let milliseconds = START;
 
   const write = vi.fn<typeof writeDaemonStatusFile>()
@@ -75,6 +108,7 @@ function fixture() {
     now: () => milliseconds,
     write,
     onFailure,
+    ...options,
   });
 
   return {
@@ -312,5 +346,197 @@ describe('daemon status publisher', () => {
 
     expect(t.write.mock.calls[0]![0].env?.QUICKNET_STATE_DIR)
       .toBe('/verified-state');
+  });
+
+  it('omits RPC usage when no reader is configured', async () => {
+    const t = fixture();
+    t.publisher.onInitialized(t.readObservation);
+
+    await t.publisher.publish();
+
+    const written = t.write.mock.calls[0]![0].snapshot;
+
+    expect(Object.hasOwn(written, 'rpcUsage')).toBe(false);
+    expect(t.onFailure).not.toHaveBeenCalled();
+  });
+
+  it('does not capture RPC usage before runtime initialization', async () => {
+    const readRpcUsage = vi.fn(rpcUsage);
+    const t = fixture({ readRpcUsage });
+
+    await t.publisher.publish();
+
+    expect(readRpcUsage).not.toHaveBeenCalled();
+
+    t.readObservation.mockReturnValueOnce({
+      ...runtime(),
+      journalInitialized: false,
+      attempts: [],
+    });
+
+    t.publisher.onInitialized(t.readObservation);
+    await t.publisher.publish();
+
+    expect(readRpcUsage).not.toHaveBeenCalled();
+    expect(t.write).not.toHaveBeenCalled();
+    expect(t.onFailure).not.toHaveBeenCalled();
+  });
+
+  it('captures RPC usage when each queued publication starts', async () => {
+    const readRpcUsage = vi.fn(rpcUsage);
+    const t = fixture({ readRpcUsage });
+
+    t.publisher.onInitialized(t.readObservation);
+
+    let release!: () => void;
+
+    const blockedWrite = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    t.write.mockReturnValueOnce(blockedWrite);
+
+    const first = t.publisher.publish();
+    const second = t.publisher.publish();
+
+    try {
+      await vi.waitFor(() => {
+        expect(t.write).toHaveBeenCalledOnce();
+      });
+
+      expect(readRpcUsage).toHaveBeenCalledExactlyOnceWith(
+        new Date(START).toISOString(),
+      );
+
+      t.setTime(START + 1_000);
+    } finally {
+      release();
+      await Promise.all([first, second]);
+    }
+
+    expect(readRpcUsage).toHaveBeenCalledTimes(2);
+    expect(readRpcUsage).toHaveBeenNthCalledWith(
+      2,
+      new Date(START + 1_000).toISOString(),
+    );
+
+    const firstSnapshot = t.write.mock.calls[0]![0].snapshot;
+    const secondSnapshot = t.write.mock.calls[1]![0].snapshot;
+
+    expect(firstSnapshot.rpcUsage).toEqual(
+      rpcUsage(new Date(START).toISOString()),
+    );
+
+    expect(secondSnapshot.rpcUsage).toEqual(
+      rpcUsage(new Date(START + 1_000).toISOString()),
+    );
+
+    expect(firstSnapshot.rpcUsage?.observedAt)
+      .toBe(firstSnapshot.observedAt);
+    expect(secondSnapshot.rpcUsage?.observedAt)
+      .toBe(secondSnapshot.observedAt);
+
+    expect(t.onFailure).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: 'capture throws', kind: 'capture' },
+    { name: 'invalid counters', kind: 'counters' },
+    { name: 'mismatched observation time', kind: 'timestamp' },
+  ] as const)(
+    'publishes recovery status and resumes RPC reporting after $name',
+    async ({ kind }) => {
+      const failure = new Error('RPC capture failed');
+      const readRpcUsage = vi.fn(rpcUsage);
+
+      readRpcUsage.mockImplementationOnce((observedAt) => {
+        if (kind === 'capture') {
+          throw failure;
+        }
+
+        const usage = rpcUsage(observedAt);
+
+        if (kind === 'counters') {
+          return {
+            ...usage,
+            http: [{
+              ...usage.http[0]!,
+              responses: 4,
+            }],
+          };
+        }
+
+        return {
+          ...usage,
+          observedAt: new Date(START - 1).toISOString(),
+        };
+      });
+
+      const t = fixture({ readRpcUsage });
+      t.publisher.onInitialized(t.readObservation);
+
+      await expect(t.publisher.publish()).resolves.toBeUndefined();
+
+      expect(t.write).toHaveBeenCalledOnce();
+      expect(t.onFailure).toHaveBeenCalledOnce();
+
+      if (kind === 'capture') {
+        expect(t.onFailure).toHaveBeenCalledWith(failure);
+      }
+
+      const first = t.write.mock.calls[0]![0].snapshot;
+
+      expect(Object.hasOwn(first, 'rpcUsage')).toBe(false);
+      expect(first.attempts).toEqual([{
+        attemptId: ATTEMPT_ID,
+        workId: WORK_ID,
+        nonce: '4',
+        phase: 'broadcast-may-have-occurred',
+        transactionHashes: [FIRST_HASH, SECOND_HASH],
+      }]);
+      expect(first.lastObservedGate).toEqual(runtime().status);
+
+      t.setTime(START + 1_000);
+      await expect(t.publisher.publish()).resolves.toBeUndefined();
+
+      expect(t.write).toHaveBeenCalledTimes(2);
+      expect(t.onFailure).toHaveBeenCalledOnce();
+
+      const second = t.write.mock.calls[1]![0].snapshot;
+
+      expect(second.rpcUsage).toEqual(
+        rpcUsage(new Date(START + 1_000).toISOString()),
+      );
+      expect(second.attempts).toEqual(first.attempts);
+      expect(second.lastObservedGate).toEqual(first.lastObservedGate);
+    },
+  );
+
+  it('publishes recovery status when RPC failure reporting also throws', async () => {
+    const failure = new Error('RPC capture failed');
+    const readRpcUsage = vi.fn(rpcUsage);
+
+    readRpcUsage.mockImplementationOnce(() => {
+      throw failure;
+    });
+
+    const t = fixture({ readRpcUsage });
+    t.publisher.onInitialized(t.readObservation);
+
+    t.onFailure.mockImplementation(() => {
+      throw new Error('Diagnostic delivery failed');
+    });
+
+    await expect(t.publisher.publish()).resolves.toBeUndefined();
+
+    expect(t.onFailure).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(t.write).toHaveBeenCalledOnce();
+
+    const written = t.write.mock.calls[0]![0].snapshot;
+
+    expect(Object.hasOwn(written, 'rpcUsage')).toBe(false);
+    expect(written.attempts[0]?.transactionHashes)
+      .toEqual([FIRST_HASH, SECOND_HASH]);
+    expect(written.lastObservedGate).toEqual(runtime().status);
   });
 });
