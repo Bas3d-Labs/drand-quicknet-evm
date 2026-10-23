@@ -504,15 +504,41 @@ it.skipIf(process.platform !== 'linux').each(COMMAND_OUTPUT_CASES)(
 
     let failure: Record<string, unknown> = {};
 
+    const records: Record<string, unknown>[] = child.stderr
+      .trimEnd()
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line));
+
+    if (command !== 'daemon') {
+      const summaries = records.filter(
+        (record) => record.event === 'rpc_usage',
+      );
+
+      expect(summaries).toHaveLength(1);
+      expect(summaries[0]).toMatchObject({
+        level: 30,
+        event: 'rpc_usage',
+        observedAt: expect.any(String),
+        report: {
+          collectorId: '11111111-1111-4111-8111-111111111111',
+          startedAt: '2026-10-22T12:00:00.000Z',
+          cumulative: {
+            logical: [],
+            http: [],
+          },
+          interval: {
+            available: false,
+            reason: 'no-baseline',
+          },
+        },
+      });
+    }
+
     if (outputFails) {
       expect(child.stdout).toBe('');
       expect(child.stderr).not.toContain('cli_failed');
       expect(child.stderr.endsWith('\n')).toBe(true);
-
-      const records: Record<string, unknown>[] = child.stderr
-        .trimEnd()
-        .split('\n')
-        .map((line) => JSON.parse(line));
 
       const outputFailures = records.filter(
         (record) => record.event === 'output_failed',
@@ -542,7 +568,10 @@ it.skipIf(process.platform !== 'linux').each(COMMAND_OUTPUT_CASES)(
           expect(diagnostic.rejected).toBe('rpc_usage');
         }
       } else {
-        expect(records).toHaveLength(1);
+        expect(records.map((record) => record.event)).toEqual([
+          'output_failed',
+          'rpc_usage',
+        ]);
       }
 
       expect(failure).toMatchObject({
@@ -553,7 +582,9 @@ it.skipIf(process.platform !== 'linux').each(COMMAND_OUTPUT_CASES)(
         },
       });
     } else {
-      expect(child.stderr).toBe('');
+      expect(records.map((record) => record.event))
+        .toEqual(['rpc_usage']);
+      expect(child.stderr.endsWith('\n')).toBe(true);
 
       const expected = outcome === 'pending'
         ? [
@@ -775,6 +806,16 @@ it.skipIf(process.platform !== 'linux').each(NONCE_SYNC_CASES)(
             return {
               publicClient: {},
               walletClient: {},
+              rpcMetrics: {
+                snapshot() {
+                  return {
+                    collectorId: '11111111-1111-4111-8111-111111111111',
+                    startedAt: '2026-10-22T12:00:00.000Z',
+                    logical: [],
+                    http: [],
+                  };
+                },
+              },
             };
           }
         `,
@@ -971,10 +1012,30 @@ it.skipIf(process.platform !== 'linux').each(NONCE_SYNC_CASES)(
     const expectedEvents = [
       ...(outcome === 'applied' ? ['signer_nonce_synced'] : []),
       ...(outputFails ? ['output_failed'] : []),
+      'rpc_usage',
     ];
 
     expect(records.map((record) => record.event))
       .toEqual(expectedEvents);
+
+    expect(records.at(-1)).toMatchObject({
+      level: 30,
+      event: 'rpc_usage',
+      chainId,
+      observedAt: expect.any(String),
+      report: {
+        collectorId: '11111111-1111-4111-8111-111111111111',
+        startedAt: '2026-10-22T12:00:00.000Z',
+        cumulative: {
+          logical: [],
+          http: [],
+        },
+        interval: {
+          available: false,
+          reason: 'no-baseline',
+        },
+      },
+    });
 
     if (outcome === 'interrupted') {
       expect(child.stdout).toBe('');

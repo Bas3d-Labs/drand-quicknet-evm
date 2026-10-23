@@ -12,6 +12,10 @@ import {
   createRelayerLog,
 } from '../../diagnostics/relayer-log.js';
 
+import {
+  createRpcUsageSession,
+} from '../../diagnostics/rpc/rpc-usage-session.js';
+
 import type {
   CliOutputHandler,
 } from '../output/cli-output.js';
@@ -55,50 +59,64 @@ export async function runSyncNonceCommand(
     destination: process.stderr,
   });
 
-  const identity = {
-    chainId: config.chain.id,
-    signer: config.account.address,
-  };
-
-  const result = await syncNonce({
-    publicClient: clients.publicClient,
-    identity,
-    finality: config.finality,
-    apply: command.apply,
-    signal,
+  const rpcUsageSession = createRpcUsageSession({
+    readSnapshot: () => clients.rpcMetrics.snapshot(),
+    emit(context) {
+      logger.rpcUsage(context);
+    },
+    onFailure(error) {
+      logger.loggingFailed({ error });
+    },
   });
 
-  if (result.status === 'applied') {
-    const { repair } = result;
+  try {
+    const identity = {
+      chainId: config.chain.id,
+      signer: config.account.address,
+    };
 
-    logger.signerNonceSynced({
-      signer: identity.signer,
-      previousNextNonce: repair.previousNextNonce,
-      nextNonce: repair.nextNonce,
-      durableBlock: repair.observation.anchor.blockNumber,
-      durableBlockHash: repair.observation.anchor.blockHash,
-      durableNonce: repair.observation.nonce,
-      repairAt: repair.at,
+    const result = await syncNonce({
+      publicClient: clients.publicClient,
+      identity,
+      finality: config.finality,
+      apply: command.apply,
+      signal,
     });
-  }
 
-  output({
-    type: 'nonce-sync-result',
-    identity,
-    mode: command.apply ? 'apply' : 'preview',
-    result,
-  });
+    if (result.status === 'applied') {
+      const { repair } = result;
 
-  switch (result.status) {
-    case 'repair-available':
-    case 'already-synchronized':
-    case 'applied':
-      return 'success';
+      logger.signerNonceSynced({
+        signer: identity.signer,
+        previousNextNonce: repair.previousNextNonce,
+        nextNonce: repair.nextNonce,
+        durableBlock: repair.observation.anchor.blockNumber,
+        durableBlockHash: repair.observation.anchor.blockHash,
+        durableNonce: repair.observation.nonce,
+        repairAt: repair.at,
+      });
+    }
 
-    case 'deferred':
-      return 'deferred';
+    output({
+      type: 'nonce-sync-result',
+      identity,
+      mode: command.apply ? 'apply' : 'preview',
+      result,
+    });
 
-    case 'refused':
-      return 'failure';
+    switch (result.status) {
+      case 'repair-available':
+      case 'already-synchronized':
+      case 'applied':
+        return 'success';
+
+      case 'deferred':
+        return 'deferred';
+
+      case 'refused':
+        return 'failure';
+    }
+  } finally {
+    rpcUsageSession.finish();
   }
 }

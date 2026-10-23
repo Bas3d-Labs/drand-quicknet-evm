@@ -21,6 +21,10 @@ import {
 } from '../../diagnostics/relayer-log.js';
 
 import {
+  createRpcUsageSession,
+} from '../../diagnostics/rpc/rpc-usage-session.js';
+
+import {
   importQuicknetRound,
   type ImportQuicknetRoundResult,
 } from '../../rounds/import-round.js';
@@ -78,70 +82,84 @@ export async function runRoundImportCommand(
     destination: process.stderr,
   });
 
-  const submitter = await openBeaconSubmitter({
-    config,
-    publicClient: clients.publicClient,
-    walletClient: clients.walletClient,
-    log: logger,
-    readChainHeads: () => getChainHeads({
-      publicClient: clients.publicClient,
-      finality: config.finality,
-    }),
-    maxBlockRange: IMPORT_REPLACEMENT_BLOCK_RANGE,
-    signal,
+  const rpcUsageSession = createRpcUsageSession({
+    readSnapshot: () => clients.rpcMetrics.snapshot(),
+    emit(context) {
+      logger.rpcUsage(context);
+    },
+    onFailure(error) {
+      logger.loggingFailed({ error });
+    },
   });
 
-  signal.throwIfAborted();
-
-  let progress: RoundImportProgress | undefined;
-  let result: ImportQuicknetRoundResult;
-
   try {
-    if (command.command === 'import') {
-      result = await importQuicknetRound({
+    const submitter = await openBeaconSubmitter({
+      config,
+      publicClient: clients.publicClient,
+      walletClient: clients.walletClient,
+      log: logger,
+      readChainHeads: () => getChainHeads({
         publicClient: clients.publicClient,
-        account: config.account,
-        submitter,
-        deployment: config.deployment,
-        round: command.round,
-        receiptTimeoutMs: config.receiptTimeoutMs,
-        fetchTimeoutMs: config.fetchTimeoutMs,
-        onProgress(current) {
-          progress = current;
-        },
-        signal,
-      });
-    } else {
-      result = await importQuicknetRoundWhenAvailable({
-        publicClient: clients.publicClient,
-        account: config.account,
-        submitter,
-        deployment: config.deployment,
-        round: command.round,
-        receiptTimeoutMs: config.receiptTimeoutMs,
-        fetchTimeoutMs: config.fetchTimeoutMs,
-        onProgress(current) {
-          progress = current;
-        },
-        signal,
-      });
-    }
-  } catch (error) {
-    if (signal.aborted && error === signal.reason) {
+        finality: config.finality,
+      }),
+      maxBlockRange: IMPORT_REPLACEMENT_BLOCK_RANGE,
+      signal,
+    });
+
+    signal.throwIfAborted();
+
+    let progress: RoundImportProgress | undefined;
+    let result: ImportQuicknetRoundResult;
+
+    try {
+      if (command.command === 'import') {
+        result = await importQuicknetRound({
+          publicClient: clients.publicClient,
+          account: config.account,
+          submitter,
+          deployment: config.deployment,
+          round: command.round,
+          receiptTimeoutMs: config.receiptTimeoutMs,
+          fetchTimeoutMs: config.fetchTimeoutMs,
+          onProgress(current) {
+            progress = current;
+          },
+          signal,
+        });
+      } else {
+        result = await importQuicknetRoundWhenAvailable({
+          publicClient: clients.publicClient,
+          account: config.account,
+          submitter,
+          deployment: config.deployment,
+          round: command.round,
+          receiptTimeoutMs: config.receiptTimeoutMs,
+          fetchTimeoutMs: config.fetchTimeoutMs,
+          onProgress(current) {
+            progress = current;
+          },
+          signal,
+        });
+      }
+    } catch (error) {
+      if (signal.aborted && error === signal.reason) {
+        throw error;
+      }
+
+      reportImportFailure(options, error, progress);
       throw error;
     }
 
-    reportImportFailure(options, error, progress);
-    throw error;
+    output({
+      type: 'import-result',
+      round: command.round,
+      result,
+    });
+
+    return importOutcome(result);
+  } finally {
+    rpcUsageSession.finish();
   }
-
-  output({
-    type: 'import-result',
-    round: command.round,
-    result,
-  });
-
-  return importOutcome(result);
 }
 
 function importOutcome(
