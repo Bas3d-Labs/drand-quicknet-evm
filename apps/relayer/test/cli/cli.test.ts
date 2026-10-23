@@ -20,6 +20,10 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { robinhoodTestnet } from 'viem/chains';
 
 import type {
+  RpcUsageLogContext,
+} from '../../src/diagnostics/rpc/rpc-usage-log.js';
+
+import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
 
@@ -389,7 +393,10 @@ beforeEach(() => {
 
   importLogMocks.createRelayerLog
     .mockReset()
-    .mockReturnValue({});
+    .mockReturnValue({
+      rpcUsage: vi.fn(),
+      loggingFailed: vi.fn(),
+    });
 });
 
 afterEach(() => {
@@ -1773,8 +1780,11 @@ describe('sync-nonce command execution', () => {
 
       const records = lines.map((line) => JSON.parse(line));
 
+      const expectedEvents = ['rpc_usage'];
+
       if (result.status === 'applied') {
-        expect(records).toHaveLength(1);
+        expectedEvents.unshift('signer_nonce_synced');
+
         expect(records[0]).toMatchObject({
           level: 40,
           event: 'signer_nonce_synced',
@@ -1787,9 +1797,29 @@ describe('sync-nonce command execution', () => {
           durableNonce: '8',
           repairAt: NONCE_REPAIR.at,
         });
-      } else {
-        expect(records).toEqual([]);
       }
+
+      expect(records.map((record) => record.event))
+        .toEqual(expectedEvents);
+
+      expect(records.at(-1)).toMatchObject({
+        level: 30,
+        event: 'rpc_usage',
+        chainId: CONFIG.chain.id,
+        observedAt: expect.any(String),
+        report: {
+          collectorId: expect.any(String),
+          startedAt: expect.any(String),
+          cumulative: {
+            logical: [],
+            http: [],
+          },
+          interval: {
+            available: false,
+            reason: 'no-baseline',
+          },
+        },
+      });
 
       expect(signerRuntimeMocks.openBeaconSubmitter)
         .not.toHaveBeenCalled();
@@ -1832,8 +1862,8 @@ describe('sync-nonce command execution', () => {
   it('emits the repair warning after completion and before output', async () => {
     const events: string[] = [];
 
-    await useRealNonceLogger(() => {
-      events.push('warning');
+    await useRealNonceLogger((line) => {
+      events.push(JSON.parse(line).event);
     });
 
     vi.mocked(syncNonce).mockImplementationOnce(async () => {
@@ -1854,8 +1884,9 @@ describe('sync-nonce command execution', () => {
 
     expect(events).toEqual([
       'repair-completed',
-      'warning',
+      'signer_nonce_synced',
       'output',
+      'rpc_usage',
     ]);
   });
 
@@ -1873,7 +1904,8 @@ describe('sync-nonce command execution', () => {
       '--apply',
     ], output)).rejects.toBe(failure);
 
-    expect(lines).toEqual([]);
+    expect(lines.map((line) => JSON.parse(line).event))
+      .toEqual(['rpc_usage']);
     expect(output).not.toHaveBeenCalled();
   });
 
@@ -1895,8 +1927,10 @@ describe('sync-nonce command execution', () => {
       throw failure;
     })).rejects.toBe(failure);
 
-    expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!).event).toBe('signer_nonce_synced');
+    expect(lines.map((line) => JSON.parse(line).event)).toEqual([
+      'signer_nonce_synced',
+      'rpc_usage',
+    ]);
     expect(syncNonce).toHaveBeenCalledOnce();
   });
 
@@ -1937,6 +1971,9 @@ describe('sync-nonce command execution', () => {
   it.each(SIGNALS)(
     'returns interrupted for handled %s cancellation',
     async (shutdownSignal) => {
+      const lines: string[] = [];
+      await useRealNonceLogger((line) => lines.push(line));
+
       const output = vi.fn();
       const listenersBefore = {
         SIGINT: process.listenerCount('SIGINT'),
@@ -1953,6 +1990,9 @@ describe('sync-nonce command execution', () => {
       });
 
       expect(await main(SYNC_ARGS, output)).toBe('interrupted');
+
+      expect(lines.map((line) => JSON.parse(line).event))
+        .toEqual(['rpc_usage']);
 
       expect(output).not.toHaveBeenCalled();
       expect(process.listenerCount('SIGINT')).toBe(listenersBefore.SIGINT);
@@ -1983,11 +2023,16 @@ describe('sync-nonce command execution', () => {
     ], output)).toBe('success');
 
     expect(output).toHaveBeenCalledOnce();
-    expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!).event).toBe('signer_nonce_synced');
+    expect(lines.map((line) => JSON.parse(line).event)).toEqual([
+      'signer_nonce_synced',
+      'rpc_usage',
+    ]);
   });
 
   it('preserves an unrelated failure when a shutdown signal also arrives', async () => {
+    const lines: string[] = [];
+    await useRealNonceLogger((line) => lines.push(line));
+
     const failure = new Error('RPC failed');
     const output = vi.fn();
 
@@ -1998,6 +2043,169 @@ describe('sync-nonce command execution', () => {
 
     await expect(main(SYNC_ARGS, output)).rejects.toBe(failure);
 
+    expect(lines.map((line) => JSON.parse(line).event))
+      .toEqual(['rpc_usage']);
+
     expect(output).not.toHaveBeenCalled();
+  });
+});
+
+describe.each(ROUND_COMMANDS)('%s RPC summary', (command) => {
+  function operation() {
+    if (command === 'import') {
+      return vi.mocked(importQuicknetRound);
+    }
+
+    return vi.mocked(importQuicknetRoundWhenAvailable);
+  }
+
+  function setup() {
+    const rpcUsage = vi.fn<(context: RpcUsageLogContext) => void>();
+    const loggingFailed = vi.fn();
+    const output = vi.fn<(record: CliOutput) => void>();
+
+    importLogMocks.createRelayerLog.mockReturnValue({
+      rpcUsage,
+      loggingFailed,
+    });
+
+    const metrics = createRpcMetrics();
+    const measured = metrics.snapshot();
+    const capture = vi.fn(() => measured);
+
+    vi.mocked(createRelayerClients).mockReturnValue({
+      publicClient: PUBLIC_CLIENT,
+      walletClient: WALLET_CLIENT,
+      rpcMetrics: {
+        ...metrics,
+        snapshot: capture,
+      },
+    });
+
+    const args = [
+      command,
+      '--network',
+      PRESET,
+      '--round',
+      ROUND.toString(),
+    ];
+
+    return {
+      args,
+      output,
+      rpcUsage,
+      loggingFailed,
+      capture,
+      measured,
+    };
+  }
+
+  it('reports cumulative usage after preserving the command result', async () => {
+    const t = setup();
+
+    await expect(main(t.args, t.output)).resolves.toBe('success');
+
+    expect(t.output).toHaveBeenCalledExactlyOnceWith({
+      type: 'import-result',
+      round: ROUND,
+      result: IMPORTED,
+    });
+
+    expect(t.capture).toHaveBeenCalledOnce();
+    expect(t.rpcUsage).toHaveBeenCalledOnce();
+    expect(t.rpcUsage.mock.calls[0]![0]).toMatchObject({
+      observedAt: expect.any(String),
+      report: {
+        collectorId: t.measured.collectorId,
+        startedAt: t.measured.startedAt,
+        cumulative: {
+          logical: [],
+          http: [],
+        },
+        interval: {
+          available: false,
+          reason: 'no-baseline',
+        },
+      },
+    });
+
+    expect(t.output.mock.invocationCallOrder[0]!)
+      .toBeLessThan(t.rpcUsage.mock.invocationCallOrder[0]!);
+
+    expect(importLogMocks.createRelayerLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        destination: process.stderr,
+      }),
+    );
+    expect(t.loggingFailed).not.toHaveBeenCalled();
+  });
+
+  it.each(['submitter', 'operation', 'output'] as const)(
+    'preserves a failure from %s while reporting cumulative usage',
+    async (stage) => {
+      const t = setup();
+      const failure = new Error('Original command failure');
+
+      switch (stage) {
+        case 'submitter':
+          signerRuntimeMocks.openBeaconSubmitter
+            .mockRejectedValueOnce(failure);
+          break;
+
+        case 'operation':
+          operation().mockRejectedValueOnce(failure);
+          break;
+
+        case 'output':
+          t.output.mockImplementationOnce(() => {
+            throw failure;
+          });
+          break;
+      }
+
+      await expect(main(t.args, t.output)).rejects.toBe(failure);
+
+      expect(t.capture).toHaveBeenCalledOnce();
+      expect(t.rpcUsage).toHaveBeenCalledOnce();
+      expect(t.rpcUsage.mock.calls[0]![0].report.interval).toEqual({
+        available: false,
+        reason: 'no-baseline',
+      });
+    },
+  );
+
+  it('preserves success when summary delivery and diagnostics throw', async () => {
+    const t = setup();
+    const failure = new Error('Summary delivery failed');
+
+    t.rpcUsage.mockImplementationOnce(() => {
+      throw failure;
+    });
+
+    t.loggingFailed.mockImplementationOnce(() => {
+      throw new Error('Diagnostic delivery failed');
+    });
+
+    await expect(main(t.args, t.output)).resolves.toBe('success');
+
+    expect(t.output).toHaveBeenCalledOnce();
+    expect(t.loggingFailed).toHaveBeenCalledExactlyOnceWith({
+      error: failure,
+    });
+  });
+
+  it('does not fabricate a summary when client creation fails', async () => {
+    const t = setup();
+    const failure = new Error('Client creation failed');
+
+    vi.mocked(createRelayerClients).mockImplementationOnce(() => {
+      throw failure;
+    });
+
+    await expect(main(t.args, t.output)).rejects.toBe(failure);
+
+    expect(t.capture).not.toHaveBeenCalled();
+    expect(t.rpcUsage).not.toHaveBeenCalled();
+    expect(t.output).not.toHaveBeenCalled();
   });
 });
