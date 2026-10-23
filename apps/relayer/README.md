@@ -1194,6 +1194,7 @@ heartbeat
 logging_failed
 round_already_stored
 round_imported
+rpc_usage
 signer_bootstrap_deferred
 signer_nonce_synced
 status_publication_failed
@@ -1224,12 +1225,76 @@ on disk, and a failed write may have an uncertain on-disk outcome.
 
 Logging failures are isolated so logging itself does not stop the daemon.
 
+### RPC usage reporting
+
+`rpc_usage` is an info-level event reporting JSON-RPC activity through
+the relayer's instrumented public and wallet clients. It excludes drand
+beacon fetches.
+
+Logical calls and HTTP requests are independent measurements. A logical
+call may require multiple HTTP requests because of retries, while batching
+can combine multiple logical calls into one HTTP request.
+
+Logical durations run from invocation to resolution or rejection. HTTP
+durations run from request start until response headers arrive or the
+request rejects; they do not measure full response-body processing.
+An HTTP response does not establish that the JSON-RPC operation succeeded.
+
+Reports include cumulative usage since collector creation and, when
+available, an interval view. Logical rows are grouped by client and method;
+HTTP rows are grouped by client and include response-status counts.
+Average durations are null when there are no completions.
+
+The daemon checks the 60-second reporting threshold at completed cycle
+boundaries. There is no separate reporting timer or catch-up burst.
+Long-running startup or cycles can delay reports. The daemon also attempts
+one final report when its reporting session finishes, including when
+startup or execution fails.
+
+`import`, `import-when-available`, and `sync-nonce` attempt one final
+cumulative report after their result output or when execution unwinds
+through failure or cancellation. No summary is created if client creation
+fails. Forced termination such as SIGKILL cannot run final reporting.
+
+Daemon RPC events use the daemon's stdout log destination. The three
+CLI commands write RPC events to stderr, keeping stdout for command
+results. Reports follow `QUICKNET_LOG_LEVEL`: info, debug, and trace allow
+them; warn, error, fatal, and silent suppress them.
+
+The first report has no interval baseline. Later daemon reports use actual
+monotonic elapsed time between observations. Interval counters are deltas,
+while in-flight values describe the current observation. Work spanning
+observations contributes its full duration to the interval in which it
+completes.
+
+An interval is unavailable when there is no baseline, the collector changes,
+elapsed time is invalid, or counters regress. Cumulative usage remains
+available in those reports.
+
+The interval baseline advances when a report is constructed, before log
+delivery. Filtering or delivery failure does not preserve that interval
+for replay. A capture failure preserves the previous baseline, and the
+daemon waits for the next reporting threshold before retrying.
+
+RPC reporting failures do not replace command results or execution errors.
+These measurements are diagnostic observations, not provider billing
+totals or evidence of daemon health.
+
 ### Daemon status snapshot
 
 The daemon attempts to publish `daemon-status.json` in the canonical
 `QUICKNET_STATE_DIR` after successful startup and after each completed
 cycle. Publication starts only after signer journal initialization.
 Writes are serialized and awaited.
+
+When available, the snapshot also includes cumulative RPC usage captured
+for that publication. The `status` command displays this historical
+observation without making RPC requests. Older snapshots may omit RPC
+usage. If RPC capture fails, recovery-status publication can still proceed
+without the RPC section.
+
+Snapshot RPC usage is independent of periodic `rpc_usage` log reports and
+does not advance their interval baseline.
 
 Publication is awaited before processing continues. A slow or stalled
 filesystem write can delay startup or the next daemon cycle even though
