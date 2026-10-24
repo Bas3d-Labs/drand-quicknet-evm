@@ -40,6 +40,10 @@ import {
 } from '../../src/state/journal-bounds.js';
 
 import {
+  MAX_DAEMON_STATUS_ATTEMPT_DETAILS,
+} from '../../src/state/project-daemon-status-attempts.js';
+
+import {
   BLOCKER_PRECEDENCE,
 } from '../../src/state/signer-gate.js';
 
@@ -82,10 +86,15 @@ const IDENTITY = {
 };
 
 function recoverySnapshot() {
+  const detailedCount = Math.min(
+    MAX_RETAINED_ATTEMPTS,
+    MAX_DAEMON_STATUS_ATTEMPT_DETAILS,
+  );
+
   let hashNumber = 1;
 
   const attempts = Array.from(
-    { length: MAX_RETAINED_ATTEMPTS },
+    { length: detailedCount },
     (_, index) => {
       const suffix = index.toString(16);
 
@@ -126,6 +135,17 @@ function recoverySnapshot() {
     runId: ID,
     observedAt: AT,
     journalInitialized: true,
+    attemptSummary: {
+      retainedCount: MAX_RETAINED_ATTEMPTS,
+      includedCount: 0,
+      unresolvedCount: MAX_RETAINED_ATTEMPTS,
+      lowestNonce: (
+        MAX_UINT256 - BigInt(MAX_RETAINED_ATTEMPTS - 1)
+      ).toString(),
+      highestNonce: MAX_UINT256.toString(),
+      detailedCount,
+      omittedCount: MAX_RETAINED_ATTEMPTS - detailedCount,
+    },
     attempts,
     lastCompletedCycle: {
       cycle: MAX_COUNT,
@@ -280,7 +300,7 @@ describe('daemon status size budget', () => {
     );
   });
 
-  it('fits complete recovery data and every RPC row within the size limit with margin', () => {
+  it('fits bounded recovery details, population summary, and every RPC row with margin', () => {
     const recovery = recoverySnapshot();
     const rpcUsage = readRpcUsageSnapshot(metricsFixture());
 
@@ -301,7 +321,18 @@ describe('daemon status size budget', () => {
     expect(rpcUsage.http).toHaveLength(2);
     expect(serialized).not.toContain('averageDurationMs');
 
-    expect(candidate.attempts).toHaveLength(MAX_RETAINED_ATTEMPTS);
+    expect(candidate.attempts).toHaveLength(Math.min(
+      MAX_RETAINED_ATTEMPTS,
+      MAX_DAEMON_STATUS_ATTEMPT_DETAILS,
+    ));
+
+    expect(candidate.attemptSummary.retainedCount)
+      .toBe(MAX_RETAINED_ATTEMPTS);
+
+    expect(
+      candidate.attemptSummary.detailedCount
+      + candidate.attemptSummary.omittedCount,
+    ).toBe(MAX_RETAINED_ATTEMPTS);
 
     for (const attempt of candidate.attempts) {
       expect(attempt.transactionHashes).toHaveLength(

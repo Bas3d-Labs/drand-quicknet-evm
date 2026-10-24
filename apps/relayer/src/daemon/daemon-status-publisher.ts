@@ -4,6 +4,7 @@ import {
 } from '../diagnostics/rpc/rpc-usage-snapshot.js';
 
 import {
+  readDaemonStatusAttemptPopulation,
   readDaemonStatusSnapshot,
   type DaemonStatusCompletedCycle,
   type DaemonStatusRetryObservation,
@@ -13,6 +14,10 @@ import {
 import {
   writeDaemonStatusFile,
 } from '../state/file-daemon-status-store.js';
+
+import {
+  projectDaemonStatusAttempts,
+} from '../state/project-daemon-status-attempts.js';
 
 import type {
   SignerRuntimeObservation,
@@ -175,6 +180,18 @@ export function createDaemonStatusPublisher(
         }
       }
 
+      const attempts = readDaemonStatusAttemptPopulation(
+        runtime.attempts.map((attempt) => ({
+          attemptId: attempt.attemptId,
+          workId: attempt.workId,
+          nonce: attempt.nonce.toString(),
+          phase: attempt.phase,
+          transactionHashes: attempt.transactionHashes,
+        })),
+      );
+
+      const projection = projectDaemonStatusAttempts(attempts);
+
       const snapshot = readDaemonStatusSnapshot({
         version: 1,
         identity,
@@ -184,13 +201,8 @@ export function createDaemonStatusPublisher(
         lastCompletedCycle,
         lastRetryObservation,
         lastObservedGate: runtime.status,
-        attempts: runtime.attempts.map((attempt) => ({
-          attemptId: attempt.attemptId,
-          workId: attempt.workId,
-          nonce: attempt.nonce.toString(),
-          phase: attempt.phase,
-          transactionHashes: attempt.transactionHashes,
-        })),
+        attemptSummary: projection.summary,
+        attempts: projection.details,
         ...rpcFields,
       }, identity);
 

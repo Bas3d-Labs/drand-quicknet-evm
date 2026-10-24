@@ -14,6 +14,10 @@ import {
   MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
 } from '../../src/state/journal-bounds.js';
 
+import {
+  MAX_DAEMON_STATUS_ATTEMPT_DETAILS,
+} from '../../src/state/project-daemon-status-attempts.js';
+
 const IDENTITY = {
   chainId: 4663,
   signer: `0x${'ab'.repeat(20)}` as const,
@@ -30,6 +34,15 @@ function snapshot() {
     runId: RUN_ID,
     observedAt: AT,
     journalInitialized: true,
+    attemptSummary: {
+      retainedCount: 0,
+      includedCount: 0,
+      unresolvedCount: 0,
+      lowestNonce: null,
+      highestNonce: null,
+      detailedCount: 0,
+      omittedCount: 0,
+    },
     attempts: [],
     lastCompletedCycle: null,
     lastRetryObservation: null,
@@ -90,6 +103,29 @@ function statusAttempts(
       },
     ),
   }));
+}
+
+function unresolvedSummary(
+  retainedCount: number,
+  detailedCount: number,
+) {
+  let lowestNonce: string | null = null;
+  let highestNonce: string | null = null;
+
+  if (retainedCount > 0) {
+    lowestNonce = '0';
+    highestNonce = String(retainedCount - 1);
+  }
+
+  return {
+    retainedCount,
+    includedCount: 0,
+    unresolvedCount: retainedCount,
+    lowestNonce,
+    highestNonce,
+    detailedCount,
+    omittedCount: retainedCount - detailedCount,
+  };
 }
 
 describe('readDaemonStatusSnapshot', () => {
@@ -224,11 +260,20 @@ describe('readDaemonStatusSnapshot', () => {
       .toThrow('Invalid daemon status snapshot.');
   });
 
-  it('accepts both supported bounds without dropping attempt or gate information', () => {
+  it('accepts bounded details and maximum candidate hashes without losing summary or gate information', () => {
+    const detailedCount = Math.min(
+      MAX_RETAINED_ATTEMPTS,
+      MAX_DAEMON_STATUS_ATTEMPT_DETAILS,
+    );
+
     const input = {
       ...snapshot(),
-      attempts: statusAttempts(
+      attemptSummary: unresolvedSummary(
         MAX_RETAINED_ATTEMPTS,
+        detailedCount,
+      ),
+      attempts: statusAttempts(
+        detailedCount,
         MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
       ),
     };
@@ -238,7 +283,9 @@ describe('readDaemonStatusSnapshot', () => {
 
     expect(result).toEqual(before);
     expect(input).toEqual(before);
-    expect(result.attempts).toHaveLength(MAX_RETAINED_ATTEMPTS);
+    expect(result.attempts).toHaveLength(detailedCount);
+    expect(result.attemptSummary).toEqual(input.attemptSummary);
+    expect(Object.isFrozen(result.attemptSummary)).toBe(true);
     expect(result.attempts).not.toBe(input.attempts);
     expect(Object.isFrozen(result.attempts)).toBe(true);
 
@@ -259,16 +306,19 @@ describe('readDaemonStatusSnapshot', () => {
     expect(result.lastObservedGate).toEqual(input.lastObservedGate);
   });
 
-  it('rejects one retained attempt above the supported maximum', () => {
+  it('rejects a population above the retention maximum even when details fit', () => {
+    const retainedCount = MAX_RETAINED_ATTEMPTS + 1;
+
     const input = {
       ...snapshot(),
-      attempts: statusAttempts(MAX_RETAINED_ATTEMPTS + 1, 1),
+      attemptSummary: unresolvedSummary(retainedCount, 1),
+      attempts: statusAttempts(1, 1),
     };
+
     const before = structuredClone(input);
 
-    expect(() => readDaemonStatusSnapshot(input, IDENTITY)).toThrow(
-      'Invalid daemon status snapshot.',
-    );
+    expect(() => readDaemonStatusSnapshot(input, IDENTITY))
+      .toThrow('Invalid daemon status snapshot.');
 
     expect(input).toEqual(before);
   });
@@ -276,6 +326,7 @@ describe('readDaemonStatusSnapshot', () => {
   it('rejects one transaction hash above the per-attempt maximum', () => {
     const input = {
       ...snapshot(),
+      attemptSummary: unresolvedSummary(1, 1),
       attempts: statusAttempts(
         1,
         MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT + 1,
@@ -290,25 +341,30 @@ describe('readDaemonStatusSnapshot', () => {
     expect(input).toEqual(before);
   });
 
-  it('counts included attempts toward the supported maximum', () => {
+  it('counts omitted included attempts toward the retention maximum', () => {
+    const retainedCount = MAX_RETAINED_ATTEMPTS + 1;
+
     const input = {
       ...snapshot(),
-      attempts: statusAttempts(MAX_RETAINED_ATTEMPTS + 1, 1).map(
-        (attempt) => ({
-          ...attempt,
-          phase: 'included',
-        }),
-      ),
+      attemptSummary: {
+        ...unresolvedSummary(retainedCount, 1),
+        includedCount: retainedCount,
+        unresolvedCount: 0,
+      },
+      attempts: statusAttempts(1, 1).map((attempt) => ({
+        ...attempt,
+        phase: 'included',
+      })),
     };
 
-    expect(() => readDaemonStatusSnapshot(input, IDENTITY)).toThrow(
-      'Invalid daemon status snapshot.',
-    );
+    expect(() => readDaemonStatusSnapshot(input, IDENTITY))
+      .toThrow('Invalid daemon status snapshot.');
   });
 
   it('still rejects an empty transaction-hash list', () => {
     const input = {
       ...snapshot(),
+      attemptSummary: unresolvedSummary(1, 1),
       attempts: statusAttempts(1, 0),
     };
 

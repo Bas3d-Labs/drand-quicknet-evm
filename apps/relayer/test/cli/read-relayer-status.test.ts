@@ -50,6 +50,15 @@ const SNAPSHOT = readDaemonStatusSnapshot({
   lastCompletedCycle: null,
   lastRetryObservation: null,
   journalInitialized: true,
+  attemptSummary: {
+    retainedCount: 0,
+    includedCount: 0,
+    unresolvedCount: 0,
+    lowestNonce: null,
+    highestNonce: null,
+    detailedCount: 0,
+    omittedCount: 0,
+  },
   attempts: [],
   lastObservedGate: {
     open: true,
