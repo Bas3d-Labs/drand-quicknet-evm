@@ -115,9 +115,11 @@ export async function inspectSignerInclusions(
     throw new TypeError('Invalid signer inclusion input.');
   }
 
-  const openingHead = await checkBlockAnchor(publicClient, head);
-  if (openingHead !== null) {
-    return openingHead;
+  if (snapshot.attempts.length > 0) {
+    const openingHead = await checkBlockAnchor(publicClient, head);
+    if (openingHead !== null) {
+      return openingHead;
+    }
   }
 
   const attempts: JournalAttempt[] = [];

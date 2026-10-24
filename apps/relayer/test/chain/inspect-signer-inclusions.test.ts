@@ -324,7 +324,7 @@ describe('signer inclusion inspection', () => {
     });
   });
 
-  it('checks the nonce for an empty queue', async () => {
+  it('checks an empty queue with only the two anchored nonce block reads', async () => {
     const t = await setup();
 
     t.getTransactionCount.mockResolvedValue(4);
@@ -339,10 +339,135 @@ describe('signer inclusion inspection', () => {
       inclusionChecksComplete: true,
       broadcastAttemptId: null,
       attempts: [],
-      observation: { nonce: 4n },
+      observation: {
+        anchor: anchorAt(130n),
+        nonce: 4n,
+      },
     });
 
     expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+
+    expect(t.getTransactionCount).toHaveBeenCalledExactlyOnceWith({
+      address: ACCOUNT.address,
+      blockNumber: 130n,
+    });
+
+    expect(t.getBlock).toHaveBeenCalledTimes(2);
+    expect(
+      t.getBlock.mock.calls.map(([request]) => request.blockNumber),
+    ).toEqual([130n, 130n]);
+
+    const blockCalls = t.getBlock.mock.invocationCallOrder;
+    const nonceCall = t.getTransactionCount.mock.invocationCallOrder[0]!;
+
+    expect(blockCalls[0]!).toBeLessThan(nonceCall);
+    expect(nonceCall).toBeLessThan(blockCalls[1]!);
+  });
+
+  it('rejects a changed opening anchor for an empty queue before reading the nonce', async () => {
+    const t = await setup();
+
+    t.getBlock.mockResolvedValueOnce({
+      number: 130n,
+      hash: FORK,
+      parentHash: hashAt(129n),
+      transactions: [],
+    });
+
+    expect(await t.run({
+      ...t.snapshot,
+      nextNonce: 4n,
+      lastObservation: t.snapshot.baseline,
+      attempts: [],
+    })).toEqual({
+      status: 'anchor-changed',
+      observedAnchor: {
+        blockNumber: 130n,
+        blockHash: FORK,
+      },
+    });
+
+    expect(t.getBlock).toHaveBeenCalledOnce();
+    expect(t.getTransactionCount).not.toHaveBeenCalled();
+    expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it('rejects a changed closing anchor for an empty queue after reading the nonce', async () => {
+    const t = await setup();
+
+    t.getTransactionCount.mockImplementationOnce(async () => {
+      t.getBlock.mockResolvedValueOnce({
+        number: 130n,
+        hash: FORK,
+        parentHash: hashAt(129n),
+        transactions: [],
+      });
+
+      return 4;
+    });
+
+    expect(await t.run({
+      ...t.snapshot,
+      nextNonce: 4n,
+      lastObservation: t.snapshot.baseline,
+      attempts: [],
+    })).toEqual({
+      status: 'anchor-changed',
+      observedAnchor: {
+        blockNumber: 130n,
+        blockHash: FORK,
+      },
+    });
+
+    expect(t.getBlock).toHaveBeenCalledTimes(2);
+    expect(t.getTransactionCount).toHaveBeenCalledOnce();
+    expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it('rejects a nonce behind the durable journal for an empty queue', async () => {
+    const t = await setup();
+
+    t.getTransactionCount.mockResolvedValue(3);
+
+    expect(await t.run({
+      ...t.snapshot,
+      nextNonce: 4n,
+      lastObservation: t.snapshot.baseline,
+      attempts: [],
+    })).toEqual({
+      status: 'nonce-behind-journal',
+      observation: {
+        anchor: anchorAt(130n),
+        nonce: 3n,
+      },
+    });
+
+    expect(t.getBlock).toHaveBeenCalledTimes(2);
+    expect(t.getTransactionCount).toHaveBeenCalledOnce();
+    expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+  });
+
+  it('preserves the opening anchor check before inspecting retained attempts', async () => {
+    const t = await setup();
+
+    t.getBlock.mockResolvedValueOnce({
+      number: 130n,
+      hash: FORK,
+      parentHash: hashAt(129n),
+      transactions: [],
+    });
+
+    expect(await t.run()).toEqual({
+      status: 'anchor-changed',
+      observedAnchor: {
+        blockNumber: 130n,
+        blockHash: FORK,
+      },
+    });
+
+    expect(t.getBlock).toHaveBeenCalledOnce();
+    expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+    expect(t.getTransactionCount).not.toHaveBeenCalled();
   });
 
   it('discovers an external replacement without advancing durable search progress', async () => {
