@@ -102,13 +102,16 @@ export function createBeaconSubmitter(
   async function recover(
     cycle?: number,
   ): Promise<SignerRecoveryCycleResult> {
-    const result = await recoverSignerAtHeads({
-      publicClient,
-      recovery: recoveryCycle,
-      readChainHeads,
-      maxBlockRange,
-      signal,
-    }, cycle);
+    const result = await coordinator.observeReconciliation(
+      () => recoverSignerAtHeads({
+        publicClient,
+        recovery: recoveryCycle,
+        readChainHeads,
+        maxBlockRange,
+        signal,
+      }, cycle),
+      cycle,
+    );
 
     try {
       options.onRecoveryCompleted?.(Object.freeze({

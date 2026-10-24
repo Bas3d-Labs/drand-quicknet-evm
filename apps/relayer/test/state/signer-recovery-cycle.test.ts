@@ -64,6 +64,7 @@ const OBSERVATION = {
 async function setup(options: {
   empty?: boolean;
   missing?: boolean;
+  maxRetainedAttempts?: number;
 } = {}) {
   let visible: TransactionJournalRead = {
     kind: 'present',
@@ -84,6 +85,7 @@ async function setup(options: {
   }
 
   const events: string[] = [];
+  const lines: string[] = [];
   const load = vi.fn(async () => visible);
 
   const save = vi.fn<TransactionJournalStore['save']>(
@@ -98,12 +100,14 @@ async function setup(options: {
 
   const create = () => SignerCoordinator.create({
     identity: IDENTITY,
-    maxRetainedAttempts: 3,
+    maxRetainedAttempts: options.maxRetainedAttempts ?? 3,
     store: { load, save },
     log: createRelayerLog({
       chainId: 4663,
       destination: {
-        write() {},
+        write(line) {
+          lines.push(line);
+        },
       },
     }),
     createErrorSummary: (secrets = []) => ({
@@ -175,6 +179,7 @@ async function setup(options: {
 
   save.mockClear();
   events.length = 0;
+  lines.length = 0;
 
   const hash =
     coordinator.attempts[0]?.transactionHashes[0] ?? HASH;
@@ -248,6 +253,7 @@ async function setup(options: {
     getBlock,
     signTransaction,
     absent,
+    lines,
     at: (value: number) => {
       now = value;
     },
@@ -1201,6 +1207,175 @@ describe('signer recovery cycle', () => {
     });
 
     expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.request).not.toHaveBeenCalled();
+  });
+
+  it('preserves broadcast events and attributes the final gate change to reconciliation', async () => {
+    const t = await setup();
+
+    t.save.mockRejectedValueOnce(
+      new Error('Observation persistence failed'),
+    );
+
+    await expect(
+      t.coordinator.recover(t.recovery),
+    ).rejects.toThrow('Journal persistence');
+
+    expect(t.coordinator.status.primaryReason)
+      .toBe('persistence-failure');
+
+    t.lines.length = 0;
+
+    const result = await t.coordinator.observeReconciliation(
+      () => t.cycle.run(t.recovery, 30),
+      30,
+    );
+
+    expect(result).toMatchObject({
+      inspection: { status: 'unresolved' },
+      broadcast: {
+        status: 'acknowledged',
+        nonce: 4n,
+      },
+      retryDelayMs: 100,
+    });
+
+    const records = t.lines.map((line) => JSON.parse(line));
+
+    expect(records.map((record) => record.event)).toEqual([
+      'attempt_broadcast_accepted',
+      'signer_blocked',
+    ]);
+
+    expect(records[0]).toMatchObject({
+      event: 'attempt_broadcast_accepted',
+      operation: { name: 'broadcast-attempt' },
+      cycle: 30,
+      nonce: '4',
+    });
+
+    expect(records[1]).toMatchObject({
+      event: 'signer_blocked',
+      operation: { name: 'reconcile-attempt' },
+      cycle: 30,
+      reason: 'unresolved-attempt',
+      blockers: t.coordinator.status.blockers,
+    });
+
+    expect(t.request).toHaveBeenCalledOnce();
+    expect(t.signTransaction).toHaveBeenCalledOnce();
+    expect(t.coordinator.canBroadcast).toBe(false);
+  });
+
+  it('does not add transient recovery blockers to the released episode', async () => {
+    const t = await setup({
+      empty: true,
+      maxRetainedAttempts: 1,
+    });
+
+    // Establish a capacity-only episode. Coalesce fixture preparation
+    // and inclusion checking so their temporary blockers do not become
+    // part of the published episode.
+    await t.coordinator.observeReconciliation(async () => {
+      const prepared = await t.coordinator.prepareAttempt({
+        workId: 'test-work:retained-inclusion',
+        account: ACCOUNT,
+        transaction: {
+          type: 'eip1559',
+          to: ACCOUNT.address,
+          data: '0x1234',
+          value: 0n,
+          gas: 100_000n,
+          maxFeePerGas: 2n,
+          maxPriorityFeePerGas: 1n,
+        },
+      });
+
+      if (prepared.status !== 'prepared') {
+        throw new Error('Expected a prepared attempt.');
+      }
+
+      t.getTransactionReceipt.mockResolvedValue({
+        transactionHash: prepared.transactionHash,
+        blockNumber: 100n,
+        blockHash: HASH,
+        status: 'success',
+      } as never);
+
+      t.getTransactionCount.mockResolvedValue(5);
+
+      await t.coordinator.checkInclusions({
+        publicClient: t.recovery.publicClient,
+        head: ANCHOR,
+      });
+    }, 40);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      primaryReason: 'journal-capacity-reached',
+      blockers: ['journal-capacity-reached'],
+    });
+
+    expect(t.coordinator.attempts).toHaveLength(1);
+    expect(t.coordinator.attempts[0]!.phase).toBe('included');
+
+    const initialRecords = t.lines.map((line) => JSON.parse(line));
+
+    expect(initialRecords.map((record) => record.event)).toEqual([
+      'signer_blocked',
+    ]);
+
+    expect(initialRecords[0]).toMatchObject({
+      reason: 'journal-capacity-reached',
+      blockers: ['journal-capacity-reached'],
+      blockedSince: expect.any(String),
+    });
+
+    const blockedSince = initialRecords[0].blockedSince;
+
+    t.lines.length = 0;
+
+    // Exercise the real recovery cycle. Its intermediate recovery
+    // blocker must not be added to the existing capacity episode.
+    const result = await t.coordinator.observeReconciliation(
+      () => t.cycle.run({
+        ...t.recovery,
+        head: ANCHOR,
+      }, 41),
+      41,
+    );
+
+    expect(result).toMatchObject({
+      inspection: { status: 'resolution-available' },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+        attempts: [],
+      },
+      broadcast: null,
+      retryDelayMs: null,
+    });
+
+    expect(t.coordinator.attempts).toEqual([]);
+    expect(t.coordinator.status.open).toBe(true);
+
+    const records = t.lines.map((line) => JSON.parse(line));
+
+    expect(records.map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_gate_released',
+    ]);
+
+    expect(records[1]).toMatchObject({
+      event: 'signer_gate_released',
+      operation: { name: 'reconcile-attempt' },
+      cycle: 41,
+      blockedSince,
+      cleared: ['journal-capacity-reached'],
+    });
+
     expect(t.request).not.toHaveBeenCalled();
   });
 });

@@ -514,8 +514,21 @@ describe('signer coordinator transitions', () => {
       evidence: t.evidence,
     });
 
-    expect(t.records().map((record) => record.event))
-      .toEqual(['attempt_resolved']);
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
+    ]);
+
+    expect(t.records()[1]).toMatchObject({
+      event: 'signer_blocked',
+      operation: { name: 'reconcile-attempt' },
+      reason: 'unattributed-signer-activity',
+      blockers: [
+        'unattributed-signer-activity',
+        'recovery-incomplete',
+      ],
+      blockedSince: CREATED,
+    });
 
     expect(t.save.mock.calls[0]![0]).toMatchObject({
       attempts: [],
@@ -541,8 +554,22 @@ describe('signer coordinator transitions', () => {
       primaryReason: 'unattributed-signer-activity',
     });
 
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
+      'signer_blocked',
+    ]);
+
+    expect(t.records()[2]).toMatchObject({
+      event: 'signer_blocked',
+      operation: { name: 'reconcile-attempt' },
+      reason: 'unattributed-signer-activity',
+      blockers: ['unattributed-signer-activity'],
+      blockedSince: CREATED,
+    });
+
     expect(t.records().map((record) => record.event))
-      .toEqual(['attempt_resolved']);
+      .not.toContain('signer_gate_released');
   });
 
   it('defers release until recovery and inclusion checks complete and preserves the episode', async () => {
@@ -605,7 +632,7 @@ describe('signer coordinator transitions', () => {
     expect(t.records()).toHaveLength(3);
   });
 
-  it('preserves blockedSince and emits only primary-reason changes', async () => {
+  it('preserves blockedSince and suppresses unchanged blocker sets', async () => {
     const t = await setup();
     const options = searchRecoveryOptions(t);
 
@@ -671,7 +698,7 @@ describe('signer coordinator transitions', () => {
 
     expect(t.coordinator.status.primaryReason).toBe('unresolved-attempt');
 
-    // More partial progress leaves the primary reason unchanged.
+    // More partial progress leaves the entire blocker set unchanged.
     expect(await t.coordinator.recover({
       ...advanced,
       maxBlockRange: 1n,
@@ -1789,8 +1816,21 @@ describe('durable signer observations', () => {
       primaryReason: 'unattributed-signer-activity',
     });
 
-    expect(t.records().map((record) => record.event))
-      .toEqual(['attempt_resolved']);
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
+    ]);
+
+    expect(t.records()[1]).toMatchObject({
+      event: 'signer_blocked',
+      operation: { name: 'reconcile-attempt' },
+      reason: 'unattributed-signer-activity',
+      blockers: [
+        'unattributed-signer-activity',
+        'recovery-incomplete',
+      ],
+      blockedSince: CREATED,
+    });
 
     await checkEmptyInclusions(t.coordinator, 5);
 
@@ -1804,8 +1844,22 @@ describe('durable signer observations', () => {
       primaryReason: 'unattributed-signer-activity',
     });
 
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
+      'signer_blocked',
+    ]);
+
+    expect(t.records()[2]).toMatchObject({
+      event: 'signer_blocked',
+      operation: { name: 'reconcile-attempt' },
+      reason: 'unattributed-signer-activity',
+      blockers: ['unattributed-signer-activity'],
+      blockedSince: CREATED,
+    });
+
     expect(t.records().map((record) => record.event))
-      .toEqual(['attempt_resolved']);
+      .not.toContain('signer_gate_released');
   });
 });
 
