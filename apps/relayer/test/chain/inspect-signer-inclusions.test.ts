@@ -220,40 +220,124 @@ describe('signer inclusion inspection', () => {
     });
   });
 
-  it('invalidates only the record with a contradicted inclusion block', async () => {
-    const t = await setup();
-    const read = t.getBlock.getMockImplementation()!;
+  it.each([
+    {
+      name: 'A before B is verified',
+      contradictedIndex: 0,
+      preservedIndex: 1,
+      contradictedBlock: 110n,
+    },
+    {
+      name: 'B after A is verified',
+      contradictedIndex: 1,
+      preservedIndex: 0,
+      contradictedBlock: 111n,
+    },
+  ])(
+    'withholds complete-pass authorization when $name is contradicted',
+    async ({
+      contradictedIndex,
+      preservedIndex,
+      contradictedBlock,
+    }) => {
+      const t = await setup();
+      const read = t.getBlock.getMockImplementation()!;
 
-    t.getBlock.mockImplementation(async (request) => {
-      const block = await read(request);
+      const contradicted = t.snapshot.attempts[contradictedIndex]!;
+      const preserved = t.snapshot.attempts[preservedIndex]!;
 
-      return request.blockNumber === 110n
-        ? { ...block, hash: FORK }
-        : block;
-    });
+      // Model contradictory provider observations while the selected
+      // head remains unchanged. These responses do not establish
+      // shared ancestry between the two inclusion blocks.
+      t.getBlock.mockImplementation(async (request) => {
+        const block = await read(request);
 
-    expect(await t.run()).toMatchObject({
-      status: 'inspected',
-      inclusionChecksComplete: false,
-      broadcastAttemptId: null,
-      attempts: [
-        {
-          nonce: 4n,
-          phase: 'broadcast-may-have-occurred',
-          inclusion: null,
+        if (request.blockNumber === contradictedBlock) {
+          return {
+            ...block,
+            hash: FORK,
+          };
+        }
+
+        return block;
+      });
+
+      const result = await t.run();
+
+      expect(result.status).toBe('inspected');
+
+      if (result.status !== 'inspected') {
+        throw new Error('Expected inspected result.');
+      }
+
+      expect(result).toMatchObject({
+        observation: {
+          anchor: anchorAt(130n),
+          nonce: 6n,
         },
-        {
-          nonce: 5n,
-          phase: 'included',
-          inclusion: {
-            observedAt: anchorAt(130n),
-          },
-        },
-      ],
-    });
+        inclusionChecksComplete: false,
+        broadcastAttemptId: null,
+      });
 
-    expect(t.getTransactionReceipt).toHaveBeenCalledTimes(1);
-  });
+      expect(result.attempts).toHaveLength(2);
+
+      expect(result.attempts[contradictedIndex]).toEqual({
+        ...contradicted,
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+      });
+
+      expect(result.attempts[preservedIndex]).toEqual({
+        ...preserved,
+        inclusion: {
+          ...preserved.inclusion!,
+          observedAt: anchorAt(130n),
+        },
+      });
+
+      // Each record is checked independently, regardless of whether
+      // the contradiction occurs before or after the other verification.
+      // Preserving one verified inclusion cannot make the pass complete.
+      expect(t.getBlock).toHaveBeenCalledWith({
+        blockNumber: 110n,
+      });
+
+      expect(t.getBlock).toHaveBeenCalledWith({
+        blockNumber: 111n,
+      });
+
+      // A contradicted block invalidates its saved inclusion without
+      // requiring its receipt. The other inclusion is checked freshly.
+      expect(t.getTransactionReceipt)
+        .toHaveBeenCalledExactlyOnceWith({
+          hash: preserved.signedTransactions[0].transactionHash,
+        });
+
+      // Neither attempt's signed bytes are discarded or replaced.
+      expect(result.attempts.map(
+        (attempt) => attempt.signedTransactions,
+      )).toEqual(
+        t.snapshot.attempts.map(
+          (attempt) => attempt.signedTransactions,
+        ),
+      );
+
+      // Inspection must not mutate the input journal.
+      expect(t.snapshot.attempts.map(
+        (attempt) => attempt.phase,
+      )).toEqual(['included', 'included']);
+
+      expect(t.snapshot.attempts.map(
+        (attempt) => attempt.inclusion?.observedAt,
+      )).toEqual([
+        anchorAt(120n),
+        anchorAt(120n),
+      ]);
+
+      expect(t.snapshot.nextNonce).toBe(6n);
+      expect(t.snapshot.durableNextNonce).toBe(4n);
+    },
+  );
 
   it('preserves an included record when its receipt is unavailable', async () => {
     const t = await setup();
@@ -784,5 +868,217 @@ describe('signer inclusion inspection', () => {
       inclusionChecksComplete: false,
       broadcastAttemptId: null,
     });
+  });
+
+  it.each(['included', 'unresolved'] as const)(
+    'retains %s attempts when nonces are consumed but receipts and replacement evidence are unavailable',
+    async (state) => {
+      const t = await setup();
+
+      const input: TransactionJournalSnapshot = {
+        ...t.snapshot,
+        attempts: t.snapshot.attempts.map((attempt) => {
+          if (state === 'included') {
+            return attempt;
+          }
+
+          return {
+            ...attempt,
+            phase: 'broadcast-may-have-occurred',
+            inclusion: null,
+            replacementSearch: {
+              lowerBound: t.snapshot.baseline,
+              searchedThrough: null,
+            },
+          };
+        }),
+      };
+
+      t.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+        throw new TransactionReceiptNotFoundError({ hash });
+      });
+
+      // Unlike the single missing-receipt case, neither retained attempt
+      // can be verified here. Even nonce == nextNonce must not turn
+      // the whole population into verified inclusions.
+      t.getTransactionCount.mockResolvedValue(6);
+
+      const result = await t.run(input, 2n);
+
+      expect(result.status).toBe('inspected');
+
+      if (result.status !== 'inspected') {
+        throw new Error('Expected inspected result.');
+      }
+
+      expect(result).toMatchObject({
+        observation: {
+          anchor: anchorAt(130n),
+          nonce: 6n,
+        },
+        inclusionChecksComplete: false,
+        broadcastAttemptId: null,
+      });
+
+      expect(result.attempts).toHaveLength(2);
+      expect(result.attempts).toEqual(input.attempts);
+
+      expect(result.attempts.map(
+        (attempt) => attempt.signedTransactions,
+      )).toEqual(
+        t.snapshot.attempts.map(
+          (attempt) => attempt.signedTransactions,
+        ),
+      );
+
+      expect(t.getTransactionReceipt).toHaveBeenCalledTimes(2);
+
+      if (state === 'included') {
+        // Receipt absence does not contradict the saved block hashes.
+        // Preserve the evidence, but do not refresh its authorization.
+        expect(result.attempts.map(
+          (attempt) => attempt.inclusion?.observedAt,
+        )).toEqual([
+          anchorAt(120n),
+          anchorAt(120n),
+        ]);
+      } else {
+        expect(result.attempts.map(
+          (attempt) => attempt.inclusion,
+        )).toEqual([null, null]);
+
+        // Latest-head searching must not advance durable search cursors.
+        expect(result.attempts.map(
+          (attempt) => attempt.replacementSearch?.searchedThrough,
+        )).toEqual([null, null]);
+
+        expect(
+          t.getBlock.mock.calls
+            .filter(([request]) => request.includeTransactions)
+            .map(([request]) => request.blockNumber),
+        ).toEqual([
+          101n,
+          102n,
+          101n,
+          102n,
+        ]);
+      }
+
+      expect(input.nextNonce).toBe(6n);
+      expect(input.durableNextNonce).toBe(4n);
+    },
+  );
+
+  it('identifies an external replacement of A before making unresolved B eligible for rebroadcast', async () => {
+    const t = await setup();
+    const first = t.snapshot.attempts[0]!;
+    const second = t.snapshot.attempts[1]!;
+
+    const input: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: t.snapshot.attempts.map((attempt) => ({
+        ...attempt,
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+        replacementSearch: {
+          lowerBound: t.snapshot.baseline,
+          searchedThrough: null,
+        },
+      })),
+    };
+
+    t.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+      throw new TransactionReceiptNotFoundError({ hash });
+    });
+
+    // Nonce 4 is consumed; nonce 5 remains available.
+    t.getTransactionCount.mockResolvedValue(5);
+
+    // Identify the consuming transaction, rather than inferring a
+    // replacement from the advanced nonce alone.
+    t.transactions.set(101n, [{
+      hash: FORK,
+      from: ACCOUNT.address,
+      nonce: 4,
+    }]);
+
+    const result = await t.run(input, 2n);
+
+    expect(result.status).toBe('inspected');
+
+    if (result.status !== 'inspected') {
+      throw new Error('Expected inspected result.');
+    }
+
+    expect(result).toMatchObject({
+      observation: {
+        anchor: anchorAt(130n),
+        nonce: 5n,
+      },
+      inclusionChecksComplete: false,
+      broadcastAttemptId: second.attemptId,
+      attempts: [
+        {
+          attemptId: first.attemptId,
+          nonce: 4n,
+          phase: 'included',
+          inclusion: {
+            outcome: 'replaced',
+            replacementTransactionHash: FORK,
+            nonceAtAnchor: 5n,
+            inclusion: anchorAt(101n),
+            observedAt: anchorAt(130n),
+          },
+          replacementSearch: {
+            lowerBound: t.snapshot.baseline,
+            searchedThrough: null,
+          },
+        },
+        {
+          attemptId: second.attemptId,
+          nonce: 5n,
+          phase: 'broadcast-may-have-occurred',
+          inclusion: null,
+          replacementSearch: {
+            lowerBound: t.snapshot.baseline,
+            searchedThrough: null,
+          },
+        },
+      ],
+    });
+
+    expect(result.attempts).toHaveLength(2);
+
+    expect(result.attempts.map(
+      (attempt) => attempt.signedTransactions,
+    )).toEqual(
+      input.attempts.map(
+        (attempt) => attempt.signedTransactions,
+      ),
+    );
+
+    expect(t.getTransactionReceipt).toHaveBeenCalledTimes(2);
+
+    expect(
+      t.getBlock.mock.calls
+        .filter(([request]) => request.includeTransactions)
+        .map(([request]) => request.blockNumber),
+    ).toEqual([101n]);
+
+    // Inspection returns evidence; it neither mutates the input journal
+    // nor advances durable resolution.
+    expect(input.attempts.map(
+      (attempt) => attempt.phase,
+    )).toEqual([
+      'broadcast-may-have-occurred',
+      'broadcast-may-have-occurred',
+    ]);
+
+    expect(input.attempts.map(
+      (attempt) => attempt.inclusion,
+    )).toEqual([null, null]);
+
+    expect(input.nextNonce).toBe(6n);
+    expect(input.durableNextNonce).toBe(4n);
   });
 });

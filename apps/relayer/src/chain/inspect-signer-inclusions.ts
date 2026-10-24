@@ -64,6 +64,11 @@ export type SignerInclusionInspection =
       readonly status: 'inspected';
       readonly observation: AnchoredNonceObservation;
       readonly attempts: readonly JournalAttempt[];
+
+      /**
+       * True only when every retained attempt was verified during this
+       * inspection pass.
+       */
       readonly inclusionChecksComplete: boolean;
       
       /**

@@ -1378,4 +1378,653 @@ describe('signer recovery cycle', () => {
 
     expect(t.request).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    'admits B above safe and recovers both reorged inclusions; restart: %s',
+    async (restart) => {
+      const t = await setup();
+      const first = t.coordinator.attempts[0]!;
+
+      const firstHash = first.transactionHashes[0];
+
+      // Broadcast A using the coordinator's existing preparation permit.
+      expect(await t.coordinator.broadcastAttempt({
+        publicClient: t.recovery.publicClient,
+        attemptId: first.attemptId,
+      }, 50)).toMatchObject({
+        status: 'acknowledged',
+        transactionHash: firstHash,
+        nonce: 4n,
+      });
+
+      // A is included at 105, while the durable head remains at 100.
+      t.getTransactionReceipt.mockResolvedValue({
+        transactionHash: firstHash,
+        blockNumber: 105n,
+        blockHash: HASH,
+        status: 'success',
+      } as never);
+
+      t.getTransactionCount.mockImplementation(
+        async ({ blockNumber }) => {
+          if (blockNumber === 100n) {
+            return 4;
+          }
+
+          if (blockNumber === 110n) {
+            return 5;
+          }
+
+          throw new Error('Unexpected nonce observation block.');
+        },
+      );
+
+      const firstRecovery = await t.coordinator.observeReconciliation(
+        () => t.cycle.run({
+          ...t.recovery,
+          head: {
+            blockNumber: 110n,
+            blockHash: HASH,
+          },
+        }, 51),
+        51,
+      );
+
+      expect(firstRecovery).toMatchObject({
+        inspection: {
+          status: 'unresolved',
+          receipt: { status: 'included-not-durable' },
+        },
+        inclusions: {
+          status: 'inspected',
+          inclusionChecksComplete: true,
+        },
+        broadcast: null,
+      });
+
+      expect(t.coordinator.status.open).toBe(true);
+      expect(t.coordinator.status.blockers).toEqual([]);
+
+      expect(t.visible()).toMatchObject({
+        kind: 'present',
+        snapshot: {
+          nextNonce: 5n,
+          durableNextNonce: 4n,
+          attempts: [{
+            attemptId: first.attemptId,
+            nonce: 4n,
+            phase: 'included',
+            inclusion: {
+              outcome: 'success',
+              transactionHash: firstHash,
+              inclusion: {
+                blockNumber: 105n,
+                blockHash: HASH,
+              },
+            },
+          }],
+        },
+      });
+
+      // This preparation must succeed without advancing the durable head.
+      const second = await t.coordinator.prepareAttempt({
+        workId: 'test-work:second-before-safe',
+        account: {
+          ...ACCOUNT,
+          signTransaction: t.signTransaction,
+        },
+        transaction: {
+          type: 'eip1559',
+          to: ACCOUNT.address,
+          data: '0x5678',
+          value: 0n,
+          gas: 100_000n,
+          maxFeePerGas: 2n,
+          maxPriorityFeePerGas: 1n,
+        },
+      }, 52);
+
+      expect(second.status).toBe('prepared');
+
+      if (second.status !== 'prepared') {
+        throw new Error('Expected preparation before A becomes durable.');
+      }
+
+      expect(second.nonce).toBe(5n);
+      expect(second.transactionHash).not.toBe(firstHash);
+
+      // The fixture's default send response refers to A. Return B's hash
+      // for this broadcast.
+      t.request.mockResolvedValueOnce(second.transactionHash);
+
+      expect(await t.coordinator.broadcastAttempt({
+        publicClient: t.recovery.publicClient,
+        attemptId: second.attemptId,
+      }, 52)).toMatchObject({
+        status: 'acknowledged',
+        transactionHash: second.transactionHash,
+        nonce: 5n,
+      });
+
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        primaryReason: 'unresolved-attempt',
+      });
+
+      expect(t.coordinator.status.blockers)
+        .toContain('unresolved-attempt');
+
+      expect(t.coordinator.status.blockers)
+        .not.toContain('journal-capacity-reached');
+
+      expect(t.coordinator.attempts).toHaveLength(2);
+
+      // B is now included too. Both inclusions remain above safe.
+      t.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+        let blockNumber: bigint;
+
+        if (hash === firstHash) {
+          blockNumber = 105n;
+        } else if (hash === second.transactionHash) {
+          blockNumber = 106n;
+        } else {
+          throw new Error('Unexpected transaction receipt lookup.');
+        }
+
+        return {
+          transactionHash: hash,
+          blockNumber,
+          blockHash: HASH,
+          status: 'success',
+        } as never;
+      });
+
+      t.getTransactionCount.mockImplementation(
+        async ({ blockNumber }) => {
+          if (blockNumber === 100n) {
+            return 4;
+          }
+
+          if (blockNumber === 110n) {
+            return 6;
+          }
+
+          throw new Error('Unexpected nonce observation block.');
+        },
+      );
+
+      const secondRecovery = await t.coordinator.observeReconciliation(
+        () => t.cycle.run({
+          ...t.recovery,
+          head: {
+            blockNumber: 110n,
+            blockHash: HASH,
+          },
+        }, 53),
+        53,
+      );
+
+      expect(secondRecovery).toMatchObject({
+        inspection: {
+          status: 'unresolved',
+          receipt: { status: 'included-not-durable' },
+        },
+        inclusions: {
+          status: 'inspected',
+          inclusionChecksComplete: true,
+        },
+        broadcast: null,
+      });
+
+      expect(t.coordinator.status.open).toBe(true);
+      expect(t.coordinator.status.blockers).toEqual([]);
+
+      expect(t.visible()).toMatchObject({
+        kind: 'present',
+        snapshot: {
+          nextNonce: 6n,
+          durableNextNonce: 4n,
+          attempts: [
+            {
+              attemptId: first.attemptId,
+              nonce: 4n,
+              phase: 'included',
+            },
+            {
+              attemptId: second.attemptId,
+              nonce: 5n,
+              phase: 'included',
+            },
+          ],
+        },
+      });
+
+      expect(t.coordinator.attempts).toHaveLength(2);
+      expect(t.signTransaction).toHaveBeenCalledTimes(2);
+      expect(t.request).toHaveBeenCalledTimes(2);
+
+      const records = t.lines.map((line) => JSON.parse(line));
+
+      expect(records.filter(
+        (record) => record.event === 'attempt_resolved',
+      )).toEqual([]);
+
+      // Preserve the exact journaled transactions before the reorg.
+      const beforeReorg = t.visible();
+
+      if (beforeReorg.kind !== 'present') {
+        throw new Error('Expected a persisted journal.');
+      }
+
+      const firstBytes =
+        beforeReorg.snapshot.attempts[0]!
+          .signedTransactions[0].signedTransaction;
+
+      const secondBytes =
+        beforeReorg.snapshot.attempts[1]!
+          .signedTransactions[0].signedTransaction;
+
+      expect(beforeReorg.snapshot.attempts.map(
+        (attempt) => attempt.attemptId,
+      )).toEqual([
+        first.attemptId,
+        second.attemptId,
+      ]);
+
+      t.request.mockClear();
+      t.lines.length = 0;
+
+      // Replace every block above the unchanged durable anchor.
+      // Both old receipts disappear and the latest nonce returns to 4.
+      t.getBlock.mockImplementation(async ({ blockNumber } = {}) => {
+        if (blockNumber === undefined) {
+          throw new Error('Expected a numbered block lookup.');
+        }
+
+        let hash: Hash = HASH;
+
+        if (blockNumber > 100n) {
+          hash = OTHER;
+        }
+
+        let parentHash: Hash = HASH;
+
+        if (blockNumber > 101n) {
+          parentHash = OTHER;
+        }
+
+        return {
+          number: blockNumber,
+          hash,
+          parentHash,
+          transactions: [],
+        } as never;
+      });
+
+      t.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+        throw new TransactionReceiptNotFoundError({ hash });
+      });
+
+      t.getTransactionCount.mockResolvedValue(4);
+
+      const forkHead = {
+        blockNumber: 110n,
+        blockHash: OTHER,
+      };
+
+      const invalidated = await t.coordinator.observeReconciliation(
+        () => t.cycle.run({
+          ...t.recovery,
+          head: forkHead,
+        }, 54),
+        54,
+      );
+
+      expect(invalidated).toMatchObject({
+        inclusions: {
+          status: 'inspected',
+          inclusionChecksComplete: false,
+          attempts: [
+            {
+              attemptId: first.attemptId,
+              phase: 'broadcast-may-have-occurred',
+              inclusion: null,
+            },
+            {
+              attemptId: second.attemptId,
+              phase: 'broadcast-may-have-occurred',
+              inclusion: null,
+            },
+          ],
+        },
+        broadcast: null,
+        retryDelayMs: 100,
+      });
+
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        primaryReason: 'unresolved-attempt',
+      });
+
+      expect(t.request).not.toHaveBeenCalled();
+      expect(t.signTransaction).toHaveBeenCalledTimes(2);
+
+      expect(t.visible()).toMatchObject({
+        kind: 'present',
+        snapshot: {
+          nextNonce: 6n,
+          durableNextNonce: 4n,
+          attempts: [
+            {
+              attemptId: first.attemptId,
+              nonce: 4n,
+              phase: 'broadcast-may-have-occurred',
+              inclusion: null,
+            },
+            {
+              attemptId: second.attemptId,
+              nonce: 5n,
+              phase: 'broadcast-may-have-occurred',
+              inclusion: null,
+            },
+          ],
+        },
+      });
+
+      let coordinator = t.coordinator;
+      let recoveryCycle = t.cycle;
+      let retryNow = 0;
+
+      if (restart) {
+        coordinator = await t.create();
+
+        recoveryCycle = new SignerRecoveryCycle({
+          coordinator,
+          schedule: new BroadcastRetrySchedule({
+            initialDelayMs: 100,
+            maxDelayMs: 400,
+            now: () => retryNow,
+          }),
+        });
+
+        expect(coordinator.status).toMatchObject({
+          open: false,
+          recoveryComplete: false,
+          inclusionChecksComplete: false,
+        });
+
+        expect(coordinator.attempts.map(
+          (attempt) => attempt.attemptId,
+        )).toEqual([
+          first.attemptId,
+          second.attemptId,
+        ]);
+      }
+
+      const runForkRecovery = (cycle: number) =>
+        coordinator.observeReconciliation(
+          () => recoveryCycle.run({
+            ...t.recovery,
+            head: forkHead,
+          }, cycle),
+          cycle,
+        );
+
+      // A restored broadcast attempt must first establish fresh recovery
+      // and its retry schedule. Neither path sends during the initial delay.
+      expect(await runForkRecovery(55)).toMatchObject({
+        broadcast: null,
+        retryDelayMs: 100,
+      });
+
+      expect(coordinator.status.open).toBe(false);
+      expect(t.request).not.toHaveBeenCalled();
+
+      retryNow = 100;
+      t.at(100);
+
+      t.request.mockResolvedValueOnce(firstHash);
+
+      expect(await runForkRecovery(56)).toMatchObject({
+        broadcast: {
+          status: 'acknowledged',
+          attemptId: first.attemptId,
+          transactionHash: firstHash,
+          nonce: 4n,
+        },
+      });
+
+      expect(t.request).toHaveBeenCalledExactlyOnceWith({
+        method: 'eth_sendRawTransaction',
+        params: [firstBytes],
+      }, {
+        retryCount: 0,
+      });
+
+      expect(coordinator.status.open).toBe(false);
+      expect(t.signTransaction).toHaveBeenCalledTimes(2);
+
+      // A lands on the replacement chain. B is still absent.
+      t.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+        if (hash === firstHash) {
+          return {
+            transactionHash: firstHash,
+            blockNumber: 107n,
+            blockHash: OTHER,
+            status: 'success',
+          } as never;
+        }
+
+        throw new TransactionReceiptNotFoundError({ hash });
+      });
+
+      t.getTransactionCount.mockImplementation(
+        async ({ blockNumber }) => {
+          if (blockNumber === 100n) {
+            return 4;
+          }
+
+          if (blockNumber === 110n) {
+            return 5;
+          }
+
+          throw new Error('Unexpected nonce observation block.');
+        },
+      );
+
+      // Revalidate A before B becomes the oldest eligible retry.
+      // Switching the tracked attempt starts B's initial retry delay.
+      expect(await runForkRecovery(57)).toMatchObject({
+        inclusions: {
+          status: 'inspected',
+          inclusionChecksComplete: false,
+          attempts: [
+            {
+              attemptId: first.attemptId,
+              phase: 'included',
+              inclusion: {
+                transactionHash: firstHash,
+                inclusion: {
+                  blockNumber: 107n,
+                  blockHash: OTHER,
+                },
+              },
+            },
+            {
+              attemptId: second.attemptId,
+              phase: 'broadcast-may-have-occurred',
+              inclusion: null,
+            },
+          ],
+        },
+        broadcast: null,
+        retryDelayMs: 100,
+      });
+
+      expect(coordinator.status).toMatchObject({
+        open: false,
+        primaryReason: 'unresolved-attempt',
+      });
+
+      expect(t.request).toHaveBeenCalledTimes(1);
+
+      retryNow = 200;
+      t.at(200);
+
+      t.request.mockResolvedValueOnce(second.transactionHash);
+
+      expect(await runForkRecovery(58)).toMatchObject({
+        broadcast: {
+          status: 'acknowledged',
+          attemptId: second.attemptId,
+          transactionHash: second.transactionHash,
+          nonce: 5n,
+        },
+      });
+
+      expect(t.request).toHaveBeenNthCalledWith(2, {
+        method: 'eth_sendRawTransaction',
+        params: [secondBytes],
+      }, {
+        retryCount: 0,
+      });
+
+      expect(t.request).toHaveBeenCalledTimes(2);
+      expect(t.signTransaction).toHaveBeenCalledTimes(2);
+      expect(coordinator.status.open).toBe(false);
+
+      // B lands after A on the replacement chain.
+      t.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+        let blockNumber: bigint;
+
+        if (hash === firstHash) {
+          blockNumber = 107n;
+        } else if (hash === second.transactionHash) {
+          blockNumber = 108n;
+        } else {
+          throw new Error('Unexpected transaction receipt lookup.');
+        }
+
+        return {
+          transactionHash: hash,
+          blockNumber,
+          blockHash: OTHER,
+          status: 'success',
+        } as never;
+      });
+
+      t.getTransactionCount.mockImplementation(
+        async ({ blockNumber }) => {
+          if (blockNumber === 100n) {
+            return 4;
+          }
+
+          if (blockNumber === 110n) {
+            return 6;
+          }
+
+          throw new Error('Unexpected nonce observation block.');
+        },
+      );
+
+      expect(await runForkRecovery(59)).toMatchObject({
+        inclusions: {
+          status: 'inspected',
+          inclusionChecksComplete: true,
+        },
+        broadcast: null,
+      });
+
+      expect(coordinator.status).toMatchObject({
+        open: true,
+        blockers: [],
+      });
+
+      const recovered = t.visible();
+
+      if (recovered.kind !== 'present') {
+        throw new Error('Expected the recovered journal.');
+      }
+
+      expect(recovered.snapshot).toMatchObject({
+        nextNonce: 6n,
+        durableNextNonce: 4n,
+        attempts: [
+          {
+            attemptId: first.attemptId,
+            nonce: 4n,
+            phase: 'included',
+            inclusion: {
+              inclusion: {
+                blockNumber: 107n,
+                blockHash: OTHER,
+              },
+            },
+          },
+          {
+            attemptId: second.attemptId,
+            nonce: 5n,
+            phase: 'included',
+            inclusion: {
+              inclusion: {
+                blockNumber: 108n,
+                blockHash: OTHER,
+              },
+            },
+          },
+        ],
+      });
+
+      expect(recovered.snapshot.attempts).toHaveLength(2);
+
+      expect(recovered.snapshot.attempts.map(
+        (attempt) => attempt.signedTransactions,
+      )).toEqual(
+        beforeReorg.snapshot.attempts.map(
+          (attempt) => attempt.signedTransactions,
+        ),
+      );
+
+      expect(t.lines.map((line) => JSON.parse(line).event))
+        .not.toContain('attempt_resolved');
+
+      // Only now advance safe past both replacement-chain inclusions.
+      t.lines.length = 0;
+
+      await coordinator.observeReconciliation(
+        () => recoveryCycle.run({
+          ...t.recovery,
+          anchor: forkHead,
+          head: forkHead,
+        }, 60),
+        60,
+      );
+
+      expect(t.visible()).toMatchObject({
+        kind: 'present',
+        snapshot: {
+          nextNonce: 6n,
+          durableNextNonce: 6n,
+          attempts: [],
+        },
+      });
+
+      expect(coordinator.status).toMatchObject({
+        open: true,
+        blockers: [],
+      });
+
+      const resolutions = t.lines
+        .map((line) => JSON.parse(line))
+        .filter((record) => record.event === 'attempt_resolved');
+
+      expect(resolutions.map((record) => record.attemptId)).toEqual([
+        first.attemptId,
+        second.attemptId,
+      ]);
+
+      expect(t.request).toHaveBeenCalledTimes(2);
+      expect(t.signTransaction).toHaveBeenCalledTimes(2);
+    },
+  );
 });
