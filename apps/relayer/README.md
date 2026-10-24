@@ -736,8 +736,9 @@ Package managers and supervisors may additionally report wrapper errors.
 | `1` | Application failure, refused nonce repair, or explicit launcher validation failure. |
 | `2` | CLI output failure; the operation may already have succeeded. |
 | `3` | One-shot import remains pending. A journaled transaction attempt remains unresolved. |
-| `4` | Import deferred because the signer is unavailable, or nonce-sync inspection deferred. |
+| `4` | Import deferred because the signer is unavailable or the work is already retained, or nonce-sync inspection deferred. |
 | `5` | One-shot command handled SIGINT/SIGTERM before producing a result. Retained journal state may still require recovery. |
+| `6` | Signer startup refused because the journal exceeds supported runtime bounds. |
 | `9` | Node startup failure observed when a configured env file is missing. |
 | `75` | Another process holds the service lock; this may have no diagnostic output. |
 
@@ -759,8 +760,10 @@ Incomplete work uses separate statuses:
 - `3` (`pending`): a journaled transaction was not acknowledged by the RPC,
   or receipt waiting timed out. Output includes the attempt ID,
   locally computed transaction hash, and pending reason.
-- `4` (`deferred`): fresh signer recovery left the gate closed, so this
-  submission prepared no new attempt. Output includes the signer blocker.
+- `4` (`deferred`): no new attempt was prepared. For
+  `signer-unavailable`, output includes the signer blocker. For
+  `already-retained`, output includes the existing attempt ID and
+  work identity (`workId`).
 - `5` (`interrupted`): the command handled cancellation before producing
   an import result. No result is printed; retained journal state may
   still require recovery.
@@ -787,6 +790,36 @@ fixed diagnostic reason:
 | `state-directory` | State-directory validation or checkpoint placement. |
 | `lock-file` | Lock-file lookup, type, or link-count validation. |
 | `descriptor` | No matching inherited exclusive flock was verified. |
+
+### Journal runtime bounds
+
+The signer runtime supports at most:
+
+- One retained transaction attempt.
+- Sixteen signed transaction candidates per attempt, including the
+  original transaction.
+
+These are supported runtime limits, not environment settings. The
+candidate limit does not itself enable automatic fee replacement.
+
+Signer startup refuses a journal that exceeds either limit, reports
+`journal-bounds-exceeded`, and exits with status `6`. It does not truncate
+or overwrite the journal to make it fit.
+
+Preserve the journal and inspect it using explicit journal status mode.
+Journal inspection remains available for structurally valid journals
+that exceed runtime bounds. Inspection does not authorize signing.
+
+An over-bound journal requires investigation and a deliberate recovery
+plan. Do not delete attempts or signed transaction candidates merely to
+pass startup validation: they may represent transactions that were
+already broadcast.
+
+`sync-nonce` is not a way to discard retained attempts. It refuses repair
+while any attempt remains retained.
+
+Having one valid retained attempt is normal during transaction recovery.
+It is distinct from exceeding the journal bounds.
 
 ## Network sources
 
@@ -1193,6 +1226,7 @@ durable_head_regressed
 heartbeat
 logging_failed
 round_already_stored
+round_deferred
 round_imported
 rpc_usage
 signer_bootstrap_deferred
@@ -1202,6 +1236,15 @@ status_publication_failed
 
 `checkpoint_advanced` and `round_already_stored` are debug-level routine
 progress. `heartbeat` is emitted periodically at info level.
+
+`round_deferred` reports a round for which no new transaction attempt
+was prepared. Its reason distinguishes `signer-unavailable`, which
+includes a signer blocker, from `already-retained`, which includes the
+existing attempt ID and work identity (`workId`).
+
+An already-retained result means the signer coordinator already tracks
+that work. It does not establish that the transaction succeeded or that
+the beacon is stored; the retained attempt still requires reconciliation.
 
 `signer_bootstrap_deferred` is an info-level event emitted when first-use
 initialization observes mismatched nonce counts. It includes `signer`,
