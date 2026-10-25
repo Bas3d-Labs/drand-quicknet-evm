@@ -129,7 +129,7 @@ function snapshot(
 describe('journal bounds', () => {
   it('keeps defaults within the supported maxima', () => {
     expect(MAX_RETAINED_ATTEMPTS).toBe(16);
-    expect(DEFAULT_MAX_RETAINED_ATTEMPTS).toBe(1);
+    expect(DEFAULT_MAX_RETAINED_ATTEMPTS).toBe(16);
     expect(MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT).toBe(16);
 
     expect(DEFAULT_JOURNAL_BOUNDS).toEqual({

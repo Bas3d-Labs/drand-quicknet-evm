@@ -7,7 +7,7 @@ import type {
  */
 export const MAX_RETAINED_ATTEMPTS = 16;
 
-export const DEFAULT_MAX_RETAINED_ATTEMPTS = 1;
+export const DEFAULT_MAX_RETAINED_ATTEMPTS = 16;
 
 /**
  * Maximum signed variants retained for one allocated nonce.

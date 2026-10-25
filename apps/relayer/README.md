@@ -795,12 +795,14 @@ fixed diagnostic reason:
 
 The signer runtime supports at most:
 
-- One retained transaction attempt.
+- Sixteen retained transaction attempts, including unresolved attempts
+  and inclusions awaiting durable resolution.
 - Sixteen signed transaction candidates per attempt, including the
   original transaction.
 
-These are supported runtime limits, not environment settings. The
-candidate limit does not itself enable automatic fee replacement.
+These are independent supported runtime limits, not environment settings.
+The candidate limit does not itself enable automatic fee replacement.
+The journal's separate 1 MiB byte limit remains enforced.
 
 Signer startup refuses a journal that exceeds either limit, reports
 `journal-bounds-exceeded`, and exits with status `6`. It does not truncate
@@ -818,8 +820,9 @@ already broadcast.
 `sync-nonce` is not a way to discard retained attempts. It refuses repair
 while any attempt remains retained.
 
-Having one valid retained attempt is normal during transaction recovery.
-It is distinct from exceeding the journal bounds.
+Retained attempts are normal during transaction recovery and while
+inclusions await durable resolution. Their presence alone does not mean
+the journal exceeds its bounds.
 
 ## Network sources
 
@@ -994,19 +997,24 @@ reconciliation and retry-schedule eligibility. Retries send recorded
 transaction bytes; an uncertain response does not allocate a new nonce
 or discard the attempt.
 
-The command runtime currently retains at most one attempt. Included
-attempts remain journaled until durable resolution, so observing inclusion
-alone does not free journal capacity.
+The command runtime retains at most sixteen attempts. Every allocated
+attempt occupies a slot until durable resolution, including attempts
+whose inclusion has been verified above the durable anchor.
 
-`retention-capacity-reached` means the journal has reached its limit
-for all allocated retained attempts, including unresolved attempts.
-It is distinct from `unresolved-attempt` and must not be reused for
-a separate admission-limit condition.
+Fresh inclusion validation can permit another attempt while earlier
+inclusions remain retained, provided capacity is available and all other
+signer gates pass.
 
-Status snapshots use the `retention-capacity-reached` spelling.
-An older snapshot containing `journal-capacity-reached` is rejected
-until the daemon publishes a replacement snapshot. No compatibility
-alias or migration is provided; the signer journal is unaffected.
+Admission never creates a second unresolved attempt: any unresolved
+retained attempt blocks new admission. A reorg can still make several
+retained inclusions unresolved at once; recovery handles that population
+in nonce order. Admission stays closed until no unresolved attempts remain,
+fresh inclusion validation completes, and retention capacity is available.
+
+`retention-capacity-reached` means all sixteen retention slots are
+occupied. Rechecking inclusions does not release slots; durable resolution
+does. Retention capacity is distinct from unresolved-attempt admission
+blocking.
 
 Preserve the signer journal alongside the checkpoint. Commands sharing a
 chain and signer must use the same state directory. Releasing the service
@@ -1056,9 +1064,11 @@ This schedule is separate from durable-head polling. Recovery reacts to
 the durable anchor supplied by the head reader, whose polling policy
 still determines when a new durable head is observed.
 
-The runtime retention limit remains one attempt. An included attempt
-continues occupying that slot until durable resolution. Scheduling
-reduces repeated recovery work; it does not remove that throughput limit.
+The runtime retention limit is sixteen attempts. Included attempts
+continue occupying slots until durable resolution. Scheduling reduces
+repeated durable recovery work; latest-head inclusion validation still
+checks retained attempts, so its RPC cost grows with the retained
+population.
 
 ### First-use signer initialization
 
@@ -1416,9 +1426,16 @@ the coordinator-reported `blockedSince`.
 A change in the primary blocker does not itself reset it. After restart,
 it may originate from a retained attempt's creation time.
 
-Retained attempts include their IDs, decimal nonces, phases, and every
-recorded candidate transaction hash. Signed transaction bytes are
-excluded.
+The snapshot summarizes the entire retained population: total, included,
+and unresolved counts, the nonce range, and detailed and omitted counts.
+
+It includes details for at most one attempt, prioritizing the oldest
+unresolved attempt, or the oldest included attempt when none are
+unresolved. That detail includes the attempt ID, work identity, decimal
+nonce, phase, and every recorded candidate transaction hash.
+
+Explicit journal status reports every retained attempt. Signed transaction
+bytes are excluded from both status sources.
 
 Cycle completion and retry observations carry separate timestamps.
 Publishing another snapshot does not refresh those timestamps.
