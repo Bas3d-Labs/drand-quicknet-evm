@@ -1296,6 +1296,11 @@ describe('durable signer observations', () => {
     await checkEmptyInclusions(t.coordinator, 4);
     expect(t.coordinator.status.open).toBe(true);
 
+    const beforeFailure = t.coordinator.durableRecoveryRevision;
+
+    expect(t.coordinator.status.blockers)
+      .not.toContain('unattributed-signer-activity');
+
     t.save.mockClear();
     t.lines.length = 0;
 
@@ -1311,6 +1316,10 @@ describe('durable signer observations', () => {
 
     await expect(t.coordinator.recover(options))
       .rejects.toThrow('Journal persistence');
+
+    // The store may expose the attempted snapshot, but durability has
+    // not been established. The committed revision must remain unchanged.
+    expect(t.coordinator.durableRecoveryRevision).toBe(beforeFailure);
 
     const pending = t.save.mock.calls[0]![0];
 
@@ -1343,7 +1352,16 @@ describe('durable signer observations', () => {
     await expect(t.coordinator.retryPersistence())
       .rejects.toThrow('Journal persistence');
 
+    expect(t.coordinator.durableRecoveryRevision).toBe(beforeFailure);
+
     await t.coordinator.retryPersistence(3);
+
+    const committedRevision = t.coordinator.durableRecoveryRevision;
+
+    expect(committedRevision).not.toBe(beforeFailure);
+
+    expect(t.coordinator.status.blockers)
+      .toContain('unattributed-signer-activity');
 
     expect(t.save).toHaveBeenCalledTimes(3);
     expect(t.save.mock.calls[1]![0]).toBe(pending);
@@ -1380,6 +1398,11 @@ describe('durable signer observations', () => {
       createErrorSummary: t.factory,
     });
 
+    expect(restarted.status.blockers)
+      .toContain('unattributed-signer-activity');
+
+    expect(restarted.durableRecoveryRevision).toBe(committedRevision);
+
     expect(restarted.status).toMatchObject({
       open: false,
       recoveryComplete: false,
@@ -1391,6 +1414,10 @@ describe('durable signer observations', () => {
       status: 'no-attempt',
       observation: observation(4n),
     });
+
+    // A lower observation must neither erase the latched evidence nor
+    // change the revision when no new committed recovery content exists.
+    expect(restarted.durableRecoveryRevision).toBe(committedRevision);
 
     expect(t.save).toHaveBeenCalledTimes(3);
 
@@ -2059,6 +2086,13 @@ describe('durable replacement search progress', () => {
 
   it('reconstructs an exhausted search after restart without rescanning the range', async () => {
     const t = await prepareExhaustedSearch();
+    const committedRevision = t.coordinator.durableRecoveryRevision;
+
+    expect(t.coordinator.status.blockers)
+      .toContain('conflict-search-exhausted');
+
+    expect(t.coordinator.status.blockers)
+      .not.toContain('unattributed-signer-activity');
 
     const restarted = await SignerCoordinator.create({
       identity: IDENTITY,
@@ -2075,6 +2109,14 @@ describe('durable replacement search progress', () => {
       }),
       createErrorSummary: t.factory,
     });
+
+    expect(restarted.status.blockers)
+      .toContain('conflict-search-exhausted');
+
+    expect(restarted.status.blockers)
+      .not.toContain('unattributed-signer-activity');
+
+    expect(restarted.durableRecoveryRevision).toBe(committedRevision);
 
     expect(restarted.status).toMatchObject({
       open: false,
@@ -2121,6 +2163,10 @@ describe('durable replacement search progress', () => {
       inclusionChecksComplete: false,
       primaryReason: 'conflict-search-exhausted',
     });
+
+    // Repeating the exhausted search at the same anchor persists an
+    // observation but changes neither search progress nor its blocker.
+    expect(restarted.durableRecoveryRevision).toBe(committedRevision);
   });
 
   it('resumes from the persisted boundary after restart', async () => {

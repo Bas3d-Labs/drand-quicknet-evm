@@ -59,6 +59,10 @@ import {
 } from '../shared/integer.js';
 
 import {
+  durableRecoveryRevision as computeDurableRecoveryRevision,
+} from './durable-recovery-revision.js';
+
+import {
   JournalPersistence,
 } from './journal-persistence.js';
 
@@ -211,9 +215,6 @@ export class SignerCoordinator {
   private emitting = false;
   private broadcastPermit: string | undefined;
 
-  private readonly blockers = new Set<CoordinatorBlocker>();
-  private readonly episodeReasons = new Set<SignerBlocker>();
-
   private blockedSince: string | null = null;
   private previousBlockers: readonly SignerBlocker[] = [];
   private pendingWrite: PendingWrite | undefined;
@@ -223,6 +224,11 @@ export class SignerCoordinator {
     readonly latestNonce: bigint;
     readonly pendingNonce: bigint;
   } | undefined;
+
+  private committedDurableRecoveryRevision = '';
+
+  private readonly blockers = new Set<CoordinatorBlocker>();
+  private readonly episodeReasons = new Set<SignerBlocker>();
 
   private constructor(
     private readonly persistence: JournalPersistence,
@@ -286,6 +292,7 @@ export class SignerCoordinator {
     coordinator.latchUnattributedActivity();
     coordinator.latchExhaustedSearch();
     coordinator.refresh();
+    coordinator.updateDurableRecoveryRevision();
 
     return coordinator;
   }
@@ -379,6 +386,14 @@ export class SignerCoordinator {
       persistenceState: this.persistence.state,
       blockedSince: this.blockedSince,
     });
+  }
+
+  /**
+   * Deterministic representation of committed state relevant to durable
+   * recovery. Equal content produces the same value across writes.
+   */
+  get durableRecoveryRevision(): string {
+    return this.committedDurableRecoveryRevision;
   }
 
   /**
@@ -1136,6 +1151,7 @@ export class SignerCoordinator {
 
     this.latchUnattributedActivity();
     this.latchExhaustedSearch();
+    this.updateDurableRecoveryRevision();
 
     let operation: SignerEventOperation = 'reconcile-attempt';
 
@@ -1285,6 +1301,13 @@ export class SignerCoordinator {
     ) {
       this.attemptLog = undefined;
     }
+  }
+
+  private updateDurableRecoveryRevision(): void {
+    this.committedDurableRecoveryRevision = computeDurableRecoveryRevision(
+      this.persistence.current,
+      this.blockers,
+    );
   }
 
   private assertAvailable(): void {

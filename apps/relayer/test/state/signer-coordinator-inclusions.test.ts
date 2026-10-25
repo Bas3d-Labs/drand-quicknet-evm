@@ -203,9 +203,12 @@ describe('coordinator replacement inclusions', () => {
         maxReplacementBlockRange: 2n,
       };
 
+      const beforeInclusion = coordinator.durableRecoveryRevision;
+
       save.mockImplementationOnce(async () => {
         expect(coordinator.status.open).toBe(false);
         expect(coordinator.status.inclusionChecksComplete).toBe(false);
+        expect(coordinator.durableRecoveryRevision).toBe(beforeInclusion);
 
         if (failWrite) {
           throw new Error('Durability uncertain');
@@ -216,10 +219,16 @@ describe('coordinator replacement inclusions', () => {
         await expect(coordinator.checkInclusions(options))
           .rejects.toThrow('Journal persistence');
 
+        expect(coordinator.durableRecoveryRevision).toBe(beforeInclusion);
+
         expect(coordinator.attempts[0]?.phase)
           .toBe('broadcast-may-have-occurred');
 
         await coordinator.retryPersistence();
+
+        const afterRetry = coordinator.durableRecoveryRevision;
+
+        expect(afterRetry).not.toBe(beforeInclusion);
 
         expect(save.mock.calls[1]![0])
           .toBe(save.mock.calls[0]![0]);
@@ -233,9 +242,14 @@ describe('coordinator replacement inclusions', () => {
 
         // Persistence retry alone does not restore authorization.
         await coordinator.checkInclusions(options);
+
+        expect(coordinator.durableRecoveryRevision).toBe(afterRetry);
       } else {
         await coordinator.checkInclusions(options);
       }
+
+      expect(coordinator.durableRecoveryRevision)
+        .not.toBe(beforeInclusion);
 
       expect(save.mock.calls[0]![0]).toMatchObject({
         nextNonce: 5n,
@@ -277,6 +291,66 @@ describe('coordinator replacement inclusions', () => {
       expect(events.filter(
         (event) => event === 'signer_gate_released',
       )).toHaveLength(1);
+
+      const retainedRevision = coordinator.durableRecoveryRevision;
+
+      // Revalidate the replacement at a newer head. The replacement's
+      // discovery nonce remains unchanged while observedAt advances.
+      await coordinator.checkInclusions({
+        ...options,
+        head: anchorAt(120n),
+      });
+
+      expect(coordinator.durableRecoveryRevision).toBe(retainedRevision);
+
+      const refreshed = save.mock.calls.at(-1)![0];
+
+      expect(refreshed.attempts[0]).toMatchObject({
+        phase: 'included',
+        inclusion: {
+          outcome: 'replaced',
+          replacementTransactionHash: REPLACEMENT,
+          nonceAtAnchor: 5n,
+          observedAt: anchorAt(120n),
+        },
+      });
+
+      // The durable pass observes nonce 4 at block 100, while the latest
+      // pass observes nonce 5. Neither observation refresh changes the
+      // retained replacement evidence or persistent blockers.
+      for (let pass = 0; pass < 2; pass += 1) {
+        getTransactionCount.mockResolvedValueOnce(4);
+
+        await coordinator.recover({
+          publicClient,
+          anchor: baseline.anchor,
+          maxBlockRange: 2n,
+        });
+
+        expect(save.mock.calls.at(-1)![0].lastObservation).toEqual({
+          anchor: baseline.anchor,
+          nonce: 4n,
+        });
+
+        expect(coordinator.durableRecoveryRevision).toBe(retainedRevision);
+
+        await coordinator.checkInclusions({
+          ...options,
+          head: anchorAt(120n),
+        });
+
+        expect(save.mock.calls.at(-1)![0].lastObservation).toEqual({
+          anchor: anchorAt(120n),
+          nonce: 5n,
+        });
+
+        expect(coordinator.durableRecoveryRevision).toBe(retainedRevision);
+      }
+
+      expect(coordinator.status).toMatchObject({
+        open: true,
+        blockers: [],
+      });
     },
   );
 });
