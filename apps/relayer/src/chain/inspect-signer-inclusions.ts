@@ -251,8 +251,6 @@ export async function inspectSignerInclusions(
     };
   }
 
-  let searched = false;
-
   if (maxReplacementBlockRange !== undefined) {
     for (const index of replacementCandidates) {
       const attempt = attempts[index]!;
@@ -284,8 +282,6 @@ export async function inspectSignerInclusions(
         maxBlockRange: maxReplacementBlockRange,
       });
 
-      searched = true;
-
       if (search.status === 'anchor-changed') {
         return search;
       }
@@ -311,8 +307,10 @@ export async function inspectSignerInclusions(
     }
   }
 
-  if (searched) {
-    // Close the entire pass after all additional searches.
+  if (snapshot.attempts.length > 0) {
+    // Close every non-empty path after receipt, nonce, and replacement
+    // inspection. No updated queue or broadcast eligibility may escape
+    // when the selected head changed during the pass.
     const closingHead = await checkBlockAnchor(publicClient, head);
     if (closingHead !== null) {
       return closingHead;
