@@ -177,6 +177,8 @@ describe('importQuicknetRound', () => {
       });
 
     submitter = {
+      findRetainedWork: vi.fn<BeaconSubmitter['findRetainedWork']>()
+        .mockReturnValue(null),
       submit: submitTransaction,
       recover: vi.fn<BeaconSubmitter['recover']>(),
     };

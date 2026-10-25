@@ -41,8 +41,11 @@ vi.mock(
 const PUBLIC_CLIENT = {} as PublicClient;
 const ACCOUNT = {} as Account;
 
-// Opaque dependencies: this factory only forwards them.
-const DEPLOYMENT = {} as RegistryDeployment;
+// Other deployment fields remain opaque to this factory.
+const DEPLOYMENT = {
+  chainId: 4663,
+  address: `0x${'22'.repeat(20)}`,
+} as RegistryDeployment;
 
 const STABLE_OPTIONS = {
   publicClient: PUBLIC_CLIENT,
@@ -52,11 +55,30 @@ const STABLE_OPTIONS = {
 
 const ROUND = 100n;
 
+const WORK_ID =
+  `quicknet-round:v1:4663:${DEPLOYMENT.address.toLowerCase()}:100`;
+
 const RESULT: ImportQuicknetRoundResult = {
   status: 'already-stored',
   round: ROUND,
   randomness: `0x${'11'.repeat(32)}`,
 };
+
+type RetainedWork = NonNullable<
+  ReturnType<BeaconSubmitter['findRetainedWork']>
+>;
+
+function retainedWork(
+  phase: RetainedWork['phase'],
+): RetainedWork {
+  return {
+    attemptId: '00000000-0000-4000-8000-000000000001',
+    workId: WORK_ID,
+    nonce: 4n,
+    phase,
+    transactionHashes: [`0x${'aa'.repeat(32)}`],
+  };
+}
 
 function forwardedOptions(index = 0) {
   const call = vi.mocked(importQuicknetRoundWhenAvailable)
@@ -78,6 +100,8 @@ describe('createRoundImporter', () => {
       .mockResolvedValue(RESULT);
 
     submitter = {
+      findRetainedWork: vi.fn<BeaconSubmitter['findRetainedWork']>()
+        .mockReturnValue(null),
       recover: vi.fn<BeaconSubmitter['recover']>(),
       submit: vi.fn<BeaconSubmitter['submit']>(),
     };
@@ -251,4 +275,172 @@ describe('createRoundImporter', () => {
         .not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    'signed',
+    'broadcast-may-have-occurred',
+    'included',
+  ] as const)(
+    'defers retained work in phase %s without invoking the importer',
+    async (phase) => {
+      const retained = retainedWork(phase);
+      const onProgress = vi.fn();
+
+      vi.mocked(submitter.findRetainedWork)
+        .mockReturnValue(retained);
+
+      const importRound = createRoundImporter(STABLE_OPTIONS)({
+        submitter,
+        onProgress,
+      });
+
+      expect(await importRound(ROUND)).toEqual({
+        status: 'deferred',
+        reason: 'already-retained',
+        round: ROUND,
+        attemptId: retained.attemptId,
+        workId: retained.workId,
+      });
+
+      expect(submitter.findRetainedWork)
+        .toHaveBeenCalledExactlyOnceWith(WORK_ID);
+
+      expect(importQuicknetRoundWhenAvailable)
+        .not.toHaveBeenCalled();
+      expect(submitter.recover).not.toHaveBeenCalled();
+      expect(submitter.submit).not.toHaveBeenCalled();
+      expect(onProgress).not.toHaveBeenCalled();
+    },
+  );
+
+  it('normalizes the registry address before looking up retained work', async () => {
+    const deployment = {
+      ...DEPLOYMENT,
+      address: `0x${'AB'.repeat(20)}`,
+    } as RegistryDeployment;
+
+    const importRound = createRoundImporter({
+      ...STABLE_OPTIONS,
+      deployment,
+    })({ submitter });
+
+    expect(await importRound(ROUND)).toBe(RESULT);
+
+    expect(submitter.findRetainedWork)
+      .toHaveBeenCalledExactlyOnceWith(
+        `quicknet-round:v1:4663:0x${'ab'.repeat(20)}:100`,
+      );
+
+    expect(importQuicknetRoundWhenAvailable)
+      .toHaveBeenCalledOnce();
+    expect(forwardedOptions().deployment).toBe(deployment);
+  });
+
+  it('imports nonmatching work and observes removal on the next invocation', async () => {
+    let retained: RetainedWork | null = retainedWork('included');
+
+    vi.mocked(submitter.findRetainedWork)
+      .mockImplementation((workId) => {
+        if (retained !== null && retained.workId === workId) {
+          return retained;
+        }
+
+        return null;
+      });
+
+    const importRound = createRoundImporter(STABLE_OPTIONS)({
+      submitter,
+    });
+
+    expect(await importRound(ROUND)).toMatchObject({
+      status: 'deferred',
+      reason: 'already-retained',
+    });
+
+    expect(importQuicknetRoundWhenAvailable)
+      .not.toHaveBeenCalled();
+
+    // A different round must not be deferred by the retained record.
+    await importRound(ROUND + 1n);
+
+    expect(importQuicknetRoundWhenAvailable)
+      .toHaveBeenCalledOnce();
+    expect(forwardedOptions().round).toBe(ROUND + 1n);
+
+    // Removing the record must be visible through the same bound importer.
+    retained = null;
+
+    expect(await importRound(ROUND)).toBe(RESULT);
+
+    expect(importQuicknetRoundWhenAvailable)
+      .toHaveBeenCalledTimes(2);
+    expect(forwardedOptions(1).round).toBe(ROUND);
+
+    expect(submitter.findRetainedWork)
+      .toHaveBeenNthCalledWith(1, WORK_ID);
+    expect(submitter.findRetainedWork)
+      .toHaveBeenNthCalledWith(
+        2,
+        `quicknet-round:v1:4663:${DEPLOYMENT.address.toLowerCase()}:101`,
+      );
+    expect(submitter.findRetainedWork)
+      .toHaveBeenNthCalledWith(3, WORK_ID);
+  });
+
+  it('honors cancellation before retained-work lookup or import', async () => {
+    const controller = new AbortController();
+    const reason = new Error('Stop importing.');
+
+    vi.mocked(submitter.findRetainedWork)
+      .mockReturnValue(retainedWork('included'));
+
+    const importRound = createRoundImporter(STABLE_OPTIONS)({
+      submitter,
+      signal: controller.signal,
+    });
+
+    controller.abort(reason);
+
+    await expect(importRound(ROUND)).rejects.toBe(reason);
+
+    expect(submitter.findRetainedWork).not.toHaveBeenCalled();
+    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    expect(submitter.recover).not.toHaveBeenCalled();
+    expect(submitter.submit).not.toHaveBeenCalled();
+  });
+
+  it.each([0n, -1n])(
+    'rejects nonpositive round %s before lookup or import',
+    async (round) => {
+      const importRound = createRoundImporter(STABLE_OPTIONS)({
+        submitter,
+      });
+
+      const result = importRound(round);
+
+      await expect(result).rejects.toBeInstanceOf(RangeError);
+      await expect(result).rejects.toThrow(
+        'Quicknet round must be greater than zero.',
+      );
+
+      expect(submitter.findRetainedWork).not.toHaveBeenCalled();
+      expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects a round above uint64 before lookup or import', async () => {
+    const importRound = createRoundImporter(STABLE_OPTIONS)({
+      submitter,
+    });
+
+    const result = importRound(1n << 64n);
+
+    await expect(result).rejects.toBeInstanceOf(TypeError);
+    await expect(result).rejects.toThrow(
+      'Invalid beacon work identity input.',
+    );
+
+    expect(submitter.findRetainedWork).not.toHaveBeenCalled();
+    expect(importQuicknetRoundWhenAvailable).not.toHaveBeenCalled();
+  });
 });

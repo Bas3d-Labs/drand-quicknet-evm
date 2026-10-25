@@ -288,6 +288,8 @@ describe('daemon cycle diagnostic reporting', () => {
     bindRoundImporter = vi.fn<RoundImporterBinder>();
 
     submitter = {
+      findRetainedWork: vi.fn<BeaconSubmitter['findRetainedWork']>()
+        .mockReturnValue(null),
       recover: vi.fn<BeaconSubmitter['recover']>(),
       submit: vi.fn<BeaconSubmitter['submit']>(),
     };

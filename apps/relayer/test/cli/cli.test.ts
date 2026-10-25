@@ -383,6 +383,8 @@ beforeEach(() => {
     });
 
   submitter = {
+    findRetainedWork: vi.fn<BeaconSubmitter['findRetainedWork']>()
+      .mockReturnValue(null),
     recover: vi.fn<BeaconSubmitter['recover']>(),
     submit: vi.fn<BeaconSubmitter['submit']>(),
   };

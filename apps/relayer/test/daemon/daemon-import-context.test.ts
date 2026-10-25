@@ -138,6 +138,8 @@ function fixture() {
     });
 
   const submitter: BeaconSubmitter = {
+    findRetainedWork: vi.fn<BeaconSubmitter['findRetainedWork']>()
+      .mockReturnValue(null),
     recover: vi.fn<BeaconSubmitter['recover']>(),
     submit: submitTransaction,
   };

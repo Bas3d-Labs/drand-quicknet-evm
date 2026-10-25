@@ -124,6 +124,9 @@ export async function runDaemon(
     });
 
     const submitter = Object.freeze<BeaconSubmitter>({
+      findRetainedWork: (workId) =>
+        options.submitter.findRetainedWork(workId),
+
       recover: () => options.submitter.recover(context.cycle),
 
       submit: (request) => options.submitter.submit(

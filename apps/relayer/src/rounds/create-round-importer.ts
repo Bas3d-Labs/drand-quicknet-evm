@@ -7,6 +7,10 @@ import {
   validateReceiptTimeoutMs,
 } from '../config/receipt-config.js';
 
+import {
+  createBeaconWorkId,
+} from './beacon-work-identity.js';
+
 import type {
   ImportQuicknetRoundResult,
 } from './import-round.js';
@@ -74,9 +78,37 @@ export function createRoundImporter(
       signal,
     } = binding;
 
-    return function importRound(
+    return async function importRound(
       round: bigint,
     ): Promise<ImportQuicknetRoundResult> {
+      if (round <= 0n) {
+        throw new RangeError('Quicknet round must be greater than zero.');
+      }
+
+      signal?.throwIfAborted();
+
+      const workId = createBeaconWorkId({
+        chainId: deployment.chainId,
+        registry: deployment.address,
+        round,
+      });
+
+      const retained = submitter.findRetainedWork(workId);
+
+      if (retained !== null) {
+        // Deferral performs no transaction work and establishes no
+        // fulfillment, so it needs no fresh deployment verification.
+        // Durable reconciliation still checks fulfillment independently
+        // before advancing its checkpoint.
+        return {
+          status: 'deferred',
+          reason: 'already-retained',
+          round,
+          attemptId: retained.attemptId,
+          workId: retained.workId,
+        };
+      }
+
       const importOptions: ImportQuicknetRoundWhenAvailableOptions = {
         publicClient,
         account,
@@ -99,6 +131,6 @@ export function createRoundImporter(
       }
 
       return importQuicknetRoundWhenAvailable(importOptions);
-    }
-  }
+    };
+  };
 }

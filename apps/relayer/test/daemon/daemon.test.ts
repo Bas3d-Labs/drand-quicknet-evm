@@ -185,6 +185,8 @@ beforeEach(() => {
   vi.mocked(importQuicknetRoundWhenAvailable).mockReset();
 
   submitter = {
+    findRetainedWork: vi.fn<BeaconSubmitter['findRetainedWork']>()
+      .mockReturnValue(null),
     recover: vi.fn<BeaconSubmitter['recover']>(),
     submit: vi.fn<BeaconSubmitter['submit']>(),
   };
@@ -299,6 +301,7 @@ describe('runDaemon', () => {
       publicClient: PUBLIC_CLIENT,
       bindRoundImporter: expect.any(Function),
       submitter: {
+        findRetainedWork: expect.any(Function),
         recover: expect.any(Function),
         submit: expect.any(Function),
       },
@@ -1018,11 +1021,58 @@ describe('daemon cycle correlation', () => {
       throw new Error('Expected two daemon cycle calls.');
     }
 
+    type RetainedWork = NonNullable<
+      ReturnType<BeaconSubmitter['findRetainedWork']>
+    >;
+
+    const workId = 'test-work:daemon-wrapper';
+
+    const transactionHashes: RetainedWork['transactionHashes'] = [
+      `0x${'aa'.repeat(32)}`,
+    ];
+
+    Object.freeze(transactionHashes);
+
+    const retained: RetainedWork = Object.freeze({
+      attemptId: '00000000-0000-4000-8000-000000000001',
+      workId,
+      nonce: 4n,
+      phase: 'included',
+      transactionHashes,
+    });
+
+    const lookup = vi.mocked(submitter.findRetainedWork);
+
+    lookup
+      .mockReturnValueOnce(retained)
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce(null);
+
+    expect(first.submitter.findRetainedWork(workId)).toBe(retained);
+    expect(second.submitter.findRetainedWork(workId)).toBeNull();
+
+    // An older cycle wrapper must also observe the current lookup result.
+    expect(first.submitter.findRetainedWork(workId)).toBeNull();
+
+    expect(lookup.mock.calls).toEqual([
+      [workId],
+      [workId],
+      [workId],
+    ]);
+
+    expect(submitter.recover).not.toHaveBeenCalled();
+    expect(submitter.submit).not.toHaveBeenCalled();
+
+    lookup.mockClear();
+
     // Opaque request: this test only checks forwarding, not encoding.
     const request = Object.freeze({}) as BeaconSubmissionRequest;
 
     expect(first.bindRoundImporter).toBe(second.bindRoundImporter);
 
+    // The daemon's controller is already aborted. These later calls exercise
+    // the captured bindings independently with a live import signal.
+    const importController = new AbortController();
     const onProgress = vi.fn();
 
     vi.mocked(importQuicknetRoundWhenAvailable)
@@ -1033,7 +1083,7 @@ describe('daemon cycle correlation', () => {
         expect(options.receiptTimeoutMs).toBe(45_000);
         expect(options.fetchTimeoutMs).toBe(12_000);
         expect(options.onProgress).toBe(onProgress);
-        expect(options.signal).toBe(controller.signal);
+        expect(options.signal).toBe(importController.signal);
 
         await options.submitter.submit(request);
 
@@ -1044,17 +1094,17 @@ describe('daemon cycle correlation', () => {
         };
       });
 
-    const firstImport = first.bindRoundImporter({
-      submitter: first.submitter,
-      onProgress,
-      signal: controller.signal,
-    });
+      const firstImport = first.bindRoundImporter({
+        submitter: first.submitter,
+        onProgress,
+        signal: importController.signal,
+      });
 
-    const secondImport = second.bindRoundImporter({
-      submitter: second.submitter,
-      onProgress,
-      signal: controller.signal,
-    });
+      const secondImport = second.bindRoundImporter({
+        submitter: second.submitter,
+        onProgress,
+        signal: importController.signal,
+      });
 
     expect(first.submitter).not.toBe(submitter);
     expect(second.submitter).not.toBe(first.submitter);

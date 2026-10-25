@@ -17,6 +17,7 @@ import {
 } from '../state/recover-signer-at-heads.js';
 
 import type {
+  AttemptSummary,
   SignerCoordinator,
 } from '../state/signer-coordinator.js';
 
@@ -49,6 +50,11 @@ type BeaconSubmissionResult =
     };
 
 export interface BeaconSubmitter {
+  /**
+   * Returns current retained work for deferral only.
+   */
+  findRetainedWork(workId: string): AttemptSummary | null;
+
   recover(cycle?: number): Promise<SignerRecoveryCycleResult>;
 
   submit(
@@ -98,6 +104,14 @@ export function createBeaconSubmitter(
     maxBlockRange,
     signal,
   } = options;
+
+  function findRetainedWork(
+    workId: string,
+  ): AttemptSummary | null {
+    return coordinator.attempts.find(
+      (attempt) => attempt.workId === workId,
+    ) ?? null;
+  }
 
   async function recover(
     cycle?: number,
@@ -156,6 +170,7 @@ export function createBeaconSubmitter(
   }
 
   return Object.freeze({
+    findRetainedWork,
     recover,
     submit,
   });
