@@ -128,6 +128,10 @@ function snapshot(
 
 describe('journal bounds', () => {
   it('keeps defaults within the supported maxima', () => {
+    expect(MAX_RETAINED_ATTEMPTS).toBe(16);
+    expect(DEFAULT_MAX_RETAINED_ATTEMPTS).toBe(1);
+    expect(MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT).toBe(16);
+
     expect(DEFAULT_JOURNAL_BOUNDS).toEqual({
       maxRetainedAttempts: DEFAULT_MAX_RETAINED_ATTEMPTS,
       maxSignedTransactionsPerAttempt:
@@ -169,7 +173,11 @@ describe('journal bounds', () => {
       Array.from({ length: observed }, () => 1),
     );
 
-    const result = inspectJournalBounds(current);
+    const result = inspectJournalBounds(current, {
+      maxRetainedAttempts: MAX_RETAINED_ATTEMPTS,
+      maxSignedTransactionsPerAttempt:
+        MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+    });
 
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
@@ -222,7 +230,11 @@ describe('journal bounds', () => {
     );
 
     const current = snapshot(counts);
-    const result = inspectJournalBounds(current);
+    const result = inspectJournalBounds(current, {
+      maxRetainedAttempts: MAX_RETAINED_ATTEMPTS,
+      maxSignedTransactionsPerAttempt:
+        MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+    });
 
     expect(result.map((violation) => ({
       bound: violation.bound,
@@ -258,7 +270,11 @@ describe('journal bounds', () => {
       return attempt.phase === 'included';
     })).toBe(true);
 
-    expect(inspectJournalBounds(current)).toMatchObject([
+    expect(inspectJournalBounds(current, {
+      maxRetainedAttempts: MAX_RETAINED_ATTEMPTS,
+      maxSignedTransactionsPerAttempt:
+        MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+    })).toMatchObject([
       {
         bound: 'retained-attempts',
         maximum: MAX_RETAINED_ATTEMPTS,
@@ -381,5 +397,27 @@ describe('journal bounds', () => {
     expect(() => new JournalBoundsExceededError([])).toThrow(
       'Expected at least one journal bound violation.',
     );
+  });
+
+  it('honors a lower supplied retained-attempt limit independently of the transaction limit', () => {
+    const current = snapshot([
+      MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+      MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+    ]);
+
+    const result = inspectJournalBounds(current, {
+      maxRetainedAttempts: 1,
+      maxSignedTransactionsPerAttempt:
+        MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+    });
+
+    expect(result).toHaveLength(1);
+
+    expect(result[0]).toMatchObject({
+      bound: 'retained-attempts',
+      maximum: 1,
+      observed: 2,
+      attemptId: null,
+    });
   });
 });

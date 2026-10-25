@@ -124,7 +124,7 @@ function recoverySnapshot() {
     },
   );
 
-  // One attempt today: use the full 768-byte work-ID content fixture.
+  // One detail record: use the full 768-byte work-ID content fixture.
   if (attempts.length === 1) {
     attempts[0]!.workId = '\u0800'.repeat(MAX_WORK_ID_LENGTH);
   }
@@ -328,6 +328,16 @@ describe('daemon status size budget', () => {
 
     expect(candidate.attemptSummary.retainedCount)
       .toBe(MAX_RETAINED_ATTEMPTS);
+
+    expect(candidate.attemptSummary).toMatchObject({
+      retainedCount: 16,
+      includedCount: 0,
+      unresolvedCount: 16,
+      detailedCount: 1,
+      omittedCount: 15,
+    });
+
+    expect(candidate.attempts).toHaveLength(1);
 
     expect(
       candidate.attemptSummary.detailedCount

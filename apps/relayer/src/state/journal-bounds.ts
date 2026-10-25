@@ -2,10 +2,16 @@ import type {
   TransactionJournalSnapshot,
 } from './transaction-journal.js';
 
-export const MAX_RETAINED_ATTEMPTS = 1;
+/**
+ * Maximum allocated attempts retained until durable resolution.
+ */
+export const MAX_RETAINED_ATTEMPTS = 16;
 
 export const DEFAULT_MAX_RETAINED_ATTEMPTS = 1;
 
+/**
+ * Maximum signed variants retained for one allocated nonce.
+ */
 export const MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT = 16;
 
 export interface JournalBounds {

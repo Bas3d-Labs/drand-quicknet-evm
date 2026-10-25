@@ -26,6 +26,10 @@ import {
 } from '../../src/diagnostics/text-scrubber.js';
 
 import {
+  MAX_RETAINED_ATTEMPTS,
+} from '../../src/state/journal-bounds.js';
+
+import {
   SignerCoordinator,
 } from '../../src/state/signer-coordinator.js';
 
@@ -241,7 +245,7 @@ async function setup(options: {
 
 async function setupIncludedWork(maxRetainedAttempts = 3) {
   // Duplicate detection requires included work below capacity.
-  // Production capacity 1 instead keeps the signer gate closed.
+  // An explicitly configured capacity of 1 keeps the gate closed.
   const t = await setup({ maxRetainedAttempts });
   const prepared = await t.prepare();
 
@@ -657,7 +661,7 @@ describe('durable attempt preparation', () => {
     },
   );
 
-  it('reports capacity before duplicate work at production capacity 1', async () => {
+  it('reports capacity before duplicate work at configured capacity 1', async () => {
     const t = await setupIncludedWork(1);
     const before = t.coordinator.status;
 
@@ -715,6 +719,246 @@ describe('durable attempt preparation', () => {
       nonce: 5n,
       phase: 'signed',
     });
+  });
+
+  it('admits 16 freshly verified inclusions and releases capacity only after durable resolution', async () => {
+    expect(MAX_RETAINED_ATTEMPTS).toBe(16);
+
+    const t = await setup({
+      maxRetainedAttempts: MAX_RETAINED_ATTEMPTS,
+    });
+
+    const head = {
+      blockNumber: 200n,
+      blockHash: HASH,
+    };
+
+    const inclusionBlocks = new Map<string, bigint>();
+    const attemptIds: string[] = [];
+    let headNonce = 4;
+
+    const getBlock = vi.fn(async (
+      { blockNumber }: { blockNumber: bigint },
+    ) => ({
+      number: blockNumber,
+      hash: HASH,
+    }));
+
+    const getTransactionReceipt = vi.fn(async (
+      { hash }: { hash: string },
+    ) => {
+      const blockNumber = inclusionBlocks.get(hash);
+
+      if (blockNumber === undefined) {
+        throw new Error('Unexpected receipt lookup.');
+      }
+
+      return {
+        transactionHash: hash,
+        blockNumber,
+        blockHash: HASH,
+        status: 'success',
+      };
+    });
+
+    const getTransactionCount = vi.fn(async (
+      { blockNumber }: { blockNumber?: bigint },
+    ) => {
+      if (blockNumber === OBSERVATION.anchor.blockNumber) {
+        return 4;
+      }
+
+      if (blockNumber === 101n) {
+        return 5;
+      }
+
+      if (blockNumber === head.blockNumber) {
+        return headNonce;
+      }
+
+      throw new Error('Unexpected nonce observation block.');
+    });
+
+    const publicClient = {
+      getBlock,
+      getTransactionReceipt,
+      getTransactionCount,
+    } as unknown as PublicClient;
+
+    for (
+      let index = 0;
+      index < MAX_RETAINED_ATTEMPTS;
+      index += 1
+    ) {
+      expect(t.coordinator.status.open).toBe(true);
+
+      const prepared = await t.prepare(`capacity-work:${index}`);
+
+      if (prepared.status !== 'prepared') {
+        throw new Error('Expected a newly prepared attempt.');
+      }
+
+      expect(prepared.nonce).toBe(4n + BigInt(index));
+      attemptIds.push(prepared.attemptId);
+
+      // Spare retention capacity never permits admission while an
+      // allocated attempt remains unresolved.
+      expect(t.coordinator.status.open).toBe(false);
+      expect(t.coordinator.status.blockers)
+        .toContain('unresolved-attempt');
+
+      const signCount = t.signTransaction.mock.calls.length;
+      const saveCount = t.save.mock.calls.length;
+
+      await expect(
+        t.prepare(`blocked-unresolved:${index}`),
+      ).rejects.toThrow(
+        'The signer gate must be open before preparing an attempt.',
+      );
+
+      expect(t.signTransaction).toHaveBeenCalledTimes(signCount);
+      expect(t.save).toHaveBeenCalledTimes(saveCount);
+
+      // This preparation-focused fixture supplies chain inclusion
+      // directly; broadcasting is covered by the recovery-cycle tests.
+      inclusionBlocks.set(
+        prepared.transactionHash,
+        101n + BigInt(index),
+      );
+      headNonce = 5 + index;
+
+      await t.coordinator.checkInclusions({
+        publicClient,
+        head,
+      });
+
+      expect(t.coordinator.status).toMatchObject({
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+        open: index + 1 < MAX_RETAINED_ATTEMPTS,
+      });
+
+      expect(t.coordinator.status.blockers)
+        .not.toContain('unresolved-attempt');
+
+      expect(t.coordinator.attempts).toHaveLength(index + 1);
+
+      const stored = await t.load();
+
+      expect(stored).toMatchObject({
+        kind: 'present',
+        snapshot: {
+          nextNonce: 5n + BigInt(index),
+          durableNextNonce: 4n,
+        },
+      });
+
+      if (stored.kind !== 'present') {
+        throw new Error('Expected the retained journal.');
+      }
+
+      expect(stored.snapshot.attempts.every(
+        (attempt) => attempt.phase === 'included',
+      )).toBe(true);
+    }
+
+    expect(t.signTransaction).toHaveBeenCalledTimes(16);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      primaryReason: 'retention-capacity-reached',
+      blockers: ['retention-capacity-reached'],
+    });
+
+    const full = await t.load();
+    const savesAtCapacity = t.save.mock.calls.length;
+
+    await expect(
+      t.prepare('capacity-work:seventeenth'),
+    ).rejects.toThrow(
+      'The signer gate must be open before preparing an attempt.',
+    );
+
+    expect(t.signTransaction).toHaveBeenCalledTimes(16);
+    expect(t.save).toHaveBeenCalledTimes(savesAtCapacity);
+    expect(await t.load()).toEqual(full);
+
+    // Rechecking the same 16 inclusions does not release retention.
+    await t.coordinator.checkInclusions({
+      publicClient,
+      head,
+    });
+
+    expect(t.coordinator.attempts).toHaveLength(16);
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      primaryReason: 'retention-capacity-reached',
+      inclusionChecksComplete: true,
+    });
+
+    // Advance the durable anchor through only the first inclusion.
+    expect(await t.coordinator.recover({
+      publicClient,
+      anchor: {
+        blockNumber: 101n,
+        blockHash: HASH,
+      },
+      maxBlockRange: 2n,
+    })).toMatchObject({
+      status: 'resolution-available',
+    });
+
+    expect(await t.load()).toMatchObject({
+      kind: 'present',
+      snapshot: {
+        nextNonce: 20n,
+        durableNextNonce: 5n,
+      },
+    });
+
+    expect(t.coordinator.attempts.map(
+      (attempt) => attempt.attemptId,
+    )).toEqual(attemptIds.slice(1));
+
+    // Freeing a slot still requires fresh latest-head validation.
+    expect(t.coordinator.status.open).toBe(false);
+    expect(t.coordinator.status.inclusionChecksComplete).toBe(false);
+
+    await t.coordinator.checkInclusions({
+      publicClient,
+      head,
+    });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: true,
+      blockers: [],
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
+
+    const admitted = await t.prepare('capacity-work:seventeenth');
+
+    expect(admitted).toMatchObject({
+      status: 'prepared',
+      nonce: 20n,
+    });
+
+    expect(t.signTransaction).toHaveBeenCalledTimes(17);
+    expect(t.coordinator.attempts).toHaveLength(16);
+
+    expect(await t.load()).toMatchObject({
+      kind: 'present',
+      snapshot: {
+        nextNonce: 21n,
+        durableNextNonce: 5n,
+      },
+    });
+
+    expect(t.coordinator.status.open).toBe(false);
+    expect(t.coordinator.status.blockers)
+      .toContain('unresolved-attempt');
+    expect(t.coordinator.status.blockers)
+      .toContain('retention-capacity-reached');
   });
 
   it.each([

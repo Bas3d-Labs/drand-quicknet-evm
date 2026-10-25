@@ -60,7 +60,6 @@ import {
 
 import {
   DEFAULT_JOURNAL_BOUNDS,
-  MAX_RETAINED_ATTEMPTS,
   MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
 } from '../../src/state/journal-bounds.js';
 
@@ -758,12 +757,12 @@ describe('command signer runtime', () => {
     {
       name: 'retained attempts',
       counts: Array.from(
-        { length: MAX_RETAINED_ATTEMPTS + 1 },
+        { length: DEFAULT_JOURNAL_BOUNDS.maxRetainedAttempts + 1 },
         () => 1,
       ),
       bound: 'retained-attempts',
-      maximum: MAX_RETAINED_ATTEMPTS,
-      observed: MAX_RETAINED_ATTEMPTS + 1,
+      maximum: DEFAULT_JOURNAL_BOUNDS.maxRetainedAttempts,
+      observed: DEFAULT_JOURNAL_BOUNDS.maxRetainedAttempts + 1,
     },
     {
       name: 'signed transactions',

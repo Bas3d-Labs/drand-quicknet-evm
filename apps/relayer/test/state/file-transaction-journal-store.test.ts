@@ -632,7 +632,11 @@ describe('file transaction journal store', () => {
       const opening = FileTransactionJournalStore.open({
         filePath,
         identity: snapshot.identity,
-        bounds: DEFAULT_JOURNAL_BOUNDS,
+        bounds: {
+          maxRetainedAttempts: MAX_RETAINED_ATTEMPTS,
+          maxSignedTransactionsPerAttempt:
+            MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+        },
       });
 
       await expect(opening).rejects.toBeInstanceOf(
