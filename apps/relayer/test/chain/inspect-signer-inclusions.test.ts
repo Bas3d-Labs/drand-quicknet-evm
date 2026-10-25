@@ -1178,7 +1178,7 @@ describe('signer inclusion inspection', () => {
     },
   );
 
-  it('uses 69 RPC calls to inspect 16 retained inclusions sharing one block', async () => {
+  it('uses 37 RPC calls to inspect 16 retained inclusions before block deduplication', async () => {
     const t = await setup();
     const attempts: JournalAttempt[] = [];
 
@@ -1273,19 +1273,20 @@ describe('signer inclusion inspection', () => {
       ([request]) => request.blockNumber === 110n,
     );
 
-    // Current full-pass baseline:
-    //   16 * 4 per-attempt recheck calls
-    //   + 2 enclosing pass head checks
-    //   + 3 anchored nonce calls
-    //   = 69 calls.
+    // Previous full-pass baseline: 69 calls.
     //
-    // After hoisting and inclusion-block deduplication, the target is:
-    //   (2 pass head checks + 1 distinct inclusion block + 16 receipts)
+    // Hoisting removes 32 per-attempt head checks:
+    //   2 enclosing pass head checks
+    //   + 16 independent inclusion-block reads
+    //   + 16 independent receipt reads
     //   + 3 anchored nonce calls
-    //   = 22 calls, if readAnchoredNonce remains unchanged.
-    expect(headReads).toHaveLength(36);
+    //   = 37 calls.
+    //
+    // Deduplicating the shared inclusion block will reduce this to:
+    //   (2 + 1 + 16) + 3 = 22 calls.
+    expect(headReads).toHaveLength(4);
     expect(inclusionReads).toHaveLength(16);
-    expect(t.getBlock).toHaveBeenCalledTimes(52);
+    expect(t.getBlock).toHaveBeenCalledTimes(20);
     expect(t.getTransactionReceipt).toHaveBeenCalledTimes(16);
 
     expect(t.getTransactionCount).toHaveBeenCalledExactlyOnceWith({
@@ -1297,7 +1298,7 @@ describe('signer inclusion inspection', () => {
       t.getBlock.mock.calls.length
       + t.getTransactionReceipt.mock.calls.length
       + t.getTransactionCount.mock.calls.length,
-    ).toBe(69);
+    ).toBe(37);
 
     expect(t.getTransactionReceipt.mock.calls.map(
       ([request]) => request.hash,
@@ -1306,5 +1307,58 @@ describe('signer inclusion inspection', () => {
     ));
 
     expect(input).toEqual(before);
+  });
+
+  it('discards refreshed inclusions when the head changes during the last receipt read', async () => {
+    const t = await setup();
+    const before = structuredClone(t.snapshot);
+    const readBlock = t.getBlock.getMockImplementation()!;
+    const readReceipt = t.getTransactionReceipt.getMockImplementation()!;
+    const lastHash = t.snapshot.attempts[1]!
+      .signedTransactions[0].transactionHash;
+
+    let headChanged = false;
+
+    t.getTransactionReceipt.mockImplementation(async (request) => {
+      const receipt = await readReceipt(request);
+
+      if (request.hash === lastHash) {
+        headChanged = true;
+      }
+
+      return receipt;
+    });
+
+    t.getBlock.mockImplementation(async (request) => {
+      const block = await readBlock(request);
+
+      if (headChanged && request.blockNumber === 130n) {
+        return {
+          ...block,
+          hash: FORK,
+        };
+      }
+
+      return block;
+    });
+
+    expect(await t.run()).toEqual({
+      status: 'anchor-changed',
+      observedAnchor: {
+        blockNumber: 130n,
+        blockHash: FORK,
+      },
+    });
+
+    expect(t.getTransactionReceipt.mock.calls.map(
+      ([request]) => request.hash,
+    )).toEqual(t.snapshot.attempts.map(
+      (attempt) => attempt.signedTransactions[0].transactionHash,
+    ));
+
+    // The anchored nonce opening check detects the changed head
+    // before reading the nonce or returning any refreshed queue.
+    expect(t.getTransactionCount).not.toHaveBeenCalled();
+    expect(t.snapshot).toEqual(before);
   });
 });

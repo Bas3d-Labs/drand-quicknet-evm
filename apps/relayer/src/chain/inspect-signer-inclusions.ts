@@ -3,6 +3,20 @@ import type {
 } from 'viem';
 
 import {
+  isFixedHex,
+} from '../shared/hex.js';
+
+import type {
+  AnchoredNonceObservation,
+  JournalAttempt,
+  TransactionJournalSnapshot,
+} from '../state/transaction-journal.js';
+
+import {
+  validateJournalSnapshotStructure,
+} from '../state/transaction-journal-validation.js';
+
+import {
   checkBlockAnchor,
   type BlockAnchor,
 } from './block-anchor.js';
@@ -16,22 +30,8 @@ import {
 } from './reconcile-attempt-receipt.js';
 
 import {
-  recheckAttemptInclusion,
+  recheckAttemptInclusionWithinPass,
 } from './recheck-attempt-inclusion.js';
-
-import {
-  isFixedHex,
-} from '../shared/hex.js';
-
-import type {
-  AnchoredNonceObservation,
-  JournalAttempt,
-  TransactionJournalSnapshot,
-} from '../state/transaction-journal.js';
-
-import {
-  validateJournalSnapshotStructure,
-} from '../state/transaction-journal-validation.js';
 
 import {
   searchAttemptReplacement,
@@ -134,7 +134,7 @@ export async function inspectSignerInclusions(
 
   for (const attempt of snapshot.attempts) {
     if (attempt.phase === 'included') {
-      const result = await recheckAttemptInclusion({
+      const result = await recheckAttemptInclusionWithinPass({
         publicClient,
         observation: attempt.inclusion,
         head,
