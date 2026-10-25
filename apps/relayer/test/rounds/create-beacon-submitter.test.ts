@@ -20,6 +20,7 @@ import {
 } from '@based-labs/drand-quicknet-registry';
 
 import type {
+  AttemptSummary,
   SignerCoordinator,
 } from '../../src/state/signer-coordinator.js';
 
@@ -59,6 +60,24 @@ const REGISTRY =
 
 const HASH = `0x${'aa'.repeat(32)}` as const;
 const SIGNATURE = `0x${'11'.repeat(48)}` as const;
+
+function retainedAttempt(
+  phase: AttemptSummary['phase'],
+): AttemptSummary {
+  const transactionHashes: AttemptSummary['transactionHashes'] = [
+    HASH,
+  ];
+
+  Object.freeze(transactionHashes);
+
+  return Object.freeze({
+    attemptId: '11111111-1111-4111-8111-111111111111',
+    workId: 'test-work:retained',
+    nonce: 4n,
+    phase,
+    transactionHashes,
+  });
+}
 
 function setup() {
   const events: string[] = [];
@@ -121,13 +140,22 @@ function setup() {
     },
   );
 
+  const readAttempts = vi.fn<
+    () => SignerCoordinator['attempts']
+  >().mockReturnValue(Object.freeze([]));
+
   const coordinator = {
     observeReconciliation,
+
+    get attempts() {
+      return readAttempts();
+    },
 
     get status() {
       return readStatus();
     },
   } as unknown as SignerCoordinator;
+
   const recovery = {} as SignerRecoveryCycle;
 
   const options = {
@@ -159,6 +187,7 @@ function setup() {
     events,
     observeReconciliation,
     observationEvents,
+    readAttempts,
     readStatus,
     recoveryResult,
     submissionResult,
@@ -577,5 +606,90 @@ describe('beacon submitter', () => {
       .toBeLessThan(
         mocks.submitBeaconTransaction.mock.invocationCallOrder[0]!,
       );
+  });
+
+  it.each([
+    'signed',
+    'broadcast-may-have-occurred',
+    'included',
+  ] as const)(
+    'returns the existing frozen summary for retained work in phase %s',
+    (phase) => {
+      const t = setup();
+      const retained = retainedAttempt(phase);
+
+      t.readAttempts.mockReturnValue(Object.freeze([retained]));
+
+      const result = t.submitter.findRetainedWork(retained.workId);
+
+      expect(result).toBe(retained);
+      expect(Object.isFrozen(result)).toBe(true);
+      expect(Object.isFrozen(result!.transactionHashes)).toBe(true);
+      expect(t.readAttempts).toHaveBeenCalledOnce();
+
+      expect(t.readStatus).not.toHaveBeenCalled();
+      expect(t.observeReconciliation).not.toHaveBeenCalled();
+      expect(t.options.readChainHeads).not.toHaveBeenCalled();
+      expect(mocks.recoverSignerAtHeads).not.toHaveBeenCalled();
+      expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
+      expect(t.events).toEqual([]);
+    },
+  );
+
+  it('matches retained work by exact identity and returns null otherwise', () => {
+    const t = setup();
+    const retained = retainedAttempt('included');
+
+    const unrelated: AttemptSummary = Object.freeze({
+      ...retained,
+      attemptId: '22222222-2222-4222-8222-222222222222',
+      workId: 'test-work:unrelated',
+      nonce: 3n,
+    });
+
+    t.readAttempts.mockReturnValue(
+      Object.freeze([unrelated, retained]),
+    );
+
+    expect(t.submitter.findRetainedWork(retained.workId))
+      .toBe(retained);
+
+    expect(t.submitter.findRetainedWork('test-work:missing'))
+      .toBeNull();
+
+    expect(t.submitter.findRetainedWork('TEST-WORK:RETAINED'))
+      .toBeNull();
+
+    expect(t.submitter.findRetainedWork('test-work:retained '))
+      .toBeNull();
+
+    expect(t.readAttempts).toHaveBeenCalledTimes(4);
+    expect(t.readStatus).not.toHaveBeenCalled();
+    expect(mocks.recoverSignerAtHeads).not.toHaveBeenCalled();
+    expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
+  });
+
+  it('reads the current retained population on every lookup', () => {
+    const t = setup();
+    const retained = retainedAttempt('included');
+
+    // The submitter already exists before the retained record appears.
+    expect(t.submitter.findRetainedWork(retained.workId)).toBeNull();
+
+    t.readAttempts.mockReturnValue(Object.freeze([retained]));
+
+    expect(t.submitter.findRetainedWork(retained.workId))
+      .toBe(retained);
+
+    // Removing the record must also be visible through the same submitter.
+    t.readAttempts.mockReturnValue(Object.freeze([]));
+
+    expect(t.submitter.findRetainedWork(retained.workId)).toBeNull();
+
+    expect(t.readAttempts).toHaveBeenCalledTimes(3);
+    expect(t.readStatus).not.toHaveBeenCalled();
+    expect(t.observeReconciliation).not.toHaveBeenCalled();
+    expect(mocks.recoverSignerAtHeads).not.toHaveBeenCalled();
+    expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
   });
 });

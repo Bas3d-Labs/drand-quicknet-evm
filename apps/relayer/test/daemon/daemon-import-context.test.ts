@@ -195,6 +195,7 @@ function fixture() {
     account: {} as Account,
     submitter,
     deployment: {
+      chainId: 4663,
       address: REGISTRY,
     } as RegistryDeployment,
     checkpointStore: {
@@ -513,7 +514,11 @@ describe('round import diagnostic context', () => {
       const controller = new AbortController();
       const reason = new Error('Shutdown requested.');
       const onCycle = vi.fn();
-      const sleep = vi.fn();
+      const sleep = vi.fn(async () => {
+        throw new Error(
+          'Unexpected polling sleep: shutdown should occur during the round wait.',
+        );
+      });
 
       let requestBlock = 1000n;
 

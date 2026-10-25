@@ -7,6 +7,7 @@ import {
 } from 'vitest';
 
 import type {
+  Account,
   Address,
   Hex,
   PublicClient,
@@ -48,8 +49,14 @@ import {
 } from '../../src/consumers/request-scanner.js';
 
 import type {
-  RoundImporter,
+  BeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
+
+import {
+  createRoundImporter,
+  type RoundImporter,
 } from '../../src/rounds/create-round-importer.js';
+
 
 import type {
   ImportQuicknetRoundResult,
@@ -633,6 +640,155 @@ describe('reconcileDurableRequests', () => {
     expect(result.imports[0]?.status).toBe('completed');
     expect(onCompleted).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    {
+      name: 'holds the checkpoint when retained work is not durably stored',
+      stored: false,
+      fulfillmentStatus: 'not-stored',
+      expectedNextBlock: 1_010n,
+    },
+    {
+      name: 'advances the checkpoint when retained work is durably stored',
+      stored: true,
+      fulfillmentStatus: 'stored',
+      expectedNextBlock: TO_BLOCK + 1n,
+    },
+  ] as const)(
+    '$name',
+    async ({
+      stored,
+      fulfillmentStatus,
+      expectedNextBlock,
+    }) => {
+      const firstRequestBlock = 1_010n;
+
+      setScan([request(ROUND_A, firstRequestBlock)]);
+      registryMocks.isStored.mockResolvedValue(stored);
+
+      type RetainedWork = NonNullable<
+        ReturnType<BeaconSubmitter['findRetainedWork']>
+      >;
+
+      const workId =
+        `quicknet-round:v1:${DEPLOYMENT.chainId}:`
+        + `${DEPLOYMENT.address.toLowerCase()}:${ROUND_A}`;
+
+      const transactionHashes: RetainedWork['transactionHashes'] = [
+        TRANSACTION_HASH,
+      ];
+
+      Object.freeze(transactionHashes);
+
+      const retained: RetainedWork = Object.freeze({
+        attemptId: '11111111-1111-4111-8111-111111111111',
+        workId,
+        nonce: 4n,
+        phase: 'included',
+        transactionHashes,
+      });
+
+      const submitter: BeaconSubmitter = {
+        findRetainedWork: vi.fn<
+          BeaconSubmitter['findRetainedWork']
+        >().mockImplementation((requestedWorkId) => {
+          if (requestedWorkId === workId) {
+            return retained;
+          }
+
+          return null;
+        }),
+        recover: vi.fn<BeaconSubmitter['recover']>(),
+        submit: vi.fn<BeaconSubmitter['submit']>(),
+      };
+
+      const onProgress = vi.fn();
+      const onCompleted = vi.fn();
+      const onIncomplete = vi.fn();
+
+      const retainedImporter = createRoundImporter({
+        publicClient: PUBLIC_CLIENT,
+        account: {} as Account,
+        deployment: DEPLOYMENT,
+      })({
+        submitter,
+        onProgress,
+      });
+
+      const result = await reconcileDurableRequests(options({
+        importRound: retainedImporter,
+        onCompleted,
+        onIncomplete,
+      }));
+
+      const deferredOutcome = {
+        status: 'deferred',
+        reason: 'already-retained',
+        round: ROUND_A,
+        firstRequestBlock,
+        attemptId: retained.attemptId,
+        workId,
+      };
+
+      expect(result.status).toBe('scanned');
+      expect(result.imports).toEqual([deferredOutcome]);
+
+      expect(onIncomplete)
+        .toHaveBeenCalledExactlyOnceWith(deferredOutcome);
+      expect(onCompleted).not.toHaveBeenCalled();
+
+      expect(submitter.findRetainedWork)
+        .toHaveBeenCalledExactlyOnceWith(workId);
+      expect(submitter.recover).not.toHaveBeenCalled();
+      expect(submitter.submit).not.toHaveBeenCalled();
+      expect(onProgress).not.toHaveBeenCalled();
+
+      // This test uses the real binder, not the fixture's importer mock.
+      expect(importRound).not.toHaveBeenCalled();
+
+      // Only durable reconciliation creates a registry reader.
+      // The early deferral must not enter the RPC-backed importer.
+      expect(createRegistryReader).toHaveBeenCalledExactlyOnceWith({
+        client: PUBLIC_CLIENT,
+        deployment: DEPLOYMENT,
+      });
+
+      expect(registryMocks.isStored)
+        .toHaveBeenCalledExactlyOnceWith(
+          ROUND_A,
+          DURABLE_BLOCK,
+        );
+
+      expect(result.fulfillment).toEqual([
+        {
+          round: ROUND_A,
+          firstRequestBlock,
+          fulfillment: {
+            status: fulfillmentStatus,
+          },
+        },
+      ]);
+
+      expect(result.checkpoint).toEqual({
+        status: 'verified',
+        nextBlock: expectedNextBlock,
+      });
+
+      expect(getBlock.mock.calls).toEqual([
+        [{ blockNumber: DURABLE_BLOCK }],
+        [{ blockNumber: DURABLE_BLOCK }],
+      ]);
+
+      expect(scanQuicknetRequests)
+        .toHaveBeenCalledExactlyOnceWith({
+          publicClient: PUBLIC_CLIENT,
+          consumers: [CONSUMER],
+          nextBlock: FROM_BLOCK,
+          throughBlock: DURABLE_BLOCK,
+          maxBlockRange: 100n,
+        });
+    },
+  );
 
   it.each([true, false])(
     'checks failed and deferred rounds for durable fulfillment: stored=%s',
