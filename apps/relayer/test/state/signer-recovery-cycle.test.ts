@@ -1318,8 +1318,8 @@ describe('signer recovery cycle', () => {
       open: false,
       recoveryComplete: true,
       inclusionChecksComplete: true,
-      primaryReason: 'journal-capacity-reached',
-      blockers: ['journal-capacity-reached'],
+      primaryReason: 'retention-capacity-reached',
+      blockers: ['retention-capacity-reached'],
     });
 
     expect(t.coordinator.attempts).toHaveLength(1);
@@ -1332,8 +1332,8 @@ describe('signer recovery cycle', () => {
     ]);
 
     expect(initialRecords[0]).toMatchObject({
-      reason: 'journal-capacity-reached',
-      blockers: ['journal-capacity-reached'],
+      reason: 'retention-capacity-reached',
+      blockers: ['retention-capacity-reached'],
       blockedSince: expect.any(String),
     });
 
@@ -1377,7 +1377,7 @@ describe('signer recovery cycle', () => {
       operation: { name: 'reconcile-attempt' },
       cycle: 41,
       blockedSince,
-      cleared: ['journal-capacity-reached'],
+      cleared: ['retention-capacity-reached'],
     });
 
     expect(t.request).not.toHaveBeenCalled();
@@ -1519,7 +1519,7 @@ describe('signer recovery cycle', () => {
         .toContain('unresolved-attempt');
 
       expect(t.coordinator.status.blockers)
-        .not.toContain('journal-capacity-reached');
+        .not.toContain('retention-capacity-reached');
 
       expect(t.coordinator.attempts).toHaveLength(2);
 

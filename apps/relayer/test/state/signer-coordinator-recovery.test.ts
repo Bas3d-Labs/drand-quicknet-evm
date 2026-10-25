@@ -1236,7 +1236,7 @@ describe('coordinator recovery', () => {
 
     expect(t.coordinator.status.blockers).toEqual([
       'unresolved-attempt',
-      'journal-capacity-reached',
+      'retention-capacity-reached',
       'recovery-incomplete',
     ]);
 
@@ -1253,15 +1253,15 @@ describe('coordinator recovery', () => {
     }, 20);
 
     expect(t.coordinator.status.blockers).toEqual([
-      'journal-capacity-reached',
+      'retention-capacity-reached',
     ]);
 
     expect(t.events()).toEqual(['signer_blocked']);
 
     expect(JSON.parse(t.lines[0]!)).toMatchObject({
       cycle: 20,
-      reason: 'journal-capacity-reached',
-      blockers: ['journal-capacity-reached'],
+      reason: 'retention-capacity-reached',
+      blockers: ['retention-capacity-reached'],
       blockedSince,
     });
 
@@ -1279,10 +1279,10 @@ describe('coordinator recovery', () => {
     ).rejects.toBe(failure);
 
     expect(t.coordinator.status.primaryReason)
-      .toBe('journal-capacity-reached');
+      .toBe('retention-capacity-reached');
 
     expect(t.coordinator.status.blockers).toEqual([
-      'journal-capacity-reached',
+      'retention-capacity-reached',
       'recovery-incomplete',
     ]);
 
@@ -1306,7 +1306,7 @@ describe('coordinator recovery', () => {
     );
 
     expect(t.coordinator.status.blockers).toEqual([
-      'journal-capacity-reached',
+      'retention-capacity-reached',
     ]);
 
     // An identical successful pass must also stay silent.
@@ -1323,13 +1323,13 @@ describe('coordinator recovery', () => {
     ]);
 
     expect(records.map((record) => record.reason)).toEqual([
-      'journal-capacity-reached',
-      'journal-capacity-reached',
+      'retention-capacity-reached',
+      'retention-capacity-reached',
     ]);
 
     expect(records.map((record) => record.blockers)).toEqual([
-      ['journal-capacity-reached', 'recovery-incomplete'],
-      ['journal-capacity-reached'],
+      ['retention-capacity-reached', 'recovery-incomplete'],
+      ['retention-capacity-reached'],
     ]);
 
     expect(records.map((record) => record.cycle)).toEqual([21, 23]);

@@ -12,7 +12,7 @@ export type SignerBlocker =
   | 'unattributed-signer-activity'
   | 'persistence-failure'
   | 'conflict-search-exhausted'
-  | 'journal-capacity-reached';
+  | 'retention-capacity-reached';
 
 export type CoordinatorBlocker =
   | 'unattributed-signer-activity'
@@ -23,7 +23,7 @@ export const BLOCKER_PRECEDENCE: readonly SignerBlocker[] = Object.freeze([
   'unattributed-signer-activity',
   'conflict-search-exhausted',
   'unresolved-attempt',
-  'journal-capacity-reached',
+  'retention-capacity-reached',
   'recovery-incomplete',
 ]);
 
@@ -86,7 +86,7 @@ export function evaluateSignerGate(
     }
 
     if (attempts.length >= options.maxRetainedAttempts) {
-      blockers.add('journal-capacity-reached');
+      blockers.add('retention-capacity-reached');
     }
   }
 

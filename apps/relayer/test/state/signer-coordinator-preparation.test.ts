@@ -663,7 +663,7 @@ describe('durable attempt preparation', () => {
 
     expect(before).toMatchObject({
       open: false,
-      primaryReason: 'journal-capacity-reached',
+      primaryReason: 'retention-capacity-reached',
       recoveryComplete: true,
       inclusionChecksComplete: true,
       persistenceState: 'idle',

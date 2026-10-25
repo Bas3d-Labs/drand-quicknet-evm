@@ -125,7 +125,7 @@ describe('readSignerRuntimeObservation', () => {
     expect(observation.status).not.toBe(source.status);
     expect(observation.attempts[0]).not.toBe(source.attempts[0]);
 
-    blockers.push('journal-capacity-reached');
+    blockers.push('retention-capacity-reached');
     transactionHashes.push(THIRD_HASH);
     source.attempts[0]!.nonce = 99n;
     source.attempts[0]!.workId = 'different-work';

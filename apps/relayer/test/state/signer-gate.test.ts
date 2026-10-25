@@ -436,8 +436,8 @@ describe('signer gate', () => {
       blockers: new Set(),
     })).toEqual({
       open: false,
-      blockers: ['journal-capacity-reached'],
-      primaryReason: 'journal-capacity-reached',
+      blockers: ['retention-capacity-reached'],
+      primaryReason: 'retention-capacity-reached',
     });
   });
 
@@ -452,7 +452,7 @@ describe('signer gate', () => {
       open: false,
       blockers: [
         'unresolved-attempt',
-        'journal-capacity-reached',
+        'retention-capacity-reached',
       ],
       primaryReason: 'unresolved-attempt',
     });

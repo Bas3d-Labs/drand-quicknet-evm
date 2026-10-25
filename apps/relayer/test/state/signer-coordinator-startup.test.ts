@@ -562,9 +562,9 @@ describe('signer coordinator startup', () => {
 
     expect(coordinator.status).toMatchObject({
       open: false,
-      primaryReason: 'journal-capacity-reached',
+      primaryReason: 'retention-capacity-reached',
       blockers: [
-        'journal-capacity-reached',
+        'retention-capacity-reached',
         'recovery-incomplete',
       ],
     });

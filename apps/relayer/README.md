@@ -998,6 +998,16 @@ The command runtime currently retains at most one attempt. Included
 attempts remain journaled until durable resolution, so observing inclusion
 alone does not free journal capacity.
 
+`retention-capacity-reached` means the journal has reached its limit
+for all allocated retained attempts, including unresolved attempts.
+It is distinct from `unresolved-attempt` and must not be reused for
+a separate admission-limit condition.
+
+Status snapshots use the `retention-capacity-reached` spelling.
+An older snapshot containing `journal-capacity-reached` is rejected
+until the daemon publishes a replacement snapshot. No compatibility
+alias or migration is provided; the signer journal is unaffected.
+
 Preserve the signer journal alongside the checkpoint. Commands sharing a
 chain and signer must use the same state directory. Releasing the service
 lock does not prove that a transaction was rejected, and an unstored round
