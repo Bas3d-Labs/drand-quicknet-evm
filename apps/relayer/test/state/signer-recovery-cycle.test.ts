@@ -28,6 +28,10 @@ import {
 } from '../../src/state/broadcast-retry-schedule.js';
 
 import {
+  DurableRecoverySchedule,
+} from '../../src/state/durable-recovery-schedule.js';
+
+import {
   SignerCoordinator,
 } from '../../src/state/signer-coordinator.js';
 
@@ -2027,4 +2031,1177 @@ describe('signer recovery cycle', () => {
       expect(t.signTransaction).toHaveBeenCalledTimes(2);
     },
   );
+
+  it('skips unchanged durable recovery while checking the latest head', async () => {
+    const t = await setup({ empty: true });
+    let now = 0;
+
+    const cycle = new SignerRecoveryCycle({
+      coordinator: t.coordinator,
+      schedule: t.schedule,
+      durableSchedule: new DurableRecoverySchedule({
+        refreshIntervalMs: 1_000,
+        now: () => now,
+      }),
+    });
+
+    const recover = vi.spyOn(t.coordinator, 'recover');
+    const checkInclusions = vi.spyOn(t.coordinator, 'checkInclusions');
+
+    const options = {
+      ...t.recovery,
+      head: ANCHOR,
+    };
+
+    await cycle.run(options);
+
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(checkInclusions).toHaveBeenCalledTimes(1);
+
+    now = 999;
+
+    expect(await cycle.run(options)).toMatchObject({
+      inspection: {
+        status: 'skipped',
+        reason: 'unchanged-durable-state',
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+      },
+      broadcast: null,
+    });
+
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(checkInclusions).toHaveBeenCalledTimes(2);
+
+    now = 1_000;
+
+    expect(await cycle.run(options)).toMatchObject({
+      inspection: { status: 'no-attempt' },
+    });
+
+    expect(recover).toHaveBeenCalledTimes(2);
+    expect(checkInclusions).toHaveBeenCalledTimes(3);
+    expect(t.request).not.toHaveBeenCalled();
+  });
+
+  it('requires durable recovery after the anchor advances', async () => {
+    const t = await setup({ empty: true });
+
+    const cycle = new SignerRecoveryCycle({
+      coordinator: t.coordinator,
+      schedule: t.schedule,
+      durableSchedule: new DurableRecoverySchedule({
+        refreshIntervalMs: 1_000,
+        now: () => 0,
+      }),
+    });
+
+    const recover = vi.spyOn(t.coordinator, 'recover');
+
+    await cycle.run({
+      ...t.recovery,
+      head: ANCHOR,
+    });
+
+    const advanced = {
+      blockNumber: 101n,
+      blockHash: HASH,
+    };
+
+    expect(await cycle.run({
+      ...t.recovery,
+      anchor: advanced,
+      head: advanced,
+    })).toMatchObject({
+      inspection: { status: 'no-attempt' },
+    });
+
+    expect(recover).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidates reuse when latest-head inspection fails', async () => {
+    const t = await setup({ empty: true });
+
+    const cycle = new SignerRecoveryCycle({
+      coordinator: t.coordinator,
+      schedule: t.schedule,
+      durableSchedule: new DurableRecoverySchedule({
+        refreshIntervalMs: 1_000,
+        now: () => 0,
+      }),
+    });
+
+    const recover = vi.spyOn(t.coordinator, 'recover');
+    const options = {
+      ...t.recovery,
+      head: ANCHOR,
+    };
+
+    await cycle.run(options);
+
+    const failure = new Error('Latest nonce lookup failed');
+
+    t.getTransactionCount.mockRejectedValueOnce(failure);
+
+    // Durable recovery is skipped; the mandatory latest check fails.
+    await expect(cycle.run(options)).rejects.toBe(failure);
+
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(t.coordinator.status.open).toBe(false);
+
+    expect(await cycle.run(options)).toMatchObject({
+      inspection: { status: 'no-attempt' },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+      },
+    });
+
+    expect(recover).toHaveBeenCalledTimes(2);
+    expect(t.coordinator.status.open).toBe(true);
+  });
+
+  it('rechecks durable recovery after discovering inclusion then skips stable evidence', async () => {
+    const t = await setup();
+    const transactionHash =
+      t.coordinator.attempts[0]!.transactionHashes[0];
+
+    // Supply inclusion evidence directly to isolate scheduling behavior.
+    // Broadcast sequencing is covered by the existing recovery tests.
+    t.getTransactionReceipt.mockResolvedValue({
+      transactionHash,
+      blockNumber: 105n,
+      blockHash: HASH,
+      status: 'success',
+    } as never);
+
+    t.getTransactionCount.mockImplementation(async ({ blockNumber }) => {
+      if (blockNumber === 100n) {
+        return 4;
+      }
+
+      if (blockNumber === 110n) {
+        return 5;
+      }
+
+      throw new Error('Unexpected nonce observation block.');
+    });
+
+    const cycle = new SignerRecoveryCycle({
+      coordinator: t.coordinator,
+      schedule: t.schedule,
+      durableSchedule: new DurableRecoverySchedule({
+        refreshIntervalMs: 1_000,
+        now: () => 0,
+      }),
+    });
+
+    const recover = vi.spyOn(t.coordinator, 'recover');
+    const checkInclusions = vi.spyOn(t.coordinator, 'checkInclusions');
+
+    const options = {
+      ...t.recovery,
+      head: {
+        blockNumber: 110n,
+        blockHash: HASH,
+      },
+    };
+
+    // Latest inspection discovers inclusion after durable completion
+    // was recorded, so that completion's revision is now outdated.
+    await cycle.run(options);
+
+    expect(t.coordinator.attempts[0]!.phase).toBe('included');
+
+    expect(await cycle.run(options)).toMatchObject({
+      inspection: {
+        status: 'unresolved',
+        receipt: { status: 'included-not-durable' },
+      },
+    });
+
+    expect(recover).toHaveBeenCalledTimes(2);
+
+    // Stable evidence and the same durable anchor now permit reuse.
+    expect(await cycle.run(options)).toMatchObject({
+      inspection: {
+        status: 'skipped',
+        reason: 'unchanged-durable-state',
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+      },
+      broadcast: null,
+    });
+
+    expect(recover).toHaveBeenCalledTimes(2);
+    expect(checkInclusions).toHaveBeenCalledTimes(3);
+    expect(t.coordinator.status.open).toBe(true);
+    expect(t.coordinator.attempts).toHaveLength(1);
+    expect(t.request).not.toHaveBeenCalled();
+  });
+
+  it('does not reuse durable recovery without an explicit latest head', async () => {
+    const t = await setup({ empty: true });
+
+    const cycle = new SignerRecoveryCycle({
+      coordinator: t.coordinator,
+      schedule: t.schedule,
+      durableSchedule: new DurableRecoverySchedule({
+        refreshIntervalMs: 1_000,
+        now: () => 0,
+      }),
+    });
+
+    const recover = vi.spyOn(t.coordinator, 'recover');
+
+    for (let pass = 0; pass < 3; pass += 1) {
+      expect(await cycle.run(t.recovery)).toMatchObject({
+        inspection: { status: 'no-attempt' },
+        inclusions: {
+          status: 'inspected',
+          inclusionChecksComplete: true,
+        },
+        broadcast: null,
+      });
+    }
+
+    expect(recover).toHaveBeenCalledTimes(3);
+    expect(t.request).not.toHaveBeenCalled();
+  });
+
+  it('detects a reorg during a skipped durable pass and requires full recovery before retry', async () => {
+    const t = await setup();
+    const first = t.coordinator.attempts[0]!;
+    const transactionHash = first.transactionHashes[0];
+
+    const initial = t.visible();
+
+    if (initial.kind !== 'present') {
+      throw new Error('Expected a persisted journal.');
+    }
+
+    const signedTransaction =
+      initial.snapshot.attempts[0]!
+        .signedTransactions[0].signedTransaction;
+
+    // Supply inclusion evidence directly to isolate scheduling and reorg
+    // handling. The attempt remains retained above the durable anchor.
+    t.getTransactionReceipt.mockResolvedValue({
+      transactionHash,
+      blockNumber: 105n,
+      blockHash: HASH,
+      status: 'success',
+    } as never);
+
+    t.getTransactionCount.mockImplementation(async ({ blockNumber }) => {
+      if (blockNumber === 100n) {
+        return 4;
+      }
+
+      if (blockNumber === 110n) {
+        return 5;
+      }
+
+      throw new Error('Unexpected nonce observation block.');
+    });
+
+    const cycle = new SignerRecoveryCycle({
+      coordinator: t.coordinator,
+      schedule: t.schedule,
+      durableSchedule: new DurableRecoverySchedule({
+        refreshIntervalMs: 1_000,
+        // Keep durable refresh time fixed. The fixture clock controls
+        // broadcast backoff independently.
+        now: () => 0,
+      }),
+    });
+
+    const recover = vi.spyOn(t.coordinator, 'recover');
+    const checkInclusions = vi.spyOn(t.coordinator, 'checkInclusions');
+
+    const options = {
+      ...t.recovery,
+      head: {
+        blockNumber: 110n,
+        blockHash: HASH,
+      },
+    };
+
+    // First discover inclusion, then complete durable recovery against
+    // the newly committed inclusion evidence.
+    await cycle.run(options);
+    await cycle.run(options);
+
+    expect(recover).toHaveBeenCalledTimes(2);
+    expect(t.coordinator.status.open).toBe(true);
+
+    expect(await cycle.run(options)).toMatchObject({
+      inspection: {
+        status: 'skipped',
+        reason: 'unchanged-durable-state',
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+      },
+      broadcast: null,
+    });
+
+    expect(recover).toHaveBeenCalledTimes(2);
+    expect(t.request).not.toHaveBeenCalled();
+
+    // Reorg above the unchanged durable anchor. The saved inclusion
+    // block is contradicted, its receipt disappears, and nonce 4 is free.
+    t.getBlock.mockImplementation(async ({ blockNumber } = {}) => {
+      if (blockNumber === undefined) {
+        throw new Error('Expected a numbered block lookup.');
+      }
+
+      let hash = HASH;
+
+      if (blockNumber > 100n) {
+        hash = OTHER;
+      }
+
+      return {
+        number: blockNumber,
+        hash,
+      } as never;
+    });
+
+    t.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+      throw new TransactionReceiptNotFoundError({ hash });
+    });
+
+    t.getTransactionCount.mockResolvedValue(4);
+
+    const forkOptions = {
+      ...t.recovery,
+      head: {
+        blockNumber: 110n,
+        blockHash: OTHER,
+      },
+    };
+
+    const invalidated = await cycle.run(forkOptions);
+
+    expect(invalidated).toMatchObject({
+      inspection: {
+        status: 'skipped',
+        reason: 'unchanged-durable-state',
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: false,
+        broadcastAttemptId: null,
+        attempts: [{
+          attemptId: first.attemptId,
+          phase: 'broadcast-may-have-occurred',
+          inclusion: null,
+        }],
+      },
+      broadcast: null,
+      retryDelayMs: 100,
+    });
+
+    // The latest check detected the reorg even though durable recovery
+    // was skipped. Contradiction does not authorize immediate rebroadcast.
+    expect(recover).toHaveBeenCalledTimes(2);
+    expect(checkInclusions).toHaveBeenCalledTimes(4);
+    expect(t.request).not.toHaveBeenCalled();
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      primaryReason: 'unresolved-attempt',
+      inclusionChecksComplete: false,
+    });
+
+    expect(t.visible()).toMatchObject({
+      kind: 'present',
+      snapshot: {
+        nextNonce: 5n,
+        durableNextNonce: 4n,
+        attempts: [{
+          attemptId: first.attemptId,
+          nonce: 4n,
+          phase: 'broadcast-may-have-occurred',
+          inclusion: null,
+          signedTransactions: [{
+            transactionHash,
+            signedTransaction,
+          }],
+        }],
+      },
+    });
+
+    // The invalidated completion cannot be reused, even though the
+    // durable anchor and durable refresh clock have not changed.
+    expect(await cycle.run(forkOptions)).toMatchObject({
+      inspection: {
+        status: 'unresolved',
+        observation: {
+          anchor: ANCHOR,
+          nonce: 4n,
+        },
+      },
+      broadcast: null,
+      retryDelayMs: 100,
+    });
+
+    expect(recover).toHaveBeenCalledTimes(3);
+    expect(t.request).not.toHaveBeenCalled();
+    expect(t.coordinator.status.open).toBe(false);
+
+    t.at(100);
+
+    expect(await cycle.run(forkOptions)).toMatchObject({
+      inspection: { status: 'unresolved' },
+      broadcast: {
+        status: 'acknowledged',
+        attemptId: first.attemptId,
+        transactionHash,
+        nonce: 4n,
+      },
+    });
+
+    expect(recover).toHaveBeenCalledTimes(4);
+
+    expect(t.request).toHaveBeenCalledExactlyOnceWith({
+      method: 'eth_sendRawTransaction',
+      params: [signedTransaction],
+    }, {
+      retryCount: 0,
+    });
+
+    expect(t.signTransaction).toHaveBeenCalledTimes(1);
+    expect(t.coordinator.status.open).toBe(false);
+
+    expect(t.lines.map((line) => JSON.parse(line).event))
+      .not.toContain('attempt_resolved');
+  });
+
+  it.each([false, true])(
+    'invalidates skipped recovery after uncertain persistence; visible write: %s',
+    async (visibleWrite) => {
+      const t = await setup({ empty: true });
+
+      const cycle = new SignerRecoveryCycle({
+        coordinator: t.coordinator,
+        schedule: t.schedule,
+        durableSchedule: new DurableRecoverySchedule({
+          refreshIntervalMs: 1_000,
+          now: () => 0,
+        }),
+      });
+
+      const recover = vi.spyOn(t.coordinator, 'recover');
+
+      const options = {
+        ...t.recovery,
+        head: ANCHOR,
+      };
+
+      await cycle.run(options);
+
+      expect(await cycle.run(options)).toMatchObject({
+        inspection: {
+          status: 'skipped',
+          reason: 'unchanged-durable-state',
+        },
+      });
+
+      expect(recover).toHaveBeenCalledTimes(1);
+
+      const committedRevision = t.coordinator.durableRecoveryRevision;
+      const originalSave = t.save.getMockImplementation()!;
+
+      t.save.mockClear();
+
+      t.save.mockImplementationOnce(async (snapshot) => {
+        if (visibleWrite) {
+          await originalSave(snapshot);
+        }
+
+        throw new Error('Observation durability uncertain');
+      });
+
+      // Durable recovery is skipped, but latest-head inspection must
+      // still persist its observation. That write fails.
+      await expect(cycle.run(options))
+        .rejects.toThrow('Journal persistence');
+
+      expect(recover).toHaveBeenCalledTimes(1);
+      expect(t.save).toHaveBeenCalledOnce();
+
+      const pending = t.save.mock.calls[0]![0];
+
+      if (visibleWrite) {
+        const visible = t.visible();
+
+        if (visible.kind !== 'present') {
+          throw new Error('Expected a visible journal.');
+        }
+
+        expect(visible.snapshot).toBe(pending);
+      }
+
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        inclusionChecksComplete: false,
+        persistenceState: 'failed',
+      });
+
+      expect(t.coordinator.durableRecoveryRevision)
+        .toBe(committedRevision);
+
+      t.getBlock.mockClear();
+      t.getTransactionCount.mockClear();
+      t.getTransactionReceipt.mockClear();
+      t.events.length = 0;
+
+      // Persistence must be retried before any fresh chain inspection.
+      t.save.mockRejectedValueOnce(new Error('Retry durability uncertain'));
+
+      await expect(cycle.run(options))
+        .rejects.toThrow('Journal persistence');
+
+      expect(t.save.mock.calls[1]![0]).toBe(pending);
+      expect(recover).toHaveBeenCalledTimes(1);
+
+      expect(t.getBlock).not.toHaveBeenCalled();
+      expect(t.getTransactionCount).not.toHaveBeenCalled();
+      expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+      expect(t.request).not.toHaveBeenCalled();
+
+      expect(t.coordinator.status.persistenceState).toBe('failed');
+
+      expect(t.coordinator.durableRecoveryRevision)
+        .toBe(committedRevision);
+
+      // A successful retry commits the exact pending snapshot. Even
+      // though its recovery revision is unchanged, the failed cycle
+      // invalidated reuse: fresh durable recovery is required.
+      const result = await cycle.run(options);
+
+      expect(t.save.mock.calls[2]![0]).toBe(pending);
+
+      expect(result).toMatchObject({
+        inspection: { status: 'no-attempt' },
+        inclusions: {
+          status: 'inspected',
+          inclusionChecksComplete: true,
+        },
+        broadcast: null,
+        retryDelayMs: null,
+      });
+
+      expect(t.events).toEqual([
+        'save',
+        'nonce',
+        'save',
+        'nonce',
+        'save',
+      ]);
+
+      expect(recover).toHaveBeenCalledTimes(2);
+
+      expect(t.coordinator.status).toMatchObject({
+        open: true,
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+        persistenceState: 'idle',
+      });
+
+      expect(t.coordinator.durableRecoveryRevision)
+        .toBe(committedRevision);
+
+      // Reuse becomes available again only after that successful pass.
+      expect(await cycle.run(options)).toMatchObject({
+        inspection: {
+          status: 'skipped',
+          reason: 'unchanged-durable-state',
+        },
+      });
+
+      expect(recover).toHaveBeenCalledTimes(2);
+      expect(t.signTransaction).not.toHaveBeenCalled();
+      expect(t.request).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { name: 'empty journal', retained: false },
+    { name: 'retained inclusion above safe', retained: true },
+  ])('requires fresh recovery after restart with $name', async ({ retained }) => {
+    const t = await setup({ empty: !retained });
+
+    if (retained) {
+      const transactionHash =
+        t.coordinator.attempts[0]!.transactionHashes[0];
+
+      t.getTransactionReceipt.mockResolvedValue({
+        transactionHash,
+        blockNumber: 105n,
+        blockHash: HASH,
+        status: 'success',
+      } as never);
+    }
+
+    t.getTransactionCount.mockImplementation(async ({ blockNumber }) => {
+      if (blockNumber === 100n) {
+        return 4;
+      }
+
+      if (blockNumber === 110n) {
+        if (retained) {
+          return 5;
+        }
+
+        return 4;
+      }
+
+      throw new Error('Unexpected nonce observation block.');
+    });
+
+    const options = {
+      ...t.recovery,
+      head: {
+        blockNumber: 110n,
+        blockHash: HASH,
+      },
+    };
+
+    const originalCycle = new SignerRecoveryCycle({
+      coordinator: t.coordinator,
+      schedule: t.schedule,
+      durableSchedule: new DurableRecoverySchedule({
+        refreshIntervalMs: 1_000,
+        now: () => 0,
+      }),
+    });
+
+    // For the retained case, first discover inclusion, then establish
+    // durable completion for that committed evidence.
+    await originalCycle.run(options);
+    await originalCycle.run(options);
+
+    expect(await originalCycle.run(options)).toMatchObject({
+      inspection: {
+        status: 'skipped',
+        reason: 'unchanged-durable-state',
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+      },
+      broadcast: null,
+    });
+
+    const committedRevision = t.coordinator.durableRecoveryRevision;
+    const retainedAttempts = t.coordinator.attempts;
+
+    // Reload the same persisted journal, with fresh in-memory ownership,
+    // recovery flags, and schedules.
+    const restarted = await t.create();
+
+    expect(restarted.durableRecoveryRevision).toBe(committedRevision);
+    expect(restarted.attempts).toEqual(retainedAttempts);
+
+    expect(restarted.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
+
+    const restartedCycle = new SignerRecoveryCycle({
+      coordinator: restarted,
+      schedule: new BroadcastRetrySchedule({
+        initialDelayMs: 100,
+        maxDelayMs: 400,
+        now: () => 0,
+      }),
+      durableSchedule: new DurableRecoverySchedule({
+        refreshIntervalMs: 1_000,
+        now: () => 0,
+      }),
+    });
+
+    const recover = vi.spyOn(restarted, 'recover');
+    const checkInclusions = vi.spyOn(restarted, 'checkInclusions');
+
+    const first = await restartedCycle.run(options);
+
+    if (retained) {
+      expect(first.inspection).toMatchObject({
+        status: 'unresolved',
+        receipt: { status: 'included-not-durable' },
+      });
+    } else {
+      expect(first.inspection).toMatchObject({
+        status: 'no-attempt',
+      });
+    }
+
+    expect(first).toMatchObject({
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+      },
+      broadcast: null,
+      retryDelayMs: null,
+    });
+
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(checkInclusions).toHaveBeenCalledTimes(1);
+
+    expect(restarted.status).toMatchObject({
+      open: true,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
+
+    expect(restarted.durableRecoveryRevision).toBe(committedRevision);
+    expect(restarted.attempts).toEqual(retainedAttempts);
+
+    // Only the fresh successful pass permits reuse in this process.
+    expect(await restartedCycle.run(options)).toMatchObject({
+      inspection: {
+        status: 'skipped',
+        reason: 'unchanged-durable-state',
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+      },
+      broadcast: null,
+    });
+
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(checkInclusions).toHaveBeenCalledTimes(2);
+
+    expect(t.request).not.toHaveBeenCalled();
+
+    if (retained) {
+      expect(t.signTransaction).toHaveBeenCalledTimes(1);
+    } else {
+      expect(t.signTransaction).not.toHaveBeenCalled();
+    }
+
+    expect(t.lines.map((line) => JSON.parse(line).event))
+      .not.toContain('attempt_resolved');
+  });
+
+  it('requires full recovery after receipt uncertainty without changing the revision', async () => {
+    const t = await setup();
+    const first = t.coordinator.attempts[0]!;
+    const transactionHash = first.transactionHashes[0];
+
+    const receipt = {
+      transactionHash,
+      blockNumber: 105n,
+      blockHash: HASH,
+      status: 'success',
+    } as const;
+
+    t.getTransactionReceipt.mockResolvedValue(receipt as never);
+
+    t.getTransactionCount.mockImplementation(async ({ blockNumber }) => {
+      if (blockNumber === 100n) {
+        return 4;
+      }
+
+      if (blockNumber === 110n) {
+        return 5;
+      }
+
+      throw new Error('Unexpected nonce observation block.');
+    });
+
+    const cycle = new SignerRecoveryCycle({
+      coordinator: t.coordinator,
+      schedule: t.schedule,
+      durableSchedule: new DurableRecoverySchedule({
+        refreshIntervalMs: 1_000,
+        now: () => 0,
+      }),
+    });
+
+    const recover = vi.spyOn(t.coordinator, 'recover');
+    const checkInclusions = vi.spyOn(t.coordinator, 'checkInclusions');
+
+    const options = {
+      ...t.recovery,
+      head: {
+        blockNumber: 110n,
+        blockHash: HASH,
+      },
+    };
+
+    // Discover inclusion, then establish durable completion for the
+    // committed evidence. Neither pass makes the attempt durable.
+    await cycle.run(options);
+    await cycle.run(options);
+
+    expect(await cycle.run(options)).toMatchObject({
+      inspection: {
+        status: 'skipped',
+        reason: 'unchanged-durable-state',
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+      },
+      broadcast: null,
+    });
+
+    expect(recover).toHaveBeenCalledTimes(2);
+    expect(checkInclusions).toHaveBeenCalledTimes(3);
+
+    const committedRevision = t.coordinator.durableRecoveryRevision;
+    const before = t.visible();
+
+    if (before.kind !== 'present') {
+      throw new Error('Expected a persisted journal.');
+    }
+
+    const savedAttempt = before.snapshot.attempts[0]!;
+
+    // Canonical block hashes and nonce observations remain unchanged.
+    // Only the receipt becomes temporarily unavailable.
+    t.getTransactionReceipt.mockRejectedValueOnce(
+      new TransactionReceiptNotFoundError({ hash: transactionHash }),
+    );
+
+    const uncertain = await cycle.run(options);
+
+    expect(uncertain).toMatchObject({
+      inspection: {
+        status: 'skipped',
+        reason: 'unchanged-durable-state',
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: false,
+        broadcastAttemptId: null,
+      },
+      broadcast: null,
+      retryDelayMs: null,
+    });
+
+    expect(recover).toHaveBeenCalledTimes(2);
+    expect(checkInclusions).toHaveBeenCalledTimes(4);
+
+    const after = t.visible();
+
+    if (after.kind !== 'present') {
+      throw new Error('Expected the retained journal.');
+    }
+
+    // Receipt absence is uncertainty, not evidence of a reorg.
+    expect(after.snapshot.attempts[0]).toEqual(savedAttempt);
+    expect(t.coordinator.durableRecoveryRevision).toBe(committedRevision);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      inclusionChecksComplete: false,
+      persistenceState: 'idle',
+    });
+
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.request).not.toHaveBeenCalled();
+
+    // The one-shot rejection is exhausted, so receipts are available
+    // again. Despite unchanged content, anchor, and time, recovery must
+    // take the full path after incomplete latest-head validation.
+    expect(await cycle.run(options)).toMatchObject({
+      inspection: {
+        status: 'unresolved',
+        receipt: { status: 'included-not-durable' },
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+      },
+      broadcast: null,
+      retryDelayMs: null,
+    });
+
+    expect(recover).toHaveBeenCalledTimes(3);
+    expect(checkInclusions).toHaveBeenCalledTimes(5);
+
+    expect(t.coordinator.durableRecoveryRevision).toBe(committedRevision);
+    expect(t.coordinator.status.open).toBe(true);
+
+    // Reuse resumes only after the successful full recovery.
+    expect(await cycle.run(options)).toMatchObject({
+      inspection: {
+        status: 'skipped',
+        reason: 'unchanged-durable-state',
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+      },
+      broadcast: null,
+    });
+
+    expect(recover).toHaveBeenCalledTimes(3);
+    expect(checkInclusions).toHaveBeenCalledTimes(6);
+    expect(t.request).not.toHaveBeenCalled();
+    expect(t.signTransaction).toHaveBeenCalledTimes(1);
+
+    expect(t.lines.map((line) => JSON.parse(line).event))
+      .not.toContain('attempt_resolved');
+  });
+
+  it('keeps durable recovery active after unattributed activity is observed', async () => {
+    const t = await setup({ empty: true });
+
+    const cycle = new SignerRecoveryCycle({
+      coordinator: t.coordinator,
+      schedule: t.schedule,
+      durableSchedule: new DurableRecoverySchedule({
+        refreshIntervalMs: 1_000,
+        now: () => 0,
+      }),
+    });
+
+    const recover = vi.spyOn(t.coordinator, 'recover');
+
+    const options = {
+      ...t.recovery,
+      head: ANCHOR,
+    };
+
+    await cycle.run(options);
+
+    expect(await cycle.run(options)).toMatchObject({
+      inspection: {
+        status: 'skipped',
+        reason: 'unchanged-durable-state',
+      },
+    });
+
+    expect(recover).toHaveBeenCalledTimes(1);
+
+    const beforeActivity = t.coordinator.durableRecoveryRevision;
+
+    // Simulate a provider observation inconsistent with the previously
+    // observed nonce at this anchor. The coordinator must latch the
+    // unaccounted consumption rather than preserve signing permission.
+    t.getTransactionCount.mockResolvedValue(8);
+
+    expect(await cycle.run(options)).toMatchObject({
+      inspection: {
+        status: 'skipped',
+        reason: 'unchanged-durable-state',
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+        attempts: [],
+      },
+      broadcast: null,
+    });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      primaryReason: 'unattributed-signer-activity',
+    });
+
+    expect(t.coordinator.status.blockers)
+      .toContain('unattributed-signer-activity');
+
+    const blockedRevision = t.coordinator.durableRecoveryRevision;
+
+    expect(blockedRevision).not.toBe(beforeActivity);
+
+    // The first full pass reacts to changed recovery state. Subsequent
+    // passes must remain full even after that state stops changing.
+    for (let pass = 0; pass < 3; pass += 1) {
+      expect(await cycle.run(options)).toMatchObject({
+        inspection: {
+          status: 'no-attempt',
+          observation: {
+            anchor: ANCHOR,
+            nonce: 8n,
+          },
+        },
+        inclusions: {
+          status: 'inspected',
+          inclusionChecksComplete: true,
+          attempts: [],
+        },
+        broadcast: null,
+      });
+
+      expect(t.coordinator.durableRecoveryRevision).toBe(blockedRevision);
+      expect(t.coordinator.status.open).toBe(false);
+
+      expect(t.coordinator.status.blockers)
+        .toContain('unattributed-signer-activity');
+    }
+
+    expect(recover).toHaveBeenCalledTimes(4);
+    expect(t.signTransaction).not.toHaveBeenCalled();
+    expect(t.request).not.toHaveBeenCalled();
+  });
+
+  it('keeps consumed unidentified nonce recovery due through search exhaustion', async () => {
+    const t = await setup();
+    const first = t.coordinator.attempts[0]!;
+
+    const hashes = new Map<bigint, Hash>([
+      [100n, HASH],
+      [101n, OTHER],
+      [102n, `0x${'cc'.repeat(32)}`],
+      [103n, `0x${'dd'.repeat(32)}`],
+    ]);
+
+    t.getBlock.mockImplementation(async ({ blockNumber } = {}) => {
+      if (blockNumber === undefined) {
+        throw new Error('Expected a numbered block lookup.');
+      }
+
+      const hash = hashes.get(blockNumber);
+
+      if (hash === undefined) {
+        throw new Error('Unexpected block requested.');
+      }
+
+      return {
+        number: blockNumber,
+        hash,
+        parentHash: hashes.get(blockNumber - 1n) ?? HASH,
+        transactions: [],
+      } as never;
+    });
+
+    // Nonce 4 was consumed, but neither a receipt nor the consuming
+    // transaction is available. This is not consumption beyond nextNonce.
+    t.getTransactionCount.mockResolvedValue(5);
+
+    const durableSchedule = new DurableRecoverySchedule({
+      refreshIntervalMs: 1_000,
+      now: () => 0,
+    });
+
+    const recordCompleted = vi.spyOn(durableSchedule, 'recordCompleted');
+
+    const cycle = new SignerRecoveryCycle({
+      coordinator: t.coordinator,
+      schedule: t.schedule,
+      durableSchedule,
+    });
+
+    const recover = vi.spyOn(t.coordinator, 'recover');
+
+    const anchor = {
+      blockNumber: 103n,
+      blockHash: hashes.get(103n)!,
+    };
+
+    const options = {
+      ...t.recovery,
+      anchor,
+      head: anchor,
+      maxBlockRange: 1n,
+    };
+
+    // Only durable recovery advances the persisted search cursor.
+    // Latest-head searching may inspect further blocks but must not
+    // advance that durable cursor.
+    for (const [index, searchedThrough] of [101n, 102n, 103n].entries()) {
+      const remainingBlocks = 103n - searchedThrough;
+
+      expect(await cycle.run(options)).toMatchObject({
+        inspection: {
+          status: 'unresolved',
+          observation: {
+            anchor,
+            nonce: 5n,
+          },
+          search: {
+            status: 'not-found',
+            scannedBlocks: 1n,
+            remainingBlocks,
+          },
+        },
+        inclusions: {
+          status: 'inspected',
+          inclusionChecksComplete: false,
+          broadcastAttemptId: null,
+        },
+        broadcast: null,
+      });
+
+      expect(recover).toHaveBeenCalledTimes(index + 1);
+
+      expect(t.visible()).toMatchObject({
+        kind: 'present',
+        snapshot: {
+          nextNonce: 5n,
+          durableNextNonce: 4n,
+          attempts: [{
+            attemptId: first.attemptId,
+            replacementSearch: {
+              searchedThrough: {
+                blockNumber: searchedThrough,
+                blockHash: hashes.get(searchedThrough),
+              },
+            },
+          }],
+        },
+      });
+
+      expect(t.coordinator.status.open).toBe(false);
+
+      expect(t.coordinator.status.blockers)
+        .not.toContain('unattributed-signer-activity');
+
+      if (remainingBlocks === 0n) {
+        expect(t.coordinator.status.blockers)
+          .toContain('conflict-search-exhausted');
+      } else {
+        expect(t.coordinator.status.blockers)
+          .not.toContain('conflict-search-exhausted');
+      }
+    }
+
+    const exhaustedRevision = t.coordinator.durableRecoveryRevision;
+
+    // Exhaustion is not an established outcome. With the same anchor,
+    // revision, and clock, durable inspection must still run again.
+    expect(await cycle.run(options)).toMatchObject({
+      inspection: {
+        status: 'unresolved',
+        search: {
+          status: 'not-found',
+          scannedBlocks: 0n,
+          remainingBlocks: 0n,
+        },
+      },
+      broadcast: null,
+    });
+
+    expect(recover).toHaveBeenCalledTimes(4);
+    expect(recordCompleted).not.toHaveBeenCalled();
+
+    expect(t.coordinator.durableRecoveryRevision).toBe(exhaustedRevision);
+    expect(t.coordinator.status.open).toBe(false);
+
+    expect(t.coordinator.status.blockers)
+      .toContain('conflict-search-exhausted');
+
+    expect(t.coordinator.attempts).toHaveLength(1);
+    expect(t.request).not.toHaveBeenCalled();
+    expect(t.signTransaction).toHaveBeenCalledTimes(1);
+
+    expect(t.lines.map((line) => JSON.parse(line).event))
+      .not.toContain('attempt_resolved');
+  });
 });
