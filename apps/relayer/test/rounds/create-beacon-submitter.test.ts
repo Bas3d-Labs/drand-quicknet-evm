@@ -104,7 +104,26 @@ function setup() {
     primaryReason: null,
   });
 
+  const observationEvents: string[] = [];
+
+  const observeReconciliation = vi.fn(
+    async <T>(
+      action: () => Promise<T>,
+      _cycle?: number,
+    ): Promise<T> => {
+      observationEvents.push('start');
+
+      try {
+        return await action();
+      } finally {
+        observationEvents.push('finish');
+      }
+    },
+  );
+
   const coordinator = {
+    observeReconciliation,
+
     get status() {
       return readStatus();
     },
@@ -138,6 +157,8 @@ function setup() {
     request,
     controller,
     events,
+    observeReconciliation,
+    observationEvents,
     readStatus,
     recoveryResult,
     submissionResult,
@@ -156,6 +177,11 @@ describe('beacon submitter', () => {
     const result = await t.submitter.recover(7);
 
     expect(result).toBe(t.recoveryResult);
+
+    expect(t.observeReconciliation)
+      .toHaveBeenCalledExactlyOnceWith(expect.any(Function), 7);
+
+    expect(t.observationEvents).toEqual(['start', 'finish']);
 
     expect(mocks.recoverSignerAtHeads)
       .toHaveBeenCalledExactlyOnceWith({
@@ -191,11 +217,16 @@ describe('beacon submitter', () => {
       expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
       expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
       expect(t.readStatus).not.toHaveBeenCalled();
+      expect(t.observeReconciliation)
+        .toHaveBeenCalledExactlyOnceWith(expect.any(Function), 8);
+
+      expect(t.observationEvents).toEqual(['start']);
     } finally {
       finishRecovery();
     }
 
     expect(await pending).toBe(t.submissionResult);
+    expect(t.observationEvents).toEqual(['start', 'finish']);
     expect(t.readStatus).toHaveBeenCalledOnce();
     expect(t.events).toEqual(['recover', 'submit']);
 
@@ -266,6 +297,9 @@ describe('beacon submitter', () => {
     await expect(
       t.submitter.submit(t.request),
     ).rejects.toBe(error);
+
+    expect(t.observeReconciliation).toHaveBeenCalledOnce();
+    expect(t.observationEvents).toEqual(['start', 'finish']);
 
     expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
     expect(t.readStatus).not.toHaveBeenCalled();
@@ -477,4 +511,71 @@ describe('beacon submitter', () => {
       expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
     },
   );
+
+  it('awaits reconciliation completion before publishing recovery or submitting', async () => {
+    const t = setup();
+
+    let notifyRecovered!: () => void;
+    let finishObservation!: () => void;
+
+    const recovered = new Promise<void>((resolve) => {
+      notifyRecovered = resolve;
+    });
+
+    const observationFinished = new Promise<void>((resolve) => {
+      finishObservation = resolve;
+    });
+
+    t.observeReconciliation.mockImplementationOnce(
+      async <T>(action: () => Promise<T>): Promise<T> => {
+        const result = await action();
+
+        notifyRecovered();
+        await observationFinished;
+
+        return result;
+      },
+    );
+
+    const onRecoveryCompleted = vi.fn();
+
+    const submitter = createBeaconSubmitter({
+      ...t.options,
+      onRecoveryCompleted,
+    });
+
+    const pending = submitter.submit(t.request, 9);
+
+    try {
+      await Promise.race([recovered, pending]);
+
+      expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
+      expect(onRecoveryCompleted).not.toHaveBeenCalled();
+      expect(t.readStatus).not.toHaveBeenCalled();
+      expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
+    } finally {
+      finishObservation();
+      await pending;
+    }
+
+    expect(await pending).toBe(t.submissionResult);
+
+    expect(t.observeReconciliation)
+      .toHaveBeenCalledExactlyOnceWith(expect.any(Function), 9);
+
+    expect(onRecoveryCompleted).toHaveBeenCalledExactlyOnceWith({
+      retryDelayMs: null,
+    });
+
+    expect(t.readStatus).toHaveBeenCalledOnce();
+    expect(mocks.submitBeaconTransaction).toHaveBeenCalledOnce();
+
+    expect(onRecoveryCompleted.mock.invocationCallOrder[0]!)
+      .toBeLessThan(t.readStatus.mock.invocationCallOrder[0]!);
+
+    expect(t.readStatus.mock.invocationCallOrder[0]!)
+      .toBeLessThan(
+        mocks.submitBeaconTransaction.mock.invocationCallOrder[0]!,
+      );
+  });
 });

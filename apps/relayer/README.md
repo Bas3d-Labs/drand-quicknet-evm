@@ -736,8 +736,9 @@ Package managers and supervisors may additionally report wrapper errors.
 | `1` | Application failure, refused nonce repair, or explicit launcher validation failure. |
 | `2` | CLI output failure; the operation may already have succeeded. |
 | `3` | One-shot import remains pending. A journaled transaction attempt remains unresolved. |
-| `4` | Import deferred because the signer is unavailable, or nonce-sync inspection deferred. |
+| `4` | Import deferred because the signer is unavailable or the work is already retained, or nonce-sync inspection deferred. |
 | `5` | One-shot command handled SIGINT/SIGTERM before producing a result. Retained journal state may still require recovery. |
+| `6` | Signer startup refused because the journal exceeds supported runtime bounds. |
 | `9` | Node startup failure observed when a configured env file is missing. |
 | `75` | Another process holds the service lock; this may have no diagnostic output. |
 
@@ -759,8 +760,10 @@ Incomplete work uses separate statuses:
 - `3` (`pending`): a journaled transaction was not acknowledged by the RPC,
   or receipt waiting timed out. Output includes the attempt ID,
   locally computed transaction hash, and pending reason.
-- `4` (`deferred`): fresh signer recovery left the gate closed, so this
-  submission prepared no new attempt. Output includes the signer blocker.
+- `4` (`deferred`): no new attempt was prepared. For
+  `signer-unavailable`, output includes the signer blocker. For
+  `already-retained`, output includes the existing attempt ID and
+  work identity (`workId`).
 - `5` (`interrupted`): the command handled cancellation before producing
   an import result. No result is printed; retained journal state may
   still require recovery.
@@ -787,6 +790,36 @@ fixed diagnostic reason:
 | `state-directory` | State-directory validation or checkpoint placement. |
 | `lock-file` | Lock-file lookup, type, or link-count validation. |
 | `descriptor` | No matching inherited exclusive flock was verified. |
+
+### Journal runtime bounds
+
+The signer runtime supports at most:
+
+- One retained transaction attempt.
+- Sixteen signed transaction candidates per attempt, including the
+  original transaction.
+
+These are supported runtime limits, not environment settings. The
+candidate limit does not itself enable automatic fee replacement.
+
+Signer startup refuses a journal that exceeds either limit, reports
+`journal-bounds-exceeded`, and exits with status `6`. It does not truncate
+or overwrite the journal to make it fit.
+
+Preserve the journal and inspect it using explicit journal status mode.
+Journal inspection remains available for structurally valid journals
+that exceed runtime bounds. Inspection does not authorize signing.
+
+An over-bound journal requires investigation and a deliberate recovery
+plan. Do not delete attempts or signed transaction candidates merely to
+pass startup validation: they may represent transactions that were
+already broadcast.
+
+`sync-nonce` is not a way to discard retained attempts. It refuses repair
+while any attempt remains retained.
+
+Having one valid retained attempt is normal during transaction recovery.
+It is distinct from exceeding the journal bounds.
 
 ## Network sources
 
@@ -969,6 +1002,53 @@ Preserve the signer journal alongside the checkpoint. Commands sharing a
 chain and signer must use the same state directory. Releasing the service
 lock does not prove that a transaction was rejected, and an unstored round
 does not prove that an earlier broadcast was never accepted.
+
+### Durable recovery scheduling
+
+Signer recovery separates durable reconciliation from latest-head
+inclusion validation. Durable reconciliation determines which retained
+attempts can be resolved under the configured finality policy.
+Latest-head validation checks whether retained inclusion evidence still
+holds and whether further signer work is permitted.
+
+The command runtime may skip the durable portion of a recovery call when
+a previous pass completed successfully, the durable anchor and relevant
+committed recovery state are unchanged, and the retained population is
+empty or fully verified. Persistent recovery blockers prevent reuse.
+An explicit latest head is required.
+
+Latest-head validation still runs on every recovery call, including
+recovery before submission. Daemon recovery and pre-submit recovery
+share the same runtime schedule.
+
+An unchanged durable pass becomes due again after 60 seconds, measured
+with a monotonic clock from successful durable completion. This is an
+internal safety-net interval, not an environment setting or a background
+timer. The refresh runs on the next recovery call after it becomes due.
+
+A changed durable anchor, including a same-height hash change or a
+regression, requires a new durable pass. Relevant committed-state changes
+also prevent reuse. Failed operations, incomplete latest-head validation,
+and persistence uncertainty invalidate reuse. A restarted runtime always
+requires fresh recovery.
+
+A consumed nonce without an identified outcome remains on the full
+recovery path, including after replacement-search exhaustion. Exhaustion
+does not establish that an attempt succeeded, reverted, or was replaced.
+
+Internally, a reused durable pass returns
+`inspection.status: 'skipped'` with reason
+`unchanged-durable-state`. This describes only the omitted durable
+inspection; latest-head validation still runs. It is not a CLI exit
+status, a transaction outcome, or signing authorization.
+
+This schedule is separate from durable-head polling. Recovery reacts to
+the durable anchor supplied by the head reader, whose polling policy
+still determines when a new durable head is observed.
+
+The runtime retention limit remains one attempt. An included attempt
+continues occupying that slot until durable resolution. Scheduling
+reduces repeated recovery work; it does not remove that throughput limit.
 
 ### First-use signer initialization
 
@@ -1193,6 +1273,7 @@ durable_head_regressed
 heartbeat
 logging_failed
 round_already_stored
+round_deferred
 round_imported
 rpc_usage
 signer_bootstrap_deferred
@@ -1202,6 +1283,15 @@ status_publication_failed
 
 `checkpoint_advanced` and `round_already_stored` are debug-level routine
 progress. `heartbeat` is emitted periodically at info level.
+
+`round_deferred` reports a round for which no new transaction attempt
+was prepared. Its reason distinguishes `signer-unavailable`, which
+includes a signer blocker, from `already-retained`, which includes the
+existing attempt ID and work identity (`workId`).
+
+An already-retained result means the signer coordinator already tracks
+that work. It does not establish that the transaction succeeded or that
+the beacon is stored; the retained attempt still requires reconciliation.
 
 `signer_bootstrap_deferred` is an info-level event emitted when first-use
 initialization observes mismatched nonce counts. It includes `signer`,

@@ -46,6 +46,15 @@ function snapshot(): DaemonStatusSnapshot {
     runId: '33333333-3333-4333-8333-333333333333',
     observedAt: '2026-10-12T12:00:00.000Z',
     journalInitialized: true,
+    attemptSummary: {
+      retainedCount: 1,
+      includedCount: 0,
+      unresolvedCount: 1,
+      lowestNonce: '4',
+      highestNonce: '4',
+      detailedCount: 1,
+      omittedCount: 0,
+    },
     attempts: [attempt()],
     lastCompletedCycle: null,
     lastRetryObservation: null,
@@ -62,9 +71,30 @@ function snapshot(): DaemonStatusSnapshot {
 }
 
 function readAttempts(attempts: unknown) {
-  return readDaemonStatusSnapshot({
+  const input = {
     ...snapshot(),
     attempts,
+  };
+
+  if (!Array.isArray(attempts)) {
+    return readDaemonStatusSnapshot(input, IDENTITY);
+  }
+
+  const includedCount = attempts.filter(
+    (item) => item?.phase === 'included',
+  ).length;
+
+  return readDaemonStatusSnapshot({
+    ...input,
+    attemptSummary: {
+      retainedCount: attempts.length,
+      includedCount,
+      unresolvedCount: attempts.length - includedCount,
+      lowestNonce: attempts[0]?.nonce ?? null,
+      highestNonce: attempts[attempts.length - 1]?.nonce ?? null,
+      detailedCount: attempts.length,
+      omittedCount: 0,
+    },
   }, IDENTITY);
 }
 
@@ -244,7 +274,7 @@ describe('daemon status retained attempts', () => {
     'broadcast-may-have-occurred',
     'included',
   ] as const)(
-    'rejects two otherwise valid retained attempts in phase %s',
+    'rejects two detail records in phase %s',
     (phase) => {
       const first: DaemonStatusAttempt = {
         ...attempt(),
@@ -260,7 +290,8 @@ describe('daemon status retained attempts', () => {
         transactionHashes: [THIRD_HASH],
       };
 
-      // Each row is valid independently; their combined count is unsupported.
+      // Each row is valid independently, but two full detail records
+      // exceed the presentation limit.
       expect(readAttempts([first]).attempts).toEqual([first]);
       expect(readAttempts([second]).attempts).toEqual([second]);
 

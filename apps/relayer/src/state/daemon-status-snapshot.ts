@@ -46,6 +46,11 @@ import type {
 } from './journal-persistence.js';
 
 import {
+  MAX_DAEMON_STATUS_ATTEMPT_DETAILS,
+  type DaemonStatusAttemptSummary,
+} from './project-daemon-status-attempts.js';
+
+import {
   BLOCKER_PRECEDENCE,
   type SignerBlocker,
 } from './signer-gate.js';
@@ -94,6 +99,7 @@ export interface DaemonStatusSnapshot {
   readonly lastCompletedCycle: DaemonStatusCompletedCycle | null;
   readonly lastRetryObservation: DaemonStatusRetryObservation | null;
   readonly journalInitialized: boolean;
+  readonly attemptSummary: DaemonStatusAttemptSummary;
   readonly attempts: readonly DaemonStatusAttempt[];
   readonly lastObservedGate: {
     readonly open: boolean;
@@ -200,9 +206,19 @@ export function readDaemonStatusSnapshot(
     throw new TypeError(INVALID);
   }
 
-  const attempts = readAttempts(root.attempts);
+  const attempts = readAttempts(
+    root.attempts,
+    MAX_DAEMON_STATUS_ATTEMPT_DETAILS,
+  );
+  const attemptSummary = readAttemptSummary(
+    root.attemptSummary,
+    attempts,
+  );
 
-  if (!root.journalInitialized && attempts.length !== 0) {
+  if (
+    !root.journalInitialized &&
+    attemptSummary.retainedCount !== 0
+  ) {
     throw new TypeError(INVALID);
   }
 
@@ -227,6 +243,7 @@ export function readDaemonStatusSnapshot(
     lastCompletedCycle,
     lastRetryObservation,
     journalInitialized: root.journalInitialized,
+    attemptSummary,
     attempts,
     lastObservedGate: Object.freeze({
       open: gate.open,
@@ -239,6 +256,15 @@ export function readDaemonStatusSnapshot(
     }),
     ...rpcFields,
   });
+}
+
+/**
+ * Validates the complete retained population before detail selection.
+ */
+export function readDaemonStatusAttemptPopulation(
+  input: unknown,
+): readonly DaemonStatusAttempt[] {
+  return readAttempts(input, MAX_RETAINED_ATTEMPTS);
 }
 
 /**
@@ -352,10 +378,11 @@ function readRetryObservation(
 
 function readAttempts(
   input: unknown,
+  maximumCount: number,
 ): readonly DaemonStatusAttempt[] {
   if (
     !Array.isArray(input) ||
-    input.length > MAX_RETAINED_ATTEMPTS
+    input.length > maximumCount
   ) {
     throw new TypeError(INVALID);
   }
@@ -384,6 +411,134 @@ function readAttempts(
   }
 
   return Object.freeze(attempts);
+}
+
+function readAttemptSummary(
+  input: unknown,
+  details: readonly DaemonStatusAttempt[],
+): DaemonStatusAttemptSummary {
+  const value = object(input);
+
+  const {
+    retainedCount,
+    includedCount,
+    unresolvedCount,
+    detailedCount,
+    omittedCount,
+  } = value;
+
+  if (
+    !isNonNegativeSafeInteger(retainedCount) ||
+    !isNonNegativeSafeInteger(includedCount) ||
+    !isNonNegativeSafeInteger(unresolvedCount) ||
+    !isNonNegativeSafeInteger(detailedCount) ||
+    !isNonNegativeSafeInteger(omittedCount)
+  ) {
+    throw new TypeError(INVALID);
+  }
+
+  if (
+    retainedCount > MAX_RETAINED_ATTEMPTS ||
+    includedCount > retainedCount ||
+    unresolvedCount > retainedCount ||
+    detailedCount > retainedCount ||
+    omittedCount > retainedCount ||
+    includedCount !== retainedCount - unresolvedCount ||
+    detailedCount !== details.length ||
+    detailedCount !== Math.min(
+      retainedCount,
+      MAX_DAEMON_STATUS_ATTEMPT_DETAILS,
+    ) ||
+    omittedCount !== retainedCount - detailedCount
+  ) {
+    throw new TypeError(INVALID);
+  }
+
+  let lowestNonce: string | null = null;
+  let highestNonce: string | null = null;
+
+  if (retainedCount === 0) {
+    if (
+      value.lowestNonce !== null ||
+      value.highestNonce !== null
+    ) {
+      throw new TypeError(INVALID);
+    }
+  } else {
+    lowestNonce = readNonce(value.lowestNonce);
+    highestNonce = readNonce(value.highestNonce);
+
+    const lowest = BigInt(lowestNonce);
+    const highest = BigInt(highestNonce);
+
+    if (
+      lowest > highest ||
+      highest - lowest + 1n < BigInt(retainedCount) ||
+      (retainedCount === 1 && lowest !== highest)
+    ) {
+      throw new TypeError(INVALID);
+    }
+
+    for (const detail of details) {
+      const nonce = BigInt(detail.nonce);
+
+      if (nonce < lowest || nonce > highest) {
+        throw new TypeError(INVALID);
+      }
+    }
+  }
+
+  let detailedUnresolvedCount = 0;
+
+  for (const detail of details) {
+    if (detail.phase !== 'included') {
+      detailedUnresolvedCount += 1;
+    }
+  }
+
+  const detailedIncludedCount =
+    details.length - detailedUnresolvedCount;
+
+  if (
+    detailedUnresolvedCount !== Math.min(
+      unresolvedCount,
+      detailedCount,
+    ) ||
+    detailedIncludedCount > includedCount
+  ) {
+    throw new TypeError(INVALID);
+  }
+
+  // With no omitted records, the range must match the displayed records.
+  if (
+    retainedCount > 0 &&
+    (
+      omittedCount === 0 ||
+      unresolvedCount === 0 ||
+      includedCount === 0
+    ) &&
+    details[0]!.nonce !== lowestNonce
+  ) {
+    throw new TypeError(INVALID);
+  }
+
+  if (
+    retainedCount > 0 &&
+    omittedCount === 0 &&
+    details[details.length - 1]!.nonce !== highestNonce
+  ) {
+    throw new TypeError(INVALID);
+  }
+
+  return Object.freeze({
+    retainedCount,
+    includedCount,
+    unresolvedCount,
+    lowestNonce,
+    highestNonce,
+    detailedCount,
+    omittedCount,
+  });
 }
 
 function readAttempt(

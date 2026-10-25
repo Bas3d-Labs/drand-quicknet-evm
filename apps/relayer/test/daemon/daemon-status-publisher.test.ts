@@ -171,6 +171,15 @@ describe('daemon status publisher', () => {
       observedAt: new Date(START).toISOString(),
       lastCompletedCycle: null,
       lastRetryObservation: null,
+      attemptSummary: {
+        retainedCount: 1,
+        includedCount: 0,
+        unresolvedCount: 1,
+        lowestNonce: '4',
+        highestNonce: '4',
+        detailedCount: 1,
+        omittedCount: 0,
+      },
       attempts: [{
         attemptId: ATTEMPT_ID,
         workId: WORK_ID,
@@ -181,6 +190,7 @@ describe('daemon status publisher', () => {
     });
 
     expect(Object.isFrozen(written.snapshot)).toBe(true);
+    expect(Object.isFrozen(written.snapshot.attemptSummary)).toBe(true);
     expect(() => JSON.stringify(written.snapshot)).not.toThrow();
   });
 

@@ -18,6 +18,10 @@ import {
 } from 'node:path';
 
 import {
+  performance,
+} from 'node:perf_hooks';
+
+import {
   afterEach,
   beforeEach,
   describe,
@@ -873,5 +877,114 @@ describe('command signer runtime', () => {
     );
 
     expect(retained).toEqual(snapshot);
+  });
+
+  it('wires durable recovery reuse with a 60-second monotonic refresh', async () => {
+    let now = 0;
+
+    const clock = vi.spyOn(performance, 'now')
+      .mockImplementation(() => now);
+
+    try {
+      const runtime = await openSignerRuntime(options());
+
+      const recover = vi.spyOn(runtime.coordinator, 'recover');
+      const checkInclusions = vi.spyOn(
+        runtime.coordinator,
+        'checkInclusions',
+      );
+
+      const input = recovery();
+
+      const withHead = {
+        ...input,
+        head: { ...input.anchor },
+      };
+
+      // Bootstrap and the first recovery must run in full.
+      expect(await runtime.recovery.run(withHead)).toMatchObject({
+        inspection: { status: 'no-attempt' },
+        inclusions: {
+          status: 'inspected',
+          inclusionChecksComplete: true,
+        },
+        broadcast: null,
+      });
+
+      expect(recover).toHaveBeenCalledTimes(1);
+      expect(checkInclusions).toHaveBeenCalledTimes(1);
+
+      now = 59_999;
+
+      expect(await runtime.recovery.run(withHead)).toMatchObject({
+        inspection: {
+          status: 'skipped',
+          reason: 'unchanged-durable-state',
+        },
+        inclusions: {
+          status: 'inspected',
+          inclusionChecksComplete: true,
+        },
+        broadcast: null,
+      });
+
+      expect(recover).toHaveBeenCalledTimes(1);
+      expect(checkInclusions).toHaveBeenCalledTimes(2);
+
+      now = 60_000;
+
+      expect(await runtime.recovery.run(withHead)).toMatchObject({
+        inspection: { status: 'no-attempt' },
+        inclusions: {
+          status: 'inspected',
+          inclusionChecksComplete: true,
+        },
+        broadcast: null,
+      });
+
+      expect(recover).toHaveBeenCalledTimes(2);
+      expect(checkInclusions).toHaveBeenCalledTimes(3);
+
+      // The completed refresh starts another interval.
+      expect(await runtime.recovery.run(withHead)).toMatchObject({
+        inspection: {
+          status: 'skipped',
+          reason: 'unchanged-durable-state',
+        },
+      });
+
+      expect(recover).toHaveBeenCalledTimes(2);
+      expect(checkInclusions).toHaveBeenCalledTimes(4);
+      expect(runtime.coordinator.status.open).toBe(true);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('keeps runtime recovery unconditional without an explicit latest head', async () => {
+    const clock = vi.spyOn(performance, 'now')
+      .mockReturnValue(0);
+
+    try {
+      const runtime = await openSignerRuntime(options());
+      const recover = vi.spyOn(runtime.coordinator, 'recover');
+
+      const input = recovery();
+
+      for (let pass = 0; pass < 3; pass += 1) {
+        expect(await runtime.recovery.run(input)).toMatchObject({
+          inspection: { status: 'no-attempt' },
+          inclusions: {
+            status: 'inspected',
+            inclusionChecksComplete: true,
+          },
+          broadcast: null,
+        });
+      }
+
+      expect(recover).toHaveBeenCalledTimes(3);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });

@@ -64,6 +64,11 @@ export type SignerInclusionInspection =
       readonly status: 'inspected';
       readonly observation: AnchoredNonceObservation;
       readonly attempts: readonly JournalAttempt[];
+
+      /**
+       * True only when every retained attempt was verified during this
+       * inspection pass.
+       */
       readonly inclusionChecksComplete: boolean;
       
       /**
@@ -115,9 +120,11 @@ export async function inspectSignerInclusions(
     throw new TypeError('Invalid signer inclusion input.');
   }
 
-  const openingHead = await checkBlockAnchor(publicClient, head);
-  if (openingHead !== null) {
-    return openingHead;
+  if (snapshot.attempts.length > 0) {
+    const openingHead = await checkBlockAnchor(publicClient, head);
+    if (openingHead !== null) {
+      return openingHead;
+    }
   }
 
   const attempts: JournalAttempt[] = [];

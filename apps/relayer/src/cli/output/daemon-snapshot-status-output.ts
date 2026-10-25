@@ -97,6 +97,15 @@ export function projectDaemonSnapshotStatusOutput(
         own(own(raw, 'lastObservedGate'), 'blockers'),
       ),
     },
+    attemptSummary: fields(own(raw, 'attemptSummary'), [
+      'retainedCount',
+      'includedCount',
+      'unresolvedCount',
+      'lowestNonce',
+      'highestNonce',
+      'detailedCount',
+      'omittedCount',
+    ]),
     attempts: elements(own(raw, 'attempts')).map((attempt) => ({
       ...fields(attempt, ['attemptId', 'workId', 'nonce', 'phase']),
       transactionHashes: elements(own(attempt, 'transactionHashes')),
@@ -184,7 +193,41 @@ export function renderDaemonSnapshotStatusOutput(
     );
   }
 
-  lines.push('Last observed retained attempts: ' + observation.attempts.length);
+  const summary = observation.attemptSummary;
+
+  lines.push(
+    'Last observed retained attempts: ' + summary.retainedCount,
+    'Stored included attempts: ' + summary.includedCount,
+    'Stored unresolved attempts: ' + summary.unresolvedCount,
+  );
+
+  if (summary.retainedCount > 0) {
+    lines.push(
+      'Retained nonce range: '
+        + summary.lowestNonce
+        + '-'
+        + summary.highestNonce,
+    );
+  }
+
+  lines.push(
+    'Attempt details shown: '
+      + summary.detailedCount
+      + ' of '
+      + summary.retainedCount,
+  );
+
+  if (summary.omittedCount > 0) {
+    lines.push(
+      'Attempt details omitted: '
+        + summary.omittedCount
+        + '; oldest unresolved attempts take priority.',
+    );
+  }
+
+  lines.push(
+    'Stored phases do not establish fresh inclusion authorization.',
+  );
 
   for (const attempt of observation.attempts) {
     lines.push(

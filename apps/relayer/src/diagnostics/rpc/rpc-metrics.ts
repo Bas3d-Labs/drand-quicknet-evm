@@ -151,6 +151,7 @@ export function createRpcMetrics(): RpcMetrics {
   async function measure<T>(
     row: Counters,
     action: () => Promise<T>,
+    onSuccess?: (result: T) => void,
   ): Promise<T> {
     const startedAt = performance.now();
 
@@ -161,6 +162,14 @@ export function createRpcMetrics(): RpcMetrics {
       const result = await action();
 
       row.succeeded += 1;
+
+      if (onSuccess !== undefined) {
+        try {
+          onSuccess(result);
+        } catch {
+          // Status inspection must not alter the request outcome.
+        }
+      }
 
       return result;
     } catch (error) {
@@ -235,15 +244,12 @@ export function createRpcMetrics(): RpcMetrics {
 
       const current = row;
 
-      return measure(current, async () => {
-        const response = await action();
+      return measure(current, action, (response) => {
         const category = statusClass(response.status);
 
         if (category !== undefined) {
           current.statuses[category] += 1;
         }
-
-        return response;
       });
     },
   });

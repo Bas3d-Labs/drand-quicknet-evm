@@ -15,6 +15,14 @@ import type {
 } from './broadcast-retry-schedule.js';
 
 import type {
+  DurableRecoverySchedule,
+} from './durable-recovery-schedule.js';
+
+import {
+  isDurableRecoveryComplete,
+} from './is-durable-recovery-complete.js';
+
+import type {
   SignerCoordinator,
   BroadcastAttemptResult,
   RecoverSignerOptions,
@@ -24,6 +32,7 @@ import type {
 export interface SignerRecoveryCycleOptions {
   readonly coordinator: SignerCoordinator;
   readonly schedule: BroadcastRetrySchedule;
+  readonly durableSchedule?: DurableRecoverySchedule;
 }
 
 export interface RunSignerRecoveryCycleOptions
@@ -37,8 +46,16 @@ export interface RunSignerRecoveryCycleOptions
 }
 
 export interface SignerRecoveryCycleResult {
-  /** Final recovery or first-use initialization result for this cycle. */
-  readonly inspection: SignerRecoveryResult;
+  /**
+   * Final durable recovery result, or an explicit indication that
+   * an eligible completed pass was reused.
+   */
+  readonly inspection:
+    | SignerRecoveryResult
+    | {
+        readonly status: 'skipped';
+        readonly reason: 'unchanged-durable-state';
+      };
   readonly broadcast: BroadcastAttemptResult | null;
   readonly inclusions: SignerInclusionInspection | null;
 
@@ -52,14 +69,18 @@ export interface SignerRecoveryCycleResult {
  * preserve backoff.
  */
 export class SignerRecoveryCycle {
-  private busy = false;
-
   private readonly coordinator: SignerCoordinator;
   private readonly schedule: BroadcastRetrySchedule;
+  private readonly durableSchedule:
+    DurableRecoverySchedule | undefined;
+
+  private busy = false;
+  private completedDurableRevision: string | undefined;
 
   constructor(options: SignerRecoveryCycleOptions) {
     this.coordinator = options.coordinator;
     this.schedule = options.schedule;
+    this.durableSchedule = options.durableSchedule;
   }
 
   /**
@@ -126,31 +147,77 @@ export class SignerRecoveryCycle {
 
       signal?.throwIfAborted();
 
-      // Bound recovery work by the queue captured after any persistence retry.
-      // A missing or empty journal still needs one recovery pass.
-      const maxRecoveryPasses = Math.max(
-        1,
-        this.coordinator.attempts.length,
-      );
+      const status = this.coordinator.status;
+      const durableSchedule = this.durableSchedule;
 
-      let inspection = await this.coordinator.recover(
-        recovery,
-        cycle,
-      );
+      const canReuseDurablePass =
+        durableSchedule !== undefined &&
+        head !== undefined &&
+        status.recoveryComplete &&
+        status.inclusionChecksComplete &&
+        status.persistenceState === 'idle' &&
+        !status.blockers.includes('unattributed-signer-activity') &&
+        !status.blockers.includes('conflict-search-exhausted') &&
+        this.completedDurableRevision ===
+          this.coordinator.durableRecoveryRevision &&
+        !durableSchedule.isDue(recovery.anchor);
 
-      for (
-        let pass = 1;
-        pass < maxRecoveryPasses &&
-        inspection.status === 'resolution-available' &&
-        this.coordinator.attempts.length > 0;
-        pass += 1
-      ) {
-        signal?.throwIfAborted();
+      let inspection: SignerRecoveryCycleResult['inspection'];
 
-        inspection = await this.coordinator.recover(
+      if (canReuseDurablePass) {
+        inspection = {
+          status: 'skipped',
+          reason: 'unchanged-durable-state',
+        };
+      } else {
+        // Once a new pass starts, an earlier completion must not survive
+        // an incomplete result or a failed operation.
+        this.invalidateDurableRecovery();
+
+        // Bound work by the queue captured after any persistence retry.
+        // A missing or empty journal still needs one recovery pass.
+        const maxRecoveryPasses = Math.max(
+          1,
+          this.coordinator.attempts.length,
+        );
+
+        let result = await this.coordinator.recover(
           recovery,
           cycle,
         );
+
+        for (
+          let pass = 1;
+          pass < maxRecoveryPasses &&
+          result.status === 'resolution-available' &&
+          this.coordinator.attempts.length > 0;
+          pass += 1
+        ) {
+          signal?.throwIfAborted();
+
+          result = await this.coordinator.recover(
+            recovery,
+            cycle,
+          );
+        }
+
+        inspection = result;
+
+        const completedStatus = this.coordinator.status;
+
+        if (
+          durableSchedule !== undefined &&
+          isDurableRecoveryComplete(result, {
+            recoveryComplete: completedStatus.recoveryComplete,
+            persistenceState: completedStatus.persistenceState,
+            attempts: this.coordinator.attempts,
+          })
+        ) {
+          durableSchedule.recordCompleted(recovery.anchor);
+
+          this.completedDurableRevision =
+            this.coordinator.durableRecoveryRevision;
+        }
       }
 
       signal?.throwIfAborted();
@@ -171,6 +238,14 @@ export class SignerRecoveryCycle {
             ? {}
             : { maxReplacementBlockRange: recovery.maxBlockRange }),
         }, cycle);
+      }
+
+      if (
+        inclusions === null ||
+        inclusions.status !== 'inspected' ||
+        !inclusions.inclusionChecksComplete
+      ) {
+        this.invalidateDurableRecovery();
       }
 
       // Inclusion inspection may change which attempt needs a retry.
@@ -199,6 +274,9 @@ export class SignerRecoveryCycle {
         broadcast,
         retryDelayMs: this.schedule.delayMs,
       });
+    } catch (error) {
+      this.invalidateDurableRecovery();
+      throw error;
     } finally {
       this.busy = false;
     }
@@ -212,5 +290,10 @@ export class SignerRecoveryCycle {
     return this.coordinator.attempts.find(
       (attempt) => attempt.phase !== 'included'
     ) ?? null;
+  }
+
+  private invalidateDurableRecovery(): void {
+    this.completedDurableRevision = undefined;
+    this.durableSchedule?.invalidate();
   }
 }

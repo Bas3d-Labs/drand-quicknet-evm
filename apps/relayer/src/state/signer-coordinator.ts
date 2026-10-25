@@ -59,6 +59,10 @@ import {
 } from '../shared/integer.js';
 
 import {
+  durableRecoveryRevision as computeDurableRecoveryRevision,
+} from './durable-recovery-revision.js';
+
+import {
   JournalPersistence,
 } from './journal-persistence.js';
 
@@ -206,15 +210,13 @@ export interface CheckSignerInclusionsOptions {
 export class SignerCoordinator {
   private recoveryComplete = false;
   private inclusionChecksComplete = false;
+  private reconciliationObservationActive = false;
   private busy = false;
   private emitting = false;
   private broadcastPermit: string | undefined;
 
-  private readonly blockers = new Set<CoordinatorBlocker>();
-  private readonly episodeReasons = new Set<SignerBlocker>();
-
   private blockedSince: string | null = null;
-  private previousPrimary: SignerBlocker | null = null;
+  private previousBlockers: readonly SignerBlocker[] = [];
   private pendingWrite: PendingWrite | undefined;
   private attemptLog: ScopedRelayerLog | undefined;
   private lastBootstrapDeferral: {
@@ -222,6 +224,11 @@ export class SignerCoordinator {
     readonly latestNonce: bigint;
     readonly pendingNonce: bigint;
   } | undefined;
+
+  private committedDurableRecoveryRevision = '';
+
+  private readonly blockers = new Set<CoordinatorBlocker>();
+  private readonly episodeReasons = new Set<SignerBlocker>();
 
   private constructor(
     private readonly persistence: JournalPersistence,
@@ -285,6 +292,7 @@ export class SignerCoordinator {
     coordinator.latchUnattributedActivity();
     coordinator.latchExhaustedSearch();
     coordinator.refresh();
+    coordinator.updateDurableRecoveryRevision();
 
     return coordinator;
   }
@@ -378,6 +386,14 @@ export class SignerCoordinator {
       persistenceState: this.persistence.state,
       blockedSince: this.blockedSince,
     });
+  }
+
+  /**
+   * Deterministic representation of committed state relevant to durable
+   * recovery. Equal content produces the same value across writes.
+   */
+  get durableRecoveryRevision(): string {
+    return this.committedDurableRecoveryRevision;
   }
 
   /**
@@ -1071,6 +1087,28 @@ export class SignerCoordinator {
   }
 
   /**
+   * Publishes gate transitions after a complete reconciliation operation.
+   */
+  async observeReconciliation<T>(
+    action: () => Promise<T>,
+    cycle?: number,
+  ): Promise<T> {
+    if (this.reconciliationObservationActive) {
+      throw new Error('Signer reconciliation observation is already active.');
+    }
+
+    this.assertAvailable();
+    this.reconciliationObservationActive = true;
+
+    try {
+      return await action();
+    } finally {
+      this.reconciliationObservationActive = false;
+      this.refresh(cycle);
+    }
+  }
+
+  /**
    * Checks whether a missing journal can adopt the selected durable nonce.
    * Only a ready decision may proceed to baseline persistence.
    */
@@ -1113,6 +1151,7 @@ export class SignerCoordinator {
 
     this.latchUnattributedActivity();
     this.latchExhaustedSearch();
+    this.updateDurableRecoveryRevision();
 
     let operation: SignerEventOperation = 'reconcile-attempt';
 
@@ -1202,7 +1241,17 @@ export class SignerCoordinator {
     cycle?: number,
     operation: SignerEventOperation = 'reconcile-attempt',
   ): void {
+    if (this.reconciliationObservationActive) {
+      return;
+    }
+
     const status = this.status;
+
+    const blockersChanged =
+      status.blockers.length !== this.previousBlockers.length ||
+      status.blockers.some(
+        (reason, index) => reason !== this.previousBlockers[index],
+      );
 
     if (status.blockers.length > 0) {
       if (this.blockedSince === null) {
@@ -1213,7 +1262,7 @@ export class SignerCoordinator {
         this.episodeReasons.add(reason);
       }
 
-      if (status.primaryReason !== this.previousPrimary) {
+      if (blockersChanged) {
         this.emit((log) => log.signerBlocked({
           signer: this.identity.signer,
           reason: status.primaryReason!,
@@ -1223,13 +1272,13 @@ export class SignerCoordinator {
       }
     }
 
-    this.previousPrimary = status.primaryReason;
+    this.previousBlockers = [...status.blockers];
 
     if (status.open && this.blockedSince !== null) {
       const blockedSince = this.blockedSince;
 
       const cleared = BLOCKER_PRECEDENCE.filter(
-        (reason) => this.episodeReasons.has(reason)
+        (reason) => this.episodeReasons.has(reason),
       );
 
       this.emit((log) => log.signerGateReleased({
@@ -1252,6 +1301,13 @@ export class SignerCoordinator {
     ) {
       this.attemptLog = undefined;
     }
+  }
+
+  private updateDurableRecoveryRevision(): void {
+    this.committedDurableRecoveryRevision = computeDurableRecoveryRevision(
+      this.persistence.current,
+      this.blockers,
+    );
   }
 
   private assertAvailable(): void {

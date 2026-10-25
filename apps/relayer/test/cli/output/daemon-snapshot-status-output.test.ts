@@ -47,6 +47,15 @@ function status() {
         persistenceState: 'idle',
         blockedSince: EARLIER,
       },
+      attemptSummary: {
+        retainedCount: 1,
+        includedCount: 0,
+        unresolvedCount: 1,
+        lowestNonce: '8',
+        highestNonce: '8',
+        detailedCount: 1,
+        omittedCount: 0,
+      },
       attempts: [{
         attemptId: ATTEMPT_ID,
         workId: WORK_ID,
@@ -133,11 +142,16 @@ describe('renderDaemonSnapshotStatusOutput', () => {
     expect(output).toContain(
       'Coordinator-reported blocking episode start: ' + EARLIER,
     );
+
     expect(output).toContain('Attempt: ' + ATTEMPT_ID);
     expect(output.split('\n')).toContain('    Work identity: ' + WORK_ID);
     expect(output).toContain('      ' + HASH);
     expect(output).toContain('      ' + SECOND_HASH);
     expect(output).toContain('Current signing authorization: unknown');
+
+    expect(output).toContain('Last observed retained attempts: 1');
+    expect(output).toContain('Attempt details shown: 1 of 1');
+    expect(output).not.toContain('Attempt details omitted:');
   });
 
   it('rejects a missing work identity', () => {
@@ -202,6 +216,16 @@ describe('renderDaemonSnapshotStatusOutput', () => {
     });
     input.observation.attempts = [];
 
+    Object.assign(input.observation.attemptSummary, {
+      retainedCount: 0,
+      includedCount: 0,
+      unresolvedCount: 0,
+      lowestNonce: null,
+      highestNonce: null,
+      detailedCount: 0,
+      omittedCount: 0,
+    });
+
     const output = renderDaemonSnapshotStatusOutput(input);
 
     expect(output).toContain('Last observed gate: open');
@@ -220,6 +244,16 @@ describe('renderDaemonSnapshotStatusOutput', () => {
       blockedSince: null,
     });
     input.observation.attempts = [];
+
+    Object.assign(input.observation.attemptSummary, {
+      retainedCount: 0,
+      includedCount: 0,
+      unresolvedCount: 0,
+      lowestNonce: null,
+      highestNonce: null,
+      detailedCount: 0,
+      omittedCount: 0,
+    });
 
     const output = renderDaemonSnapshotStatusOutput(input);
 

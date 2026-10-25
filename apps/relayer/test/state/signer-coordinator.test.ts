@@ -514,8 +514,21 @@ describe('signer coordinator transitions', () => {
       evidence: t.evidence,
     });
 
-    expect(t.records().map((record) => record.event))
-      .toEqual(['attempt_resolved']);
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
+    ]);
+
+    expect(t.records()[1]).toMatchObject({
+      event: 'signer_blocked',
+      operation: { name: 'reconcile-attempt' },
+      reason: 'unattributed-signer-activity',
+      blockers: [
+        'unattributed-signer-activity',
+        'recovery-incomplete',
+      ],
+      blockedSince: CREATED,
+    });
 
     expect(t.save.mock.calls[0]![0]).toMatchObject({
       attempts: [],
@@ -541,8 +554,22 @@ describe('signer coordinator transitions', () => {
       primaryReason: 'unattributed-signer-activity',
     });
 
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
+      'signer_blocked',
+    ]);
+
+    expect(t.records()[2]).toMatchObject({
+      event: 'signer_blocked',
+      operation: { name: 'reconcile-attempt' },
+      reason: 'unattributed-signer-activity',
+      blockers: ['unattributed-signer-activity'],
+      blockedSince: CREATED,
+    });
+
     expect(t.records().map((record) => record.event))
-      .toEqual(['attempt_resolved']);
+      .not.toContain('signer_gate_released');
   });
 
   it('defers release until recovery and inclusion checks complete and preserves the episode', async () => {
@@ -605,7 +632,7 @@ describe('signer coordinator transitions', () => {
     expect(t.records()).toHaveLength(3);
   });
 
-  it('preserves blockedSince and emits only primary-reason changes', async () => {
+  it('preserves blockedSince and suppresses unchanged blocker sets', async () => {
     const t = await setup();
     const options = searchRecoveryOptions(t);
 
@@ -671,7 +698,7 @@ describe('signer coordinator transitions', () => {
 
     expect(t.coordinator.status.primaryReason).toBe('unresolved-attempt');
 
-    // More partial progress leaves the primary reason unchanged.
+    // More partial progress leaves the entire blocker set unchanged.
     expect(await t.coordinator.recover({
       ...advanced,
       maxBlockRange: 1n,
@@ -1269,6 +1296,11 @@ describe('durable signer observations', () => {
     await checkEmptyInclusions(t.coordinator, 4);
     expect(t.coordinator.status.open).toBe(true);
 
+    const beforeFailure = t.coordinator.durableRecoveryRevision;
+
+    expect(t.coordinator.status.blockers)
+      .not.toContain('unattributed-signer-activity');
+
     t.save.mockClear();
     t.lines.length = 0;
 
@@ -1284,6 +1316,10 @@ describe('durable signer observations', () => {
 
     await expect(t.coordinator.recover(options))
       .rejects.toThrow('Journal persistence');
+
+    // The store may expose the attempted snapshot, but durability has
+    // not been established. The committed revision must remain unchanged.
+    expect(t.coordinator.durableRecoveryRevision).toBe(beforeFailure);
 
     const pending = t.save.mock.calls[0]![0];
 
@@ -1316,7 +1352,16 @@ describe('durable signer observations', () => {
     await expect(t.coordinator.retryPersistence())
       .rejects.toThrow('Journal persistence');
 
+    expect(t.coordinator.durableRecoveryRevision).toBe(beforeFailure);
+
     await t.coordinator.retryPersistence(3);
+
+    const committedRevision = t.coordinator.durableRecoveryRevision;
+
+    expect(committedRevision).not.toBe(beforeFailure);
+
+    expect(t.coordinator.status.blockers)
+      .toContain('unattributed-signer-activity');
 
     expect(t.save).toHaveBeenCalledTimes(3);
     expect(t.save.mock.calls[1]![0]).toBe(pending);
@@ -1353,6 +1398,11 @@ describe('durable signer observations', () => {
       createErrorSummary: t.factory,
     });
 
+    expect(restarted.status.blockers)
+      .toContain('unattributed-signer-activity');
+
+    expect(restarted.durableRecoveryRevision).toBe(committedRevision);
+
     expect(restarted.status).toMatchObject({
       open: false,
       recoveryComplete: false,
@@ -1364,6 +1414,10 @@ describe('durable signer observations', () => {
       status: 'no-attempt',
       observation: observation(4n),
     });
+
+    // A lower observation must neither erase the latched evidence nor
+    // change the revision when no new committed recovery content exists.
+    expect(restarted.durableRecoveryRevision).toBe(committedRevision);
 
     expect(t.save).toHaveBeenCalledTimes(3);
 
@@ -1789,8 +1843,21 @@ describe('durable signer observations', () => {
       primaryReason: 'unattributed-signer-activity',
     });
 
-    expect(t.records().map((record) => record.event))
-      .toEqual(['attempt_resolved']);
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
+    ]);
+
+    expect(t.records()[1]).toMatchObject({
+      event: 'signer_blocked',
+      operation: { name: 'reconcile-attempt' },
+      reason: 'unattributed-signer-activity',
+      blockers: [
+        'unattributed-signer-activity',
+        'recovery-incomplete',
+      ],
+      blockedSince: CREATED,
+    });
 
     await checkEmptyInclusions(t.coordinator, 5);
 
@@ -1804,8 +1871,22 @@ describe('durable signer observations', () => {
       primaryReason: 'unattributed-signer-activity',
     });
 
+    expect(t.records().map((record) => record.event)).toEqual([
+      'attempt_resolved',
+      'signer_blocked',
+      'signer_blocked',
+    ]);
+
+    expect(t.records()[2]).toMatchObject({
+      event: 'signer_blocked',
+      operation: { name: 'reconcile-attempt' },
+      reason: 'unattributed-signer-activity',
+      blockers: ['unattributed-signer-activity'],
+      blockedSince: CREATED,
+    });
+
     expect(t.records().map((record) => record.event))
-      .toEqual(['attempt_resolved']);
+      .not.toContain('signer_gate_released');
   });
 });
 
@@ -2005,6 +2086,13 @@ describe('durable replacement search progress', () => {
 
   it('reconstructs an exhausted search after restart without rescanning the range', async () => {
     const t = await prepareExhaustedSearch();
+    const committedRevision = t.coordinator.durableRecoveryRevision;
+
+    expect(t.coordinator.status.blockers)
+      .toContain('conflict-search-exhausted');
+
+    expect(t.coordinator.status.blockers)
+      .not.toContain('unattributed-signer-activity');
 
     const restarted = await SignerCoordinator.create({
       identity: IDENTITY,
@@ -2021,6 +2109,14 @@ describe('durable replacement search progress', () => {
       }),
       createErrorSummary: t.factory,
     });
+
+    expect(restarted.status.blockers)
+      .toContain('conflict-search-exhausted');
+
+    expect(restarted.status.blockers)
+      .not.toContain('unattributed-signer-activity');
+
+    expect(restarted.durableRecoveryRevision).toBe(committedRevision);
 
     expect(restarted.status).toMatchObject({
       open: false,
@@ -2067,6 +2163,10 @@ describe('durable replacement search progress', () => {
       inclusionChecksComplete: false,
       primaryReason: 'conflict-search-exhausted',
     });
+
+    // Repeating the exhausted search at the same anchor persists an
+    // observation but changes neither search progress nor its blocker.
+    expect(restarted.durableRecoveryRevision).toBe(committedRevision);
   });
 
   it('resumes from the persisted boundary after restart', async () => {

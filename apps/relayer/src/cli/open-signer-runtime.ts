@@ -3,6 +3,10 @@ import {
   resolve,
 } from 'node:path';
 
+import {
+  performance,
+} from 'node:perf_hooks';
+
 import type {
   ErrorSummaryFactory,
 } from '../config/config.js';
@@ -19,6 +23,10 @@ import {
   BroadcastRetrySchedule,
   type BroadcastRetryScheduleOptions,
 } from '../state/broadcast-retry-schedule.js';
+
+import {
+  DurableRecoverySchedule,
+} from '../state/durable-recovery-schedule.js';
 
 import type {
   PersistenceBoundaryHook,
@@ -53,6 +61,8 @@ import {
 import type {
   JournalIdentity,
 } from '../state/transaction-journal.js';
+
+const DURABLE_RECOVERY_REFRESH_INTERVAL_MS = 60_000;
 
 export interface OpenSignerRuntimeOptions {
   readonly identity: JournalIdentity;
@@ -154,6 +164,10 @@ export async function openSignerRuntime(
     recovery: new SignerRecoveryCycle({
       coordinator,
       schedule,
+      durableSchedule: new DurableRecoverySchedule({
+        refreshIntervalMs: DURABLE_RECOVERY_REFRESH_INTERVAL_MS,
+        now: () => performance.now(),
+      }),
     }),
   });
 }

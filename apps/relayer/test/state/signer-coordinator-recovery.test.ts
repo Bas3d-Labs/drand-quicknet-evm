@@ -47,7 +47,10 @@ const anchorAt = (number: bigint) => ({
   blockHash: hashAt(number),
 });
 
-async function setup(empty = false) {
+async function setup(
+  empty = false,
+  maxRetainedAttempts = 3,
+) {
   const bytes = await ACCOUNT.signTransaction({
     type: 'eip1559',
     chainId: 4663,
@@ -107,7 +110,7 @@ async function setup(empty = false) {
 
   const create = () => SignerCoordinator.create({
     identity: IDENTITY,
-    maxRetainedAttempts: 3,
+    maxRetainedAttempts,
     store: {
       load,
       save,
@@ -952,5 +955,390 @@ describe('coordinator recovery', () => {
     });
 
     expect(coordinator.canBroadcast).toBe(false);
+  });
+
+  it('suppresses transient gate notifications across complete reconciliation', async () => {
+    const t = await setup(true);
+
+    t.getTransactionCount.mockResolvedValue(4);
+
+    await t.coordinator.recover(t.options);
+    await t.checkInclusions();
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    t.lines.length = 0;
+
+    for (const cycle of [10, 11]) {
+      await t.coordinator.observeReconciliation(async () => {
+        await t.coordinator.recover(t.options, cycle);
+
+        expect(t.coordinator.status).toMatchObject({
+          open: false,
+          recoveryComplete: true,
+          inclusionChecksComplete: false,
+        });
+
+        expect(t.events()).toEqual([]);
+
+        await t.checkInclusions(cycle);
+      }, cycle);
+
+      expect(t.coordinator.status.open).toBe(true);
+      expect(t.events()).toEqual([]);
+    }
+  });
+
+  it('publishes a failed reconciliation once and permits a later reconciliation', async () => {
+    const t = await setup(true);
+
+    t.getTransactionCount.mockResolvedValue(4);
+
+    await t.coordinator.recover(t.options);
+    await t.checkInclusions();
+
+    t.lines.length = 0;
+
+    const failure = new Error('Nonce lookup failed');
+
+    t.getTransactionCount.mockRejectedValueOnce(failure);
+
+    await expect(
+      t.coordinator.observeReconciliation(async () => {
+        await t.coordinator.recover(t.options, 12);
+        await t.checkInclusions(12);
+      }, 12),
+    ).rejects.toBe(failure);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+    });
+
+    expect(t.events()).toEqual(['signer_blocked']);
+
+    const blocked = JSON.parse(t.lines[0]!);
+
+    expect(blocked).toMatchObject({
+      event: 'signer_blocked',
+      operation: { name: 'reconcile-attempt' },
+      cycle: 12,
+      reason: 'recovery-incomplete',
+      blockers: ['recovery-incomplete'],
+      blockedSince: expect.any(String),
+    });
+
+    await t.coordinator.observeReconciliation(async () => {
+      await t.coordinator.recover(t.options, 13);
+      await t.checkInclusions(13);
+    }, 13);
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    expect(t.events()).toEqual([
+      'signer_blocked',
+      'signer_gate_released',
+    ]);
+
+    expect(JSON.parse(t.lines[1]!)).toMatchObject({
+      event: 'signer_gate_released',
+      operation: { name: 'reconcile-attempt' },
+      cycle: 13,
+      blockedSince: blocked.blockedSince,
+      cleared: ['recovery-incomplete'],
+    });
+  });
+
+  it('publishes persistence failure at reconciliation completion without reporting resolution', async () => {
+    const t = await setup();
+
+    t.save.mockRejectedValueOnce(new Error('Disk unavailable'));
+
+    await expect(
+      t.coordinator.observeReconciliation(async () => {
+        await t.coordinator.recover(t.options, 14);
+        await t.checkInclusions(14);
+      }, 14),
+    ).rejects.toThrow('Journal persistence');
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      persistenceState: 'failed',
+    });
+
+    expect(t.coordinator.attempts).toHaveLength(1);
+    expect(t.events()).toEqual(['signer_blocked']);
+
+    expect(JSON.parse(t.lines[0]!)).toMatchObject({
+      event: 'signer_blocked',
+      operation: { name: 'reconcile-attempt' },
+      cycle: 14,
+      reason: 'persistence-failure',
+      blockers: t.coordinator.status.blockers,
+    });
+  });
+
+  it('emits committed resolution inside the scope and releases the gate only at its end', async () => {
+    const t = await setup();
+
+    await t.coordinator.observeReconciliation(async () => {
+      await t.coordinator.recover(t.options, 15);
+
+      expect(t.save).toHaveBeenCalledOnce();
+      expect(t.coordinator.attempts).toEqual([]);
+      expect(t.coordinator.status.open).toBe(false);
+
+      expect(t.events()).toEqual(['attempt_resolved']);
+
+      expect(JSON.parse(t.lines[0]!)).toMatchObject({
+        event: 'attempt_resolved',
+        operation: { name: 'reconcile-attempt' },
+        cycle: 15,
+      });
+
+      await t.checkInclusions(15);
+
+      expect(t.coordinator.status.open).toBe(true);
+      expect(t.events()).toEqual(['attempt_resolved']);
+    }, 15);
+
+    expect(t.events()).toEqual([
+      'attempt_resolved',
+      'signer_gate_released',
+    ]);
+
+    expect(JSON.parse(t.lines[1]!)).toMatchObject({
+      event: 'signer_gate_released',
+      operation: { name: 'reconcile-attempt' },
+      cycle: 15,
+      blockedSince: t.snapshot.attempts[0]!.createdAt,
+    });
+  });
+
+  it('keeps live status closed and rejects overlapping work during scoped RPC inspection', async () => {
+    const t = await setup(true);
+
+    t.getTransactionCount.mockResolvedValue(4);
+
+    await t.coordinator.recover(t.options);
+    await t.checkInclusions();
+
+    t.lines.length = 0;
+
+    const entered = deferred();
+    const finish = deferred();
+
+    t.getTransactionCount.mockImplementationOnce(async () => {
+      entered.resolve();
+      await finish.promise;
+      return 4;
+    });
+
+    const pending = t.coordinator.recover(t.options, 16);
+    const action = vi.fn(async () => {});
+
+    try {
+      await Promise.race([entered.promise, pending]);
+
+      expect(t.coordinator.status.open).toBe(false);
+
+      await expect(
+        t.coordinator.observeReconciliation(action, 16),
+      ).rejects.toThrow('already in progress');
+
+      expect(action).not.toHaveBeenCalled();
+    } finally {
+      finish.resolve();
+      await pending;
+    }
+
+    await t.checkInclusions();
+
+    t.lines.length = 0;
+
+    const enteredScoped = deferred();
+    const finishScoped = deferred();
+
+    t.getTransactionCount.mockImplementationOnce(async () => {
+      enteredScoped.resolve();
+      await finishScoped.promise;
+      return 4;
+    });
+
+    const scoped = t.coordinator.observeReconciliation(async () => {
+      await t.coordinator.recover(t.options, 17);
+      await t.checkInclusions(17);
+    }, 17);
+
+    try {
+      await Promise.race([enteredScoped.promise, scoped]);
+
+      expect(t.coordinator.status.open).toBe(false);
+      expect(t.events()).toEqual([]);
+
+      await expect(
+        t.coordinator.recover(t.options),
+      ).rejects.toThrow('already in progress');
+
+      await expect(
+        t.checkInclusions(),
+      ).rejects.toThrow('already in progress');
+    } finally {
+      finishScoped.resolve();
+      await scoped;
+    }
+
+    expect(t.coordinator.status.open).toBe(true);
+    expect(t.events()).toEqual([]);
+  });
+
+  it('rejects nested observation without ending the outer scope', async () => {
+    const t = await setup(true);
+
+    t.getTransactionCount.mockResolvedValue(4);
+
+    await t.coordinator.recover(t.options);
+    await t.checkInclusions();
+
+    t.lines.length = 0;
+
+    const nestedAction = vi.fn(async () => {});
+
+    await t.coordinator.observeReconciliation(async () => {
+      await expect(
+        t.coordinator.observeReconciliation(nestedAction),
+      ).rejects.toThrow(
+        'Signer reconciliation observation is already active.',
+      );
+
+      expect(nestedAction).not.toHaveBeenCalled();
+
+      await t.coordinator.recover(t.options);
+
+      expect(t.coordinator.status.open).toBe(false);
+      expect(t.events()).toEqual([]);
+
+      await t.checkInclusions();
+    });
+
+    expect(t.coordinator.status.open).toBe(true);
+    expect(t.events()).toEqual([]);
+
+    await expect(
+      t.coordinator.observeReconciliation(async () => 'completed'),
+    ).resolves.toBe('completed');
+  });
+
+  it('reports blocker-set expansion and contraction while preserving the blocked episode', async () => {
+    const t = await setup(false, 1);
+    const blockedSince = t.snapshot.attempts[0]!.createdAt;
+
+    expect(t.coordinator.status.blockers).toEqual([
+      'unresolved-attempt',
+      'journal-capacity-reached',
+      'recovery-incomplete',
+    ]);
+
+    // The receipt is above the durable anchor, so recovery retains it.
+    t.getTransactionCount.mockResolvedValueOnce(4);
+
+    await t.coordinator.observeReconciliation(async () => {
+      await t.coordinator.recover({
+        ...t.options,
+        anchor: anchorAt(100n),
+      }, 20);
+
+      await t.checkInclusions(20);
+    }, 20);
+
+    expect(t.coordinator.status.blockers).toEqual([
+      'journal-capacity-reached',
+    ]);
+
+    expect(t.events()).toEqual(['signer_blocked']);
+
+    expect(JSON.parse(t.lines[0]!)).toMatchObject({
+      cycle: 20,
+      reason: 'journal-capacity-reached',
+      blockers: ['journal-capacity-reached'],
+      blockedSince,
+    });
+
+    t.lines.length = 0;
+
+    const failure = new Error('Receipt lookup failed');
+
+    t.getTransactionReceipt.mockRejectedValueOnce(failure);
+
+    await expect(
+      t.coordinator.observeReconciliation(
+        () => t.checkInclusions(21),
+        21,
+      ),
+    ).rejects.toBe(failure);
+
+    expect(t.coordinator.status.primaryReason)
+      .toBe('journal-capacity-reached');
+
+    expect(t.coordinator.status.blockers).toEqual([
+      'journal-capacity-reached',
+      'recovery-incomplete',
+    ]);
+
+    expect(t.events()).toEqual(['signer_blocked']);
+
+    // An identical failed pass must not repeat the notification.
+    t.getTransactionReceipt.mockRejectedValueOnce(failure);
+
+    await expect(
+      t.coordinator.observeReconciliation(
+        () => t.checkInclusions(22),
+        22,
+      ),
+    ).rejects.toBe(failure);
+
+    expect(t.events()).toEqual(['signer_blocked']);
+
+    await t.coordinator.observeReconciliation(
+      () => t.checkInclusions(23),
+      23,
+    );
+
+    expect(t.coordinator.status.blockers).toEqual([
+      'journal-capacity-reached',
+    ]);
+
+    // An identical successful pass must also stay silent.
+    await t.coordinator.observeReconciliation(
+      () => t.checkInclusions(24),
+      24,
+    );
+
+    const records = t.lines.map((line) => JSON.parse(line));
+
+    expect(records.map((record) => record.event)).toEqual([
+      'signer_blocked',
+      'signer_blocked',
+    ]);
+
+    expect(records.map((record) => record.reason)).toEqual([
+      'journal-capacity-reached',
+      'journal-capacity-reached',
+    ]);
+
+    expect(records.map((record) => record.blockers)).toEqual([
+      ['journal-capacity-reached', 'recovery-incomplete'],
+      ['journal-capacity-reached'],
+    ]);
+
+    expect(records.map((record) => record.cycle)).toEqual([21, 23]);
+
+    expect(
+      records.every((record) => record.blockedSince === blockedSince),
+    ).toBe(true);
+
+    expect(t.coordinator.status.open).toBe(false);
+    expect(t.events()).not.toContain('signer_gate_released');
   });
 });

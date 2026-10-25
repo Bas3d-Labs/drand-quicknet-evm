@@ -86,7 +86,11 @@ export type JournalInclusionObservation = {
       /** Identifies a transaction outside this attempt's signedTransactions. */
       readonly replacementTransactionHash: Hash;
 
-      /** Signer nonce observed at observedAt. */
+      /**
+       * Signer nonce observed when this replacement evidence was established.
+       * Subsequent inclusion revalidation may refresh observedAt without
+       * changing its value.
+       */
       readonly nonceAtAnchor: bigint;
     }
 );
