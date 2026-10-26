@@ -2544,3 +2544,604 @@ describe('durable replacement search progress', () => {
     )).toHaveLength(1);
   });
 });
+
+describe('signer inspection ownership', () => {
+  it('does not restore authorization when an empty inspection finishes', async () => {
+    const t = await setup({ empty: true });
+
+    await t.coordinator.recover(receiptRecoveryOptions(t, 4));
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: true,
+      blockers: [],
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
+
+    const revision = t.coordinator.durableRecoveryRevision;
+    t.save.mockClear();
+
+    const inspection = t.coordinator.beginInspection();
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      blockers: ['recovery-incomplete'],
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+    });
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    inspection.finish();
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      blockers: ['recovery-incomplete'],
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+      persistenceState: 'idle',
+    });
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.coordinator.durableRecoveryRevision).toBe(revision);
+    expect(t.save).not.toHaveBeenCalled();
+
+    // Finishing released ownership, but fresh inspection is still needed.
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
+  });
+
+  it('keeps admission closed between completed scoped operations', async () => {
+    const t = await setup({ empty: true });
+    const options = receiptRecoveryOptions(t, 4);
+    const inspection = t.coordinator.beginInspection();
+
+    try {
+      await inspection.recover(options);
+
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: true,
+        inclusionChecksComplete: false,
+        persistenceState: 'idle',
+      });
+
+      await inspection.checkInclusions({
+        publicClient: options.publicClient,
+        head: options.anchor,
+      });
+
+      // Both operations and their writes have completed. Ownership alone
+      // keeps admission closed despite the empty blocker list.
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        blockers: [],
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+        persistenceState: 'idle',
+      });
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      const writes = t.save.mock.calls.length;
+      const reads = vi.mocked(options.publicClient.getBlock)
+        .mock.calls.length;
+
+      await expect(t.coordinator.recover(options))
+        .rejects.toThrow('Signer inspection is already in progress.');
+
+      await expect(t.coordinator.checkInclusions({
+        publicClient: options.publicClient,
+        head: options.anchor,
+      })).rejects.toThrow('Signer inspection is already in progress.');
+
+      expect(t.save).toHaveBeenCalledTimes(writes);
+      expect(options.publicClient.getBlock).toHaveBeenCalledTimes(reads);
+    } catch (error) {
+      await inspection.abandon();
+      throw error;
+    }
+
+    inspection.finish();
+
+    expect(t.coordinator.status).toMatchObject({
+      open: true,
+      blockers: [],
+    });
+  });
+
+  it('rejects an expired handle while a newer inspection owns the coordinator', async () => {
+    const t = await setup({ empty: true });
+    const options = receiptRecoveryOptions(t, 4);
+
+    const expired = t.coordinator.beginInspection();
+    expired.finish();
+
+    const current = t.coordinator.beginInspection();
+
+    try {
+      const before = t.coordinator.status;
+      const revision = t.coordinator.durableRecoveryRevision;
+
+      await expect(expired.recover(options))
+        .rejects.toThrow('Signer inspection is no longer active.');
+
+      await expect(expired.checkInclusions({
+        publicClient: options.publicClient,
+        head: options.anchor,
+      })).rejects.toThrow('Signer inspection is no longer active.');
+
+      expect(() => expired.finish())
+        .toThrow('Signer inspection is no longer active.');
+
+      await expect(expired.abandon())
+        .rejects.toThrow('Signer inspection is no longer active.');
+
+      expect(t.coordinator.status).toEqual(before);
+      expect(t.coordinator.durableRecoveryRevision).toBe(revision);
+      expect(t.save).not.toHaveBeenCalled();
+      expect(options.publicClient.getBlock).not.toHaveBeenCalled();
+      expect(options.publicClient.getTransactionCount)
+        .not.toHaveBeenCalled();
+
+      // Rejected stale operations must not release the current owner.
+      await expect(t.coordinator.recover(options))
+        .rejects.toThrow('Signer inspection is already in progress.');
+
+      await current.recover(options);
+      await current.checkInclusions({
+        publicClient: options.publicClient,
+        head: options.anchor,
+      });
+    } catch (error) {
+      await current.abandon();
+      throw error;
+    }
+
+    current.finish();
+
+    expect(t.coordinator.status.open).toBe(true);
+  });
+
+  it('waits for an active inclusion write before completing abandonment', async () => {
+    const t = await setup({ empty: true });
+    const options = receiptRecoveryOptions(t, 4);
+    const inspection = t.coordinator.beginInspection();
+
+    await inspection.recover(options);
+
+    let entered!: () => void;
+    let release!: () => void;
+
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    t.save.mockImplementationOnce(() => {
+      entered();
+      return held;
+    });
+
+    const operation = inspection.checkInclusions({
+      publicClient: options.publicClient,
+      head: options.anchor,
+    });
+
+    await started;
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      inclusionChecksComplete: false,
+      persistenceState: 'writing',
+    });
+
+    expect(() => inspection.finish())
+      .toThrow('Signer inspection operation is still running.');
+
+    let abandoned = false;
+
+    const abandonment = inspection.abandon().then(() => {
+      abandoned = true;
+    });
+
+    try {
+      await Promise.resolve();
+
+      expect(abandoned).toBe(false);
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      expect(() => t.coordinator.beginInspection())
+        .toThrow('Signer inspection is already in progress.');
+
+      await expect(inspection.recover(options))
+        .rejects.toThrow('Signer inspection is being abandoned.');
+
+      expect(() => inspection.finish())
+        .toThrow('Signer inspection is being abandoned.');
+    } finally {
+      release();
+      await Promise.all([operation, abandonment]);
+    }
+
+    // Inclusion completion set its flag after abandonment began.
+    // Abandonment must clear it again before releasing ownership.
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      blockers: ['recovery-incomplete'],
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+      persistenceState: 'idle',
+    });
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
+  });
+
+  it('abandons a failed write and requires persistence retry before a new inspection', async () => {
+    const t = await setup({ empty: true });
+    const options = receiptRecoveryOptions(t, 4);
+    const inspection = t.coordinator.beginInspection();
+    const failure = new Error('Uncertain journal write.');
+
+    let entered!: () => void;
+    let rejectWrite!: (error: Error) => void;
+
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+
+    const held = new Promise<void>((_resolve, reject) => {
+      rejectWrite = reject;
+    });
+
+    t.save.mockImplementationOnce(() => {
+      entered();
+      return held;
+    });
+
+    const operation = inspection.recover(options);
+
+    // Attach the rejection assertion before releasing the failed write.
+    const rejected = expect(operation).rejects.toThrow(
+      'Journal persistence did not complete.',
+    );
+
+    await started;
+    rejectWrite(failure);
+    await rejected;
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+      persistenceState: 'failed',
+    });
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    expect(() => inspection.finish())
+      .toThrow('Signer inspection has pending persistence. Call abandon().');
+
+    // Persistence retry is also excluded while inspection ownership remains.
+    await expect(t.coordinator.retryPersistence())
+      .rejects.toThrow('Signer inspection is already in progress.');
+
+    const pendingSnapshot = t.save.mock.calls[0]![0];
+
+    await inspection.abandon();
+
+    expect(t.coordinator.status.persistenceState).toBe('failed');
+
+    expect(() => t.coordinator.beginInspection())
+      .toThrow('A pending journal write must be retried first.');
+
+    // The one-shot failure is exhausted; retry uses the fixture's normal save.
+    await t.coordinator.retryPersistence();
+
+    expect(t.save).toHaveBeenCalledTimes(2);
+    expect(t.save.mock.calls[1]![0]).toEqual(pendingSnapshot);
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+      persistenceState: 'idle',
+    });
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    await t.coordinator.recover(options);
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
+  });
+
+  it('preserves acknowledged resolution when a later inspection operation throws', async () => {
+    const t = await setup();
+    const options = receiptRecoveryOptions(t);
+    const inspection = t.coordinator.beginInspection();
+
+    const result = await inspection.recover(options);
+
+    expect(result.status).toBe('resolution-available');
+    expect(t.coordinator.attempts).toEqual([]);
+    expect(t.save).toHaveBeenCalledTimes(1);
+
+    const committed = t.save.mock.calls[0]![0];
+    const revision = t.coordinator.durableRecoveryRevision;
+
+    expect(committed).toMatchObject({
+      attempts: [],
+      nextNonce: 5n,
+      durableNextNonce: 5n,
+    });
+
+    const failure = new Error('Latest-head RPC failed.');
+
+    vi.mocked(options.publicClient.getBlock)
+      .mockRejectedValueOnce(failure);
+
+    await expect(inspection.checkInclusions({
+      publicClient: options.publicClient,
+      head: options.anchor,
+    })).rejects.toBe(failure);
+
+    await inspection.abandon();
+
+    expect(t.coordinator.attempts).toEqual([]);
+    expect(t.coordinator.durableRecoveryRevision).toBe(revision);
+    expect(t.save).toHaveBeenCalledTimes(1);
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      inclusionChecksComplete: false,
+      persistenceState: 'idle',
+    });
+
+    // Fresh recovery starts from the acknowledged, reduced population.
+    const recovered = await t.coordinator.recover(options);
+
+    expect(recovered.status).toBe('no-attempt');
+
+    await checkEmptyInclusions(t.coordinator, 5);
+
+    expect(t.coordinator.status.open).toBe(true);
+    expect(t.coordinator.attempts).toEqual([]);
+    expect(t.save.mock.calls.at(-1)![0]).toMatchObject({
+      attempts: [],
+      nextNonce: 5n,
+      durableNextNonce: 5n,
+    });
+  });
+
+  it('abandons before a deferred operation starts without performing work', async () => {
+    const t = await setup({ empty: true });
+    const options = receiptRecoveryOptions(t, 4);
+    const inspection = t.coordinator.beginInspection();
+
+    const operation = inspection.recover(options);
+    const rejected = expect(operation).rejects.toThrow(
+      'Signer inspection is being abandoned.',
+    );
+
+    // No await: abandonment races the operation's deferred start.
+    const abandonment = inspection.abandon();
+
+    await Promise.all([rejected, abandonment]);
+
+    expect(options.publicClient.getBlock).not.toHaveBeenCalled();
+    expect(options.publicClient.getTransactionCount).not.toHaveBeenCalled();
+    expect(options.publicClient.getTransactionReceipt).not.toHaveBeenCalled();
+    expect(t.save).not.toHaveBeenCalled();
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+      persistenceState: 'idle',
+    });
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    // Abandonment released ownership.
+    await t.coordinator.recover(options);
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
+  });
+
+  it('waits for a rejecting operation before releasing abandoned ownership', async () => {
+    const t = await setup({ empty: true });
+    const options = receiptRecoveryOptions(t, 4);
+    const inspection = t.coordinator.beginInspection();
+    const failure = new Error('Held RPC failed.');
+
+    let entered!: () => void;
+    let rejectRead!: (error: Error) => void;
+
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+
+    const held = new Promise<never>((_resolve, reject) => {
+      rejectRead = reject;
+    });
+
+    vi.mocked(options.publicClient.getBlock)
+      .mockImplementationOnce(() => {
+        entered();
+        return held;
+      });
+
+    const operation = inspection.recover(options);
+    const rejected = expect(operation).rejects.toBe(failure);
+
+    await started;
+
+    let abandoned = false;
+
+    const abandonment = inspection.abandon().then(() => {
+      abandoned = true;
+    });
+
+    try {
+      await Promise.resolve();
+
+      expect(abandoned).toBe(false);
+      expect(t.coordinator.status.open).toBe(false);
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      expect(() => t.coordinator.beginInspection())
+        .toThrow('Signer inspection is already in progress.');
+
+      await expect(inspection.recover(options))
+        .rejects.toThrow('Signer inspection is being abandoned.');
+    } finally {
+      rejectRead(failure);
+      await Promise.all([rejected, abandonment]);
+    }
+
+    expect(abandoned).toBe(true);
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: false,
+      inclusionChecksComplete: false,
+      persistenceState: 'idle',
+    });
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    await t.coordinator.recover(options);
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
+  });
+
+  it('captures recovery inputs before the deferred operation starts', async () => {
+    const t = await setup({ empty: true });
+    const options = receiptRecoveryOptions(t, 4);
+    const originalClient = options.publicClient;
+    const originalAnchor = { ...options.anchor };
+    const replacementClient = receiptRecoveryOptions(t, 8).publicClient;
+    const inspection = t.coordinator.beginInspection();
+
+    const operation = inspection.recover(options);
+
+    // Mutate both the nested anchor and the outer options before any await.
+    Object.assign(options.anchor, {
+      blockNumber: 999n,
+      blockHash: OTHER,
+    });
+    options.publicClient = replacementClient;
+    options.maxBlockRange = 0n;
+
+    try {
+      expect(await operation).toMatchObject({
+        status: 'no-attempt',
+        observation: {
+          anchor: originalAnchor,
+          nonce: 4n,
+        },
+      });
+
+      expect(originalClient.getBlock).toHaveBeenCalled();
+      expect(originalClient.getTransactionCount).toHaveBeenCalled();
+
+      for (const [request] of vi.mocked(originalClient.getBlock).mock.calls) {
+        expect(request).toMatchObject({
+          blockNumber: originalAnchor.blockNumber,
+        });
+      }
+
+      expect(replacementClient.getBlock).not.toHaveBeenCalled();
+      expect(replacementClient.getTransactionCount).not.toHaveBeenCalled();
+      expect(replacementClient.getTransactionReceipt).not.toHaveBeenCalled();
+
+      expect(t.save).toHaveBeenCalledTimes(1);
+      expect(t.save.mock.calls[0]![0].lastObservation).toEqual({
+        anchor: originalAnchor,
+        nonce: 4n,
+      });
+    } catch (error) {
+      await inspection.abandon();
+      throw error;
+    }
+
+    inspection.finish();
+  });
+
+  it('captures inclusion inputs before the deferred operation starts', async () => {
+    const t = await setup({ empty: true });
+    const recovery = receiptRecoveryOptions(t, 4);
+
+    await t.coordinator.recover(recovery);
+    t.save.mockClear();
+
+    const options = {
+      publicClient: recovery.publicClient,
+      head: { ...recovery.anchor },
+      maxReplacementBlockRange: 2n,
+    };
+
+    const originalClient = options.publicClient;
+    const originalHead = { ...options.head };
+    const replacementClient = receiptRecoveryOptions(t, 8).publicClient;
+
+    vi.mocked(originalClient.getBlock).mockClear();
+    vi.mocked(originalClient.getTransactionCount).mockClear();
+
+    const inspection = t.coordinator.beginInspection();
+    const operation = inspection.checkInclusions(options);
+
+    Object.assign(options.head, {
+      blockNumber: 999n,
+      blockHash: OTHER,
+    });
+    options.publicClient = replacementClient;
+    options.maxReplacementBlockRange = 0n;
+
+    try {
+      expect(await operation).toMatchObject({
+        status: 'inspected',
+        inclusionChecksComplete: true,
+        observation: {
+          anchor: originalHead,
+          nonce: 4n,
+        },
+      });
+
+      expect(originalClient.getBlock).toHaveBeenCalled();
+      expect(originalClient.getTransactionCount).toHaveBeenCalled();
+
+      for (const [request] of vi.mocked(originalClient.getBlock).mock.calls) {
+        expect(request).toMatchObject({
+          blockNumber: originalHead.blockNumber,
+        });
+      }
+
+      expect(replacementClient.getBlock).not.toHaveBeenCalled();
+      expect(replacementClient.getTransactionCount).not.toHaveBeenCalled();
+      expect(replacementClient.getTransactionReceipt).not.toHaveBeenCalled();
+
+      expect(t.save).toHaveBeenCalledTimes(1);
+      expect(t.save.mock.calls[0]![0].lastObservation).toEqual({
+        anchor: originalHead,
+        nonce: 4n,
+      });
+
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        blockers: [],
+        inclusionChecksComplete: true,
+      });
+    } catch (error) {
+      await inspection.abandon();
+      throw error;
+    }
+
+    inspection.finish();
+
+    expect(t.coordinator.status.open).toBe(true);
+  });
+});

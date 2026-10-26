@@ -77,6 +77,11 @@ import {
 } from '../../src/state/service-lock.js';
 
 import type {
+  SignerCoordinator,
+  SignerInspection,
+} from '../../src/state/signer-coordinator.js';
+
+import type {
   JournalAttempt,
   JournalSignedTransaction,
   TransactionJournalSnapshot,
@@ -183,6 +188,46 @@ async function runtimeBoundsFixture(
     durableNextNonce: 4n,
     repairs: [],
     attempts,
+  };
+}
+
+function observeInspectionCalls(coordinator: SignerCoordinator) {
+  const beginInspection = coordinator.beginInspection.bind(coordinator);
+
+  const recover = vi.fn(
+    (
+      inspection: SignerInspection,
+      ...args: Parameters<SignerInspection['recover']>
+    ) => inspection.recover(...args),
+  );
+
+  const checkInclusions = vi.fn(
+    (
+      inspection: SignerInspection,
+      ...args: Parameters<SignerInspection['checkInclusions']>
+    ) => inspection.checkInclusions(...args),
+  );
+
+  vi.spyOn(coordinator, 'beginInspection').mockImplementation(() => {
+    const inspection = beginInspection();
+
+    return Object.freeze({
+      recover: (...args: Parameters<SignerInspection['recover']>) =>
+        recover(inspection, ...args),
+
+      checkInclusions: (
+        ...args: Parameters<SignerInspection['checkInclusions']>
+      ) => checkInclusions(inspection, ...args),
+
+      finish: () => inspection.finish(),
+
+      abandon: () => inspection.abandon(),
+    });
+  });
+
+  return {
+    recover,
+    checkInclusions,
   };
 }
 
@@ -887,11 +932,8 @@ describe('command signer runtime', () => {
     try {
       const runtime = await openSignerRuntime(options());
 
-      const recover = vi.spyOn(runtime.coordinator, 'recover');
-      const checkInclusions = vi.spyOn(
-        runtime.coordinator,
-        'checkInclusions',
-      );
+      const { recover, checkInclusions } =
+        observeInspectionCalls(runtime.coordinator);
 
       const input = recovery();
 
@@ -966,7 +1008,8 @@ describe('command signer runtime', () => {
 
     try {
       const runtime = await openSignerRuntime(options());
-      const recover = vi.spyOn(runtime.coordinator, 'recover');
+      const { recover } =
+        observeInspectionCalls(runtime.coordinator);
 
       const input = recovery();
 

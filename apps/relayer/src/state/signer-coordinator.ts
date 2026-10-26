@@ -174,7 +174,7 @@ export interface BroadcastAttemptOptions {
  * Neither outcome establishes inclusion or execution, advances nonce
  * allocation, resolves an attempt, or rolls allocation back.
  * 
- * Another broadcast requires fresh reconiliation.
+ * Another broadcast requires fresh reconciliation.
  */
 export type BroadcastAttemptResult = PreparedAttempt & (
   | {
@@ -203,6 +203,39 @@ export interface CheckSignerInclusionsOptions {
   readonly maxReplacementBlockRange?: bigint;
 }
 
+export interface SignerInspection {
+  recover(
+    options: RecoverSignerOptions,
+    cycle?: number,
+  ): Promise<SignerRecoveryResult>;
+
+  checkInclusions(
+    options: CheckSignerInclusionsOptions,
+    cycle?: number,
+  ): Promise<SignerInclusionInspection>;
+
+  /**
+   * Releases a successfully completed inspection.
+   * 
+   * Rejects while an operation is running or persistence is pending.
+   */
+  finish(): void;
+
+  /**
+   * Prevents further operations, waits for any started operation to
+   * settle, clears action authorization, and releases ownership.
+   */
+  abandon(): Promise<void>;
+}
+
+interface InspectionOwner {
+  readonly generation: bigint;
+  activeOperation: Promise<unknown> | null;
+  abandonment: Promise<void> | null;
+  abandoning: boolean;
+  cycle: number | undefined;
+}
+
 /**
  * Coordinates durable nonce observations and attempt resolution so restart
  * recovery and signer availability follow the same journal state.
@@ -214,6 +247,9 @@ export class SignerCoordinator {
   private busy = false;
   private emitting = false;
   private broadcastPermit: string | undefined;
+
+  private inspectionGeneration = 0n;
+  private inspectionOwner: InspectionOwner | null = null;
 
   private blockedSince: string | null = null;
   private previousBlockers: readonly SignerBlocker[] = [];
@@ -297,6 +333,81 @@ export class SignerCoordinator {
     return coordinator;
   }
 
+  beginInspection(): SignerInspection {
+    this.assertAvailable();
+
+    if (
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      throw new Error('A pending journal write must be retried first.');
+    }
+
+    this.inspectionGeneration += 1n;
+
+    const owner: InspectionOwner = {
+      generation: this.inspectionGeneration,
+      activeOperation: null,
+      abandonment: null,
+      abandoning: false,
+      cycle: undefined,
+    };
+
+    this.inspectionOwner = owner;
+    this.revokeActionAuthorization();
+
+    return Object.freeze({
+      recover: (
+        options: RecoverSignerOptions,
+        cycle?: number,
+      ) => {
+        const captured: RecoverSignerOptions = {
+          publicClient: options.publicClient,
+          anchor: Object.freeze({
+            blockNumber: options.anchor.blockNumber,
+            blockHash: options.anchor.blockHash,
+          }),
+          maxBlockRange: options.maxBlockRange,
+        };
+
+        return this.runInspectionOperation(
+          owner,
+          () => this.recoverOwned(captured, owner, cycle),
+          cycle,
+        );
+      },
+
+      checkInclusions: (
+        options: CheckSignerInclusionsOptions,
+        cycle?: number,
+      ) => {
+        const maxReplacementBlockRange =
+          options.maxReplacementBlockRange;
+
+          const captured: CheckSignerInclusionsOptions = {
+            publicClient: options.publicClient,
+            head: Object.freeze({
+              blockNumber: options.head.blockNumber,
+              blockHash: options.head.blockHash,
+            }),
+            ...(maxReplacementBlockRange === undefined
+              ? {}
+              : { maxReplacementBlockRange }),
+          };
+
+          return this.runInspectionOperation(
+            owner,
+            () => this.checkInclusionsOwned(captured, owner, cycle),
+            cycle,
+          );
+      },
+
+      finish: () => this.finishInspection(owner),
+
+      abandon: () => this.abandonInspection(owner),
+    })
+  }
+
   /**
    * Chain identity used by the signer journal and transaction signing.
    */
@@ -347,6 +458,7 @@ export class SignerCoordinator {
       this.busy ||
       this.emitting ||
       this.pendingWrite !== undefined ||
+      this.inspectionOwner !== null ||
       this.persistence.state !== 'idle' ||
       current.kind !== 'present'
     ) {
@@ -380,7 +492,10 @@ export class SignerCoordinator {
 
     return Object.freeze({
       ...gate,
-      open: gate.open && !this.busy,
+      open: 
+        gate.open &&
+        !this.busy &&
+        this.inspectionOwner === null,
       recoveryComplete: this.recoveryComplete,
       inclusionChecksComplete: this.inclusionChecksComplete,
       persistenceState: this.persistence.state,
@@ -715,7 +830,24 @@ export class SignerCoordinator {
     options: RecoverSignerOptions,
     cycle?: number,
   ): Promise<SignerRecoveryResult> {
-    this.assertAvailable();
+    const inspection = this.beginInspection();
+
+    try {
+      const result = await inspection.recover(options, cycle);
+      inspection.finish();
+      return result;
+    } catch (error) {
+      await inspection.abandon();
+      throw error;
+    }
+  }
+
+  private async recoverOwned(
+    options: RecoverSignerOptions,
+    owner: InspectionOwner,
+    cycle?: number,
+  ): Promise<SignerRecoveryResult> {
+    this.assertAvailable(owner);
 
     const { maxBlockRange } = options;
 
@@ -990,7 +1122,24 @@ export class SignerCoordinator {
     options: CheckSignerInclusionsOptions,
     cycle?: number,
   ): Promise<SignerInclusionInspection> {
-    this.assertAvailable();
+    const inspection = this.beginInspection();
+
+    try {
+      const result = await inspection.checkInclusions(options, cycle);
+      inspection.finish();
+      return result;
+    } catch (error) {
+      await inspection.abandon();
+      throw error;
+    }
+  }
+
+  private async checkInclusionsOwned(
+    options: CheckSignerInclusionsOptions,
+    owner: InspectionOwner,
+    cycle?: number,
+  ): Promise<SignerInclusionInspection> {
+    this.assertAvailable(owner);
 
     if (
       this.pendingWrite !== undefined ||
@@ -1124,6 +1273,121 @@ export class SignerCoordinator {
       signer: this.identity.signer,
       anchor: options.anchor,
     });
+  }
+
+  private revokeActionAuthorization(): void {
+    this.broadcastPermit = undefined;
+    this.inclusionChecksComplete = false;
+  }
+
+  private assertInspectionOwner(
+    owner: InspectionOwner,
+  ): void {
+    if (
+      this.inspectionOwner !== owner ||
+      this.inspectionGeneration !== owner.generation
+    ) {
+      throw new Error('Signer inspection is no longer active.');
+    }
+  }
+
+  private async runInspectionOperation<T>(
+    owner: InspectionOwner,
+    operation: () => Promise<T>,
+    cycle?: number,
+  ): Promise<T> {
+    this.assertAvailable(owner);
+
+    if (owner.activeOperation !== null) {
+      throw new Error('Signer inspection operation is already in progress.');
+    }
+
+    owner.cycle = cycle;
+
+    // Register the promise before entering operation mode. This also
+    // covers synchronous callbacks made before its first awaited RPC.
+    const pending = Promise.resolve().then(() => {
+      this.assertAvailable(owner);
+      return operation();
+    });
+
+    owner.activeOperation = pending;
+
+    try {
+      return await pending;
+    } finally {
+      owner.activeOperation = null;
+    }
+  }
+
+  private finishInspection(
+    owner: InspectionOwner,
+  ): void {
+    this.assertInspectionOwner(owner);
+
+    if (owner.abandoning) {
+      throw new Error('Signer inspection is being abandoned.');
+    }
+
+    if (owner.activeOperation !== null) {
+      throw new Error('Signer inspection operation is still running.');
+    }
+
+    if (this.busy || this.emitting) {
+      throw new Error('Signer coordinator operation is already in progress.');
+    }
+
+    if (
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      throw new Error(
+        'Signer inspection has pending persistence. Call abandon().'
+      );
+    }
+
+    this.inspectionOwner = null;
+    this.refresh(owner.cycle);
+  }
+
+  private async abandonInspection(
+    owner: InspectionOwner,
+  ): Promise<void> {
+    this.assertInspectionOwner(owner);
+
+    if (owner.abandonment !== null) {
+      return owner.abandonment;
+    }
+
+    owner.abandoning = true;
+    this.revokeActionAuthorization();
+
+    const pending = owner.activeOperation;
+
+    owner.abandonment = this.completeAbandonment(owner, pending);
+    return owner.abandonment;
+  }
+
+  private async completeAbandonment(
+    owner: InspectionOwner,
+    pending: Promise<unknown> | null,
+  ): Promise<void> {
+    if (pending !== null) {
+      try {
+        await pending;
+      } catch {
+        // The operation's caller recieves its failure. Abandonment must
+        // release ownership after either settlement outcome.
+      }
+    }
+
+    // Ownership cannot be replaced while abandonment awaits settlement.
+    // Failure here is an internal lifecycle invariant violation.
+    this.assertInspectionOwner(owner);
+
+    this.revokeActionAuthorization();
+    this.inspectionOwner = null;
+    this.refresh(owner.cycle);
   }
 
   private finishWrite(cycle?: number): void {
@@ -1310,7 +1574,21 @@ export class SignerCoordinator {
     );
   }
 
-  private assertAvailable(): void {
+  private assertAvailable(
+    owner?: InspectionOwner,
+  ): void {
+    if (owner === undefined) {
+      if (this.inspectionOwner !== null) {
+        throw new Error('Signer inspection is already in progress.');
+      }
+    } else {
+      this.assertInspectionOwner(owner);
+
+      if (owner.abandoning) {
+        throw new Error('Signer inspection is being abandoned.');
+      }
+    }
+
     if (this.busy || this.emitting) {
       throw new Error('Signer coordinator operation is already in progress.');
     }
