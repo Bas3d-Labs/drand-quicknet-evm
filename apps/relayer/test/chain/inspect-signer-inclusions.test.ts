@@ -18,6 +18,7 @@ import {
 
 import {
   inspectSignerInclusions,
+  inspectSignerInclusionsWithinPass,
 } from '../../src/chain/inspect-signer-inclusions.js';
 
 import type {
@@ -1307,6 +1308,62 @@ describe('signer inclusion inspection', () => {
     ));
 
     expect(input).toEqual(before);
+
+    function rpcTrace(): string[] {
+      const calls = [
+        ...t.getBlock.mock.calls.map(([request], index) => ({
+          order: t.getBlock.mock.invocationCallOrder[index]!,
+          label: `block:${request.blockNumber}`,
+        })),
+
+        ...t.getTransactionReceipt.mock.calls.map(([request], index) => ({
+          order: t.getTransactionReceipt.mock.invocationCallOrder[index]!,
+          label: `receipt:${request.hash}`,
+        })),
+
+        ...t.getTransactionCount.mock.invocationCallOrder.map((order) => ({
+          order,
+          label: 'nonce',
+        })),
+      ];
+
+      return calls
+        .sort((first, second) => first.order - second.order)
+        .map(({ label }) => label);
+    }
+
+    const standaloneTrace = rpcTrace();
+
+    expect(standaloneTrace).toHaveLength(37);
+    expect(standaloneTrace[0]).toBe('block:130');
+    expect(standaloneTrace.at(-1)).toBe('block:130');
+
+    t.getBlock.mockClear();
+    t.getTransactionReceipt.mockClear();
+    t.getTransactionCount.mockClear();
+
+    const withinPass = await inspectSignerInclusionsWithinPass({
+      publicClient: {
+        getBlock: t.getBlock,
+        getTransactionReceipt: t.getTransactionReceipt,
+        getTransactionCount: t.getTransactionCount,
+      } as unknown as PublicClient,
+      snapshot: input,
+      head: anchorAt(130n),
+    });
+
+    expect(withinPass).toEqual(result);
+
+    // Only the two enclosing head reads move to the caller.
+    // All evidence reads, including the nonce bracket, retain their order.
+    expect(rpcTrace()).toEqual(standaloneTrace.slice(1, -1));
+    expect(rpcTrace()).toHaveLength(35);
+
+    expect(t.getBlock).toHaveBeenCalledTimes(18);
+    expect(t.getTransactionReceipt).toHaveBeenCalledTimes(16);
+    expect(t.getTransactionCount).toHaveBeenCalledTimes(1);
+
+    expect(input).toEqual(before);
   });
 
   it('discards refreshed inclusions when the head changes during the last receipt read', async () => {
@@ -1360,5 +1417,81 @@ describe('signer inclusion inspection', () => {
     // before reading the nonce or returning any refreshed queue.
     expect(t.getTransactionCount).not.toHaveBeenCalled();
     expect(t.snapshot).toEqual(before);
+  });
+
+  it('keeps the same nonce bracket for empty standalone and within-pass inspections', async () => {
+    const t = await setup();
+
+    const snapshot: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: [],
+      nextNonce: 4n,
+      lastObservation: t.snapshot.baseline,
+    };
+
+    const before = structuredClone(snapshot);
+    const trace: string[] = [];
+
+    const publicClient = {
+      getBlock: vi.fn(async (
+        { blockNumber }: { blockNumber: bigint },
+      ) => {
+        trace.push(`block:${blockNumber}`);
+
+        return {
+          number: blockNumber,
+          hash: hashAt(blockNumber),
+        };
+      }),
+
+      getTransactionCount: vi.fn(async () => {
+        trace.push('nonce');
+        return 4;
+      }),
+
+      getTransactionReceipt: vi.fn(),
+    };
+
+    const options = {
+      publicClient: publicClient as unknown as PublicClient,
+      snapshot,
+      head: anchorAt(130n),
+    };
+
+    const standalone = await inspectSignerInclusions(options);
+
+    expect(standalone).toMatchObject({
+      status: 'inspected',
+      inclusionChecksComplete: true,
+      attempts: [],
+      broadcastAttemptId: null,
+      observation: {
+        anchor: anchorAt(130n),
+        nonce: 4n,
+      },
+    });
+
+    expect(trace).toEqual([
+      'block:130',
+      'nonce',
+      'block:130',
+    ]);
+
+    trace.length = 0;
+
+    const withinPass = await inspectSignerInclusionsWithinPass(options);
+
+    expect(withinPass).toEqual(standalone);
+
+    // Empty standalone inspection already omits the outer bracket.
+    // The within-pass entry must still retain readAnchoredNonce's checks.
+    expect(trace).toEqual([
+      'block:130',
+      'nonce',
+      'block:130',
+    ]);
+
+    expect(publicClient.getTransactionReceipt).not.toHaveBeenCalled();
+    expect(snapshot).toEqual(before);
   });
 });

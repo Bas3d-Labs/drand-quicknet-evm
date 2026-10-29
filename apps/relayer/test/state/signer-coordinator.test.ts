@@ -3144,4 +3144,219 @@ describe('signer inspection ownership', () => {
 
     expect(t.coordinator.status.open).toBe(true);
   });
+
+  it.each(['recover', 'checkInclusions'] as const)(
+    'rejects opening a head bracket after %s has run',
+    async (operation) => {
+      const t = await setup({ empty: true });
+      const options = receiptRecoveryOptions(t, 4);
+      const inspection = t.coordinator.beginInspection();
+
+      try {
+        if (operation === 'recover') {
+          await inspection.recover(options);
+        } else {
+          await inspection.checkInclusions({
+            publicClient: options.publicClient,
+            head: options.anchor,
+          });
+        }
+
+        const before = t.coordinator.status;
+        const writes = t.save.mock.calls.length;
+        const reads = vi.mocked(options.publicClient.getBlock)
+          .mock.calls.length;
+
+        await expect(inspection.openHead({
+          publicClient: options.publicClient,
+          head: options.anchor,
+        })).rejects.toThrow(
+          'The head bracket must be opened before recovery or inclusion work.',
+        );
+
+        expect(t.coordinator.status).toEqual(before);
+        expect(t.save).toHaveBeenCalledTimes(writes);
+        expect(options.publicClient.getBlock).toHaveBeenCalledTimes(reads);
+      } catch (error) {
+        await inspection.abandon();
+        throw error;
+      }
+
+      // A rejected late opening never started a bracket. The existing
+      // unbracketed inspection can still finish normally.
+      inspection.finish();
+    },
+  );
+
+  it('requires abandonment when an opened head bracket has not closed', async () => {
+    const t = await setup({ empty: true });
+    const options = receiptRecoveryOptions(t, 4);
+
+    await t.coordinator.recover(options);
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    t.save.mockClear();
+    vi.mocked(options.publicClient.getBlock).mockClear();
+
+    const inspection = t.coordinator.beginInspection();
+
+    try {
+      expect(await inspection.openHead({
+        publicClient: options.publicClient,
+        head: options.anchor,
+      })).toBeNull();
+
+      expect(options.publicClient.getBlock).toHaveBeenCalledTimes(1);
+      expect(t.save).not.toHaveBeenCalled();
+
+      expect(() => inspection.finish()).toThrow(
+        'Signer inspection head bracket is still open.',
+      );
+
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: true,
+        inclusionChecksComplete: false,
+        persistenceState: 'idle',
+      });
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      expect(() => t.coordinator.beginInspection())
+        .toThrow('Signer inspection is already in progress.');
+    } finally {
+      await inspection.abandon();
+    }
+
+    expect(t.coordinator.status.open).toBe(false);
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    // Ownership was released; fresh inspection can authorize admission.
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
+  });
+
+  it('closes an empty head bracket before persistence and rejects further inspection work', async () => {
+    const t = await setup({ empty: true });
+    const options = receiptRecoveryOptions(t, 4);
+
+    await t.coordinator.recover(options);
+
+    const trace: string[] = [];
+
+    vi.mocked(options.publicClient.getBlock)
+      .mockImplementation(async ({ blockNumber } = {}) => {
+        trace.push(`block:${blockNumber}`);
+
+        return {
+          number: blockNumber,
+          hash: HASH,
+        } as never;
+      });
+
+    vi.mocked(options.publicClient.getTransactionCount)
+      .mockImplementation(async () => {
+        trace.push('nonce');
+        return 4;
+      });
+
+    t.save.mockImplementation(async () => {
+      trace.push('save:ack');
+    });
+
+    // Establish the standalone empty-population baseline.
+    await t.coordinator.checkInclusions({
+      publicClient: options.publicClient,
+      head: options.anchor,
+    });
+
+    expect(trace).toEqual([
+      'block:110',
+      'nonce',
+      'block:110',
+      'save:ack',
+    ]);
+
+    trace.length = 0;
+    t.save.mockClear();
+
+    const inspection = t.coordinator.beginInspection();
+
+    try {
+      expect(await inspection.openHead({
+        publicClient: options.publicClient,
+        head: options.anchor,
+      })).toBeNull();
+
+      expect(await inspection.checkInclusions({
+        publicClient: options.publicClient,
+        head: options.anchor,
+      })).toMatchObject({
+        status: 'inspected',
+        inclusionChecksComplete: true,
+        attempts: [],
+        broadcastAttemptId: null,
+      });
+
+      // Five RPC calls: the original three-call nonce bracket plus
+      // the enclosing opening and closing reads. Closing precedes saving.
+      expect(trace).toEqual([
+        'block:110',
+        'block:110',
+        'nonce',
+        'block:110',
+        'block:110',
+        'save:ack',
+      ]);
+
+      expect(t.save).toHaveBeenCalledTimes(1);
+
+      // Completion flags are ready, but ownership still closes admission.
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        blockers: [],
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+        persistenceState: 'idle',
+      });
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      const completedTrace = [...trace];
+      const completedStatus = t.coordinator.status;
+
+      await expect(inspection.recover(options))
+        .rejects.toThrow('Signer inspection head bracket is already closed.');
+
+      await expect(inspection.checkInclusions({
+        publicClient: options.publicClient,
+        head: options.anchor,
+      })).rejects.toThrow(
+        'Signer inspection head bracket is already closed.',
+      );
+
+      await expect(inspection.openHead({
+        publicClient: options.publicClient,
+        head: options.anchor,
+      })).rejects.toThrow(
+        'Signer inspection head bracket is already closed.',
+      );
+
+      expect(trace).toEqual(completedTrace);
+      expect(t.coordinator.status).toEqual(completedStatus);
+      expect(t.save).toHaveBeenCalledTimes(1);
+    } catch (error) {
+      await inspection.abandon();
+      throw error;
+    }
+
+    inspection.finish();
+
+    expect(t.coordinator.status).toMatchObject({
+      open: true,
+      blockers: [],
+    });
+    expect(t.coordinator.canBroadcast).toBe(false);
+  });
 });
