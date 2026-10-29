@@ -1523,6 +1523,13 @@ export class SignerCoordinator {
       );
     }
 
+    if (
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      throw new Error('Signer inspection has pending persistence.');
+    }
+
     this.inspectionOwner = null;
     this.refresh(owner.cycle);
   }

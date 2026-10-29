@@ -2782,7 +2782,7 @@ describe('signer inspection ownership', () => {
     expect(t.coordinator.status.open).toBe(true);
   });
 
-  it('abandons a failed write and requires persistence retry before a new inspection', async () => {
+  it('validates the closing head before persistence and rejects work after completion', async () => {
     const t = await setup({ empty: true });
     const options = receiptRecoveryOptions(t, 4);
     const inspection = t.coordinator.beginInspection();
@@ -2824,7 +2824,7 @@ describe('signer inspection ownership', () => {
     expect(t.coordinator.canBroadcast).toBe(false);
 
     expect(() => inspection.finish())
-      .toThrow('Signer inspection has pending persistence. Call abandon().');
+      .toThrow('Signer inspection has pending persistence.');
 
     // Persistence retry is also excluded while inspection ownership remains.
     await expect(t.coordinator.retryPersistence())
@@ -2843,7 +2843,7 @@ describe('signer inspection ownership', () => {
     await t.coordinator.retryPersistence();
 
     expect(t.save).toHaveBeenCalledTimes(2);
-    expect(t.save.mock.calls[1]![0]).toEqual(pendingSnapshot);
+    expect(t.save.mock.calls[1]![0]).toBe(pendingSnapshot);
     expect(t.coordinator.status).toMatchObject({
       open: false,
       recoveryComplete: false,
