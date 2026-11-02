@@ -1,3 +1,7 @@
+import {
+  isOperationCancelled
+} from '../execution/is-operation-cancelled.js';
+
 import type {
   RoundImporter,
 } from '../rounds/create-round-importer.js';
@@ -189,10 +193,7 @@ export async function processQuicknetRequestsWithOutcomes(
         // Reporting must not replace a successful import.
       }
     } catch (error) {
-      if (
-        options.signal?.aborted &&
-        error === options.signal.reason
-      ) {
+      if (isOperationCancelled(error, options.signal)) {
         throw error;
       }
 

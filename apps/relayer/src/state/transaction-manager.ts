@@ -44,6 +44,7 @@ import type {
   TransactionBroadcastOutcome,
   TransactionManagerStatus,
   TransactionReconciliationReport,
+  TransactionRecoveryObservation,
 } from './transaction-manager-types.js';
 
 const registeredRecordings = new WeakMap<object, SubmissionRecording>();
@@ -111,6 +112,14 @@ export interface TransactionManagerOptions
   readonly maxBlockRange: bigint;
   readonly retry: BroadcastRetryScheduleOptions;
   readonly durableRecovery?: DurableRecoveryScheduleOptions;
+
+  /**
+   * Includes pre-submit recovery so diagnostics retain its result even
+   * when subsequent preparation or broadcast fails.
+   */
+  readonly onRecoveryCompleted?: (
+    observation: TransactionRecoveryObservation,
+  ) => void;
 }
 
 export class TransactionManager {
@@ -124,6 +133,9 @@ export class TransactionManager {
     private readonly account: LocalAccount,
     private readonly readChainHeads: () => Promise<ChainHeads>,
     private readonly maxBlockRange: bigint,
+    private readonly onRecoveryCompleted:
+      | ((observation: TransactionRecoveryObservation) => void)
+      | undefined,
   ) {}
 
   static async create(
@@ -177,6 +189,7 @@ export class TransactionManager {
       account,
       readChainHeads,
       maxBlockRange,
+      options.onRecoveryCompleted,
     );
   }
 
@@ -389,7 +402,7 @@ export class TransactionManager {
   private async reconcileOwned(
     options: ReconcileTransactionsOptions,
   ): Promise<SignerRecoveryCycleResult> {
-    return this.coordinator.observeReconciliation(
+    const result = await this.coordinator.observeReconciliation(
       () => this.recovery.run({
         publicClient: this.publicClient,
         anchor: options.durable,
@@ -401,6 +414,16 @@ export class TransactionManager {
       }, options.cycle),
       options.cycle,
     );
+
+    try {
+      this.onRecoveryCompleted?.(Object.freeze({
+        retryDelayMs: result.retryDelayMs,
+      }));
+    } catch {
+      // Diagnostic delivery must not replace the recovery outcome.
+    }
+
+    return result;
   }
 
   private async reconcileSelectedHeadsOwned(

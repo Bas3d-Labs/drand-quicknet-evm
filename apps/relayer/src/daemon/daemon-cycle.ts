@@ -8,8 +8,12 @@ import type {
 } from '@based-labs/drand-quicknet-registry';
 
 import type {
-  CheckpointStore,
-} from '../state/checkpoint.js';
+  ChainHeads,
+} from '../chain/chain-heads.js';
+
+import type {
+  FinalityPolicy,
+} from '../chain/finality-policy.js';
 
 import type {
   IncompleteQuicknetRoundOutcome,
@@ -24,24 +28,13 @@ import type {
   ValidatedQuicknetConsumer,
 } from '../consumers/consumer.js';
 
-import {
-  runDaemonIteration,
-  type RunDaemonIterationOptions,
-  type RunDaemonIterationResult,
-  type SoftScanCursor,
-} from '../daemon/daemon-iteration.js';
-
-import type {
-  ChainHeads,
-} from '../chain/chain-heads.js';
-
-import type {
-  FinalityPolicy,
-} from '../chain/finality-policy.js';
-
 import type {
   OperationContext,
 } from '../diagnostics/operation-context.js';
+
+import {
+  isOperationCancelled
+} from '../execution/is-operation-cancelled.js';
 
 import type {
   BeaconSubmitter,
@@ -50,6 +43,17 @@ import type {
 import type {
   RoundImporterBinder,
 } from '../rounds/create-round-importer.js';
+
+import type {
+  CheckpointStore,
+} from '../state/checkpoint.js';
+
+import {
+  runDaemonIteration,
+  type RunDaemonIterationOptions,
+  type RunDaemonIterationResult,
+  type SoftScanCursor,
+} from './daemon-iteration.js';
 
 export interface RunDaemonCycleOptions {
   publicClient: PublicClient;
@@ -104,10 +108,7 @@ export async function runDaemonCycle(
   try {
     await options.submitter.recover();
   } catch (error) {
-    if (
-      options.signal?.aborted &&
-      error === options.signal.reason
-    ) {
+    if (isOperationCancelled(error, options.signal)) {
       throw error;
     }
 
@@ -205,10 +206,7 @@ export async function runDaemonCycle(
 
       consumers.push(successful);
     } catch (error) {
-      if (
-        options.signal?.aborted &&
-        error === options.signal.reason
-      ) {
+      if (isOperationCancelled(error, options.signal)) {
         throw error;
       }
 

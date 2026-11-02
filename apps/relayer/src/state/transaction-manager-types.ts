@@ -141,3 +141,7 @@ export interface TransactionReconciliationReport {
   readonly broadcast: TransactionBroadcastOutcome | null;
   readonly retryDelayMs: number | null;
 }
+
+export interface TransactionRecoveryObservation {
+  readonly retryDelayMs: number | null;
+}

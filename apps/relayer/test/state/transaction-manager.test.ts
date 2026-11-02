@@ -21,6 +21,10 @@ import {
   createRelayerLog,
 } from '../../src/diagnostics/relayer-log.js';
 
+import {
+  isOperationCancelled,
+} from '../../src/execution/is-operation-cancelled.js';
+
 import type {
   TransactionJournalSnapshot,
   TransactionJournalStore,
@@ -1009,5 +1013,91 @@ describe('submissionRecording', () => {
 
     expect(submissionRecording(error)).toBeUndefined();
     expect(get).not.toHaveBeenCalled();
+  });
+});
+
+describe('isOperationCancelled', () => {
+  it('returns false before the signal is aborted even when the reason matches', () => {
+    const controller = new AbortController();
+
+    expect(isOperationCancelled(
+      controller.signal.reason,
+      controller.signal,
+    )).toBe(false);
+
+    expect(isOperationCancelled(undefined, undefined)).toBe(false);
+  });
+
+  it('recognizes the direct abort reason', () => {
+    const controller = new AbortController();
+    const reason = new Error('Cancelled.');
+
+    controller.abort(reason);
+
+    expect(isOperationCancelled(reason, controller.signal)).toBe(true);
+  });
+
+  it('recognizes a registered submission error with the matching cause', async () => {
+    const t = await managerFixture();
+    const controller = new AbortController();
+    const reason = new Error('Cancelled before submission.');
+
+    controller.abort(reason);
+
+    const error = await rejectedValue(t.manager.submit({
+      ...submissionOptions(),
+      signal: controller.signal,
+    }));
+
+    expect(submissionRecording(error)).toEqual({ status: 'none' });
+    expect(isOperationCancelled(error, controller.signal)).toBe(true);
+  });
+
+  it('rejects a registered submission error with a different cause', async () => {
+    const t = await managerFixture();
+    const failure = new Error('Fee preparation failed.');
+
+    t.prepareTransactionRequest.mockRejectedValueOnce(failure);
+
+    const error = await rejectedValue(
+      t.manager.submit(submissionOptions()),
+    );
+
+    const controller = new AbortController();
+    controller.abort(new Error('Cancelled after the failure.'));
+
+    expect(submissionRecording(error)).toEqual({ status: 'none' });
+    expect((error as Error).cause).toBe(failure);
+    expect(isOperationCancelled(error, controller.signal)).toBe(false);
+  });
+
+  it('rejects an unregistered error with a matching cause', () => {
+    const controller = new AbortController();
+    const reason = new Error('Cancelled.');
+
+    controller.abort(reason);
+
+    const error = new Error('Unregistered wrapper.', {
+      cause: reason,
+    });
+
+    expect(isOperationCancelled(error, controller.signal)).toBe(false);
+  });
+
+  it('does not invoke a cause getter on an unregistered object', () => {
+    const controller = new AbortController();
+    const reason = new Error('Cancelled.');
+    const getter = vi.fn(() => reason);
+
+    controller.abort(reason);
+
+    const error = Object.create(null);
+
+    Object.defineProperty(error, 'cause', {
+      get: getter,
+    });
+
+    expect(isOperationCancelled(error, controller.signal)).toBe(false);
+    expect(getter).not.toHaveBeenCalled();
   });
 });

@@ -25,6 +25,10 @@ import {
 } from '../../diagnostics/rpc/rpc-usage-session.js';
 
 import {
+  isOperationCancelled
+} from '../../execution/is-operation-cancelled.js';
+
+import {
   importQuicknetRound,
   type ImportQuicknetRoundResult,
 } from '../../rounds/import-round.js';
@@ -142,7 +146,7 @@ export async function runRoundImportCommand(
         });
       }
     } catch (error) {
-      if (signal.aborted && error === signal.reason) {
+      if (isOperationCancelled(error, signal)) {
         throw error;
       }
 
