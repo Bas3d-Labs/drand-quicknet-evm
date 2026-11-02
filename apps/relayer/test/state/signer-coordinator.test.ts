@@ -2782,7 +2782,7 @@ describe('signer inspection ownership', () => {
     expect(t.coordinator.status.open).toBe(true);
   });
 
-  it('validates the closing head before persistence and rejects work after completion', async () => {
+  it('abandons a failed write and requires persistence retry before a new inspection', async () => {
     const t = await setup({ empty: true });
     const options = receiptRecoveryOptions(t, 4);
     const inspection = t.coordinator.beginInspection();
@@ -3238,7 +3238,7 @@ describe('signer inspection ownership', () => {
     expect(t.coordinator.status.open).toBe(true);
   });
 
-  it('closes an empty head bracket before persistence and rejects further inspection work', async () => {
+  it('validates the closing head before persistence and rejects work after completion', async () => {
     const t = await setup({ empty: true });
     const options = receiptRecoveryOptions(t, 4);
 
