@@ -76,6 +76,10 @@ import {
 } from './signer-gate.js';
 
 import type {
+  SubmissionRecording,
+} from './transaction-manager-types.js';
+
+import type {
   AnchoredNonceObservation,
   JournalAttempt,
   JournalIdentity,
@@ -505,6 +509,52 @@ export class SignerCoordinator {
         transactionHashes,
       });
     }));
+  }
+
+  /**
+   * Manager-internal: isolation relies on the manager exclusively owning
+   * this coordinator, rather than private visibility.
+   * 
+   * Check acknowledged state first because a failed broadcast-marker
+   * write does not undo an acknowledged preparation. That attempt remains
+   * retained even while its marker snapshot awaits persistence retry.
+   */
+  captureSubmissionRecording(
+    workId: string,
+  ): SubmissionRecording {
+    const current = this.persistence.current;
+
+    if (current.kind === 'present') {
+      const retained = current.snapshot.attempts.find(
+        (attempt) => attempt.workId === workId,
+      );
+
+      if (retained !== undefined) {
+        return Object.freeze({
+          status: 'retained',
+          attempt: Object.freeze({
+            workId: retained.workId,
+            attemptId: retained.attemptId,
+          }),
+        });
+      }
+    }
+
+    if (this.pendingWrite?.kind === 'prepared') {
+      const attempt =
+        this.persistence.failedWriteAttemptIdentity(workId);
+
+      if (attempt !== undefined) {
+        return Object.freeze({
+          status: 'uncertain',
+          attempt,
+        });
+      }
+    }
+
+    return Object.freeze({
+      status: 'none',
+    });
   }
 
   /**

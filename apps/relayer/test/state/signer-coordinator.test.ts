@@ -3915,3 +3915,187 @@ describe('signer inspection ownership', () => {
     },
   );
 });
+
+describe('submission recording capture', () => {
+  const workId = 'test-work:submission-recording';
+
+  function preparationOptions() {
+    return {
+      account: ACCOUNT,
+      workId,
+      transaction: {
+        type: 'eip1559' as const,
+        to: ACCOUNT.address,
+        data: '0x1234' as const,
+        value: 0n,
+        gas: 100_000n,
+        maxFeePerGas: 2n,
+        maxPriorityFeePerGas: 1n,
+      },
+    };
+  }
+
+  async function ready() {
+    const t = await setup({ empty: true });
+
+    await t.coordinator.recover(receiptRecoveryOptions(t, 4));
+    await checkEmptyInclusions(t.coordinator, 4);
+
+    expect(t.coordinator.status.open).toBe(true);
+    t.save.mockClear();
+
+    return t;
+  }
+
+  it('reports none when the work has no recorded attempt', async () => {
+    const t = await ready();
+
+    const recording =
+      t.coordinator.captureSubmissionRecording(workId);
+
+    expect(recording).toEqual({ status: 'none' });
+    expect(Object.isFrozen(recording)).toBe(true);
+    expect(t.save).not.toHaveBeenCalled();
+  });
+
+  it('captures uncertain preparation from the failed pending snapshot', async () => {
+    const t = await ready();
+
+    let visibleSnapshot = t.snapshot;
+    const visible = () => visibleSnapshot;
+
+    t.save.mockImplementationOnce(async (snapshot) => {
+      visibleSnapshot = snapshot;
+      throw new Error('Injected failure after replacement.');
+    });
+
+    await expect(
+      t.coordinator.prepareAttempt(preparationOptions()),
+    ).rejects.toThrow('Journal persistence did not complete.');
+
+    const visibleAttempt = visible().attempts[0]!;
+
+    const recording =
+      t.coordinator.captureSubmissionRecording(workId);
+
+    expect(recording).toEqual({
+      status: 'uncertain',
+      attempt: {
+        workId: visibleAttempt.workId,
+        attemptId: visibleAttempt.attemptId,
+      },
+    });
+
+    if (recording.status !== 'uncertain') {
+      throw new Error('Expected uncertain preparation recording.');
+    }
+
+    expect(Object.isFrozen(recording)).toBe(true);
+    expect(Object.isFrozen(recording.attempt)).toBe(true);
+
+    expect(t.coordinator.attempts).toEqual([]);
+    expect(t.coordinator.status.persistenceState).toBe('failed');
+
+    expect(
+      t.coordinator.captureSubmissionRecording('unrelated-work'),
+    ).toEqual({ status: 'none' });
+
+    await t.coordinator.retryPersistence();
+
+    expect(t.save).toHaveBeenCalledTimes(2);
+    expect(t.save.mock.calls[1]![0]).toBe(t.save.mock.calls[0]![0]);
+
+    expect(t.coordinator.captureSubmissionRecording(workId))
+      .toEqual({
+        status: 'retained',
+        attempt: recording.attempt,
+      });
+
+    // Retry changes current state, not the failure-time capture.
+    expect(recording.status).toBe('uncertain');
+    expect(recording.attempt).toEqual({
+      workId: visibleAttempt.workId,
+      attemptId: visibleAttempt.attemptId,
+    });
+  });
+
+  it('reports retained when the broadcast-marker write fails', async () => {
+    const t = await ready();
+
+    const prepared = await t.coordinator.prepareAttempt(
+      preparationOptions(),
+    );
+
+    if (prepared.status !== 'prepared') {
+      throw new Error('Expected a newly prepared attempt.');
+    }
+
+    const acknowledged = t.coordinator.attempts[0]!;
+
+    const beforeMarker =
+      t.coordinator.captureSubmissionRecording(workId);
+
+    expect(beforeMarker).toEqual({
+      status: 'retained',
+      attempt: {
+        workId: acknowledged.workId,
+        attemptId: acknowledged.attemptId,
+      },
+    });
+
+    t.save.mockClear();
+
+    let visibleSnapshot = t.snapshot;
+    const visible = () => visibleSnapshot;
+
+    t.save.mockImplementationOnce(async (snapshot) => {
+      visibleSnapshot = snapshot;
+      throw new Error('Injected marker failure after replacement.');
+    });
+
+    const request = vi.fn();
+
+    await expect(t.coordinator.broadcastAttempt({
+      publicClient: { request } as unknown as PublicClient,
+      attemptId: prepared.attemptId,
+    })).rejects.toThrow('Journal persistence did not complete.');
+
+    expect(request).not.toHaveBeenCalled();
+
+    expect(visible().attempts[0]).toMatchObject({
+      attemptId: prepared.attemptId,
+      phase: 'broadcast-may-have-occurred',
+    });
+
+    expect(t.coordinator.attempts[0]).toMatchObject({
+      attemptId: prepared.attemptId,
+      phase: 'signed',
+    });
+
+    expect(t.coordinator.status.persistenceState).toBe('failed');
+
+    const recording =
+      t.coordinator.captureSubmissionRecording(workId);
+
+    expect(recording).toEqual(beforeMarker);
+
+    if (recording.status !== 'retained') {
+      throw new Error('Expected acknowledged preparation recording.');
+    }
+
+    expect(Object.isFrozen(recording)).toBe(true);
+    expect(Object.isFrozen(recording.attempt)).toBe(true);
+
+    await t.coordinator.retryPersistence();
+
+    expect(t.save.mock.calls[1]![0]).toBe(t.save.mock.calls[0]![0]);
+
+    expect(t.coordinator.attempts[0]).toMatchObject({
+      attemptId: prepared.attemptId,
+      phase: 'broadcast-may-have-occurred',
+    });
+
+    expect(recording).toEqual(beforeMarker);
+    expect(request).not.toHaveBeenCalled();
+  });
+});

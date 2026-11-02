@@ -426,4 +426,89 @@ describe('journal persistence latch', () => {
     expect(persistence.state).toBe('idle');
     expect(load).not.toHaveBeenCalled();
   });
+
+  it('reads failed preparation identity from the pending snapshot', async () => {
+    const fixtureSnapshot = await fixture();
+
+    const prepared: TransactionJournalSnapshot = {
+      ...fixtureSnapshot,
+      attempts: [{
+        ...fixtureSnapshot.attempts[0]!,
+        phase: 'signed',
+        inclusion: null,
+      }],
+    };
+
+    const initial: TransactionJournalSnapshot = {
+      ...prepared,
+      nextNonce: 4n,
+      attempts: [],
+    };
+
+    let visibleSnapshot = initial;
+    const visible = () => visibleSnapshot;
+
+    const load = vi.fn<TransactionJournalStore['load']>();
+    const save = vi.fn<TransactionJournalStore['save']>()
+      .mockResolvedValue(undefined);
+
+    const persistence = await JournalPersistence.create({
+      identity: IDENTITY,
+      store: { load, save },
+      initial: {
+        kind: 'present',
+        snapshot: initial,
+      },
+    });
+
+    const workId = prepared.attempts[0]!.workId;
+
+    expect(persistence.failedWriteAttemptIdentity(workId))
+      .toBeUndefined();
+
+    save.mockImplementationOnce(async (snapshot) => {
+      visibleSnapshot = snapshot;
+      throw new Error('Injected failure after replacement.');
+    });
+
+    await expect(persistence.save(prepared))
+      .rejects.toThrow('Journal persistence did not complete.');
+
+    const visibleAttempt = visible().attempts[0]!;
+    const captured = persistence.failedWriteAttemptIdentity(workId);
+
+    expect(captured).toEqual({
+      workId: visibleAttempt.workId,
+      attemptId: visibleAttempt.attemptId,
+    });
+    expect(Object.isFrozen(captured)).toBe(true);
+
+    expect(persistence.current).toEqual({
+      kind: 'present',
+      snapshot: initial,
+    });
+    expect(persistence.state).toBe('failed');
+
+    expect(persistence.failedWriteAttemptIdentity('unrelated-work'))
+      .toBeUndefined();
+
+    await persistence.retry();
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls[1]![0]).toBe(save.mock.calls[0]![0]);
+
+    expect(persistence.failedWriteAttemptIdentity(workId))
+      .toBeUndefined();
+
+    expect(persistence.current).toEqual({
+      kind: 'present',
+      snapshot: visible(),
+    });
+
+    expect(captured).toEqual({
+      workId: visibleAttempt.workId,
+      attemptId: visibleAttempt.attemptId,
+    });
+    expect(load).not.toHaveBeenCalled();
+  });
 });
