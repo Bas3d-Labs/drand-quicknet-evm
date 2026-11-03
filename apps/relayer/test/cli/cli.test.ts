@@ -17,6 +17,7 @@ import type {
 } from 'viem';
 
 import { privateKeyToAccount } from 'viem/accounts';
+
 import { robinhoodTestnet } from 'viem/chains';
 
 import type {
@@ -26,6 +27,16 @@ import type {
 import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
+
+import {
+  TransactionManager,
+  submissionRecording,
+} from '../../src/state/transaction-manager.js';
+
+import type {
+  TransactionJournalSnapshot,
+  TransactionJournalStore,
+} from '../../src/state/transaction-journal.js';
 
 import {
   expectUsageError,
@@ -342,6 +353,177 @@ const ROUND_COMMANDS = [
 const SIGNALS = ['SIGINT', 'SIGTERM'] as const;
 
 let submitter: BeaconSubmitter;
+
+async function createSubmissionFailure(
+  recordingStatus: 'none' | 'uncertain' | 'retained',
+  options: {
+    signal?: AbortSignal;
+    onPrepared?: () => void;
+  } = {},
+) {
+  const actualLog = await vi.importActual<
+    typeof import('../../src/diagnostics/relayer-log.js')
+  >('../../src/diagnostics/relayer-log.js');
+
+  const identity = {
+    chainId: CONFIG.chain.id,
+    signer: ACCOUNT.address,
+  };
+
+  const observation = {
+    anchor: {
+      blockNumber: 100n,
+      blockHash: HASH,
+    },
+    nonce: 4n,
+  };
+
+  let visible: TransactionJournalSnapshot = {
+    version: 1,
+    identity,
+    baseline: observation,
+    lastObservation: observation,
+    nextNonce: 4n,
+    durableNextNonce: 4n,
+    repairs: [],
+    attempts: [],
+  };
+
+  const failure = new Error('Injected submission failure.');
+
+  const save = vi.fn<TransactionJournalStore['save']>()
+    .mockImplementation(async (snapshot) => {
+      // Model a write becoming visible before its acknowledgement fails.
+      visible = snapshot;
+
+      if (snapshot.attempts[0]?.phase === 'signed') {
+        options.onPrepared?.();
+      }
+
+      const attempt = snapshot.attempts[0];
+
+      if (
+        recordingStatus === 'uncertain' &&
+        attempt?.phase === 'signed'
+      ) {
+        throw failure;
+      }
+
+      if (
+        recordingStatus === 'retained' &&
+        attempt?.phase === 'broadcast-may-have-occurred'
+      ) {
+        throw failure;
+      }
+    });
+
+  const prepareTransactionRequest = vi.fn(async () => {
+    if (recordingStatus === 'none') {
+      throw failure;
+    }
+
+    return {
+      type: 'eip1559' as const,
+      gas: 100_000n,
+      maxFeePerGas: 2n,
+      maxPriorityFeePerGas: 1n,
+    };
+  });
+
+  const request = vi.fn(async () => {
+    throw new Error('Unexpected broadcast in failure fixture.');
+  });
+
+  const manager = await TransactionManager.create({
+    identity,
+    store: {
+      load: async () => ({
+        kind: 'present',
+        snapshot: visible,
+      }),
+      save,
+    },
+    maxRetainedAttempts: 1,
+    log: actualLog.createRelayerLog({
+      chainId: identity.chainId,
+      destination: {
+        write() {},
+      },
+    }),
+    createErrorSummary: () => ERROR_SUMMARY,
+    publicClient: {
+      getBlock: async ({ blockNumber }: { blockNumber: bigint }) => ({
+        number: blockNumber,
+        hash: HASH,
+      }),
+      getTransactionCount: async () => 4,
+      request,
+    } as unknown as PublicClient,
+    walletClient: {
+      prepareTransactionRequest,
+    } as unknown as WalletClient,
+    account: ACCOUNT,
+    readChainHeads: async () => ({
+      durableBlock: 100n,
+      latestBlock: 100n,
+    }),
+    maxBlockRange: 10n,
+    retry: {
+      initialDelayMs: 1_000,
+      maxDelayMs: 10_000,
+      now: () => 0,
+    },
+  });
+
+  let error: unknown;
+
+  try {
+    await manager.submit({
+      work: {
+        workId:
+          `quicknet-round:v1:${identity.chainId}:${REGISTRY}:${ROUND}`,
+        call: {
+          to: REGISTRY,
+          data: '0x1234',
+          value: 0n,
+          gas: 100_000n,
+        },
+      },
+      signal: options.signal,
+    });
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(Error);
+  expect(request).not.toHaveBeenCalled();
+
+  const recording = submissionRecording(error);
+
+  expect(recording?.status).toBe(recordingStatus);
+
+  if (recording === undefined) {
+    throw new Error('Expected a registered submission error.');
+  }
+
+  if (recording.status !== 'none') {
+    const attempt = visible.attempts[0];
+
+    if (attempt === undefined) {
+      throw new Error('Expected a visible recorded attempt.');
+    }
+
+    expect(recording.attempt).toEqual({
+      workId: attempt.workId,
+      attemptId: attempt.attemptId,
+    });
+  }
+
+  return {
+    error,
+    recording,
+  };
+}
 
 beforeEach(() => {
   vi.mocked(loadRelayerConfig)
@@ -2211,3 +2393,168 @@ describe.each(ROUND_COMMANDS)('%s RPC summary', (command) => {
     expect(t.output).not.toHaveBeenCalled();
   });
 });
+
+describe.each(ROUND_COMMANDS)(
+  '%s submission recording',
+  (command) => {
+    function operation() {
+      if (command === 'import') {
+        return vi.mocked(importQuicknetRound);
+      }
+
+      return vi.mocked(importQuicknetRoundWhenAvailable);
+    }
+
+    const args = [
+      command,
+      '--network',
+      PRESET,
+      '--round',
+      ROUND.toString(),
+    ];
+
+    const progress = {
+      round: ROUND,
+      phase: 'submit-transaction' as const,
+    };
+
+    it.each(['none', 'uncertain', 'retained'] as const)(
+      'reports %s recording and preserves the registered error',
+      async (recordingStatus) => {
+        const t = await createSubmissionFailure(recordingStatus);
+        const output = vi.fn<(record: CliOutput) => void>();
+        const onImportFailure = vi.fn();
+
+        operation().mockImplementationOnce(async ({ onProgress }) => {
+          onProgress?.(progress);
+          throw t.error;
+        });
+
+        await expect(
+          main(args, output, { onImportFailure }),
+        ).rejects.toBe(t.error);
+
+        expect(operation()).toHaveBeenCalledOnce();
+        expect(onImportFailure).toHaveBeenCalledExactlyOnceWith(
+          t.error,
+          progress,
+        );
+
+        if (recordingStatus === 'none') {
+          expect(output).not.toHaveBeenCalled();
+        } else {
+          expect(output).toHaveBeenCalledExactlyOnceWith({
+            type: 'submission-recording',
+            round: ROUND,
+            recording: t.recording,
+          });
+
+          const emitted = output.mock.calls[0]![0];
+
+          if (emitted.type !== 'submission-recording') {
+            throw new Error('Expected submission recording output.');
+          }
+
+          expect(emitted.recording).toBe(t.recording);
+
+          expect(output.mock.invocationCallOrder[0]!)
+            .toBeLessThan(
+              onImportFailure.mock.invocationCallOrder[0]!,
+            );
+        }
+
+        expect(submissionRecording(t.error)).toBe(t.recording);
+      },
+    );
+
+    it.each(['uncertain', 'retained'] as const)(
+      'preserves output failure while reporting %s recording',
+      async (recordingStatus) => {
+        const t = await createSubmissionFailure(recordingStatus);
+        const outputFailure = new Error('Recording output failed.');
+        const onImportFailure = vi.fn();
+
+        operation().mockImplementationOnce(async ({ onProgress }) => {
+          onProgress?.(progress);
+          throw t.error;
+        });
+
+        const output = vi.fn<(record: CliOutput) => void>(() => {
+          throw outputFailure;
+        });
+
+        await expect(
+          main(args, output, { onImportFailure }),
+        ).rejects.toBe(outputFailure);
+
+        expect(output).toHaveBeenCalledExactlyOnceWith({
+          type: 'submission-recording',
+          round: ROUND,
+          recording: t.recording,
+        });
+
+        expect(operation()).toHaveBeenCalledOnce();
+        expect(onImportFailure).not.toHaveBeenCalled();
+        expect(submissionRecording(t.error)).toBe(t.recording);
+      },
+    );
+
+    it.each(SIGNALS)(
+      'reports retained work when %s cancels after preparation',
+      async (shutdownSignal) => {
+        const before = SIGNALS.map(name => process.listeners(name));
+        const previous = process.listeners(shutdownSignal);
+        const output = vi.fn<(record: CliOutput) => void>();
+        const onImportFailure = vi.fn();
+
+        let captured:
+          | Awaited<ReturnType<typeof createSubmissionFailure>>
+          | undefined;
+
+        operation().mockImplementationOnce(async ({ signal, onProgress }) => {
+          expect(signal).toBeInstanceOf(AbortSignal);
+          onProgress?.(progress);
+
+          captured = await createSubmissionFailure('retained', {
+            signal: signal!,
+            onPrepared() {
+              const added = process.listeners(shutdownSignal).filter(
+                listener => !previous.includes(listener),
+              );
+
+              expect(added).toHaveLength(1);
+              added[0]!(shutdownSignal);
+
+              expect(signal?.aborted).toBe(true);
+            },
+          });
+
+          throw captured.error;
+        });
+
+        await expect(
+          main(args, output, { onImportFailure }),
+        ).resolves.toBe('interrupted');
+
+        if (captured === undefined) {
+          throw new Error('Expected a registered submission failure.');
+        }
+
+        expect(captured.recording.status).toBe('retained');
+
+        expect(output).toHaveBeenCalledExactlyOnceWith({
+          type: 'submission-recording',
+          round: ROUND,
+          recording: captured.recording,
+        });
+
+        expect(operation()).toHaveBeenCalledOnce();
+        expect(onImportFailure).not.toHaveBeenCalled();
+
+        expect(
+          SIGNALS.map(name => process.listeners(name)),
+        ).toEqual(before);
+      },
+    );
+  },
+);

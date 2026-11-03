@@ -50,8 +50,11 @@ const MODULE_PATHS = {
   'import-round-when-available':
     'rounds/import-round-when-available.js',
   'inspect-nonce-sync': 'chain/inspect-nonce-sync.js',
+  'journal-bounds-error': 'state/journal-bounds-error.js',
   'open-beacon-submitter': 'cli/open-beacon-submitter.js',
+  'relayer-log': 'diagnostics/relayer-log.js',
   'service-lock': 'state/service-lock.js',
+  'transaction-manager': 'state/transaction-manager.js',
   'validate-consumers': 'consumers/validate-consumers.js',
 } as const;
 
@@ -1142,6 +1145,608 @@ it.skipIf(process.platform !== 'linux').each(NONCE_SYNC_CASES)(
     }
 
     // Reacquisition must succeed after bootstrap exits.
+    const reacquired = spawnSync('flock', [
+      '--exclusive',
+      '--nonblock',
+      '--no-fork',
+      '--conflict-exit-code',
+      '75',
+      lockFile,
+      process.execPath,
+      '-e',
+      '',
+    ], {
+      cwd: APP,
+      env,
+      encoding: 'utf8',
+      timeout: 5_000,
+      maxBuffer: 1_048_576,
+    });
+
+    expect(reacquired.error).toBeUndefined();
+    expect(reacquired.signal).toBeNull();
+    expect(reacquired.status, reacquired.stderr).toBe(0);
+  },
+);
+
+const SUBMISSION_RECORDING_CASES = (
+  ['import', 'import-when-available'] as const
+).flatMap(command =>
+  (['uncertain', 'retained', 'cancelled', 'bounds'] as const).flatMap(
+    mode => {
+      const outputCases = mode === 'bounds'
+        ? [false]
+        : [false, true];
+
+      return outputCases.map(outputFails => ({
+        command,
+        mode,
+        outputFails,
+      }));
+    },
+  ),
+);
+
+it.skipIf(process.platform !== 'linux').each(SUBMISSION_RECORDING_CASES)(
+  '$command reports $mode submission recording (output fails: $outputFails)',
+  ({ command, mode, outputFails }) => {
+    const directory = mkdtempSync(
+      join(fixture, 'submission-recording-'),
+    );
+
+    const preload = join(directory, 'preload.mjs');
+    const evidenceFile = join(directory, 'evidence.json');
+    const lockFile = join(directory, 'relayer.flock');
+    const renderer = compiledModuleUrl('cli-output');
+
+    const operationName = command === 'import'
+      ? 'importQuicknetRound'
+      : 'importQuicknetRoundWhenAvailable';
+
+    const operationSource = `
+      import assert from 'node:assert/strict';
+      import { writeFileSync } from 'node:fs';
+      import { privateKeyToAccount } from 'viem/accounts';
+
+      import {
+        JournalBoundsExceededError,
+      } from ${JSON.stringify(compiledModuleUrl('journal-bounds-error'))};
+
+      import {
+        TransactionManager,
+        submissionRecording,
+      } from ${JSON.stringify(compiledModuleUrl('transaction-manager'))};
+
+      import {
+        createRelayerLog,
+      } from ${JSON.stringify(compiledModuleUrl('relayer-log'))};
+
+      export async function ${operationName}({ signal, onProgress }) {
+        assert.ok(signal instanceof AbortSignal);
+
+        const mode = ${JSON.stringify(mode)};
+
+        const boundsFailure = new JournalBoundsExceededError([{
+          bound: 'retained-attempts',
+          maximum: 1,
+          observed: 2,
+          attemptId: null,
+          message: 'bounds-message-canary-must-not-appear',
+        }]);
+
+        const account = privateKeyToAccount('0x' + '11'.repeat(32));
+        const identity = {
+          chainId: 46630,
+          signer: account.address,
+        };
+
+        const hash = '0x' + 'aa'.repeat(32);
+        const observation = {
+          anchor: {
+            blockNumber: 100n,
+            blockHash: hash,
+          },
+          nonce: 4n,
+        };
+
+        let visible = {
+          version: 1,
+          identity,
+          baseline: observation,
+          lastObservation: observation,
+          nextNonce: 4n,
+          durableNextNonce: 4n,
+          repairs: [],
+          attempts: [],
+        };
+
+        let sendCalls = 0;
+        let preparationCalls = 0;
+        let cancellationRequested = false;
+
+        const manager = await TransactionManager.create({
+          identity,
+          store: {
+            async load() {
+              return { kind: 'present', snapshot: visible };
+            },
+
+            async save(snapshot) {
+              visible = snapshot;
+              const attempt = snapshot.attempts[0];
+
+              if (attempt?.phase === 'signed') {
+                if (mode === 'uncertain') {
+                  throw new Error('Injected preparation persistence failure.');
+                }
+
+                if (mode === 'cancelled' && !cancellationRequested) {
+                  cancellationRequested = true;
+                  process.emit('SIGTERM');
+                  assert.equal(signal.aborted, true);
+                }
+              }
+
+              if (
+                mode === 'retained' &&
+                attempt?.phase === 'broadcast-may-have-occurred'
+              ) {
+                throw new Error('Injected marker persistence failure.');
+              }
+            },
+          },
+          maxRetainedAttempts: 1,
+          log: createRelayerLog({
+            chainId: identity.chainId,
+            destination: { write() {} },
+          }),
+          createErrorSummary: () => ({
+            scrubText(text) {
+              return { text, removed: false };
+            },
+          }),
+          publicClient: {
+            async getBlock({ blockNumber }) {
+              return { number: blockNumber, hash };
+            },
+            async getTransactionCount() {
+              return 4;
+            },
+            async request() {
+              sendCalls += 1;
+              throw new Error('Unexpected broadcast.');
+            },
+          },
+          walletClient: {
+            async prepareTransactionRequest() {
+              preparationCalls += 1;
+
+              if (mode === 'bounds') {
+                throw boundsFailure;
+              }
+
+              return {
+                type: 'eip1559',
+                gas: 100_000n,
+                maxFeePerGas: 2n,
+                maxPriorityFeePerGas: 1n,
+              };
+            },
+          },
+          account,
+          async readChainHeads() {
+            return {
+              latestBlock: 100n,
+              durableBlock: 100n,
+            };
+          },
+          maxBlockRange: 10n,
+          retry: {
+            initialDelayMs: 1_000,
+            maxDelayMs: 10_000,
+            now: () => 0,
+          },
+        });
+
+        onProgress?.({
+          round: 100n,
+          phase: 'submit-transaction',
+        });
+
+        let failure;
+
+        try {
+          await manager.submit({
+            signal,
+            work: {
+              workId:
+                'quicknet-round:v1:46630:' +
+                '0x2222222222222222222222222222222222222222:100',
+              call: {
+                to: '0x' + '22'.repeat(20),
+                data: '0x1234',
+                value: 0n,
+                gas: 100_000n,
+              },
+            },
+          });
+        } catch (error) {
+          failure = error;
+        }
+
+        assert.ok(failure instanceof Error);
+
+        const recording = submissionRecording(failure);
+        assert.ok(recording);
+
+        if (mode === 'bounds') {
+          assert.notEqual(failure, boundsFailure);
+          assert.equal(
+            Object.getOwnPropertyDescriptor(failure, 'cause')?.value,
+            boundsFailure,
+          );
+
+          assert.deepEqual(recording, { status: 'none' });
+          assert.equal(preparationCalls, 1);
+          assert.equal(sendCalls, 0);
+          assert.equal(visible.attempts.length, 0);
+
+          writeFileSync(
+            ${JSON.stringify(evidenceFile)},
+            JSON.stringify({
+              recording,
+              signedTransactions: [],
+              preparationCalls,
+              sendCalls,
+              cancellationRequested,
+            }),
+          );
+
+          throw failure;
+        }
+
+        assert.notEqual(recording.status, 'none');
+
+        let expectedStatus = 'retained';
+
+        if (mode === 'uncertain') {
+          expectedStatus = 'uncertain';
+        }
+
+        assert.equal(recording.status, expectedStatus);
+        assert.equal(preparationCalls, 1);
+        assert.equal(sendCalls, 0);
+
+        const attempt = visible.attempts[0];
+        assert.ok(attempt);
+        assert.deepEqual(recording.attempt, {
+          attemptId: attempt.attemptId,
+          workId: attempt.workId,
+        });
+
+        writeFileSync(
+          ${JSON.stringify(evidenceFile)},
+          JSON.stringify({
+            recording,
+            signedTransactions: attempt.signedTransactions.map(
+              candidate => candidate.signedTransaction,
+            ),
+            preparationCalls,
+            sendCalls,
+            cancellationRequested,
+          }),
+        );
+
+        throw failure;
+      }
+    `;
+
+    const replacements = new Map<ModuleName, string>([
+      [
+        'config',
+        `
+          export function parseRelayerNetworkPreset() {
+            return 'robinhood-testnet';
+          }
+
+          export async function loadRelayerConfig() {
+            return {
+              chain: { id: 46630 },
+              account: { address: '0x' + '11'.repeat(20) },
+              deployment: {
+                chainId: 46630,
+                address: '0x' + '22'.repeat(20),
+              },
+              finality: { type: 'safe' },
+            };
+          }
+        `,
+      ],
+      [
+        'clients',
+        `
+          export function createRelayerClients() {
+            return {
+              publicClient: {},
+              walletClient: {},
+              rpcMetrics: {
+                snapshot() {
+                  return {
+                    collectorId: '11111111-1111-4111-8111-111111111111',
+                    startedAt: '2026-10-22T12:00:00.000Z',
+                    logical: [],
+                    http: [],
+                  };
+                },
+              },
+            };
+          }
+        `,
+      ],
+      [
+        'open-beacon-submitter',
+        `
+          export async function openBeaconSubmitter() {
+            return Object.freeze({});
+          }
+        `,
+      ],
+      [
+        'daemon-command',
+        `
+          export async function runDaemonCommand() {
+            throw new Error('Unexpected daemon command.');
+          }
+        `,
+      ],
+      [
+        'import-round',
+        `
+          export async function importQuicknetRound() {
+            throw new Error('Unexpected immediate import.');
+          }
+        `,
+      ],
+      [
+        'import-round-when-available',
+        `
+          export async function importQuicknetRoundWhenAvailable() {
+            throw new Error('Unexpected waiting import.');
+          }
+        `,
+      ],
+      [
+        'cli-output',
+        `
+          import { closeSync } from 'node:fs';
+
+          import {
+            renderCliOutput as actualRender,
+          } from ${JSON.stringify(renderer + '?submission-recording-test')};
+
+          export {
+            renderOutputFailure,
+          } from ${JSON.stringify(renderer + '?submission-recording-test')};
+
+          export function renderCliOutput(record) {
+            const rendered = actualRender(record);
+
+            if (
+              record.type === 'submission-recording' &&
+              ${outputFails}
+            ) {
+              closeSync(1);
+            }
+
+            return rendered;
+          }
+        `,
+      ],
+    ]);
+
+    if (command === 'import') {
+      replacements.set('import-round', operationSource);
+    } else {
+      replacements.set('import-round-when-available', operationSource);
+    }
+
+    const modules = [...replacements].map(([name, source]) => [
+      compiledModuleUrl(name),
+      source,
+    ]);
+
+    writeFileSync(preload, `
+      import { registerHooks } from 'node:module';
+
+      const modules = new Map(${JSON.stringify(modules)});
+
+      registerHooks({
+        load(url, context, nextLoad) {
+          if (modules.has(url)) {
+            return {
+              format: 'module',
+              source: modules.get(url),
+              shortCircuit: true,
+            };
+          }
+
+          return nextLoad(url, context);
+        },
+      });
+    `);
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      NODE_ENV: 'production',
+      QUICKNET_LOG_LEVEL: 'info',
+      QUICKNET_STATE_DIR: directory,
+      PRIVATE_KEY: '',
+      QUICKNET_RPC_URL: '',
+      ROBINHOOD_TESTNET_RPC_URL: '',
+    };
+
+    delete env.NODE_OPTIONS;
+    delete env.QUICKNET_ENV_FILE;
+
+    const child = spawnSync('flock', [
+      '--exclusive',
+      '--nonblock',
+      '--no-fork',
+      '--conflict-exit-code',
+      '75',
+      lockFile,
+      process.execPath,
+      '--import',
+      preload,
+      join(compiledApplication, 'dist', MODULE_PATHS.bootstrap),
+      command,
+      '--network',
+      'robinhood-testnet',
+      '--round',
+      '100',
+    ], {
+      cwd: APP,
+      env,
+      encoding: 'utf8',
+      timeout: 5_000,
+      maxBuffer: 1_048_576,
+    });
+
+    let expectedExitCode = 1;
+
+    if (outputFails) {
+      expectedExitCode = 2;
+    } else if (mode === 'cancelled') {
+      expectedExitCode = 5;
+    } else if (mode === 'bounds') {
+      expectedExitCode = 6;
+    }
+
+    expect(child.error).toBeUndefined();
+    expect(child.signal).toBeNull();
+    expect(child.status, child.stderr).toBe(expectedExitCode);
+
+    const evidence = JSON.parse(readFileSync(evidenceFile, 'utf8'));
+
+    const records: Record<string, unknown>[] = child.stderr
+      .trimEnd()
+      .split('\n')
+      .filter(line => line.length > 0)
+      .map(line => JSON.parse(line));
+
+    if (mode === 'bounds') {
+      expect(evidence).toEqual({
+        recording: { status: 'none' },
+        signedTransactions: [],
+        preparationCalls: 1,
+        sendCalls: 0,
+        cancellationRequested: false,
+      });
+
+      expect(child.stdout).toBe('');
+
+      expect(records.map(record => record.event)).toEqual([
+        'rpc_usage',
+        'cli_failed',
+      ]);
+
+      expect(records[1]).toEqual({
+        event: 'cli_failed',
+        kind: 'signer-journal',
+        code: 'journal-bounds-exceeded',
+        message:
+          'Retained journal state exceeds the configured runtime bounds. ' +
+          'Inspect the journal before restarting. Do not delete it ' +
+          'or initialize a replacement.',
+        violations: [{
+          bound: 'retained-attempts',
+          maximum: 1,
+          observed: 2,
+          attemptId: null,
+        }],
+      });
+
+      expect(child.stderr)
+        .not.toContain('bounds-message-canary-must-not-appear');
+    } else {
+      let expectedStatus = 'retained';
+
+      if (mode === 'uncertain') {
+        expectedStatus = 'uncertain';
+      }
+
+      expect(evidence).toMatchObject({
+        recording: {
+          status: expectedStatus,
+          attempt: {
+            attemptId: expect.any(String),
+            workId:
+              'quicknet-round:v1:46630:' +
+              '0x2222222222222222222222222222222222222222:100',
+          },
+        },
+        preparationCalls: 1,
+        sendCalls: 0,
+        cancellationRequested: mode === 'cancelled',
+      });
+
+      expect(evidence.signedTransactions).toHaveLength(1);
+
+      if (outputFails) {
+        expect(child.stdout).toBe('');
+
+        expect(records.map(record => record.event)).toEqual([
+          'output_failed',
+          'rpc_usage',
+        ]);
+
+        expect(records[0]).toMatchObject({
+          event: 'output_failed',
+          code: 'CLI_OUTPUT_FAILED',
+          output: 'submission-recording',
+          round: '100',
+          status: expectedStatus,
+          ...evidence.recording.attempt,
+        });
+
+        expect(records[0]).not.toHaveProperty('transactionHash');
+        expect(records[0]).not.toHaveProperty('signedTransactions');
+      } else {
+        let message = 'The attempt is retained for recovery.';
+
+        if (mode === 'uncertain') {
+          message =
+            'Attempt persistence is uncertain. ' +
+            'The pending journal write must be retried.';
+        }
+
+        expect(child.stdout).toBe([
+          'Quicknet round 100 submission did not complete.',
+          message,
+          'Attempt: ' + evidence.recording.attempt.attemptId,
+          'Work identity: ' + evidence.recording.attempt.workId,
+          '',
+        ].join('\n'));
+
+        const expectedEvents = ['rpc_usage'];
+
+        if (mode !== 'cancelled') {
+          expectedEvents.push('cli_failed');
+        }
+
+        expect(records.map(record => record.event))
+          .toEqual(expectedEvents);
+      }
+    }
+
+    for (const signedTransaction of evidence.signedTransactions) {
+      expect(child.stdout).not.toContain(signedTransaction);
+      expect(child.stderr).not.toContain(signedTransaction);
+    }
+
+    expect(child.stdout).not.toContain('0x' + '11'.repeat(32));
+    expect(child.stderr).not.toContain('0x' + '11'.repeat(32));
+
     const reacquired = spawnSync('flock', [
       '--exclusive',
       '--nonblock',
