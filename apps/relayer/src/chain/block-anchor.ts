@@ -8,7 +8,9 @@ import {
 } from 'viem';
 
 import {
+  captureAnchoredReadScope,
   registerAnchoredReadFailure,
+  type AnchoredReadScope,
 } from '../diagnostics/anchored-read-errors.js';
 
 import {
@@ -23,6 +25,7 @@ export interface BlockAnchor {
 export async function checkBlockAnchor(
   publicClient: PublicClient,
   expected: Readonly<BlockAnchor>,
+  scope?: AnchoredReadScope,
 ): Promise<{
   status: 'anchor-changed';
   observedAnchor: Readonly<BlockAnchor>;
@@ -31,6 +34,7 @@ export async function checkBlockAnchor(
     publicClient,
     expected.blockNumber,
     expected.blockHash,
+    scope,
   );
 
   if (blockAnchorsMatch(expected, observed)) {
@@ -47,11 +51,13 @@ export async function getBlockAnchor(
   publicClient: PublicClient,
   blockNumber: bigint,
   expectedBlockHash?: Hash,
+  scope?: AnchoredReadScope,
 ): Promise<BlockAnchor> {
   if (blockNumber < 0n) {
     throw new Error('Block anchor number must not be negative.');
   }
 
+  const capturedScope = captureAnchoredReadScope(scope);
   const startedAt = performance.now();
 
   try {
@@ -72,6 +78,7 @@ export async function getBlockAnchor(
     };
   } catch (error) {
     registerAnchoredReadFailure(error, {
+      ...capturedScope,
       method: 'eth_getBlockByNumber',
       blockNumber,
       durationMs: performance.now() - startedAt,

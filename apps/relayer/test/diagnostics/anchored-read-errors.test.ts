@@ -218,4 +218,70 @@ describe('anchored read failure context', () => {
       durationMs: 12.5,
     });
   });
+
+  it('captures operation and confirmation policy as bounded values', () => {
+    const error = new Error();
+
+    registerAnchoredReadFailure(error, {
+      ...context(),
+      operation: 'nonce-sync',
+      finality: {
+        type: 'confirmations',
+        confirmations: 12n,
+      },
+    });
+
+    expect(anchoredReadDetails(error)).toMatchObject({
+      operation: 'nonce-sync',
+      finality: {
+        type: 'confirmations',
+        confirmations: '12',
+      },
+    });
+  });
+
+  it('does not share nested finality details between summaries', () => {
+    const error = new Error();
+
+    registerAnchoredReadFailure(error, {
+      ...context(),
+      finality: {
+        type: 'confirmations',
+        confirmations: 12n,
+      },
+    });
+
+    const first = anchoredReadDetails(error)!;
+
+    if (first.finality?.type !== 'confirmations') {
+      throw new Error('Expected confirmation policy.');
+    }
+
+    first.finality.confirmations = '99';
+
+    expect(anchoredReadDetails(error)?.finality).toEqual({
+      type: 'confirmations',
+      confirmations: '12',
+    });
+  });
+
+  it('omits invalid optional scope without losing read context', () => {
+    const error = new Error();
+
+    registerAnchoredReadFailure(error, {
+      ...context(),
+      operation: 'provider-controlled',
+      finality: {
+        type: 'confirmations',
+        confirmations: -1n,
+      },
+    } as unknown as AnchoredReadContext);
+
+    expect(anchoredReadDetails(error)).toEqual({
+      method: 'eth_getTransactionCount',
+      blockNumber: '100',
+      expectedBlockHash: HASH,
+      durationMs: 12.5,
+    });
+  });
 });

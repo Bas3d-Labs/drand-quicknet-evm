@@ -6,7 +6,33 @@ import {
   MAX_UINT256,
 } from '../shared/uint.js';
 
-export interface AnchoredReadContext {
+export type AnchoredReadOperation =
+  | 'signer-bootstrap'
+  | 'signer-recovery'
+  | 'signer-inclusions'
+  | 'nonce-sync';
+
+export interface AnchoredReadScope {
+  readonly operation?: AnchoredReadOperation;
+  readonly finality?:
+    | Readonly<{ type: 'safe' | 'finalized' }>
+    | Readonly<{
+        type: 'confirmations';
+        confirmations: bigint;
+      }>;
+}
+
+export interface AnchoredReadScopeDetails {
+  operation?: AnchoredReadOperation;
+  finality?:
+    | { type: 'safe' | 'finalized' }
+    | {
+        type: 'confirmations';
+        confirmations: string;
+      };
+}
+
+export interface AnchoredReadContext extends AnchoredReadScope {
   method:
     | 'eth_getBlockByNumber'
     | 'eth_getTransactionCount';
@@ -15,7 +41,7 @@ export interface AnchoredReadContext {
   durationMs: number;
 }
 
-export interface AnchoredReadDetails {
+export interface AnchoredReadDetails extends AnchoredReadScopeDetails {
   method:
     | 'eth_getBlockByNumber'
     | 'eth_getTransactionCount';
@@ -41,6 +67,67 @@ function own(
   }
 
   return descriptor.value;
+}
+
+/**
+ * Captures optional metadata before asynchronous work.
+ * Invalid optional fields are omitted independently.
+ */
+export function captureAnchoredReadScope(
+  input?: AnchoredReadScope,
+): Readonly<AnchoredReadScope> {
+  const captured: {
+    operation?: AnchoredReadOperation;
+    finality?: NonNullable<AnchoredReadScope['finality']>;
+  } = {};
+
+  if (input === undefined) {
+    return Object.freeze(captured);
+  }
+
+  try {
+    const operation = own(input, 'operation');
+
+    if (
+      operation === 'signer-bootstrap' ||
+      operation === 'signer-recovery' ||
+      operation === 'signer-inclusions' ||
+      operation === 'nonce-sync'
+    ) {
+      captured.operation = operation;
+    }
+  } catch {
+    // Optional diagnostic metadata must not affect execution.
+  }
+
+  try {
+    const finality = own(input, 'finality');
+
+    if (typeof finality === 'object' && finality !== null) {
+      const type = own(finality, 'type');
+
+      if (type === 'safe' || type === 'finalized') {
+        captured.finality = Object.freeze({ type });
+      } else if (type === 'confirmations') {
+        const confirmations = own(finality, 'confirmations');
+
+        if (
+          typeof confirmations === 'bigint' &&
+          confirmations >= 0n &&
+          confirmations <= MAX_UINT256
+        ) {
+          captured.finality = Object.freeze({
+            type,
+            confirmations,
+          });
+        }
+      }
+    }
+  } catch {
+    // Preserve independently valid operation metadata.
+  }
+
+  return Object.freeze(captured);
 }
 
 /**
@@ -105,6 +192,25 @@ export function registerAnchoredReadFailure(
       details.expectedBlockHash = expectedBlockHash;
     }
 
+    const scope = captureAnchoredReadScope(context);
+
+    if (scope.operation !== undefined) {
+      details.operation = scope.operation;
+    }
+
+    if (scope.finality !== undefined) {
+      if (scope.finality.type === 'confirmations') {
+        details.finality = Object.freeze({
+          type: 'confirmations',
+          confirmations: scope.finality.confirmations.toString(),
+        });
+      } else {
+        details.finality = Object.freeze({
+          type: scope.finality.type,
+        });
+      }
+    }
+
     registered.set(error, Object.freeze(details));
   } catch {
     // Diagnostic capture must not replace the original failure.
@@ -124,5 +230,11 @@ export function anchoredReadDetails(
     return undefined;
   }
 
-  return { ...details };
+  const copy: AnchoredReadDetails = { ...details };
+
+  if (details.finality !== undefined) {
+    copy.finality = { ...details.finality };
+  }
+
+  return copy;
 }

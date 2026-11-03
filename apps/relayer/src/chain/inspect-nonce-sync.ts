@@ -3,6 +3,15 @@ import type {
 } from 'viem';
 
 import {
+  captureAnchoredReadScope,
+} from '../diagnostics/anchored-read-errors.js';
+
+import type {
+  AnchoredNonceObservation,
+  JournalIdentity,
+} from '../state/transaction-journal.js';
+
+import {
   getBlockAnchor,
   type BlockAnchor,
 } from './block-anchor.js';
@@ -18,11 +27,6 @@ import type {
 import {
   inspectSignerBootstrap,
 } from './inspect-signer-bootstrap.js';
-
-import type {
-  AnchoredNonceObservation,
-  JournalIdentity,
-} from '../state/transaction-journal.js';
 
 export interface InspectNonceSyncOptions {
   readonly publicClient: PublicClient;
@@ -65,6 +69,11 @@ export async function inspectNonceSync(
 
   signal?.throwIfAborted();
 
+  const scope = captureAnchoredReadScope({
+    operation: 'nonce-sync',
+    finality: options.finality,
+  });
+
   const chainId = await publicClient.getChainId();
 
   signal?.throwIfAborted();
@@ -86,6 +95,8 @@ export async function inspectNonceSync(
   const anchor = await getBlockAnchor(
     publicClient,
     heads.durableBlock,
+    undefined,
+    scope,
   );
 
   signal?.throwIfAborted();
@@ -94,6 +105,7 @@ export async function inspectNonceSync(
     publicClient,
     signer: identity.signer,
     anchor,
+    scope,
   });
 
   signal?.throwIfAborted();

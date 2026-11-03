@@ -17,6 +17,10 @@ import {
   readAnchoredNonce,
 } from '../../src/chain/read-anchored-nonce.js';
 
+import type {
+  AnchoredReadScope,
+} from '../../src/diagnostics/anchored-read-errors.js';
+
 import {
   anchoredReadDetails,
 } from '../../src/diagnostics/anchored-read-errors.js';
@@ -166,5 +170,89 @@ describe('anchored read diagnostics', () => {
 
     await expect(fixture.run()).rejects.toBe('RPC failed.');
     expect(anchoredReadDetails('RPC failed.')).toBeUndefined();
+  });
+
+  it.each([
+    'opening',
+    'nonce',
+    'closing',
+  ] as const)(
+    'carries scope to the %s failure',
+    async stage => {
+      const fixture = setup();
+      const error = new Error('RPC failed.');
+
+      if (stage === 'opening') {
+        fixture.getBlock.mockRejectedValueOnce(error);
+      } else if (stage === 'nonce') {
+        fixture.getTransactionCount.mockRejectedValueOnce(error);
+      } else {
+        fixture.getBlock
+          .mockResolvedValueOnce({
+            number: 100n,
+            hash: HASH,
+          })
+          .mockRejectedValueOnce(error);
+      }
+
+      await expect(readAnchoredNonce({
+        publicClient: fixture.publicClient,
+        signer: SIGNER,
+        anchor: {
+          blockNumber: 100n,
+          blockHash: HASH,
+        },
+        scope: {
+          operation: 'nonce-sync',
+          finality: { type: 'safe' },
+        },
+      })).rejects.toBe(error);
+
+      expect(anchoredReadDetails(error)).toMatchObject({
+        operation: 'nonce-sync',
+        finality: { type: 'safe' },
+      });
+    },
+  );
+
+  it('captures scope before awaiting the opening read', async () => {
+    const fixture = setup();
+    const error = new Error('RPC failed.');
+
+    const finality = {
+      type: 'confirmations' as const,
+      confirmations: 12n,
+    };
+
+    const scope: AnchoredReadScope = {
+      operation: 'nonce-sync',
+      finality,
+    };
+
+    fixture.getBlock.mockImplementationOnce(async () => {
+      finality.confirmations = 99n;
+
+      return {
+        number: 100n,
+        hash: HASH,
+      };
+    });
+
+    fixture.getTransactionCount.mockRejectedValueOnce(error);
+
+    await expect(readAnchoredNonce({
+      publicClient: fixture.publicClient,
+      signer: SIGNER,
+      anchor: {
+        blockNumber: 100n,
+        blockHash: HASH,
+      },
+      scope,
+    })).rejects.toBe(error);
+
+    expect(anchoredReadDetails(error)?.finality).toEqual({
+      type: 'confirmations',
+      confirmations: '12',
+    });
   });
 });
