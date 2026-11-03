@@ -1,4 +1,9 @@
 import {
+  classifyAnchoredReadFailure,
+  type AnchoredReadClassification,
+} from './anchored-read-classification.js';
+
+import {
   anchoredReadDetails,
   type AnchoredReadDetails,
 } from './anchored-read-errors.js';
@@ -79,7 +84,9 @@ export interface ErrorSummary {
   textModified?: true;
   revert?: RevertSummary;
   mismatch?: MismatchDetails;
-  anchoredRead?: AnchoredReadDetails;
+  anchoredRead?: AnchoredReadDetails & {
+    classification: AnchoredReadClassification;
+  };
 }
 
 interface RevertSummary {
@@ -149,7 +156,10 @@ function visit(
 
   const anchoredRead = anchoredReadDetails(error);
   if (anchoredRead !== undefined) {
-    summary.anchoredRead = anchoredRead;
+    summary.anchoredRead = {
+      ...anchoredRead,
+      classification: 'unknown',
+    };
   }
 
   const chain = prototypeChain(error);
@@ -295,6 +305,11 @@ function visit(
       // Reconstruct solely from registered, validated public values.
       summary.message = mismatchMessage(mismatch);
     }
+  }
+
+  if (summary.anchoredRead !== undefined) {
+    summary.anchoredRead.classification =
+      classifyAnchoredReadFailure(summary);
   }
 
   return summary;

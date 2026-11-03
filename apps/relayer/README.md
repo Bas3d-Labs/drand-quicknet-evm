@@ -350,6 +350,27 @@ Do not give the relayer account:
 
 Never commit private keys or populated `.env` files.
 
+### RPC historical-state availability
+
+The RPC endpoint must serve account state at the block heights required
+by signer initialization and recovery, including the configured durable
+boundary. Support for returning `safe` or `finalized` block headers alone
+is insufficient. Depending on the chain's durable-head lag and the
+provider's retention policy, archive access or sufficiently deep
+historical-state retention may be required.
+
+The relayer does not substitute `latest` state when an anchored read fails.
+
+Anchored-read failure summaries include the RPC method, requested block,
+read duration, and expected block hash when known. Operation and finality
+context are included when supplied by the caller.
+
+Recognized historical-state error messages are labelled
+`historical-state-unavailable`; other failures are labelled `unknown`.
+These labels interpret provider-reported errors for diagnostics only.
+They do not establish the provider's retention policy, determine whether
+retrying will succeed, or change transaction recovery behavior.
+
 ### Receipt timeout
 
 `QUICKNET_RECEIPT_TIMEOUT_MS` controls receipt waiting for `import`,

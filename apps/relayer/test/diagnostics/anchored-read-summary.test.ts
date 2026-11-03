@@ -44,6 +44,7 @@ describe('anchored read error summaries', () => {
       blockNumber: '100',
       expectedBlockHash: HASH,
       durationMs: 12.5,
+      classification: 'unknown',
     });
   });
 
