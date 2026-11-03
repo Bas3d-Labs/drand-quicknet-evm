@@ -1,4 +1,9 @@
 import {
+  anchoredReadDetails,
+  type AnchoredReadDetails,
+} from './anchored-read-errors.js';
+
+import {
   mismatchDetails,
   mismatchMessage,
   type MismatchDetails,
@@ -74,6 +79,7 @@ export interface ErrorSummary {
   textModified?: true;
   revert?: RevertSummary;
   mismatch?: MismatchDetails;
+  anchoredRead?: AnchoredReadDetails;
 }
 
 interface RevertSummary {
@@ -140,6 +146,11 @@ function visit(
   }
 
   budget.seen.add(error);
+
+  const anchoredRead = anchoredReadDetails(error);
+  if (anchoredRead !== undefined) {
+    summary.anchoredRead = anchoredRead;
+  }
 
   const chain = prototypeChain(error);
   const name = dataProperty(chain, 'name');

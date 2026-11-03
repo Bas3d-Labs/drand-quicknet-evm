@@ -1,7 +1,15 @@
+import {
+  performance,
+} from 'node:perf_hooks';
+
 import type {
   Address,
   PublicClient,
 } from 'viem';
+
+import {
+  registerAnchoredReadFailure,
+} from '../diagnostics/anchored-read-errors.js';
 
 import type {
   AnchoredNonceObservation,
@@ -71,12 +79,26 @@ export async function readAnchoredNonce(
     return before;
   }
 
-  const nonce = parseNonceResponse(
-    await publicClient.getTransactionCount({
-      address: signer,
+  const startedAt = performance.now();
+  let nonce: bigint;
+
+  try {
+    nonce = parseNonceResponse(
+      await publicClient.getTransactionCount({
+        address: signer,
+        blockNumber: anchor.blockNumber,
+      }),
+    );
+  } catch (error) {
+    registerAnchoredReadFailure(error, {
+      method: 'eth_getTransactionCount',
       blockNumber: anchor.blockNumber,
-    }),
-  );
+      expectedBlockHash: anchor.blockHash,
+      durationMs: performance.now() - startedAt,
+    });
+
+    throw error;
+  }
 
   const after = await checkBlockAnchor(publicClient, anchor);
   if (after !== null) {
