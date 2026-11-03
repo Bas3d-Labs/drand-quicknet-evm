@@ -473,6 +473,22 @@ function writePreload(
       const shutdownSignal = ${JSON.stringify(signal)};
 
       export async function openBeaconSubmitter(options) {
+        const manager = {
+          status: {
+            chainId: 46630,
+            journalInitialized: false,
+            busy: false,
+            open: false,
+            primaryReason: 'recovery-incomplete',
+            blockers: ['recovery-incomplete'],
+            recoveryComplete: false,
+            inclusionChecksComplete: false,
+            persistenceState: 'idle',
+            blockedSince: null,
+            attempts: [],
+          },
+        };
+
         const submitter = {
           async recover() {
             assertServiceLockHeld();
@@ -502,20 +518,9 @@ function writePreload(
             writeFileSync(join(directory, 'recovery-completed'), '');
 
             return {
-              inspection: {
-                status: 'bootstrap-deferred',
-                reason: 'nonce-count-mismatch',
-                observation: {
-                  anchor: {
-                    blockNumber: 100n,
-                    blockHash: '0x' + 'aa'.repeat(32),
-                  },
-                  nonce: 4n,
-                },
-                latestNonce: 4n,
-                pendingNonce: 5n,
-              },
-              inclusions: null,
+              state: manager.status,
+              recoveryStatus: 'bootstrap-deferred',
+              inclusionStatus: null,
               broadcast: null,
               retryDelayMs: null,
             };
@@ -527,7 +532,7 @@ function writePreload(
         };
 
         await waitForSignerJournal({
-          coordinator: { journalInitialized: false },
+          manager,
           submitter,
           pollIntervalMs: options.startupPollIntervalMs,
           signal: options.signal,

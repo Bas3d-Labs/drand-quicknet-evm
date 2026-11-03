@@ -4,13 +4,6 @@ import {
 } from 'viem';
 
 import {
-  blockAnchorsMatch,
-  checkBlockAnchor,
-  getBlockAnchor,
-  type BlockAnchor,
-} from './block-anchor.js';
-
-import {
   snapshotResolutionEvidence,
 } from '../diagnostics/resolution-validation.js';
 
@@ -21,6 +14,13 @@ import {
 import type {
   JournalInclusionObservation,
 } from '../state/transaction-journal.js';
+
+import {
+  blockAnchorsMatch,
+  checkBlockAnchor,
+  getBlockAnchor,
+  type BlockAnchor,
+} from './block-anchor.js';
 
 export interface RecheckAttemptInclusionOptions {
   readonly publicClient: PublicClient;
@@ -62,8 +62,50 @@ export type InclusionRecheckResult =
 export async function recheckAttemptInclusion(
   options: RecheckAttemptInclusionOptions,
 ): Promise<InclusionRecheckResult> {
-  const publicClient = options.publicClient;
+  const input = captureInclusionRecheck(options);
 
+  const {
+    publicClient,
+    saved,
+    head,
+  } = input;
+
+  // Preserve the standalone no-RPC result when the head is behind
+  // inclusion. The shared evidence function also checks this condition
+  // for callers using the within-pass entry point.
+  if (head.blockNumber < saved.inclusion.blockNumber) {
+    return {
+      status: 'head-behind-inclusion',
+    };
+  }
+
+  const before = await checkBlockAnchor(publicClient, head);
+  if (before !== null) {
+    return before;
+  }
+
+  const result = await inspectInclusionEvidence(input);
+
+  const after = await checkBlockAnchor(publicClient, head);
+  if (after !== null) {
+    return after;
+  }
+
+  return result;
+}
+
+/**
+ * Rechecks inclusion evidence inside an enclosing head-checked pass.
+ */
+export async function recheckAttemptInclusionWithinPass(
+  options: RecheckAttemptInclusionOptions,
+): Promise<InclusionRecheckResult> {
+  return inspectInclusionEvidence(captureInclusionRecheck(options));
+}
+
+function captureInclusionRecheck(
+  options: RecheckAttemptInclusionOptions,
+) {
   const saved = snapshotResolutionEvidence({
     ...options.observation,
     anchor: options.observation.observedAt,
@@ -82,80 +124,82 @@ export async function recheckAttemptInclusion(
     throw new TypeError('Invalid inclusion recheck input.');
   }
 
+  return {
+    publicClient: options.publicClient,
+    saved,
+    head,
+  };
+}
+
+async function inspectInclusionEvidence(
+  input: ReturnType<typeof captureInclusionRecheck>,
+): Promise<InclusionRecheckResult> {
+  const {
+    publicClient,
+    saved,
+    head,
+  } = input;
+
   if (head.blockNumber < saved.inclusion.blockNumber) {
     return {
       status: 'head-behind-inclusion',
-    };
-  }
-
-  const before = await checkBlockAnchor(publicClient, head);
-  if (before !== null) {
-    return before;
+    }
   }
 
   const canonicalBlock = Object.freeze(
     await getBlockAnchor(publicClient, saved.inclusion.blockNumber),
   );
 
-  let result: InclusionRecheckResult;
-
   if (!blockAnchorsMatch(saved.inclusion, canonicalBlock)) {
-    result = {
+    return {
       status: 'inclusion-block-changed',
       inclusion: saved.inclusion,
       canonicalBlock,
     };
-  } else {
-    const transactionHash = saved.outcome === 'replaced'
-      ? saved.replacementTransactionHash
-      : saved.transactionHash;
+  }
 
-    let receipt;
+  const transactionHash = saved.outcome === 'replaced'
+    ? saved.replacementTransactionHash
+    : saved.transactionHash;
 
-    try {
-      receipt = await publicClient.getTransactionReceipt({
-        hash: transactionHash,
-      });
-    } catch (error) {
-      if (!(error instanceof TransactionReceiptNotFoundError)) {
-        throw error;
-      }
-    }
+  let receipt;
 
-    if (receipt === undefined) {
-      result = {
-        status: 'receipt-unavailable',
-      };
-    } else {
-      if (
-        !isFixedHex(receipt.transactionHash, 32) ||
-        receipt.transactionHash.toLowerCase() !==
-          transactionHash.toLowerCase() ||
-        typeof receipt.blockNumber !== 'bigint' ||
-        receipt.blockNumber !== saved.inclusion.blockNumber ||
-        !isFixedHex(receipt.blockHash, 32) ||
-        receipt.blockHash.toLowerCase() !==
-          saved.inclusion.blockHash.toLowerCase() ||
-        (receipt.status !== 'success' && receipt.status !== 'reverted') ||
-        (
-          saved.outcome !== 'replaced' &&
-          receipt.status !== saved.outcome
-        )
-      ) {
-        throw new TypeError('Inconsistent inclusion receipt response.');
-      }
-
-      result = {
-        status: 'verified-unchanged',
-        observedAt: head,
-      };
+  try {
+    receipt = await publicClient.getTransactionReceipt({
+      hash: transactionHash,
+    });
+  } catch (error) {
+    if (!(error instanceof TransactionReceiptNotFoundError)) {
+      throw error;
     }
   }
 
-  const after = await checkBlockAnchor(publicClient, head);
-  if (after !== null) {
-    return after;
+  if (receipt === undefined) {
+    return {
+      status: 'receipt-unavailable',
+    };
   }
 
-  return result;
+  if (
+    !isFixedHex(receipt.transactionHash, 32) ||
+    receipt.transactionHash.toLowerCase() !==
+      transactionHash.toLowerCase() ||
+    typeof receipt.blockNumber !== 'bigint' ||
+    receipt.blockNumber !== saved.inclusion.blockNumber ||
+    !isFixedHex(receipt.blockHash, 32) ||
+    receipt.blockHash.toLowerCase() !==
+      saved.inclusion.blockHash.toLowerCase() ||
+    (receipt.status !== 'success' && receipt.status !== 'reverted') ||
+    (
+      saved.outcome !== 'replaced' &&
+      receipt.status !== saved.outcome
+    )
+  ) {
+    throw new TypeError('Inconsistent inclusion receipt response.');
+  }
+
+  return {
+    status: 'verified-unchanged',
+    observedAt: head,
+  };
 }

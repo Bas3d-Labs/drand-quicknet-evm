@@ -448,7 +448,7 @@ describe('processQuicknetRequests', () => {
         status: 'deferred',
         round: 1_101n,
         reason: 'signer-unavailable',
-        blocker: 'journal-capacity-reached',
+        blocker: 'retention-capacity-reached',
       });
 
     const outcomes = await processQuicknetRequestsWithOutcomes({
@@ -473,14 +473,14 @@ describe('processQuicknetRequests', () => {
         firstRequestBlock: 2_101n,
         status: 'deferred',
         reason: 'signer-unavailable',
-        blocker: 'journal-capacity-reached',
+        blocker: 'retention-capacity-reached',
       },
       {
         round: 1_102n,
         firstRequestBlock: 2_102n,
         status: 'deferred',
         reason: 'signer-unavailable',
-        blocker: 'journal-capacity-reached',
+        blocker: 'retention-capacity-reached',
       },
     ]);
 
@@ -680,7 +680,7 @@ describe('processQuicknetRequests', () => {
         status: 'deferred',
         round: 200n,
         reason: 'signer-unavailable',
-        blocker: 'journal-capacity-reached',
+        blocker: 'retention-capacity-reached',
       });
 
       const outcomes = await processQuicknetRequestsWithOutcomes({
@@ -700,21 +700,21 @@ describe('processQuicknetRequests', () => {
           firstRequestBlock: 1_000n,
           status: 'deferred',
           reason: 'signer-unavailable',
-          blocker: 'journal-capacity-reached',
+          blocker: 'retention-capacity-reached',
         },
         {
           round: 201n,
           firstRequestBlock: 1_001n,
           status: 'deferred',
           reason: 'signer-unavailable',
-          blocker: 'journal-capacity-reached',
+          blocker: 'retention-capacity-reached',
         },
         {
           round: 202n,
           firstRequestBlock: 1_002n,
           status: 'deferred',
           reason: 'signer-unavailable',
-          blocker: 'journal-capacity-reached',
+          blocker: 'retention-capacity-reached',
         },
       ]);
       expect(onIncomplete.mock.calls).toEqual(

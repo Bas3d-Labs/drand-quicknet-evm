@@ -162,90 +162,104 @@ export class SignerRecoveryCycle {
           this.coordinator.durableRecoveryRevision &&
         !durableSchedule.isDue(recovery.anchor);
 
+      const owner = this.coordinator.beginInspection();
+
       let inspection: SignerRecoveryCycleResult['inspection'];
+      let inclusions: SignerInclusionInspection | null = null;
 
-      if (canReuseDurablePass) {
-        inspection = {
-          status: 'skipped',
-          reason: 'unchanged-durable-state',
-        };
-      } else {
-        // Once a new pass starts, an earlier completion must not survive
-        // an incomplete result or a failed operation.
-        this.invalidateDurableRecovery();
+      try {
+        if (canReuseDurablePass) {
+          inspection = {
+            status: 'skipped',
+            reason: 'unchanged-durable-state',
+          };
+        } else {
+          // Once a new pass starts, an earlier completion must not survive
+          // an incomplete result or a failed operation.
+          this.invalidateDurableRecovery();
 
-        // Bound work by the queue captured after any persistence retry.
-        // A missing or empty journal still needs one recovery pass.
-        const maxRecoveryPasses = Math.max(
-          1,
-          this.coordinator.attempts.length,
-        );
+          // Bound work by the queue captured after any persistence retry.
+          // A missing or empty journal still needs one recovery pass.
+          const maxRecoveryPasses = Math.max(
+            1,
+            this.coordinator.attempts.length,
+          );
 
-        let result = await this.coordinator.recover(
-          recovery,
-          cycle,
-        );
-
-        for (
-          let pass = 1;
-          pass < maxRecoveryPasses &&
-          result.status === 'resolution-available' &&
-          this.coordinator.attempts.length > 0;
-          pass += 1
-        ) {
-          signal?.throwIfAborted();
-
-          result = await this.coordinator.recover(
+          let result = await owner.recover(
             recovery,
             cycle,
           );
+
+          for (
+            let pass = 1;
+            pass < maxRecoveryPasses &&
+            result.status === 'resolution-available' &&
+            this.coordinator.attempts.length > 0;
+            pass += 1
+          ) {
+            signal?.throwIfAborted();
+
+            result = await owner.recover(
+              recovery,
+              cycle,
+            );
+          }
+
+          inspection = result;
+
+          const completedStatus = this.coordinator.status;
+
+          if (
+            durableSchedule !== undefined &&
+            isDurableRecoveryComplete(result, {
+              recoveryComplete: completedStatus.recoveryComplete,
+              persistenceState: completedStatus.persistenceState,
+              attempts: this.coordinator.attempts,
+            })
+          ) {
+            durableSchedule.recordCompleted(recovery.anchor);
+
+            this.completedDurableRevision =
+              this.coordinator.durableRecoveryRevision;
+          }
         }
 
-        inspection = result;
-
-        const completedStatus = this.coordinator.status;
+        signal?.throwIfAborted();
 
         if (
-          durableSchedule !== undefined &&
-          isDurableRecoveryComplete(result, {
-            recoveryComplete: completedStatus.recoveryComplete,
-            persistenceState: completedStatus.persistenceState,
-            attempts: this.coordinator.attempts,
-          })
+          this.coordinator.status.recoveryComplete &&
+          (
+            head !== undefined ||
+            this.coordinator.attempts.length === 0
+          )
         ) {
-          durableSchedule.recordCompleted(recovery.anchor);
-
-          this.completedDurableRevision =
-            this.coordinator.durableRecoveryRevision;
+          inclusions = await owner.checkInclusions({
+            publicClient: recovery.publicClient,
+            head: head ?? recovery.anchor,
+            ...(head === undefined
+              ? {}
+              : { maxReplacementBlockRange: recovery.maxBlockRange }),
+          }, cycle);
         }
-      }
 
-      signal?.throwIfAborted();
+        if (
+          inclusions === null ||
+          inclusions.status !== 'inspected' ||
+          !inclusions.inclusionChecksComplete
+        ) {
+          this.invalidateDurableRecovery();
+        }
 
-      let inclusions: SignerInclusionInspection | null = null;
+        // Cancellation before releasing inspection ownership abandons
+        // the pass and clears any action authorization it produced.
+        signal?.throwIfAborted();
 
-      if (
-        this.coordinator.status.recoveryComplete &&
-        (
-          head !== undefined ||
-          this.coordinator.attempts.length === 0
-        )
-      ) {
-        inclusions = await this.coordinator.checkInclusions({
-          publicClient: recovery.publicClient,
-          head: head ?? recovery.anchor,
-          ...(head === undefined
-            ? {}
-            : { maxReplacementBlockRange: recovery.maxBlockRange }),
-        }, cycle);
-      }
-
-      if (
-        inclusions === null ||
-        inclusions.status !== 'inspected' ||
-        !inclusions.inclusionChecksComplete
-      ) {
-        this.invalidateDurableRecovery();
+        owner.finish();
+      } catch (error) {
+        // Abandonment preserves acknowledged commits and pending writes.
+        // The next run retries failed persistence before beginning again.
+        await owner.abandon();
+        throw error;
       }
 
       // Inclusion inspection may change which attempt needs a retry.

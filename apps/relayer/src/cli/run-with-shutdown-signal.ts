@@ -1,5 +1,9 @@
 import process from 'node:process';
 
+import {
+  isOperationCancelled
+} from '../execution/is-operation-cancelled.js';
+
 import type {
   CliOutcome,
 } from './cli-types.js';
@@ -20,10 +24,7 @@ export async function runWithShutdownSignal(
   try {
     return await run(controller.signal);
   } catch (error) {
-    if (
-      !controller.signal.aborted ||
-      error !== controller.signal.reason
-    ) {
+    if (!isOperationCancelled(error, controller.signal)) {
       throw error;
     }
 

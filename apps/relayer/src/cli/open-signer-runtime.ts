@@ -19,15 +19,6 @@ import {
   assertSignerBootstrapState,
 } from '../state/assert-signer-bootstrap-state.js';
 
-import {
-  BroadcastRetrySchedule,
-  type BroadcastRetryScheduleOptions,
-} from '../state/broadcast-retry-schedule.js';
-
-import {
-  DurableRecoverySchedule,
-} from '../state/durable-recovery-schedule.js';
-
 import type {
   PersistenceBoundaryHook,
 } from '../state/durable-replace.js';
@@ -51,12 +42,10 @@ import {
 } from '../state/service-lock.js';
 
 import {
-  SignerCoordinator,
-} from '../state/signer-coordinator.js';
-
-import {
-  SignerRecoveryCycle,
-} from '../state/signer-recovery-cycle.js';
+  TransactionManager,
+  validateTransactionRetryOptions,
+  type TransactionManagerOptions,
+} from '../state/transaction-manager.js';
 
 import type {
   JournalIdentity,
@@ -64,23 +53,27 @@ import type {
 
 const DURABLE_RECOVERY_REFRESH_INTERVAL_MS = 60_000;
 
-export interface OpenSignerRuntimeOptions {
+export interface OpenSignerRuntimeOptions
+  extends Pick<
+    TransactionManagerOptions,
+    | 'publicClient'
+    | 'walletClient'
+    | 'account'
+    | 'readChainHeads'
+    | 'maxBlockRange'
+    | 'onRecoveryCompleted'
+  > {
   readonly identity: JournalIdentity;
   readonly log: ScopedRelayerLog;
   readonly createErrorSummary: ErrorSummaryFactory;
-  readonly retry: BroadcastRetryScheduleOptions;
+  readonly retry: TransactionManagerOptions['retry'];
   readonly onPersistenceBoundary?: PersistenceBoundaryHook;
   readonly checkpointFile?: string | undefined;
   readonly env?: NodeJS.ProcessEnv;
 }
 
-export interface SignerRuntime {
-  readonly coordinator: SignerCoordinator;
-  readonly recovery: SignerRecoveryCycle;
-}
-
 /**
- * Opens the command's signer journal and creates its recovery cycle.
+ * Opens the command's signer journal and privately owned transaction manager.
  * A missing journal may initialize during recovery only after passing
  * the command's prior-state check.
  *
@@ -89,19 +82,19 @@ export interface SignerRuntime {
  */
 export async function openSignerRuntime(
   options: OpenSignerRuntimeOptions,
-): Promise<SignerRuntime> {
+): Promise<TransactionManager> {
   const bounds = DEFAULT_JOURNAL_BOUNDS;
 
   validateJournalBounds(bounds);
 
   const identity = captureJournalIdentity(options.identity);
 
+  validateTransactionRetryOptions(options.retry);
+
   const {
     log,
     createErrorSummary,
   } = options;
-
-  const schedule = new BroadcastRetrySchedule(options.retry);
 
   const env = options.env ?? process.env;
 
@@ -145,29 +138,24 @@ export async function openSignerRuntime(
       : { onPersistenceBoundary: options.onPersistenceBoundary }),
   });
 
-  const coordinator = await SignerCoordinator.create({
+  return TransactionManager.create({
     identity,
     store,
     maxRetainedAttempts: bounds.maxRetainedAttempts,
     log,
     createErrorSummary,
-  });
-
-  const unresolved = coordinator.attempts.find(
-    (attempt) => attempt.phase !== 'included',
-  );
-
-  schedule.track(unresolved ?? null);
-
-  return Object.freeze({
-    coordinator,
-    recovery: new SignerRecoveryCycle({
-      coordinator,
-      schedule,
-      durableSchedule: new DurableRecoverySchedule({
-        refreshIntervalMs: DURABLE_RECOVERY_REFRESH_INTERVAL_MS,
-        now: () => performance.now(),
-      }),
-    }),
+    publicClient: options.publicClient,
+    walletClient: options.walletClient,
+    account: options.account,
+    readChainHeads: options.readChainHeads,
+    maxBlockRange: options.maxBlockRange,
+    retry: options.retry,
+    durableRecovery: {
+      refreshIntervalMs: DURABLE_RECOVERY_REFRESH_INTERVAL_MS,
+      now: () => performance.now(),
+    },
+    ...(options.onRecoveryCompleted === undefined
+      ? {}
+      : { onRecoveryCompleted: options.onRecoveryCompleted }),
   });
 }

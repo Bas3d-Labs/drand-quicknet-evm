@@ -738,7 +738,7 @@ Package managers and supervisors may additionally report wrapper errors.
 | `3` | One-shot import remains pending. A journaled transaction attempt remains unresolved. |
 | `4` | Import deferred because the signer is unavailable or the work is already retained, or nonce-sync inspection deferred. |
 | `5` | One-shot command handled SIGINT/SIGTERM before producing a result. Retained journal state may still require recovery. |
-| `6` | Signer startup refused because the journal exceeds supported runtime bounds. |
+| `6` | A recognized signer-journal bounds failure occurred, including startup refusal for an over-bound journal. |
 | `9` | Node startup failure observed when a configured env file is missing. |
 | `75` | Another process holds the service lock; this may have no diagnostic output. |
 
@@ -765,18 +765,20 @@ Incomplete work uses separate statuses:
   `already-retained`, output includes the existing attempt ID and
   work identity (`workId`).
 - `5` (`interrupted`): the command handled cancellation before producing
-  an import result. No result is printed; retained journal state may
-  still require recovery.
+  an import result. No import result is printed. If submission recorded
+  an attempt before cancellation, separate submission-recording output
+  identifies the attempt and work requiring recovery.
 
 None of these outcomes proves that the beacon is absent on-chain.
 Retained transaction attempts remain available for journal recovery.
 The one-shot command exits rather than continuing recovery in the
 background.
 
-If rendering or writing a command result fails, status `2` takes precedence 
-over the result’s normal exit status. An import or nonce repair may already 
-have succeeded. Service ownership is released when the process exits. The 
-journal is retained.
+If rendering or writing command output fails, status `2` takes precedence
+over the operation's normal result, submission failure, or handled
+cancellation. An import or nonce repair may already have succeeded, or a
+transaction attempt may remain retained. Service ownership is released
+when the process exits. Output failure does not undo journal persistence.
 
 Other startup failures can retain the exit status of the failing tool.
 Do not interpret every nonzero status as contention.
@@ -791,16 +793,51 @@ fixed diagnostic reason:
 | `lock-file` | Lock-file lookup, type, or link-count validation. |
 | `descriptor` | No matching inherited exclusive flock was verified. |
 
+### Submission failures and recording state
+
+For `import` and `import-when-available`, a submission error may carry
+recording information for the attempt created by that submission.
+When present, the CLI prints the attempt ID and work identity before
+reporting the failure or completing handled cancellation.
+
+The recording states are:
+
+- **Retained:** the attempt was saved successfully and remains available
+  for recovery. This does not establish whether it was broadcast or
+  included. A later failure to persist the broadcast marker does not
+  change an already-retained attempt into uncertain preparation.
+- **Persistence uncertain:** preparation produced an attempt, but its
+  journal write was not acknowledged as complete. The active runtime
+  retains the pending write for retry. After restart, recovery uses the
+  committed journal; an unacknowledged write may or may not have replaced
+  the previous journal.
+- **None:** this submission recorded no attempt. No submission-recording
+  output is printed. This says nothing about earlier retained attempts
+  or transactions handled during recovery.
+
+Recording information describes persistence, not transaction success or
+permission to broadcast. A failed or interrupted command does not prove
+that no transaction was signed or broadcast.
+
+Preserve the signer journal and inspect its state before changing signer
+configuration or attempting manual recovery. Do not delete the journal
+to clear an error.
+
+One-shot commands exit after reporting the outcome; they do not keep
+retrying pending journal writes or transaction recovery in the background.
+
 ### Journal runtime bounds
 
 The signer runtime supports at most:
 
-- One retained transaction attempt.
+- Sixteen retained transaction attempts, including unresolved attempts
+  and inclusions awaiting durable resolution.
 - Sixteen signed transaction candidates per attempt, including the
   original transaction.
 
-These are supported runtime limits, not environment settings. The
-candidate limit does not itself enable automatic fee replacement.
+These are independent supported runtime limits, not environment settings.
+The candidate limit does not itself enable automatic fee replacement.
+The journal's separate 1 MiB byte limit remains enforced.
 
 Signer startup refuses a journal that exceeds either limit, reports
 `journal-bounds-exceeded`, and exits with status `6`. It does not truncate
@@ -818,8 +855,9 @@ already broadcast.
 `sync-nonce` is not a way to discard retained attempts. It refuses repair
 while any attempt remains retained.
 
-Having one valid retained attempt is normal during transaction recovery.
-It is distinct from exceeding the journal bounds.
+Retained attempts are normal during transaction recovery and while
+inclusions await durable resolution. Their presence alone does not mean
+the journal exceeds its bounds.
 
 ## Network sources
 
@@ -880,6 +918,16 @@ network security model and normative infrastructure policy. See the root
 deployment manifests, and operator configuration.
 
 ## Exact-round processing
+
+Before beginning fresh import work for a scanned request, the daemon's
+round importer checks whether the exact work identity is already retained.
+If so, it returns `already-retained` with the existing attempt ID and work
+identity, without repeating deployment verification, beacon retrieval,
+simulation, or submission for that request.
+
+The one-shot CLI commands perform their import checks before reaching
+transaction admission. The transaction manager checks retained work
+before preparing fees or signing a new attempt.
 
 `import`, `import-when-available`, and `daemon` use the same submission path 
 for an exact round `R`:
@@ -994,9 +1042,24 @@ reconciliation and retry-schedule eligibility. Retries send recorded
 transaction bytes; an uncertain response does not allocate a new nonce
 or discard the attempt.
 
-The command runtime currently retains at most one attempt. Included
-attempts remain journaled until durable resolution, so observing inclusion
-alone does not free journal capacity.
+The command runtime retains at most sixteen attempts. Every allocated
+attempt occupies a slot until durable resolution, including attempts
+whose inclusion has been verified above the durable anchor.
+
+Fresh inclusion validation can permit another attempt while earlier
+inclusions remain retained, provided capacity is available and all other
+signer gates pass.
+
+Admission never creates a second unresolved attempt: any unresolved
+retained attempt blocks new admission. A reorg can still make several
+retained inclusions unresolved at once; recovery handles that population
+in nonce order. Admission stays closed until no unresolved attempts remain,
+fresh inclusion validation completes, and retention capacity is available.
+
+`retention-capacity-reached` means all sixteen retention slots are
+occupied. Rechecking inclusions does not release slots; durable resolution
+does. Retention capacity is distinct from unresolved-attempt admission
+blocking.
 
 Preserve the signer journal alongside the checkpoint. Commands sharing a
 chain and signer must use the same state directory. Releasing the service
@@ -1046,9 +1109,11 @@ This schedule is separate from durable-head polling. Recovery reacts to
 the durable anchor supplied by the head reader, whose polling policy
 still determines when a new durable head is observed.
 
-The runtime retention limit remains one attempt. An included attempt
-continues occupying that slot until durable resolution. Scheduling
-reduces repeated recovery work; it does not remove that throughput limit.
+The runtime retention limit is sixteen attempts. Included attempts
+continue occupying slots until durable resolution. Scheduling reduces
+repeated durable recovery work; latest-head inclusion validation still
+checks retained attempts, so its RPC cost grows with the retained
+population.
 
 ### First-use signer initialization
 
@@ -1406,9 +1471,16 @@ the coordinator-reported `blockedSince`.
 A change in the primary blocker does not itself reset it. After restart,
 it may originate from a retained attempt's creation time.
 
-Retained attempts include their IDs, decimal nonces, phases, and every
-recorded candidate transaction hash. Signed transaction bytes are
-excluded.
+The snapshot summarizes the entire retained population: total, included,
+and unresolved counts, the nonce range, and detailed and omitted counts.
+
+It includes details for at most one attempt, prioritizing the oldest
+unresolved attempt, or the oldest included attempt when none are
+unresolved. That detail includes the attempt ID, work identity, decimal
+nonce, phase, and every recorded candidate transaction hash.
+
+Explicit journal status reports every retained attempt. Signed transaction
+bytes are excluded from both status sources.
 
 Cycle completion and retry observations carry separate timestamps.
 Publishing another snapshot does not refresh those timestamps.
@@ -1520,7 +1592,13 @@ If rendering or writing command output fails, the CLI attempts to emit
 That diagnostic preserves validated import outcome fields when available:
 completed results include randomness and, for imported results, the
 transaction hash. Pending results include the attempt ID, transaction
-hash, and reason. Deferred results include the reason and signer blocker.
+hash, and reason. Deferred results include the reason and either the
+signer blocker or the existing attempt ID and work identity.
+
+For submission-recording output, `output_failed` preserves the round,
+recording status, attempt ID, and work identity. It excludes signed
+transaction bytes. This reporting is best effort when stderr is also
+unavailable.
 
 An output failure does not change the underlying import outcome.
 
@@ -1709,6 +1787,10 @@ Coverage includes:
 - snapshot age classification and historical gate reporting
 - status reads preserving journals, checkpoints, and temporary files
 - status output validation and output-failure exit codes
+- submission recording states and preservation of original failures
+- retained-attempt reporting after cancellation during preparation
+- submission-recording output failure taking precedence over cancellation
+- wrapped journal-bounds diagnostics and exit status `6`
 
 ## Operational assumptions
 

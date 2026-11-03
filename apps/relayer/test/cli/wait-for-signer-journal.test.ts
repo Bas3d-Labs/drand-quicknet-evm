@@ -14,41 +14,59 @@ import type {
 } from '../../src/rounds/create-beacon-submitter.js';
 
 import type {
-  SignerRecoveryCycleResult,
-} from '../../src/state/signer-recovery-cycle.js';
+  TransactionManagerStatus,
+  TransactionReconciliationReport,
+} from '../../src/state/transaction-manager-types.js';
 
-const ANCHOR = {
-  blockNumber: 100n,
-  blockHash: `0x${'aa'.repeat(32)}` as const,
-};
+function managerStatus(
+  journalInitialized = false,
+): TransactionManagerStatus {
+  if (journalInitialized) {
+    return {
+      chainId: 4663,
+      journalInitialized: true,
+      busy: false,
+      open: true,
+      primaryReason: null,
+      blockers: [],
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      persistenceState: 'idle',
+      blockedSince: null,
+      attempts: [],
+    };
+  }
 
-const OBSERVATION = {
-  anchor: ANCHOR,
-  nonce: 4n,
-};
-
-function deferredResult(): SignerRecoveryCycleResult {
   return {
-    inspection: {
-      status: 'bootstrap-deferred',
-      reason: 'nonce-count-mismatch',
-      observation: OBSERVATION,
-      latestNonce: 4n,
-      pendingNonce: 5n,
-    },
-    inclusions: null,
+    chainId: 4663,
+    journalInitialized: false,
+    busy: false,
+    open: false,
+    primaryReason: 'recovery-incomplete',
+    blockers: ['recovery-incomplete'],
+    recoveryComplete: false,
+    inclusionChecksComplete: false,
+    persistenceState: 'idle',
+    blockedSince: null,
+    attempts: [],
+  };
+}
+
+function deferredResult(): TransactionReconciliationReport {
+  return {
+    state: managerStatus(),
+    recoveryStatus: 'bootstrap-deferred',
+    inclusionStatus: null,
     broadcast: null,
     retryDelayMs: null,
   };
 }
 
-function readyResult(): SignerRecoveryCycleResult {
+function readyResult(): TransactionReconciliationReport {
   return {
-    inspection: {
-      status: 'no-attempt',
-      observation: OBSERVATION,
-    },
-    inclusions: null,
+    state: managerStatus(true),
+    recoveryStatus: 'no-attempt',
+    inclusionStatus: 'inspected',
     broadcast: null,
     retryDelayMs: null,
   };
@@ -57,9 +75,9 @@ function readyResult(): SignerRecoveryCycleResult {
 function setup(initialized = false) {
   let journalInitialized = initialized;
 
-  const coordinator = {
-    get journalInitialized() {
-      return journalInitialized;
+  const manager = {
+    get status(): TransactionManagerStatus {
+      return managerStatus(journalInitialized);
     },
   };
 
@@ -83,7 +101,7 @@ function setup(initialized = false) {
       journalInitialized = true;
     },
     run: () => waitForSignerJournal({
-      coordinator,
+      manager,
       submitter: { recover },
       pollIntervalMs: 100,
       signal: controller.signal,
@@ -149,14 +167,9 @@ describe('waitForSignerJournal', () => {
     const t = setup();
 
     t.recover.mockResolvedValueOnce({
-      inspection: {
-        status: 'anchor-changed',
-        observedAnchor: {
-          blockNumber: 100n,
-          blockHash: `0x${'bb'.repeat(32)}`,
-        },
-      },
-      inclusions: null,
+      state: managerStatus(),
+      recoveryStatus: 'anchor-changed',
+      inclusionStatus: null,
       broadcast: null,
       retryDelayMs: null,
     });
@@ -246,7 +259,7 @@ describe('waitForSignerJournal', () => {
     const recover = vi.fn<BeaconSubmitter['recover']>();
 
     await expect(waitForSignerJournal({
-      coordinator: { journalInitialized: false },
+      manager: { status: managerStatus() },
       submitter: { recover },
       pollIntervalMs,
     })).rejects.toThrow('Invalid signer startup polling interval.');
@@ -262,7 +275,7 @@ describe('waitForSignerJournal', () => {
       .mockResolvedValue(deferredResult());
 
     const pending = waitForSignerJournal({
-      coordinator: { journalInitialized: false },
+      manager: { status: managerStatus() },
       submitter: { recover },
       pollIntervalMs: 60_000,
       signal: controller.signal,

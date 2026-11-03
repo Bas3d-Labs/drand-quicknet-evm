@@ -1152,18 +1152,22 @@ describe('runDaemonCycle', () => {
       controller.abort();
 
       return {
-        inspection: {
-          status: 'no-attempt',
-          observation: {
-            anchor: {
-              blockNumber: 1_200n,
-              blockHash: REGISTRY_RUNTIME_CODEHASH,
-            },
-            nonce: 0n,
-          },
+        state: {
+          chainId: CHAIN_ID,
+          journalInitialized: true,
+          busy: false,
+          open: true,
+          primaryReason: null,
+          blockers: [],
+          recoveryComplete: true,
+          inclusionChecksComplete: true,
+          persistenceState: 'idle',
+          blockedSince: null,
+          attempts: [],
         },
+        recoveryStatus: 'no-attempt',
+        inclusionStatus: 'inspected',
         broadcast: null,
-        inclusions: null,
         retryDelayMs: null,
       };
     });

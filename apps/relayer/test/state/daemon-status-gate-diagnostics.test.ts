@@ -76,6 +76,37 @@ describe('daemon status gate diagnostics', () => {
     expect(Object.isFrozen(result.lastObservedGate)).toBe(true);
   });
 
+  it('rejects the retired journal-capacity blocker in persisted status', () => {
+    const input = snapshot();
+
+    const current = {
+      ...input,
+      lastObservedGate: {
+        ...input.lastObservedGate,
+        open: false,
+        primaryReason: 'retention-capacity-reached',
+        blockers: ['retention-capacity-reached'],
+        blockedSince: '2026-10-12T11:59:00.000Z',
+      },
+    };
+
+    // Establish that the surrounding snapshot and current spelling
+    // are accepted before checking the retired spelling.
+    expect(
+      readDaemonStatusSnapshot(current, IDENTITY)
+        .lastObservedGate.blockers,
+    ).toEqual(['retention-capacity-reached']);
+
+    expect(() => readDaemonStatusSnapshot({
+      ...current,
+      lastObservedGate: {
+        ...current.lastObservedGate,
+        primaryReason: 'journal-capacity-reached',
+        blockers: ['journal-capacity-reached'],
+      },
+    }, IDENTITY)).toThrow('Invalid daemon status snapshot.');
+  });
+
   it.each([
     { recoveryComplete: false },
     { inclusionChecksComplete: false },

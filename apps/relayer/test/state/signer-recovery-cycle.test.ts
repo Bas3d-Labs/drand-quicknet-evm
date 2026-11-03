@@ -32,7 +32,12 @@ import {
 } from '../../src/state/durable-recovery-schedule.js';
 
 import {
+  MAX_RETAINED_ATTEMPTS,
+} from '../../src/state/journal-bounds.js';
+
+import {
   SignerCoordinator,
+  type SignerInspection,
 } from '../../src/state/signer-coordinator.js';
 
 import {
@@ -313,6 +318,49 @@ async function setupTwoAttempts() {
     ...t,
     first,
     second,
+  };
+}
+
+function observeInspectionCalls(coordinator: SignerCoordinator) {
+  const beginInspection = coordinator.beginInspection.bind(coordinator);
+
+  const recover = vi.fn(
+    (
+      inspection: SignerInspection,
+      ...args: Parameters<SignerInspection['recover']>
+    ) => inspection.recover(...args),
+  );
+
+  const checkInclusions = vi.fn(
+    (
+      inspection: SignerInspection,
+      ...args: Parameters<SignerInspection['checkInclusions']>
+    ) => inspection.checkInclusions(...args),
+  );
+
+  vi.spyOn(coordinator, 'beginInspection').mockImplementation(() => {
+    const inspection = beginInspection();
+
+    return Object.freeze({
+      openHead: (...args: Parameters<SignerInspection['openHead']>) =>
+        inspection.openHead(...args),
+
+      recover: (...args: Parameters<SignerInspection['recover']>) =>
+        recover(inspection, ...args),
+
+      checkInclusions: (
+        ...args: Parameters<SignerInspection['checkInclusions']>
+      ) => checkInclusions(inspection, ...args),
+
+      finish: () => inspection.finish(),
+
+      abandon: () => inspection.abandon(),
+    });
+  });
+
+  return {
+    recover,
+    checkInclusions,
   };
 }
 
@@ -1318,8 +1366,8 @@ describe('signer recovery cycle', () => {
       open: false,
       recoveryComplete: true,
       inclusionChecksComplete: true,
-      primaryReason: 'journal-capacity-reached',
-      blockers: ['journal-capacity-reached'],
+      primaryReason: 'retention-capacity-reached',
+      blockers: ['retention-capacity-reached'],
     });
 
     expect(t.coordinator.attempts).toHaveLength(1);
@@ -1332,8 +1380,8 @@ describe('signer recovery cycle', () => {
     ]);
 
     expect(initialRecords[0]).toMatchObject({
-      reason: 'journal-capacity-reached',
-      blockers: ['journal-capacity-reached'],
+      reason: 'retention-capacity-reached',
+      blockers: ['retention-capacity-reached'],
       blockedSince: expect.any(String),
     });
 
@@ -1377,7 +1425,7 @@ describe('signer recovery cycle', () => {
       operation: { name: 'reconcile-attempt' },
       cycle: 41,
       blockedSince,
-      cleared: ['journal-capacity-reached'],
+      cleared: ['retention-capacity-reached'],
     });
 
     expect(t.request).not.toHaveBeenCalled();
@@ -1519,7 +1567,7 @@ describe('signer recovery cycle', () => {
         .toContain('unresolved-attempt');
 
       expect(t.coordinator.status.blockers)
-        .not.toContain('journal-capacity-reached');
+        .not.toContain('retention-capacity-reached');
 
       expect(t.coordinator.attempts).toHaveLength(2);
 
@@ -2045,8 +2093,8 @@ describe('signer recovery cycle', () => {
       }),
     });
 
-    const recover = vi.spyOn(t.coordinator, 'recover');
-    const checkInclusions = vi.spyOn(t.coordinator, 'checkInclusions');
+    const { recover, checkInclusions } =
+      observeInspectionCalls(t.coordinator);
 
     const options = {
       ...t.recovery,
@@ -2098,7 +2146,7 @@ describe('signer recovery cycle', () => {
       }),
     });
 
-    const recover = vi.spyOn(t.coordinator, 'recover');
+    const { recover } = observeInspectionCalls(t.coordinator);
 
     await cycle.run({
       ...t.recovery,
@@ -2133,7 +2181,7 @@ describe('signer recovery cycle', () => {
       }),
     });
 
-    const recover = vi.spyOn(t.coordinator, 'recover');
+    const { recover } = observeInspectionCalls(t.coordinator);
     const options = {
       ...t.recovery,
       head: ANCHOR,
@@ -2198,8 +2246,8 @@ describe('signer recovery cycle', () => {
       }),
     });
 
-    const recover = vi.spyOn(t.coordinator, 'recover');
-    const checkInclusions = vi.spyOn(t.coordinator, 'checkInclusions');
+    const { recover, checkInclusions } =
+      observeInspectionCalls(t.coordinator);
 
     const options = {
       ...t.recovery,
@@ -2256,7 +2304,7 @@ describe('signer recovery cycle', () => {
       }),
     });
 
-    const recover = vi.spyOn(t.coordinator, 'recover');
+    const { recover } = observeInspectionCalls(t.coordinator);
 
     for (let pass = 0; pass < 3; pass += 1) {
       expect(await cycle.run(t.recovery)).toMatchObject({
@@ -2320,8 +2368,8 @@ describe('signer recovery cycle', () => {
       }),
     });
 
-    const recover = vi.spyOn(t.coordinator, 'recover');
-    const checkInclusions = vi.spyOn(t.coordinator, 'checkInclusions');
+    const { recover, checkInclusions } =
+      observeInspectionCalls(t.coordinator);
 
     const options = {
       ...t.recovery,
@@ -2498,7 +2546,7 @@ describe('signer recovery cycle', () => {
         }),
       });
 
-      const recover = vi.spyOn(t.coordinator, 'recover');
+      const { recover } = observeInspectionCalls(t.coordinator);
 
       const options = {
         ...t.recovery,
@@ -2730,8 +2778,8 @@ describe('signer recovery cycle', () => {
       }),
     });
 
-    const recover = vi.spyOn(restarted, 'recover');
-    const checkInclusions = vi.spyOn(restarted, 'checkInclusions');
+    const { recover, checkInclusions } =
+      observeInspectionCalls(restarted);
 
     const first = await restartedCycle.run(options);
 
@@ -2830,8 +2878,8 @@ describe('signer recovery cycle', () => {
       }),
     });
 
-    const recover = vi.spyOn(t.coordinator, 'recover');
-    const checkInclusions = vi.spyOn(t.coordinator, 'checkInclusions');
+    const { recover, checkInclusions } =
+      observeInspectionCalls(t.coordinator);
 
     const options = {
       ...t.recovery,
@@ -2970,7 +3018,7 @@ describe('signer recovery cycle', () => {
       }),
     });
 
-    const recover = vi.spyOn(t.coordinator, 'recover');
+    const { recover } = observeInspectionCalls(t.coordinator);
 
     const options = {
       ...t.recovery,
@@ -3098,7 +3146,7 @@ describe('signer recovery cycle', () => {
       durableSchedule,
     });
 
-    const recover = vi.spyOn(t.coordinator, 'recover');
+    const { recover } = observeInspectionCalls(t.coordinator);
 
     const anchor = {
       blockNumber: 103n,
@@ -3203,5 +3251,953 @@ describe('signer recovery cycle', () => {
 
     expect(t.lines.map((line) => JSON.parse(line).event))
       .not.toContain('attempt_resolved');
+  });
+
+  it.each([false, true])(
+    'recovers all 16 reorged inclusions in nonce order; restart: %s',
+    async (restart) => {
+      expect(MAX_RETAINED_ATTEMPTS).toBe(16);
+
+      const t = await setup({
+        empty: true,
+        maxRetainedAttempts: MAX_RETAINED_ATTEMPTS,
+      });
+
+      const originalHead = {
+        blockNumber: 200n,
+        blockHash: HASH,
+      };
+
+      const forkHead = {
+        blockNumber: 300n,
+        blockHash: OTHER,
+      };
+
+      const receipts = new Map<Hash, {
+        transactionHash: Hash;
+        blockNumber: bigint;
+        blockHash: Hash;
+        status: 'success';
+      }>();
+
+      let headNonce = 4;
+      let forked = false;
+
+      t.getBlock.mockImplementation(async ({ blockNumber } = {}) => {
+        if (blockNumber === undefined) {
+          throw new Error('Expected a numbered block lookup.');
+        }
+
+        let blockHash: Hash = HASH;
+
+        if (forked && blockNumber > ANCHOR.blockNumber) {
+          blockHash = OTHER;
+        }
+
+        return {
+          number: blockNumber,
+          hash: blockHash,
+        } as never;
+      });
+
+      t.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+        const receipt = receipts.get(hash);
+
+        if (receipt === undefined) {
+          throw new TransactionReceiptNotFoundError({ hash });
+        }
+
+        return receipt as never;
+      });
+
+      t.getTransactionCount.mockImplementation(
+        async ({ blockNumber }) => {
+          if (blockNumber === ANCHOR.blockNumber) {
+            return 4;
+          }
+
+          if (
+            blockNumber === originalHead.blockNumber ||
+            blockNumber === forkHead.blockNumber
+          ) {
+            return headNonce;
+          }
+
+          throw new Error('Unexpected nonce observation block.');
+        },
+      );
+
+      // Build the population through actual preparation, broadcast, and
+      // inclusion checking. The durable anchor never advances.
+      for (
+        let index = 0;
+        index < MAX_RETAINED_ATTEMPTS;
+        index += 1
+      ) {
+        expect(t.coordinator.status.open).toBe(true);
+
+        const prepared = await t.coordinator.prepareAttempt({
+          workId: `full-reorg:${index}`,
+          account: {
+            ...ACCOUNT,
+            signTransaction: t.signTransaction,
+          },
+          transaction: {
+            type: 'eip1559',
+            to: ACCOUNT.address,
+            data: '0x1234',
+            value: 0n,
+            gas: 100_000n,
+            maxFeePerGas: 2n,
+            maxPriorityFeePerGas: 1n,
+          },
+        });
+
+        if (prepared.status !== 'prepared') {
+          throw new Error('Expected a prepared attempt.');
+        }
+
+        expect(prepared.nonce).toBe(4n + BigInt(index));
+
+        t.request.mockResolvedValueOnce(prepared.transactionHash);
+
+        expect(await t.coordinator.broadcastAttempt({
+          publicClient: t.recovery.publicClient,
+          attemptId: prepared.attemptId,
+        })).toMatchObject({
+          status: 'acknowledged',
+          nonce: prepared.nonce,
+          transactionHash: prepared.transactionHash,
+        });
+
+        receipts.set(prepared.transactionHash, {
+          transactionHash: prepared.transactionHash,
+          blockNumber: 101n + BigInt(index),
+          blockHash: HASH,
+          status: 'success',
+        });
+
+        headNonce += 1;
+
+        // Broadcasting invalidates durable recovery and inclusion checking.
+        // Complete both passes before admitting the next attempt.
+        expect(await t.cycle.run({
+          ...t.recovery,
+          head: originalHead,
+        })).toMatchObject({
+          inclusions: {
+            status: 'inspected',
+            inclusionChecksComplete: true,
+          },
+          broadcast: null,
+          retryDelayMs: null,
+        });
+
+        expect(t.coordinator.status).toMatchObject({
+          recoveryComplete: true,
+          inclusionChecksComplete: true,
+          open: index + 1 < MAX_RETAINED_ATTEMPTS,
+        });
+      }
+
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        inclusionChecksComplete: true,
+        primaryReason: 'retention-capacity-reached',
+        blockers: ['retention-capacity-reached'],
+      });
+
+      expect(t.signTransaction).toHaveBeenCalledTimes(16);
+      expect(t.request).toHaveBeenCalledTimes(16);
+
+      const stored = t.visible();
+
+      if (stored.kind !== 'present') {
+        throw new Error('Expected the retained journal.');
+      }
+
+      const beforeReorg = structuredClone(stored.snapshot);
+      const retained = beforeReorg.attempts;
+
+      expect(retained).toHaveLength(16);
+      expect(retained.every(
+        (attempt) => attempt.phase === 'included',
+      )).toBe(true);
+
+      expect(beforeReorg).toMatchObject({
+        nextNonce: 20n,
+        durableNextNonce: 4n,
+      });
+
+      // Contradict every inclusion above the unchanged durable anchor.
+      forked = true;
+      receipts.clear();
+      headNonce = 4;
+
+      t.request.mockClear();
+      t.lines.length = 0;
+
+      expect(await t.cycle.run({
+        ...t.recovery,
+        head: forkHead,
+      })).toMatchObject({
+        inclusions: {
+          status: 'inspected',
+          inclusionChecksComplete: false,
+          attempts: retained.map((attempt) => ({
+            attemptId: attempt.attemptId,
+            phase: 'broadcast-may-have-occurred',
+            inclusion: null,
+          })),
+        },
+        broadcast: null,
+        retryDelayMs: 100,
+      });
+
+      expect(t.request).not.toHaveBeenCalled();
+
+      const invalidated = t.visible();
+
+      if (invalidated.kind !== 'present') {
+        throw new Error('Expected the invalidated journal.');
+      }
+
+      expect(invalidated.snapshot).toMatchObject({
+        nextNonce: 20n,
+        durableNextNonce: 4n,
+        attempts: retained.map((attempt) => ({
+          attemptId: attempt.attemptId,
+          nonce: attempt.nonce,
+          phase: 'broadcast-may-have-occurred',
+          inclusion: null,
+          signedTransactions: attempt.signedTransactions,
+        })),
+      });
+
+      expect(invalidated.snapshot.attempts).toHaveLength(16);
+
+      let coordinator = t.coordinator;
+      let cycle = t.cycle;
+      let now = 0;
+
+      if (restart) {
+        coordinator = await t.create();
+
+        // A restarted process has fresh retry timing, even though its
+        // journal retains exactly the same signed transactions.
+        cycle = new SignerRecoveryCycle({
+          coordinator,
+          schedule: new BroadcastRetrySchedule({
+            initialDelayMs: 100,
+            maxDelayMs: 400,
+            now: () => now,
+          }),
+        });
+
+        expect(coordinator.status).toMatchObject({
+          open: false,
+          recoveryComplete: false,
+          inclusionChecksComplete: false,
+        });
+      }
+
+      expect(coordinator.attempts.map(
+        (attempt) => attempt.attemptId,
+      )).toEqual(retained.map(
+        (attempt) => attempt.attemptId,
+      ));
+
+      expect(coordinator.attempts.every(
+        (attempt) => attempt.phase === 'broadcast-may-have-occurred',
+      )).toBe(true);
+
+      const savesBeforeAdmission = t.save.mock.calls.length;
+
+      await expect(coordinator.prepareAttempt({
+        workId: 'full-reorg:new-work',
+        account: {
+          ...ACCOUNT,
+          signTransaction: t.signTransaction,
+        },
+        transaction: {
+          type: 'eip1559',
+          to: ACCOUNT.address,
+          data: '0x5678',
+          value: 0n,
+          gas: 100_000n,
+          maxFeePerGas: 2n,
+          maxPriorityFeePerGas: 1n,
+        },
+      })).rejects.toThrow(
+        'The signer gate must be open before preparing an attempt.',
+      );
+
+      expect(t.save).toHaveBeenCalledTimes(savesBeforeAdmission);
+      expect(t.signTransaction).toHaveBeenCalledTimes(16);
+
+      const run = () => cycle.run({
+        ...t.recovery,
+        head: forkHead,
+      });
+
+      expect(await run()).toMatchObject({
+        broadcast: null,
+        retryDelayMs: 100,
+      });
+
+      expect(t.request).not.toHaveBeenCalled();
+
+      for (const [index, attempt] of retained.entries()) {
+        const signed = attempt.signedTransactions[0];
+
+        // Only the previously retried prefix is included. The next
+        // retained nonce must match the fresh head nonce observation.
+        expect(BigInt(headNonce)).toBe(attempt.nonce);
+        expect(coordinator.status.open).toBe(false);
+        expect(coordinator.attempts.map(
+          (current) => current.phase,
+        )).toEqual([
+          ...Array.from({ length: index }, () => 'included'),
+          ...Array.from(
+            { length: retained.length - index },
+            () => 'broadcast-may-have-occurred',
+          ),
+        ]);
+
+        t.getTransactionCount.mockClear();
+
+        now += 100;
+        t.at(now);
+
+        t.request.mockResolvedValueOnce(signed.transactionHash);
+
+        expect(await run()).toMatchObject({
+          broadcast: {
+            status: 'acknowledged',
+            attemptId: attempt.attemptId,
+            transactionHash: signed.transactionHash,
+            nonce: attempt.nonce,
+          },
+        });
+
+        expect(t.request).toHaveBeenCalledTimes(index + 1);
+        expect(t.request).toHaveBeenNthCalledWith(index + 1, {
+          method: 'eth_sendRawTransaction',
+          params: [signed.signedTransaction],
+        }, {
+          retryCount: 0,
+        });
+
+        // Every retry run must obtain a fresh head nonce before sending.
+        const headReadIndex =
+          t.getTransactionCount.mock.calls.findIndex(
+            ([options]) => options.blockNumber === forkHead.blockNumber,
+          );
+
+        expect(headReadIndex).toBeGreaterThanOrEqual(0);
+
+        expect(
+          t.getTransactionCount.mock.invocationCallOrder[headReadIndex]!,
+        ).toBeLessThan(
+          t.request.mock.invocationCallOrder[index]!,
+        );
+
+        expect(t.signTransaction).toHaveBeenCalledTimes(16);
+
+        receipts.set(signed.transactionHash, {
+          transactionHash: signed.transactionHash,
+          blockNumber: 201n + BigInt(index),
+          blockHash: OTHER,
+          status: 'success',
+        });
+        headNonce += 1;
+
+        // Revalidate this inclusion before selecting the next nonce.
+        // Switching attempts starts a fresh initial retry delay.
+        const revalidated = await run();
+
+        expect(revalidated.broadcast).toBeNull();
+        expect(t.request).toHaveBeenCalledTimes(index + 1);
+        expect(coordinator.attempts[index]?.phase).toBe('included');
+
+        if (index + 1 < retained.length) {
+          expect(revalidated.retryDelayMs).toBe(100);
+          expect(coordinator.status.blockers)
+            .toContain('unresolved-attempt');
+        } else {
+          expect(revalidated.retryDelayMs).toBeNull();
+        }
+
+        // Even the fully re-included population still fills retention.
+        expect(coordinator.status.open).toBe(false);
+      }
+
+      const recovered = t.visible();
+
+      if (recovered.kind !== 'present') {
+        throw new Error('Expected the recovered journal.');
+      }
+
+      expect(recovered.snapshot).toMatchObject({
+        nextNonce: 20n,
+        durableNextNonce: 4n,
+      });
+
+      expect(recovered.snapshot.attempts).toHaveLength(16);
+      expect(recovered.snapshot.attempts.every(
+        (attempt) => attempt.phase === 'included',
+      )).toBe(true);
+
+      expect(recovered.snapshot.attempts.map(
+        (attempt) => attempt.signedTransactions,
+      )).toEqual(retained.map(
+        (attempt) => attempt.signedTransactions,
+      ));
+
+      expect(coordinator.status).toMatchObject({
+        open: false,
+        inclusionChecksComplete: true,
+        blockers: ['retention-capacity-reached'],
+      });
+
+      expect(t.lines.map((line) => JSON.parse(line).event))
+        .not.toContain('attempt_resolved');
+
+      t.lines.length = 0;
+
+      // Only advancing the durable anchor past all replacement-chain
+      // inclusions releases the retained population.
+      await cycle.run({
+        ...t.recovery,
+        anchor: forkHead,
+        head: forkHead,
+      });
+
+      expect(t.visible()).toMatchObject({
+        kind: 'present',
+        snapshot: {
+          nextNonce: 20n,
+          durableNextNonce: 20n,
+          attempts: [],
+        },
+      });
+
+      expect(coordinator.status).toMatchObject({
+        open: true,
+        blockers: [],
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+      });
+
+      const resolutions = t.lines
+        .map((line) => JSON.parse(line))
+        .filter((record) => record.event === 'attempt_resolved');
+
+      expect(resolutions.map(
+        (record) => record.attemptId,
+      )).toEqual(retained.map(
+        (attempt) => attempt.attemptId,
+      ));
+
+      expect(t.request).toHaveBeenCalledTimes(16);
+      expect(t.signTransaction).toHaveBeenCalledTimes(16);
+    },
+  );
+
+  it('uses 44 RPC calls in durable-then-latest order for 16 retained inclusions', async () => {
+    const t = await setup({
+      empty: true,
+      maxRetainedAttempts: 16,
+    });
+
+    const head = {
+      blockNumber: 130n,
+      blockHash: HASH,
+    };
+
+    const hashes: Hash[] = [];
+    let latestNonce = 4;
+
+    t.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+      expect(hashes).toContain(hash);
+
+      return {
+        transactionHash: hash,
+        blockNumber: 110n,
+        blockHash: HASH,
+        status: 'success',
+      } as never;
+    });
+
+    t.getTransactionCount.mockImplementation(async ({ blockNumber }) => {
+      if (blockNumber === ANCHOR.blockNumber) {
+        return 4;
+      }
+
+      expect(blockNumber).toBe(head.blockNumber);
+      return latestNonce;
+    });
+
+    // Build the population through normal admission and inclusion checking.
+    // Setup is excluded from the measured cycle.
+    for (let index = 0; index < 16; index += 1) {
+      const prepared = await t.coordinator.prepareAttempt({
+        workId: `cycle-budget:${index}`,
+        account: {
+          ...ACCOUNT,
+          signTransaction: t.signTransaction,
+        },
+        transaction: {
+          type: 'eip1559',
+          to: ACCOUNT.address,
+          data: '0x1234',
+          value: 0n,
+          gas: 100_000n,
+          maxFeePerGas: 2n,
+          maxPriorityFeePerGas: 1n,
+        },
+      });
+
+      if (prepared.status !== 'prepared') {
+        throw new Error('Expected a prepared budget-fixture attempt.');
+      }
+
+      hashes.push(prepared.transactionHash);
+      latestNonce += 1;
+
+      await t.cycle.run({
+        ...t.recovery,
+        head,
+      });
+    }
+
+    const before = t.visible();
+    const trace: string[] = [];
+
+    const save = t.save.getMockImplementation()!;
+
+    t.save.mockImplementation(async (snapshot) => {
+      trace.push('save:start');
+      await save(snapshot);
+      trace.push('save:ack');
+    });
+
+    t.getBlock.mockImplementation(async ({ blockNumber } = {}) => {
+      trace.push(`block:${blockNumber}`);
+
+      return {
+        number: blockNumber,
+        hash: HASH,
+      } as never;
+    });
+
+    const receipt = t.getTransactionReceipt.getMockImplementation()!;
+
+    t.getTransactionReceipt.mockImplementation(async (args) => {
+      trace.push(`receipt:${args.hash}`);
+      return receipt(args);
+    });
+
+    const nonce = t.getTransactionCount.getMockImplementation()!;
+
+    t.getTransactionCount.mockImplementation(async (args) => {
+      trace.push(`nonce:${args.blockNumber}`);
+      return nonce(args);
+    });
+
+    t.getBlock.mockClear();
+    t.getTransactionReceipt.mockClear();
+    t.getTransactionCount.mockClear();
+    t.save.mockClear();
+    t.signTransaction.mockClear();
+    t.request.mockClear();
+
+    const result = await t.cycle.run({
+      ...t.recovery,
+      head,
+    });
+
+    // Durable recovery: 4 receipt-reconciliation calls + 3 nonce calls.
+    // Latest inclusion validation: 37 calls.
+    // Head selection before run() and persistence are outside the RPC tally.
+    expect(trace).toEqual([
+      'block:100',
+      `receipt:${hashes[0]}`,
+      'block:110',
+      'block:100',
+
+      'block:100',
+      'nonce:100',
+      'block:100',
+
+      'save:start',
+      'save:ack',
+
+      'block:130',
+
+      ...hashes.flatMap((hash) => [
+        'block:110',
+        `receipt:${hash}`,
+      ]),
+
+      'block:130',
+      'nonce:130',
+      'block:130',
+
+      'block:130',
+
+      'save:start',
+      'save:ack',
+    ]);
+
+    expect(t.getBlock).toHaveBeenCalledTimes(25);
+    expect(t.getTransactionReceipt).toHaveBeenCalledTimes(17);
+    expect(t.getTransactionCount).toHaveBeenCalledTimes(2);
+
+    const rpcTrace = trace.filter(
+      (event) => !event.startsWith('save:'),
+    );
+
+    expect(rpcTrace).toHaveLength(44);
+    expect(t.save).toHaveBeenCalledTimes(2);
+    expect(t.request).not.toHaveBeenCalled();
+    expect(t.signTransaction).not.toHaveBeenCalled();
+
+    expect(result).toMatchObject({
+      inspection: {
+        status: 'unresolved',
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+      },
+      broadcast: null,
+      retryDelayMs: null,
+    });
+
+    // Setup already refreshed observedAt to this head, so the measured
+    // stable cycle leaves the committed snapshot unchanged.
+    expect(t.visible()).toEqual(before);
+    expect(t.coordinator.attempts).toHaveLength(16);
+  });
+
+  it.each(['admission', 'broadcast'] as const)(
+    'revokes prior %s authorization before the first durable RPC',
+    async (authorization) => {
+      const t = await setup({
+        empty: authorization === 'admission',
+      });
+
+      if (authorization === 'broadcast') {
+        await t.coordinator.recover(t.recovery);
+        expect(t.coordinator.canBroadcast).toBe(true);
+      } else {
+        expect(t.coordinator.status.open).toBe(true);
+      }
+
+      // Production has no caller-held admission token. A request captured
+      // before the cycle must still pass live ownership and gate checks.
+      const preparation = {
+        workId: 'captured-before-inspection',
+        account: {
+          ...ACCOUNT,
+          signTransaction: t.signTransaction,
+        },
+        transaction: {
+          type: 'eip1559' as const,
+          to: ACCOUNT.address,
+          data: '0x1234' as const,
+          value: 0n,
+          gas: 100_000n,
+          maxFeePerGas: 2n,
+          maxPriorityFeePerGas: 1n,
+        },
+      };
+
+      const before = t.visible();
+      const entered = deferred();
+      const release = deferred();
+
+      t.getBlock.mockImplementationOnce(async ({ blockNumber } = {}) => {
+        // Recovery has revoked authorization before entering its first RPC.
+        expect(blockNumber).toBe(ANCHOR.blockNumber);
+        expect(t.coordinator.canBroadcast).toBe(false);
+        expect(t.coordinator.status).toMatchObject({
+          open: false,
+          recoveryComplete: false,
+          inclusionChecksComplete: false,
+          persistenceState: 'idle',
+        });
+        expect(t.coordinator.status.blockers)
+          .toContain('recovery-incomplete');
+
+        entered.resolve();
+        await release.promise;
+
+        return {
+          number: blockNumber,
+          hash: HASH,
+        } as never;
+      });
+
+      t.getBlock.mockClear();
+      t.save.mockClear();
+      t.signTransaction.mockClear();
+      t.getTransactionCount.mockClear();
+      t.getTransactionReceipt.mockClear();
+      t.request.mockClear();
+
+      const running = t.cycle.run({
+        ...t.recovery,
+        head: ANCHOR,
+      });
+
+      try {
+        await Promise.race([
+          entered.promise,
+          running.then(() => {
+            throw new Error(
+              'Cycle completed without reaching the held RPC.',
+            );
+          }),
+        ]);
+
+        expect(t.getBlock).toHaveBeenCalledTimes(1);
+        expect(t.save).not.toHaveBeenCalled();
+        expect(t.getTransactionCount).not.toHaveBeenCalled();
+        expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+        expect(t.request).not.toHaveBeenCalled();
+
+        await expect(t.coordinator.recover(t.recovery))
+          .rejects.toThrow('Signer inspection is already in progress.');
+
+        await expect(t.coordinator.prepareAttempt(preparation))
+          .rejects.toThrow('Signer inspection is already in progress.');
+
+        expect(t.signTransaction).not.toHaveBeenCalled();
+        expect(t.save).not.toHaveBeenCalled();
+        expect(t.getBlock).toHaveBeenCalledTimes(1);
+        expect(t.visible()).toEqual(before);
+      } finally {
+        release.resolve();
+        await running;
+      }
+    },
+  );
+
+  it('holds ownership after acknowledged prefix removal and releases it after inclusion failure', async () => {
+    const t = await setupTwoAttempts();
+
+    const head = {
+      blockNumber: 110n,
+      blockHash: HASH,
+    };
+
+    // The first attempt is durable. The second is included above D.
+    t.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+      let blockNumber: bigint;
+
+      if (hash === t.first.transactionHashes[0]) {
+        blockNumber = 100n;
+      } else if (hash === t.second.transactionHash) {
+        blockNumber = 105n;
+      } else {
+        throw new Error('Unexpected transaction receipt lookup.');
+      }
+
+      return {
+        transactionHash: hash,
+        blockNumber,
+        blockHash: HASH,
+        status: 'success',
+      } as never;
+    });
+
+    t.getTransactionCount.mockImplementation(async ({ blockNumber }) => {
+      if (blockNumber === ANCHOR.blockNumber) {
+        return 5;
+      }
+
+      if (blockNumber === head.blockNumber) {
+        return 6;
+      }
+
+      throw new Error('Unexpected nonce observation block.');
+    });
+
+    const entered = deferred();
+    const release = deferred();
+    const failure = new Error('Inclusion opening read failed.');
+
+    const beginInspection =
+      t.coordinator.beginInspection.bind(t.coordinator);
+
+    vi.spyOn(t.coordinator, 'beginInspection')
+      .mockImplementationOnce(() => {
+        const inspection = beginInspection();
+
+        return Object.freeze({
+          ...inspection,
+
+          checkInclusions: async (
+            ...args: Parameters<SignerInspection['checkInclusions']>
+          ) => {
+            // Durable operations have settled. Do not start the next
+            // owned operation until the test checks this gap.
+            entered.resolve();
+            await release.promise;
+
+            return inspection.checkInclusions(...args);
+          },
+        });
+      });
+
+    t.signTransaction.mockClear();
+    t.request.mockClear();
+
+    const options = {
+      ...t.recovery,
+      head,
+    };
+
+    const running = t.cycle.run(options);
+
+    // Attach a rejection handler immediately, while retaining the error
+    // as data so the held-boundary race can also detect early termination.
+    const outcome = running.then(
+      (result) => ({ kind: 'completed' as const, result }),
+      (error: unknown) => ({ kind: 'failed' as const, error }),
+    );
+
+    try {
+      await Promise.race([
+        entered.promise,
+        outcome.then(() => {
+          throw new Error(
+            'Cycle settled before reaching the inclusion boundary.',
+          );
+        }),
+      ]);
+
+      // Resolution and the following durable observation were acknowledged.
+      expect(t.save).toHaveBeenCalledTimes(2);
+      expect(t.save.mock.calls[0]![0]).toMatchObject({
+        nextNonce: 6n,
+        durableNextNonce: 5n,
+        attempts: [{ attemptId: t.second.attemptId }],
+      });
+
+      const committed = t.visible();
+
+      expect(committed).toMatchObject({
+        kind: 'present',
+        snapshot: {
+          nextNonce: 6n,
+          durableNextNonce: 5n,
+          attempts: [{ attemptId: t.second.attemptId }],
+        },
+      });
+
+      expect(t.coordinator.attempts).toHaveLength(1);
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: true,
+        inclusionChecksComplete: false,
+        persistenceState: 'idle',
+      });
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      const reads = t.getBlock.mock.calls.length;
+
+      // These failures must identify inspection ownership. A generic
+      // busy failure would not establish exclusion between operations.
+      await expect(t.coordinator.recover(t.recovery))
+        .rejects.toThrow('Signer inspection is already in progress.');
+
+      await expect(t.coordinator.prepareAttempt({
+        workId: 'prefix-gap:new-work',
+        account: {
+          ...ACCOUNT,
+          signTransaction: t.signTransaction,
+        },
+        transaction: {
+          type: 'eip1559',
+          to: ACCOUNT.address,
+          data: '0x5678',
+          value: 0n,
+          gas: 100_000n,
+          maxFeePerGas: 2n,
+          maxPriorityFeePerGas: 1n,
+        },
+      })).rejects.toThrow('Signer inspection is already in progress.');
+
+      expect(t.getBlock).toHaveBeenCalledTimes(reads);
+      expect(t.save).toHaveBeenCalledTimes(2);
+      expect(t.visible()).toEqual(committed);
+      expect(t.signTransaction).not.toHaveBeenCalled();
+      expect(t.request).not.toHaveBeenCalled();
+
+      // Fail the first real inclusion RPC after releasing the held gap.
+      t.getBlock.mockRejectedValueOnce(failure);
+    } finally {
+      release.resolve();
+      await outcome;
+    }
+
+    expect(await outcome).toEqual({
+      kind: 'failed',
+      error: failure,
+    });
+
+    expect(t.save).toHaveBeenCalledTimes(2);
+    expect(t.visible()).toMatchObject({
+      kind: 'present',
+      snapshot: {
+        nextNonce: 6n,
+        durableNextNonce: 5n,
+        attempts: [{ attemptId: t.second.attemptId }],
+      },
+    });
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      inclusionChecksComplete: false,
+      persistenceState: 'idle',
+    });
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.request).not.toHaveBeenCalled();
+
+    t.getTransactionReceipt.mockClear();
+
+    // The failed cycle released ownership. Fresh recovery sees only the
+    // retained suffix and never resurrects the acknowledged removal.
+    expect(await t.cycle.run(options)).toMatchObject({
+      inspection: {
+        status: 'unresolved',
+        receipt: { status: 'included-not-durable' },
+      },
+      inclusions: {
+        status: 'inspected',
+        inclusionChecksComplete: true,
+      },
+      broadcast: null,
+      retryDelayMs: null,
+    });
+
+    expect(t.getTransactionReceipt).toHaveBeenCalled();
+
+    for (const [request] of t.getTransactionReceipt.mock.calls) {
+      expect(request.hash).toBe(t.second.transactionHash);
+    }
+
+    expect(t.coordinator.attempts).toHaveLength(1);
+    expect(t.coordinator.attempts[0]).toMatchObject({
+      attemptId: t.second.attemptId,
+      phase: 'included',
+    });
+
+    expect(t.coordinator.status.open).toBe(true);
+    expect(t.signTransaction).not.toHaveBeenCalled();
+    expect(t.request).not.toHaveBeenCalled();
   });
 });

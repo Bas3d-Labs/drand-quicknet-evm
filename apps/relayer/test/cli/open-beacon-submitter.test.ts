@@ -97,11 +97,29 @@ const CONFIG: RelayerConfig = {
 type SignerRuntime = Awaited<ReturnType<typeof openSignerRuntime>>;
 
 function fixture() {
-  // These dependencies are only forwarded by this composition layer.
-  const runtime = {
-    coordinator: {} as SignerRuntime['coordinator'],
-    recovery: {} as SignerRuntime['recovery'],
+  const state: SignerRuntime['status'] = {
+    chainId: CONFIG.chain.id,
+    journalInitialized: false,
+    busy: false,
+    open: false,
+    primaryReason: 'recovery-incomplete',
+    blockers: ['recovery-incomplete'],
+    recoveryComplete: false,
+    inclusionChecksComplete: false,
+    persistenceState: 'idle',
+    blockedSince: null,
+    attempts: [],
   };
+
+  const manager = {
+    status: state,
+    reconcile: vi.fn<SignerRuntime['reconcile']>(),
+    submit: vi.fn<SignerRuntime['submit']>(),
+  } satisfies Pick<SignerRuntime, 'status' | 'reconcile' | 'submit'>;
+
+  // The mocked factory returns a class with private members. This fixture
+  // implements only the public surface used by the composition layer.
+  const runtime = manager as unknown as SignerRuntime;
 
   const submitter: BeaconSubmitter = {
     findRetainedWork: vi.fn<BeaconSubmitter['findRetainedWork']>()
@@ -168,6 +186,11 @@ describe('openBeaconSubmitter', () => {
         chainId: CONFIG.chain.id,
         signer: ACCOUNT.address,
       },
+      publicClient: options.publicClient,
+      walletClient: options.walletClient,
+      account: ACCOUNT,
+      readChainHeads,
+      maxBlockRange: 250n,
       log: options.log,
       createErrorSummary: CREATE_ERROR_SUMMARY,
       retry: CONFIG.broadcastRetry,
@@ -177,12 +200,8 @@ describe('openBeaconSubmitter', () => {
 
     expect(createBeaconSubmitter).toHaveBeenCalledExactlyOnceWith({
       publicClient: options.publicClient,
-      walletClient: options.walletClient,
-      account: ACCOUNT,
-      coordinator: runtime.coordinator,
-      recovery: runtime.recovery,
+      manager: runtime,
       readChainHeads,
-      maxBlockRange: 250n,
       signal: options.signal,
     });
 
@@ -196,8 +215,12 @@ describe('openBeaconSubmitter', () => {
     expect(openedWith.retry).toBe(CONFIG.broadcastRetry);
     expect(openedWith.createErrorSummary).toBe(CREATE_ERROR_SUMMARY);
 
-    expect(boundWith.coordinator).toBe(runtime.coordinator);
-    expect(boundWith.recovery).toBe(runtime.recovery);
+    expect(openedWith.publicClient).toBe(options.publicClient);
+    expect(openedWith.walletClient).toBe(options.walletClient);
+    expect(openedWith.account).toBe(ACCOUNT);
+    expect(openedWith.readChainHeads).toBe(readChainHeads);
+
+    expect(boundWith.manager).toBe(runtime);
     expect(boundWith.readChainHeads).toBe(readChainHeads);
     expect(boundWith.signal).toBe(options.signal);
 
@@ -292,7 +315,7 @@ describe('openBeaconSubmitter', () => {
     try {
       await vi.waitFor(() => {
         expect(waitForSignerJournal).toHaveBeenCalledExactlyOnceWith({
-          coordinator: t.runtime.coordinator,
+          manager: t.runtime,
           submitter: t.submitter,
           pollIntervalMs: 100,
           signal: t.options.signal,
@@ -329,7 +352,7 @@ describe('openBeaconSubmitter', () => {
     expect(t.submitter.submit).not.toHaveBeenCalled();
   });
 
-  it('forwards the recovery observer to the bound submitter', async () => {
+  it('forwards the recovery observer to the transaction manager', async () => {
     const t = fixture();
     const onRecoveryCompleted = vi.fn();
 
@@ -338,20 +361,20 @@ describe('openBeaconSubmitter', () => {
       onRecoveryCompleted,
     });
 
-    expect(createBeaconSubmitter).toHaveBeenCalledWith(
+    expect(openSignerRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
         onRecoveryCompleted,
       }),
     );
+
+    const boundWith = vi.mocked(createBeaconSubmitter).mock.calls[0]![0];
+
+    expect(boundWith).not.toHaveProperty('onRecoveryCompleted');
   });
 
   it('does not expose an initialized reader for a missing journal', async () => {
     const t = fixture();
     const onInitialized = vi.fn();
-
-    Object.defineProperty(t.runtime.coordinator, 'journalInitialized', {
-      value: false,
-    });
 
     await expect(openBeaconSubmitter({
       ...t.options,
@@ -366,24 +389,18 @@ describe('openBeaconSubmitter', () => {
 
     let open = true;
 
-    Object.defineProperties(t.runtime.coordinator, {
-      journalInitialized: {
-        get: () => true,
-      },
-      status: {
-        get: () => ({
-          open,
-          primaryReason: null,
-          blockers: [],
-          recoveryComplete: true,
-          inclusionChecksComplete: true,
-          persistenceState: 'idle',
-          blockedSince: null,
-        }),
-      },
-      attempts: {
-        get: () => [],
-      },
+    const initialStatus = t.runtime.status;
+
+    Object.defineProperty(t.runtime, 'status', {
+      get: (): SignerRuntime['status'] => ({
+        ...initialStatus,
+        journalInitialized: true,
+        open,
+        primaryReason: null,
+        blockers: [],
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+      }),
     });
 
     const onInitialized = vi.fn<
@@ -421,8 +438,13 @@ describe('openBeaconSubmitter', () => {
     const t = fixture();
     let initialized = false;
 
-    Object.defineProperty(t.runtime.coordinator, 'journalInitialized', {
-      get: () => initialized,
+    const initialStatus = t.runtime.status;
+
+    Object.defineProperty(t.runtime, 'status', {
+      get: (): SignerRuntime['status'] => ({
+        ...initialStatus,
+        journalInitialized: initialized,
+      }),
     });
 
     let finish!: () => void;
@@ -481,8 +503,11 @@ describe('openBeaconSubmitter', () => {
   it('preserves successful opening when the initialization observer throws', async () => {
     const t = fixture();
 
-    Object.defineProperty(t.runtime.coordinator, 'journalInitialized', {
-      value: true,
+    Object.defineProperty(t.runtime, 'status', {
+      value: {
+        ...t.runtime.status,
+        journalInitialized: true,
+      } satisfies SignerRuntime['status'],
     });
 
     await expect(openBeaconSubmitter({

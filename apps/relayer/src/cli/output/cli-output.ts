@@ -38,13 +38,17 @@ import {
   isUuidV4,
 } from '../../shared/uuid.js';
 
-import {
-  BLOCKER_PRECEDENCE,
-} from '../../state/signer-gate.js';
-
 import type {
   JournalIdentity,
 } from '../../state/transaction-journal.js';
+
+import type {
+  SubmissionRecording,
+} from '../../state/transaction-manager-types.js';
+
+import {
+  isTransactionAdmissionReason,
+} from '../../state/transaction-manager-types.js';
 
 import type {
   RelayerStatus,
@@ -82,6 +86,11 @@ export type CliOutput =
       type: 'import-result';
       round: bigint;
       result: ImportQuicknetRoundResult;
+    }
+  | {
+      type: 'submission-recording';
+      round: bigint;
+      recording: Exclude<SubmissionRecording, { status: 'none' }>;
     }
   | {
       type: 'daemon-startup';
@@ -490,10 +499,7 @@ function deferredImportFields(
   if (reason === 'signer-unavailable') {
     const blocker = own(result, 'blocker');
 
-    if (
-      typeof blocker !== 'string' ||
-      !BLOCKER_PRECEDENCE.some((allowed) => allowed === blocker)
-    ) {
+    if (!isTransactionAdmissionReason(blocker)) {
       throw new TypeError('Invalid signer blocker.');
     }
 
@@ -525,6 +531,37 @@ function deferredImportFields(
   throw new TypeError('Invalid deferral reason.');
 }
 
+function submissionRecordingFields(
+  output: unknown,
+) {
+  const round = uint(own(output, 'round'));
+  const recording = own(output, 'recording');
+  const status = own(recording, 'status');
+
+  if (status !== 'uncertain' && status !== 'retained') {
+    throw new TypeError('Invalid submission recording status.');
+  }
+
+  const attempt = own(recording, 'attempt');
+  const attemptId = own(attempt, 'attemptId');
+  const workId = own(attempt, 'workId');
+
+  if (!isUuidV4(attemptId)) {
+    throw new TypeError('Invalid CLI attempt ID.');
+  }
+
+  if (!isWorkId(workId)) {
+    throw new TypeError('Invalid work identity.');
+  }
+
+  return {
+    round,
+    status,
+    attemptId,
+    workId,
+  };
+}
+
 // Construct and validate the complete output before any writer receives it.
 export function renderCliOutput(
   output: CliOutput,
@@ -536,6 +573,25 @@ export function renderCliOutput(
 
   if (type === 'daemon-help') {
     return DAEMON_HELP;
+  }
+
+  if (type === 'submission-recording') {
+    const fields = submissionRecordingFields(output);
+
+    let message = 'The attempt is retained for recovery.';
+
+    if (fields.status === 'uncertain') {
+      message =
+        'Attempt persistence is uncertain. ' +
+        'The pending journal write must be retried.';
+    }
+
+    return [
+      'Quicknet round ' + fields.round + ' submission did not complete.',
+      message,
+      'Attempt: ' + fields.attemptId,
+      'Work identity: ' + fields.workId,
+    ].join('\n');
   }
 
   if (type === 'import-result') {
@@ -739,6 +795,11 @@ export function renderOutputFailure(
       type === 'daemon-startup'
     ) {
       context = { output: type };
+    } else if (type === 'submission-recording') {
+      context = {
+        output: type,
+        ...submissionRecordingFields(output),
+      };
     } else if (type === 'import-result') {
       const round = uint(own(output, 'round'));
       const result = own(output, 'result');

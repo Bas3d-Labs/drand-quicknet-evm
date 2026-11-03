@@ -1,4 +1,16 @@
 import {
+  journalBoundsViolations,
+} from '../state/journal-bounds-error.js';
+
+import {
+  serviceLockReason
+} from '../state/service-lock.js';
+
+import {
+  submissionRecording,
+} from '../state/transaction-manager.js';
+
+import {
   configDiagnostic,
 } from './config-errors.js';
 
@@ -26,13 +38,8 @@ import {
 } from './operation-context.js';
 
 import {
-  serviceLockReason
-} from '../state/service-lock.js';
-
-import {
   isPriorSignerStateError,
 } from './signer-journal-errors.js';
-import { journalBoundsViolations } from '../state/journal-bounds-error.js';
 
 export function renderDiagnostic(
   error: unknown,
@@ -40,7 +47,9 @@ export function renderDiagnostic(
   importProgress?: RoundImportProgress,
 ): string {
   try {
-    const code = usageCode(error);
+    const classified = classificationError(error);
+
+    const code = usageCode(classified);
     if (code !== undefined) {
       return JSON.stringify({
         event: 'cli_failed',
@@ -50,7 +59,7 @@ export function renderDiagnostic(
       });
     }
 
-    const config = configDiagnostic(error);
+    const config = configDiagnostic(classified);
     if (config !== undefined) {
       return JSON.stringify({
         event: 'cli_failed',
@@ -61,7 +70,7 @@ export function renderDiagnostic(
       });
     }
 
-    const reason = serviceLockReason(error);
+    const reason = serviceLockReason(classified);
     if (reason !== undefined) {
       return JSON.stringify({
         event: 'cli_failed',
@@ -76,7 +85,7 @@ export function renderDiagnostic(
       });
     }
 
-    const violations = journalBoundsViolations(error);
+    const violations = journalBoundsViolations(classified);
     if (violations !== undefined) {
       return JSON.stringify({
         event: 'cli_failed',
@@ -95,7 +104,7 @@ export function renderDiagnostic(
       });
     }
 
-    if (isPriorSignerStateError(error)) {
+    if (isPriorSignerStateError(classified)) {
       return JSON.stringify({
         event: 'cli_failed',
         kind: 'signer-journal',
@@ -143,5 +152,24 @@ export function renderDiagnostic(
 export function isJournalBoundsFailure(
   error: unknown,
 ): boolean {
-  return journalBoundsViolations(error) !== undefined;
+  return journalBoundsViolations(classificationError(error)) !== undefined;
+}
+
+function classificationError(
+  error: unknown,
+): unknown {
+  if (submissionRecording(error) === undefined) {
+    return error;
+  }
+
+  const cause = Object.getOwnPropertyDescriptor(error, 'cause');
+
+  if (
+    cause === undefined ||
+    !Object.hasOwn(cause, 'value')
+  ) {
+    return error;
+  }
+
+  return cause.value;
 }

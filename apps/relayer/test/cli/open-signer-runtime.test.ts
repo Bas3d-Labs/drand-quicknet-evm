@@ -35,7 +35,8 @@ import {
 } from 'viem';
 
 import type {
-  PublicClient
+  PublicClient,
+  WalletClient,
 } from 'viem';
 
 import {
@@ -60,7 +61,6 @@ import {
 
 import {
   DEFAULT_JOURNAL_BOUNDS,
-  MAX_RETAINED_ATTEMPTS,
   MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
 } from '../../src/state/journal-bounds.js';
 
@@ -99,9 +99,11 @@ vi.mock('../../src/state/service-lock.js', async (importOriginal) => {
   };
 });
 
+const ACCOUNT = privateKeyToAccount(`0x${'11'.repeat(32)}`);
+
 const IDENTITY = {
   chainId: 4663,
-  signer: `0x${'ab'.repeat(20)}` as const,
+  signer: ACCOUNT.address.toLowerCase() as `0x${string}`,
 };
 
 const HASH = `0x${'aa'.repeat(32)}` as const;
@@ -216,9 +218,35 @@ describe('command signer runtime', () => {
     });
   });
 
-  function options() {
+  function recoveryClient(): PublicClient {
+    return {
+      getBlock: vi.fn<PublicClient['getBlock']>()
+        .mockImplementation(async ({ blockNumber } = {}) => ({
+          number: blockNumber,
+          hash: HASH,
+        }) as never),
+      getTransactionCount: vi.fn<PublicClient['getTransactionCount']>()
+        .mockResolvedValue(4),
+    } as unknown as PublicClient;
+  }
+
+  function options(
+    publicClient: PublicClient = recoveryClient(),
+  ) {
     return {
       identity: { ...IDENTITY },
+      publicClient,
+      walletClient: {
+        prepareTransactionRequest: vi.fn().mockRejectedValue(
+          new Error('Unexpected transaction preparation.'),
+        ),
+      } as unknown as WalletClient,
+      account: ACCOUNT,
+      readChainHeads: vi.fn(async () => ({
+        durableBlock: 100n,
+        latestBlock: 100n,
+      })),
+      maxBlockRange: 10n,
       log: createRelayerLog({
         chainId: IDENTITY.chainId,
         destination: {
@@ -242,24 +270,15 @@ describe('command signer runtime', () => {
   }
 
   function recovery() {
-    const getBlock = vi.fn().mockResolvedValue({
-      number: 100n,
-      hash: HASH,
-    });
-
-    const getTransactionCount = vi.fn()
-      .mockResolvedValue(4);
-
     return {
-      publicClient: {
-        getBlock,
-        getTransactionCount,
-      } as unknown as PublicClient,
-      anchor: {
+      durable: {
         blockNumber: 100n,
         blockHash: HASH,
       },
-      maxBlockRange: 10n,
+      head: {
+        blockNumber: 100n,
+        blockHash: HASH,
+      },
     };
   }
 
@@ -272,10 +291,10 @@ describe('command signer runtime', () => {
   it('leaves a missing journal untouched until automatic recovery', async () => {
     const runtime = await openSignerRuntime(options());
 
-    expect(Object.isFrozen(runtime)).toBe(true);
-    expect(runtime.coordinator.attempts).toEqual([]);
+    expect(Object.isFrozen(runtime.status)).toBe(true);
+    expect(runtime.status.attempts).toEqual([]);
 
-    expect(runtime.coordinator.status).toMatchObject({
+    expect(runtime.status).toMatchObject({
       open: false,
       recoveryComplete: false,
       inclusionChecksComplete: false,
@@ -283,14 +302,14 @@ describe('command signer runtime', () => {
 
     expect(await stateEntries()).toEqual([]);
 
-    expect(await runtime.recovery.run(recovery())).toMatchObject({
-      inspection: { status: 'no-attempt' },
-      inclusions: { status: 'inspected' },
+    expect(await runtime.reconcile(recovery())).toMatchObject({
+      recoveryStatus: 'no-attempt',
+      inclusionStatus: 'inspected',
       broadcast: null,
       retryDelayMs: null,
     });
 
-    expect(runtime.coordinator.status).toMatchObject({
+    expect(runtime.status).toMatchObject({
       open: true,
       recoveryComplete: true,
       inclusionChecksComplete: true,
@@ -304,9 +323,9 @@ describe('command signer runtime', () => {
   it('uses the same persisted journal across signer casing and requires recovery on reopen', async () => {
     const first = await openSignerRuntime(options());
 
-    await first.recovery.run(recovery());
+    await first.reconcile(recovery());
 
-    expect(first.coordinator.status).toMatchObject({
+    expect(first.status).toMatchObject({
       open: true,
       recoveryComplete: true,
       inclusionChecksComplete: true,
@@ -318,19 +337,20 @@ describe('command signer runtime', () => {
 
     // Simulate a later command; the first runtime is no longer used.
     const next = options();
-    next.identity.signer = `0x${'AB'.repeat(20)}`;
+    next.identity.signer =
+      `0x${IDENTITY.signer.slice(2).toUpperCase()}`;
 
     const reopened = await openSignerRuntime(next);
 
-    expect(reopened.coordinator.status).toMatchObject({
+    expect(reopened.status).toMatchObject({
       open: false,
       recoveryComplete: false,
       inclusionChecksComplete: false,
     });
 
-    await reopened.recovery.run(recovery());
+    await reopened.reconcile(recovery());
 
-    expect(reopened.coordinator.status).toMatchObject({
+    expect(reopened.status).toMatchObject({
       open: true,
       recoveryComplete: true,
       inclusionChecksComplete: true,
@@ -375,7 +395,7 @@ describe('command signer runtime', () => {
 
     const blocked = await openSignerRuntime(options());
 
-    expect(blocked.coordinator.status).toMatchObject({
+    expect(blocked.status).toMatchObject({
       open: false,
       primaryReason: 'unattributed-signer-activity',
     });
@@ -450,27 +470,26 @@ describe('command signer runtime', () => {
     expect(repaired.repairs).toEqual([result.repair]);
     expect(repaired.attempts).toEqual([]);
 
-    const reopened = await openSignerRuntime(options());
+    const reopened = await openSignerRuntime(options(publicClient));
 
     // Repair persistence alone must not bypass runtime recovery.
-    expect(reopened.coordinator.status).toMatchObject({
+    expect(reopened.status).toMatchObject({
       open: false,
       recoveryComplete: false,
       inclusionChecksComplete: false,
     });
 
-    expect(await reopened.recovery.run({
-      publicClient,
-      anchor,
-      maxBlockRange: 10n,
+    expect(await reopened.reconcile({
+      durable: anchor,
+      head: anchor,
     })).toMatchObject({
-      inspection: { status: 'no-attempt' },
-      inclusions: { status: 'inspected' },
+      recoveryStatus: 'no-attempt',
+      inclusionStatus: 'inspected',
       broadcast: null,
       retryDelayMs: null,
     });
 
-    expect(reopened.coordinator.status).toMatchObject({
+    expect(reopened.status).toMatchObject({
       open: true,
       recoveryComplete: true,
       inclusionChecksComplete: true,
@@ -478,7 +497,7 @@ describe('command signer runtime', () => {
       blockers: [],
     });
 
-    expect(reopened.coordinator.attempts).toEqual([]);
+    expect(reopened.status.attempts).toEqual([]);
     expect(request).not.toHaveBeenCalled();
     expect(sendRawTransaction).not.toHaveBeenCalled();
 
@@ -564,13 +583,13 @@ describe('command signer runtime', () => {
 
     expect(await stateEntries()).toEqual([]);
 
-    expect(await runtime.recovery.run(recovery())).toMatchObject({
-      inspection: { status: 'no-attempt' },
-      inclusions: { status: 'inspected' },
+    expect(await runtime.reconcile(recovery())).toMatchObject({
+      recoveryStatus: 'no-attempt',
+      inclusionStatus: 'inspected',
       broadcast: null,
     });
 
-    expect(runtime.coordinator.status.open).toBe(true);
+    expect(runtime.status.open).toBe(true);
 
     expect(await stateEntries()).toEqual([
       `transaction-journal-4663-${IDENTITY.signer}.json`,
@@ -580,7 +599,7 @@ describe('command signer runtime', () => {
   it('recovers an existing journal when checkpoint state exists', async () => {
     const first = await openSignerRuntime(options());
 
-    await first.recovery.run(recovery());
+    await first.reconcile(recovery());
 
     const checkpointFile = join(directory, 'checkpoint.json');
     await writeFile(checkpointFile, '{}');
@@ -591,15 +610,15 @@ describe('command signer runtime', () => {
       checkpointFile,
     });
 
-    expect(reopened.coordinator.status).toMatchObject({
+    expect(reopened.status).toMatchObject({
       open: false,
       recoveryComplete: false,
       inclusionChecksComplete: false,
     });
 
-    await reopened.recovery.run(recovery());
+    await reopened.reconcile(recovery());
 
-    expect(reopened.coordinator.status).toMatchObject({
+    expect(reopened.status).toMatchObject({
       open: true,
       recoveryComplete: true,
       inclusionChecksComplete: true,
@@ -737,7 +756,7 @@ describe('command signer runtime', () => {
 
   it('allows existing-journal recovery to clean owned temporary files', async () => {
     const first = await openSignerRuntime(options());
-    await first.recovery.run(recovery());
+    await first.reconcile(recovery());
 
     const journalName =
       `transaction-journal-4663-${IDENTITY.signer}.json`;
@@ -748,9 +767,9 @@ describe('command signer runtime', () => {
     await writeFile(join(directory, tempName), 'orphaned snapshot');
 
     const reopened = await openSignerRuntime(options());
-    await reopened.recovery.run(recovery());
+    await reopened.reconcile(recovery());
 
-    expect(reopened.coordinator.status.open).toBe(true);
+    expect(reopened.status.open).toBe(true);
     expect(await stateEntries()).toEqual([journalName]);
   });
 
@@ -758,12 +777,12 @@ describe('command signer runtime', () => {
     {
       name: 'retained attempts',
       counts: Array.from(
-        { length: MAX_RETAINED_ATTEMPTS + 1 },
+        { length: DEFAULT_JOURNAL_BOUNDS.maxRetainedAttempts + 1 },
         () => 1,
       ),
       bound: 'retained-attempts',
-      maximum: MAX_RETAINED_ATTEMPTS,
-      observed: MAX_RETAINED_ATTEMPTS + 1,
+      maximum: DEFAULT_JOURNAL_BOUNDS.maxRetainedAttempts,
+      observed: DEFAULT_JOURNAL_BOUNDS.maxRetainedAttempts + 1,
     },
     {
       name: 'signed transactions',
@@ -853,7 +872,7 @@ describe('command signer runtime', () => {
       identity: snapshot.identity,
     });
 
-    expect(runtime.coordinator.attempts).toEqual(
+    expect(runtime.status.attempts).toEqual(
       snapshot.attempts.map((attempt) => ({
         attemptId: attempt.attemptId,
         workId: attempt.workId,
@@ -865,7 +884,7 @@ describe('command signer runtime', () => {
       })),
     );
 
-    expect(runtime.coordinator.status).toMatchObject({
+    expect(runtime.status).toMatchObject({
       open: false,
       recoveryComplete: false,
       inclusionChecksComplete: false,
@@ -886,103 +905,105 @@ describe('command signer runtime', () => {
       .mockImplementation(() => now);
 
     try {
-      const runtime = await openSignerRuntime(options());
-
-      const recover = vi.spyOn(runtime.coordinator, 'recover');
-      const checkInclusions = vi.spyOn(
-        runtime.coordinator,
-        'checkInclusions',
-      );
-
+      const client = recoveryClient();
+      const getTransactionCount = vi.mocked(client.getTransactionCount);
+      const runtime = await openSignerRuntime(options(client));
       const input = recovery();
 
-      const withHead = {
-        ...input,
-        head: { ...input.anchor },
-      };
-
-      // Bootstrap and the first recovery must run in full.
-      expect(await runtime.recovery.run(withHead)).toMatchObject({
-        inspection: { status: 'no-attempt' },
-        inclusions: {
-          status: 'inspected',
+      expect(await runtime.reconcile(input)).toMatchObject({
+        recoveryStatus: 'no-attempt',
+        inclusionStatus: 'inspected',
+        broadcast: null,
+        state: {
+          open: true,
+          recoveryComplete: true,
           inclusionChecksComplete: true,
         },
-        broadcast: null,
       });
 
-      expect(recover).toHaveBeenCalledTimes(1);
-      expect(checkInclusions).toHaveBeenCalledTimes(1);
+      getTransactionCount.mockClear();
 
       now = 59_999;
 
-      expect(await runtime.recovery.run(withHead)).toMatchObject({
-        inspection: {
-          status: 'skipped',
-          reason: 'unchanged-durable-state',
-        },
-        inclusions: {
-          status: 'inspected',
+      expect(await runtime.reconcile(input)).toMatchObject({
+        recoveryStatus: 'skipped',
+        inclusionStatus: 'inspected',
+        broadcast: null,
+        state: {
+          open: true,
           inclusionChecksComplete: true,
         },
-        broadcast: null,
       });
 
-      expect(recover).toHaveBeenCalledTimes(1);
-      expect(checkInclusions).toHaveBeenCalledTimes(2);
+      // Reuse still performs the latest-head nonce inspection.
+      expect(getTransactionCount).toHaveBeenCalledTimes(1);
 
       now = 60_000;
 
-      expect(await runtime.recovery.run(withHead)).toMatchObject({
-        inspection: { status: 'no-attempt' },
-        inclusions: {
-          status: 'inspected',
+      expect(await runtime.reconcile(input)).toMatchObject({
+        recoveryStatus: 'no-attempt',
+        inclusionStatus: 'inspected',
+        broadcast: null,
+        state: {
+          open: true,
+          recoveryComplete: true,
           inclusionChecksComplete: true,
         },
-        broadcast: null,
       });
 
-      expect(recover).toHaveBeenCalledTimes(2);
-      expect(checkInclusions).toHaveBeenCalledTimes(3);
+      // The refresh performs both durable and latest-head observations.
+      expect(getTransactionCount).toHaveBeenCalledTimes(3);
 
-      // The completed refresh starts another interval.
-      expect(await runtime.recovery.run(withHead)).toMatchObject({
-        inspection: {
-          status: 'skipped',
-          reason: 'unchanged-durable-state',
-        },
+      expect(await runtime.reconcile(input)).toMatchObject({
+        recoveryStatus: 'skipped',
+        inclusionStatus: 'inspected',
       });
 
-      expect(recover).toHaveBeenCalledTimes(2);
-      expect(checkInclusions).toHaveBeenCalledTimes(4);
-      expect(runtime.coordinator.status.open).toBe(true);
+      expect(getTransactionCount).toHaveBeenCalledTimes(4);
+      expect(runtime.status.open).toBe(true);
     } finally {
       clock.mockRestore();
     }
   });
 
-  it('keeps runtime recovery unconditional without an explicit latest head', async () => {
+  it('runs durable recovery when the durable anchor advances before refresh is due', async () => {
     const clock = vi.spyOn(performance, 'now')
       .mockReturnValue(0);
 
     try {
-      const runtime = await openSignerRuntime(options());
-      const recover = vi.spyOn(runtime.coordinator, 'recover');
+      const client = recoveryClient();
+      const getTransactionCount = vi.mocked(client.getTransactionCount);
+      const runtime = await openSignerRuntime(options(client));
 
-      const input = recovery();
+      await runtime.reconcile(recovery());
 
-      for (let pass = 0; pass < 3; pass += 1) {
-        expect(await runtime.recovery.run(input)).toMatchObject({
-          inspection: { status: 'no-attempt' },
-          inclusions: {
-            status: 'inspected',
-            inclusionChecksComplete: true,
-          },
-          broadcast: null,
-        });
-      }
+      expect(await runtime.reconcile(recovery())).toMatchObject({
+        recoveryStatus: 'skipped',
+        inclusionStatus: 'inspected',
+      });
 
-      expect(recover).toHaveBeenCalledTimes(3);
+      getTransactionCount.mockClear();
+
+      const advanced = {
+        blockNumber: 101n,
+        blockHash: HASH,
+      };
+
+      expect(await runtime.reconcile({
+        durable: advanced,
+        head: advanced,
+      })).toMatchObject({
+        recoveryStatus: 'no-attempt',
+        inclusionStatus: 'inspected',
+        broadcast: null,
+        state: {
+          open: true,
+          recoveryComplete: true,
+          inclusionChecksComplete: true,
+        },
+      });
+
+      expect(getTransactionCount).toHaveBeenCalledTimes(2);
     } finally {
       clock.mockRestore();
     }

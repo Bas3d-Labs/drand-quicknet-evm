@@ -131,10 +131,14 @@ function fixture() {
 
   const submitTransaction = vi.fn<BeaconSubmitter['submit']>()
     .mockResolvedValue({
-      status: 'acknowledged',
-      attemptId: '11111111-1111-4111-8111-111111111111',
-      transactionHash: HASH,
-      nonce: 4n,
+      status: 'submitted',
+      broadcast: {
+        status: 'acknowledged',
+        workId: `quicknet-round:v1:4663:${REGISTRY}:${ROUND}`,
+        attemptId: '11111111-1111-4111-8111-111111111111',
+        transactionHash: HASH,
+        nonce: 4n,
+      },
     });
 
   const submitter: BeaconSubmitter = {

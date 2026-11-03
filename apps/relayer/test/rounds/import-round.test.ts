@@ -83,6 +83,10 @@ const REGISTRY_RUNTIME_CODEHASH: Hex =
 
 const ROUND = 20_791_007n;
 
+const WORK_ID =
+  'quicknet-round:v1:46630:' +
+  '0x1111111111111111111111111111111111111111:20791007';
+
 const COMPRESSED_SIGNATURE =
   `0x${'11'.repeat(48)}` as CompressedSignature;
 
@@ -170,10 +174,14 @@ describe('importQuicknetRound', () => {
 
     submitTransaction = vi.fn<BeaconSubmitter['submit']>()
       .mockResolvedValue({
-        status: 'acknowledged',
-        attemptId: '11111111-1111-4111-8111-111111111111',
-        transactionHash: SUBMITTED_TRANSACTION_HASH,
-        nonce: 4n,
+        status: 'submitted',
+        broadcast: {
+          status: 'acknowledged',
+          workId: WORK_ID,
+          attemptId: '11111111-1111-4111-8111-111111111111',
+          transactionHash: SUBMITTED_TRANSACTION_HASH,
+          nonce: 4n,
+        },
       });
 
     submitter = {
@@ -383,8 +391,9 @@ describe('importQuicknetRound', () => {
 
   it('returns deferred when the signer is unavailable without waiting for a receipt', async () => {
     submitTransaction.mockResolvedValueOnce({
-      status: 'signer-unavailable',
-      blocker: 'unresolved-attempt',
+      status: 'deferred',
+      primaryReason: 'unresolved-attempt',
+      reasons: ['unresolved-attempt'],
     });
 
     await expect(importRound()).resolves.toEqual({
@@ -405,14 +414,14 @@ describe('importQuicknetRound', () => {
 
   it('defers already-retained work without receipt waiting or fulfillment reads', async () => {
     const attemptId = '11111111-1111-4111-8111-111111111111';
-    const workId =
-      'quicknet-round:v1:46630:' +
-      '0x1111111111111111111111111111111111111111:20791007';
+    const workId = WORK_ID;
 
     submitTransaction.mockResolvedValueOnce({
       status: 'already-retained',
-      attemptId,
-      workId,
+      retained: {
+        attemptId,
+        workId,
+      },
     });
 
     await expect(importRound()).resolves.toEqual({
@@ -439,10 +448,14 @@ describe('importQuicknetRound', () => {
     const attemptId = '11111111-1111-4111-8111-111111111111';
 
     submitTransaction.mockResolvedValueOnce({
-      status: 'not-acknowledged',
-      attemptId,
-      transactionHash: SUBMITTED_TRANSACTION_HASH,
-      nonce: 4n,
+      status: 'submitted',
+      broadcast: {
+        status: 'not-acknowledged',
+        workId: WORK_ID,
+        attemptId,
+        transactionHash: SUBMITTED_TRANSACTION_HASH,
+        nonce: 4n,
+      },
     });
 
     await expect(importRound()).resolves.toEqual({

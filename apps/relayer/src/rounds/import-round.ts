@@ -35,8 +35,8 @@ import {
 } from '../diagnostics/operation-context.js';
 
 import type {
-  SignerBlocker,
-} from '../state/signer-gate.js';
+  TransactionAdmissionReason,
+} from '../state/transaction-manager-types.js';
 
 import {
   simulateBeaconSubmission,
@@ -93,7 +93,7 @@ type DeferredImportResult = {
 } & (
   | {
       readonly reason: 'signer-unavailable';
-      readonly blocker: SignerBlocker;
+      readonly blocker: TransactionAdmissionReason;
     }
   | {
       /**
@@ -239,31 +239,33 @@ export async function importQuicknetRound(
       status: 'deferred',
       round,
       reason: 'already-retained',
-      attemptId: submitted.attemptId,
-      workId: submitted.workId,
-    }
+      attemptId: submitted.retained.attemptId,
+      workId: submitted.retained.workId,
+    };
   }
 
-  if (submitted.status === 'signer-unavailable') {
+  if (submitted.status === 'deferred') {
     return {
       status: 'deferred',
       round,
       reason: 'signer-unavailable',
-      blocker: submitted.blocker,
+      blocker: submitted.primaryReason,
     };
   }
 
-  if (submitted.status === 'not-acknowledged') {
+  const broadcast = submitted.broadcast;
+
+  if (broadcast.status === 'not-acknowledged') {
     return {
       status: 'pending',
       round,
-      attemptId: submitted.attemptId,
-      transactionHash: submitted.transactionHash,
+      attemptId: broadcast.attemptId,
+      transactionHash: broadcast.transactionHash,
       reason: 'broadcast-not-acknowledged',
     };
   }
 
-  const hash = submitted.transactionHash;
+  const hash = broadcast.transactionHash;
 
   reportImportProgress(options.onProgress, {
     round,
@@ -286,8 +288,8 @@ export async function importQuicknetRound(
     return {
       status: 'pending',
       round,
-      attemptId: submitted.attemptId,
-      transactionHash: submitted.transactionHash,
+      attemptId: broadcast.attemptId,
+      transactionHash: broadcast.transactionHash,
       reason: 'receipt-timeout',
     };
   }

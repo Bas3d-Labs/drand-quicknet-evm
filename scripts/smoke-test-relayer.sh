@@ -94,6 +94,11 @@ require_env PRIVATE_KEY
 [[ -f "$CUSTOM_NETWORK_CONFIG" ]] ||
   fail "Custom network config not found: $CUSTOM_NETWORK_CONFIG"
 
+CUSTOM_NETWORK_CONFIG="$(
+  cd "$(dirname "$CUSTOM_NETWORK_CONFIG")" &&
+  printf '%s/%s\n' "$PWD" "$(basename "$CUSTOM_NETWORK_CONFIG")"
+)"
+
 [[ -f "$DEPLOYMENT_FILE" ]] ||
   fail "Deployment manifest not found: $DEPLOYMENT_FILE"
 
@@ -224,10 +229,11 @@ echo "Signer nonce unchanged: $NONCE_AFTER_SECOND_IMPORT"
 
 info "3/3 import same round via custom network config"
 
-relayer \
-  import \
-  --network-config "$CUSTOM_NETWORK_CONFIG" \
-  --round "$TARGET_ROUND"
+QUICKNET_RPC_URL="$ROBINHOOD_TESTNET_RPC_URL" \
+  relayer \
+    import \
+    --network-config "$CUSTOM_NETWORK_CONFIG" \
+    --round "$TARGET_ROUND"
 
 BEACON_AFTER_CUSTOM_CONFIG="$(registry_get_beacon "$TARGET_ROUND")"
 

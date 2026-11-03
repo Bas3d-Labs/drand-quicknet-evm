@@ -25,6 +25,10 @@ import {
 } from '../../diagnostics/rpc/rpc-usage-session.js';
 
 import {
+  isOperationCancelled
+} from '../../execution/is-operation-cancelled.js';
+
+import {
   importQuicknetRound,
   type ImportQuicknetRoundResult,
 } from '../../rounds/import-round.js';
@@ -32,6 +36,10 @@ import {
 import {
   importQuicknetRoundWhenAvailable,
 } from '../../rounds/import-round-when-available.js';
+
+import {
+  submissionRecording,
+} from '../../state/transaction-manager.js';
 
 import type {
   CliOutputHandler,
@@ -142,7 +150,20 @@ export async function runRoundImportCommand(
         });
       }
     } catch (error) {
-      if (signal.aborted && error === signal.reason) {
+      const recording = submissionRecording(error);
+
+      if (
+        recording !== undefined &&
+        recording.status !== 'none'
+      ) {
+        output({
+          type: 'submission-recording',
+          round: command.round,
+          recording,
+        });
+      }
+
+      if (isOperationCancelled(error, signal)) {
         throw error;
       }
 

@@ -3,6 +3,7 @@ import {
 } from './journal-identity.js';
 
 import type {
+  JournalAttempt,
   JournalIdentity,
   TransactionJournalRead,
   TransactionJournalSnapshot,
@@ -89,6 +90,27 @@ export class JournalPersistence {
    */
   get current(): TransactionJournalRead {
     return this.currentValue;
+  }
+
+  failedWriteAttemptIdentity(
+    workId: string,
+  ): Readonly<Pick<JournalAttempt, 'workId' | 'attemptId'>> | undefined {
+    if (this.stateValue !== 'failed') {
+      return undefined;
+    }
+
+    const attempt = this.pending?.attempts.find(
+      (candidate) => candidate.workId === workId,
+    );
+
+    if (attempt === undefined) {
+      return undefined;
+    }
+
+    return Object.freeze({
+      workId: attempt.workId,
+      attemptId: attempt.attemptId,
+    });
   }
 
   /**

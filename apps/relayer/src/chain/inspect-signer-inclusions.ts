@@ -3,6 +3,20 @@ import type {
 } from 'viem';
 
 import {
+  isFixedHex,
+} from '../shared/hex.js';
+
+import type {
+  AnchoredNonceObservation,
+  JournalAttempt,
+  TransactionJournalSnapshot,
+} from '../state/transaction-journal.js';
+
+import {
+  validateJournalSnapshotStructure,
+} from '../state/transaction-journal-validation.js';
+
+import {
   checkBlockAnchor,
   type BlockAnchor,
 } from './block-anchor.js';
@@ -16,22 +30,8 @@ import {
 } from './reconcile-attempt-receipt.js';
 
 import {
-  recheckAttemptInclusion,
+  recheckAttemptInclusionWithinPass,
 } from './recheck-attempt-inclusion.js';
-
-import {
-  isFixedHex,
-} from '../shared/hex.js';
-
-import type {
-  AnchoredNonceObservation,
-  JournalAttempt,
-  TransactionJournalSnapshot,
-} from '../state/transaction-journal.js';
-
-import {
-  validateJournalSnapshotStructure,
-} from '../state/transaction-journal-validation.js';
 
 import {
   searchAttemptReplacement,
@@ -79,15 +79,32 @@ export type SignerInclusionInspection =
       readonly broadcastAttemptId: string | null;
     };
 
-/**
- * Inspects every retained attempt at one selected head.
- * 
- * Preserves uncertain inclusion observations and invalidates only records
- * whose saved inclusion block was contradicted. Does not persist changes,
- * advance either nonce counter, or authorize broadcasting.
- */
 export async function inspectSignerInclusions(
   options: InspectSignerInclusionsOptions,
+): Promise<SignerInclusionInspection> {
+  return inspectSignerInclusionsInternal(options, true);
+}
+
+/**
+ * Inspects retained attempts inside a caller-owned head bracket.
+ * 
+ * The caller must check the selected head before beginning the enclosing
+ * pass and check that same head again after this function completes.
+ * Until the closing check succeeds, this result must not be accepted
+ * for persistence or action authorization.
+ * 
+ * Inner receipt, nonce, and replacement-search checks remain enabled.
+ */
+export async function inspectSignerInclusionsWithinPass(
+  options: InspectSignerInclusionsOptions,
+): Promise<SignerInclusionInspection> {
+  return inspectSignerInclusionsInternal(options, false);
+}
+
+
+export async function inspectSignerInclusionsInternal(
+  options: InspectSignerInclusionsOptions,
+  checkOuterHead: boolean,
 ): Promise<SignerInclusionInspection> {
   const publicClient = options.publicClient;
 
@@ -120,7 +137,7 @@ export async function inspectSignerInclusions(
     throw new TypeError('Invalid signer inclusion input.');
   }
 
-  if (snapshot.attempts.length > 0) {
+  if (checkOuterHead && snapshot.attempts.length > 0) {
     const openingHead = await checkBlockAnchor(publicClient, head);
     if (openingHead !== null) {
       return openingHead;
@@ -134,7 +151,7 @@ export async function inspectSignerInclusions(
 
   for (const attempt of snapshot.attempts) {
     if (attempt.phase === 'included') {
-      const result = await recheckAttemptInclusion({
+      const result = await recheckAttemptInclusionWithinPass({
         publicClient,
         observation: attempt.inclusion,
         head,
@@ -251,8 +268,6 @@ export async function inspectSignerInclusions(
     };
   }
 
-  let searched = false;
-
   if (maxReplacementBlockRange !== undefined) {
     for (const index of replacementCandidates) {
       const attempt = attempts[index]!;
@@ -284,8 +299,6 @@ export async function inspectSignerInclusions(
         maxBlockRange: maxReplacementBlockRange,
       });
 
-      searched = true;
-
       if (search.status === 'anchor-changed') {
         return search;
       }
@@ -311,8 +324,10 @@ export async function inspectSignerInclusions(
     }
   }
 
-  if (searched) {
-    // Close the entire pass after all additional searches.
+  if (checkOuterHead && snapshot.attempts.length > 0) {
+    // Close every non-empty path after receipt, nonce, and replacement
+    // inspection. No updated queue or broadcast eligibility may escape
+    // when the selected head changed during the pass.
     const closingHead = await checkBlockAnchor(publicClient, head);
     if (closingHead !== null) {
       return closingHead;

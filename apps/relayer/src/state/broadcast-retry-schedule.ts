@@ -41,19 +41,12 @@ export class BroadcastRetrySchedule {
   private readonly now: () => number;
 
   constructor(options: BroadcastRetryScheduleOptions) {
+    validateBroadcastRetryOptions(options);
+
     const {
       initialDelayMs,
       maxDelayMs,
     } = options;
-
-    if (
-      !isPositiveSafeInteger(initialDelayMs) ||
-      !isPositiveSafeInteger(maxDelayMs) ||
-      maxDelayMs < initialDelayMs ||
-      maxDelayMs > MAX_DELAY_MS
-    ) {
-      throw new RangeError('Invalid broadcast retry delays.');
-    }
 
     this.initialDelayMs = initialDelayMs;
     this.maxDelayMs = maxDelayMs;
@@ -168,5 +161,23 @@ export class BroadcastRetrySchedule {
     this.lastNow = Math.max(this.lastNow, value);
 
     return this.lastNow;
+  }
+}
+
+export function validateBroadcastRetryOptions(
+  options: BroadcastRetryScheduleOptions,
+): void {
+  const {
+    initialDelayMs,
+    maxDelayMs,
+  } = options;
+
+  if (
+    !isPositiveSafeInteger(initialDelayMs) ||
+    !isPositiveSafeInteger(maxDelayMs) ||
+    maxDelayMs < initialDelayMs ||
+    maxDelayMs > MAX_DELAY_MS
+  ) {
+    throw new RangeError('Invalid broadcast retry delays.');
   }
 }

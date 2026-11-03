@@ -886,7 +886,14 @@ describe.skipIf(process.platform !== 'linux')(
 
             expect(included.body).toMatchObject({
               signCalls: 0,
-              status: { open: false },
+              canBroadcast: false,
+              status: {
+                open: true,
+                blockers: [],
+                recoveryComplete: true,
+                inclusionChecksComplete: true,
+                persistenceState: 'idle',
+              },
               result: {
                 broadcast: null,
                 retryDelayMs: null,
@@ -1420,7 +1427,14 @@ describe.skipIf(process.platform !== 'linux')(
 
           expect(included.body).toMatchObject({
             signCalls: 0,
-            status: { open: false },
+            canBroadcast: false,
+            status: {
+              open: true,
+              blockers: [],
+              recoveryComplete: true,
+              inclusionChecksComplete: true,
+              persistenceState: 'idle',
+            },
             result: {
               broadcast: null,
               retryDelayMs: null,
@@ -1736,7 +1750,14 @@ describe.skipIf(process.platform !== 'linux')(
 
           expect(included.body).toMatchObject({
             signCalls: 0,
-            status: { open: false },
+            canBroadcast: false,
+            status: {
+              open: true,
+              blockers: [],
+              recoveryComplete: true,
+              inclusionChecksComplete: true,
+              persistenceState: 'idle',
+            },
             result: {
               broadcast: null,
               retryDelayMs: null,
@@ -2103,10 +2124,11 @@ describe.skipIf(process.platform !== 'linux')(
             signCalls: 0,
             canBroadcast: false,
             status: {
-              open: false,
-              recoveryComplete: true,
+              open: true,
+              blockers: [],
               inclusionChecksComplete: true,
               persistenceState: 'idle',
+              recoveryComplete: true,
             },
             result: {
               broadcast: null,

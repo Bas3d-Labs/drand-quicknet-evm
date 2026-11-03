@@ -98,7 +98,7 @@ export async function openBeaconSubmitter(
     throw new Error('Signer runtime configuration is missing.');
   }
 
-  const runtime = await openSignerRuntime({
+  const manager = await openSignerRuntime({
     identity: {
       chainId: config.chain.id,
       signer: config.account.address,
@@ -106,27 +106,28 @@ export async function openBeaconSubmitter(
     log,
     createErrorSummary,
     retry: broadcastRetry,
-    checkpointFile: options.checkpointFile,
-    env: options.env ?? process.env,
-  });
-
-  const submitter = createBeaconSubmitter({
     publicClient,
     walletClient,
     account: config.account,
-    coordinator: runtime.coordinator,
-    recovery: runtime.recovery,
     readChainHeads,
     maxBlockRange,
-    signal,
+    checkpointFile: options.checkpointFile,
+    env: options.env ?? process.env,
     ...(options.onRecoveryCompleted === undefined
       ? {}
       : { onRecoveryCompleted: options.onRecoveryCompleted }),
   });
 
+  const submitter = createBeaconSubmitter({
+    publicClient,
+    manager,
+    readChainHeads,
+    signal,
+  });
+
   if (options.startupPollIntervalMs !== undefined) {
     await waitForSignerJournal({
-      coordinator: runtime.coordinator,
+      manager,
       submitter,
       pollIntervalMs: options.startupPollIntervalMs,
       signal,
@@ -135,11 +136,11 @@ export async function openBeaconSubmitter(
 
   if (
     options.onInitialized !== undefined &&
-    runtime.coordinator.journalInitialized
+    manager.status.journalInitialized
   ) {
     try {
       options.onInitialized(
-        () => readSignerRuntimeObservation(runtime.coordinator),
+        () => readSignerRuntimeObservation(manager),
       );
     } catch {
       // Diagnostic setup must not replace successful signer startup.
