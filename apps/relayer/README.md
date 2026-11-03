@@ -919,12 +919,15 @@ deployment manifests, and operator configuration.
 
 ## Exact-round processing
 
-Before beginning fresh import work, the importer checks whether the exact
-work identity is already retained. If so, it returns `already-retained`
-with the existing attempt ID and work identity, without repeating
-deployment verification, beacon retrieval, simulation, or submission.
-The following steps describe processing when that early check finds no
-retained attempt.
+Before beginning fresh import work for a scanned request, the daemon's
+round importer checks whether the exact work identity is already retained.
+If so, it returns `already-retained` with the existing attempt ID and work
+identity, without repeating deployment verification, beacon retrieval,
+simulation, or submission for that request.
+
+The one-shot CLI commands perform their import checks before reaching
+transaction admission. The transaction manager checks retained work
+before preparing fees or signing a new attempt.
 
 `import`, `import-when-available`, and `daemon` use the same submission path 
 for an exact round `R`:
