@@ -3,6 +3,11 @@ import type {
   PublicClient,
 } from 'viem';
 
+import {
+  captureAnchoredReadScope,
+  type AnchoredReadScope,
+} from '../diagnostics/anchored-read-errors.js';
+
 import type {
   AnchoredNonceObservation,
 } from '../state/transaction-journal.js';
@@ -24,6 +29,7 @@ export interface InspectSignerBootstrapOptions {
   readonly publicClient: PublicClient;
   readonly signer: Address;
   readonly anchor: Readonly<BlockAnchor>;
+  readonly scope?: AnchoredReadScope;
 }
 
 export type SignerBootstrapDecision =
@@ -58,10 +64,18 @@ export async function inspectSignerBootstrap(
     signer,
   } = options;
 
+  const suppliedScope = captureAnchoredReadScope(options.scope);
+
+  const scope = Object.freeze({
+    operation: 'signer-bootstrap' as const,
+    ...suppliedScope,
+  });
+
   const result = await readAnchoredNonce({
     publicClient,
     signer,
     anchor: options.anchor,
+    scope,
   });
 
   if (result.status === 'anchor-changed') {
@@ -87,6 +101,7 @@ export async function inspectSignerBootstrap(
   const closingAnchor = await checkBlockAnchor(
     publicClient,
     observation.anchor,
+    scope,
   );
 
   if (closingAnchor !== null) {

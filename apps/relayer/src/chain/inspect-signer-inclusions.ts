@@ -138,7 +138,9 @@ export async function inspectSignerInclusionsInternal(
   }
 
   if (checkOuterHead && snapshot.attempts.length > 0) {
-    const openingHead = await checkBlockAnchor(publicClient, head);
+    const openingHead = await checkBlockAnchor(publicClient, head, {
+      operation: 'signer-inclusions',
+    });
     if (openingHead !== null) {
       return openingHead;
     }
@@ -244,6 +246,9 @@ export async function inspectSignerInclusionsInternal(
     publicClient,
     signer: snapshot.identity.signer,
     anchor: head,
+    scope: {
+      operation: 'signer-inclusions',
+    },
   });
 
   if (nonce.status === 'anchor-changed') {
@@ -328,7 +333,9 @@ export async function inspectSignerInclusionsInternal(
     // Close every non-empty path after receipt, nonce, and replacement
     // inspection. No updated queue or broadcast eligibility may escape
     // when the selected head changed during the pass.
-    const closingHead = await checkBlockAnchor(publicClient, head);
+    const closingHead = await checkBlockAnchor(publicClient, head, {
+      operation: 'signer-inclusions',
+    });
     if (closingHead !== null) {
       return closingHead;
     }

@@ -1,7 +1,17 @@
+import {
+  performance,
+} from 'node:perf_hooks';
+
 import type {
   Address,
   PublicClient,
 } from 'viem';
+
+import {
+  captureAnchoredReadScope,
+  registerAnchoredReadFailure,
+  type AnchoredReadScope,
+} from '../diagnostics/anchored-read-errors.js';
 
 import type {
   AnchoredNonceObservation,
@@ -24,6 +34,7 @@ export interface ReadAnchoredNonceOptions {
   publicClient: PublicClient;
   signer: Address;
   anchor: Readonly<BlockAnchor>;
+  scope?: AnchoredReadScope;
 }
 
 export type AnchoredNonceResult =
@@ -66,19 +77,36 @@ export async function readAnchoredNonce(
     throw new TypeError('Invalid anchored nonce input.');
   }
 
-  const before = await checkBlockAnchor(publicClient, anchor);
+  const scope = captureAnchoredReadScope(options.scope);
+
+  const before = await checkBlockAnchor(publicClient, anchor, scope);
   if (before !== null) {
     return before;
   }
 
-  const nonce = parseNonceResponse(
-    await publicClient.getTransactionCount({
-      address: signer,
-      blockNumber: anchor.blockNumber,
-    }),
-  );
+  const startedAt = performance.now();
+  let nonce: bigint;
 
-  const after = await checkBlockAnchor(publicClient, anchor);
+  try {
+    nonce = parseNonceResponse(
+      await publicClient.getTransactionCount({
+        address: signer,
+        blockNumber: anchor.blockNumber,
+      }),
+    );
+  } catch (error) {
+    registerAnchoredReadFailure(error, {
+      ...scope,
+      method: 'eth_getTransactionCount',
+      blockNumber: anchor.blockNumber,
+      expectedBlockHash: anchor.blockHash,
+      durationMs: performance.now() - startedAt,
+    });
+
+    throw error;
+  }
+
+  const after = await checkBlockAnchor(publicClient, anchor, scope);
   if (after !== null) {
     return after;
   }

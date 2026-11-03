@@ -144,6 +144,9 @@ export async function inspectSignerRecovery(
     publicClient,
     signer: snapshot.identity.signer,
     anchor,
+    scope: {
+      operation: 'signer-recovery',
+    },
   });
 
   if (nonce.status === 'anchor-changed') {
