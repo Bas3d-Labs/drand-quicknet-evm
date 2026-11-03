@@ -738,7 +738,7 @@ Package managers and supervisors may additionally report wrapper errors.
 | `3` | One-shot import remains pending. A journaled transaction attempt remains unresolved. |
 | `4` | Import deferred because the signer is unavailable or the work is already retained, or nonce-sync inspection deferred. |
 | `5` | One-shot command handled SIGINT/SIGTERM before producing a result. Retained journal state may still require recovery. |
-| `6` | Signer startup refused because the journal exceeds supported runtime bounds. |
+| `6` | A recognized signer-journal bounds failure occurred, including startup refusal for an over-bound journal. |
 | `9` | Node startup failure observed when a configured env file is missing. |
 | `75` | Another process holds the service lock; this may have no diagnostic output. |
 
@@ -765,18 +765,20 @@ Incomplete work uses separate statuses:
   `already-retained`, output includes the existing attempt ID and
   work identity (`workId`).
 - `5` (`interrupted`): the command handled cancellation before producing
-  an import result. No result is printed; retained journal state may
-  still require recovery.
+  an import result. No import result is printed. If submission recorded
+  an attempt before cancellation, separate submission-recording output
+  identifies the attempt and work requiring recovery.
 
 None of these outcomes proves that the beacon is absent on-chain.
 Retained transaction attempts remain available for journal recovery.
 The one-shot command exits rather than continuing recovery in the
 background.
 
-If rendering or writing a command result fails, status `2` takes precedence 
-over the result’s normal exit status. An import or nonce repair may already 
-have succeeded. Service ownership is released when the process exits. The 
-journal is retained.
+If rendering or writing command output fails, status `2` takes precedence
+over the operation's normal result, submission failure, or handled
+cancellation. An import or nonce repair may already have succeeded, or a
+transaction attempt may remain retained. Service ownership is released
+when the process exits. Output failure does not undo journal persistence.
 
 Other startup failures can retain the exit status of the failing tool.
 Do not interpret every nonzero status as contention.
@@ -790,6 +792,39 @@ fixed diagnostic reason:
 | `state-directory` | State-directory validation or checkpoint placement. |
 | `lock-file` | Lock-file lookup, type, or link-count validation. |
 | `descriptor` | No matching inherited exclusive flock was verified. |
+
+### Submission failures and recording state
+
+For `import` and `import-when-available`, a submission error may carry
+recording information for the attempt created by that submission.
+When present, the CLI prints the attempt ID and work identity before
+reporting the failure or completing handled cancellation.
+
+The recording states are:
+
+- **Retained:** the attempt was saved successfully and remains available
+  for recovery. This does not establish whether it was broadcast or
+  included. A later failure to persist the broadcast marker does not
+  change an already-retained attempt into uncertain preparation.
+- **Persistence uncertain:** preparation produced an attempt, but its
+  journal write was not acknowledged as complete. The active runtime
+  retains the pending write for retry. After restart, recovery uses the
+  committed journal; an unacknowledged write may or may not have replaced
+  the previous journal.
+- **None:** this submission recorded no attempt. No submission-recording
+  output is printed. This says nothing about earlier retained attempts
+  or transactions handled during recovery.
+
+Recording information describes persistence, not transaction success or
+permission to broadcast. A failed or interrupted command does not prove
+that no transaction was signed or broadcast.
+
+Preserve the signer journal and inspect its state before changing signer
+configuration or attempting manual recovery. Do not delete the journal
+to clear an error.
+
+One-shot commands exit after reporting the outcome; they do not keep
+retrying pending journal writes or transaction recovery in the background.
 
 ### Journal runtime bounds
 
@@ -883,6 +918,13 @@ network security model and normative infrastructure policy. See the root
 deployment manifests, and operator configuration.
 
 ## Exact-round processing
+
+Before beginning fresh import work, the importer checks whether the exact
+work identity is already retained. If so, it returns `already-retained`
+with the existing attempt ID and work identity, without repeating
+deployment verification, beacon retrieval, simulation, or submission.
+The following steps describe processing when that early check finds no
+retained attempt.
 
 `import`, `import-when-available`, and `daemon` use the same submission path 
 for an exact round `R`:
@@ -1547,7 +1589,13 @@ If rendering or writing command output fails, the CLI attempts to emit
 That diagnostic preserves validated import outcome fields when available:
 completed results include randomness and, for imported results, the
 transaction hash. Pending results include the attempt ID, transaction
-hash, and reason. Deferred results include the reason and signer blocker.
+hash, and reason. Deferred results include the reason and either the
+signer blocker or the existing attempt ID and work identity.
+
+For submission-recording output, `output_failed` preserves the round,
+recording status, attempt ID, and work identity. It excludes signed
+transaction bytes. This reporting is best effort when stderr is also
+unavailable.
 
 An output failure does not change the underlying import outcome.
 
@@ -1736,6 +1784,10 @@ Coverage includes:
 - snapshot age classification and historical gate reporting
 - status reads preserving journals, checkpoints, and temporary files
 - status output validation and output-failure exit codes
+- submission recording states and preservation of original failures
+- retained-attempt reporting after cancellation during preparation
+- submission-recording output failure taking precedence over cancellation
+- wrapped journal-bounds diagnostics and exit status `6`
 
 ## Operational assumptions
 
