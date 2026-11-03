@@ -51,20 +51,12 @@ import {
 } from '../../src/rounds/create-round-importer.js';
 
 import {
-  BroadcastRetrySchedule,
-} from '../../src/state/broadcast-retry-schedule.js';
-
-import {
   FileTransactionJournalStore,
 } from '../../src/state/file-transaction-journal-store.js';
 
 import {
-  SignerCoordinator,
-} from '../../src/state/signer-coordinator.js';
-
-import {
-  SignerRecoveryCycle,
-} from '../../src/state/signer-recovery-cycle.js';
+  TransactionManager,
+} from '../../src/state/transaction-manager.js';
 
 const KEY = `0x${'11'.repeat(32)}` as const;
 const ACCOUNT = privateKeyToAccount(KEY);
@@ -112,25 +104,6 @@ describe('retained beacon import', () => {
       });
 
       const save = vi.spyOn(store, 'save');
-
-      const coordinator = await SignerCoordinator.create({
-        identity,
-        store,
-        maxRetainedAttempts: 1,
-        log: createRelayerLog({
-          chainId: identity.chainId,
-          destination: {
-            write() {},
-          },
-        }),
-        createErrorSummary: (secrets = []) => ({
-          scrubText: createScrubber({
-            privateKey: KEY,
-            rpcUrls: [],
-            secrets,
-          }),
-        }),
-      });
 
       const getBlock = vi.fn().mockResolvedValue({
         number: anchor.blockNumber,
@@ -192,28 +165,44 @@ describe('retained beacon import', () => {
         signTransaction,
       };
 
-      const recovery = new SignerRecoveryCycle({
-        coordinator,
-        schedule: new BroadcastRetrySchedule({
-          initialDelayMs: 100,
-          maxDelayMs: 400,
-          now: () => 0,
-        }),
-      });
-
       const readChainHeads = vi.fn().mockResolvedValue({
         latestBlock: 100n,
         durableBlock: 100n,
       });
 
-      const submitter = createBeaconSubmitter({
+      const manager = await TransactionManager.create({
+        identity,
+        store,
+        maxRetainedAttempts: 1,
+        log: createRelayerLog({
+          chainId: identity.chainId,
+          destination: {
+            write() {},
+          },
+        }),
+        createErrorSummary: (secrets = []) => ({
+          scrubText: createScrubber({
+            privateKey: KEY,
+            rpcUrls: [],
+            secrets,
+          }),
+        }),
         publicClient,
         walletClient,
         account,
-        coordinator,
-        recovery,
         readChainHeads,
         maxBlockRange: 2n,
+        retry: {
+          initialDelayMs: 100,
+          maxDelayMs: 400,
+          now: () => 0,
+        },
+      });
+
+      const submitter = createBeaconSubmitter({
+        publicClient,
+        manager,
+        readChainHeads,
       });
 
       // No submission or identity helper is mocked: this creates the
@@ -226,8 +215,12 @@ describe('retained beacon import', () => {
       }, 7);
 
       expect(submitted).toMatchObject({
-        status: 'acknowledged',
-        nonce: 4n,
+        status: 'submitted',
+        broadcast: {
+          status: 'acknowledged',
+          workId: `quicknet-round:v1:4663:${REGISTRY}:${ROUND}`,
+          nonce: 4n,
+        },
       });
 
       expect(signTransaction).toHaveBeenCalledOnce();

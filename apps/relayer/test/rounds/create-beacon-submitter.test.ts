@@ -8,38 +8,22 @@ import {
 
 import type {
   PublicClient,
-  WalletClient,
 } from 'viem';
-
-import {
-  privateKeyToAccount,
-} from 'viem/accounts';
 
 import {
   drandQuicknetBeaconRegistryAbi,
 } from '@based-labs/drand-quicknet-registry';
 
 import type {
-  AttemptSummary,
-  SignerCoordinator,
-} from '../../src/state/signer-coordinator.js';
-
-import type {
-  SignerRecoveryCycle,
-  SignerRecoveryCycleResult,
-} from '../../src/state/signer-recovery-cycle.js';
+  TransactionAttemptSummary,
+  TransactionManagerStatus,
+  TransactionReconciliationReport,
+  SubmitTransactionWorkResult,
+} from '../../src/state/transaction-manager-types.js';
 
 const mocks = vi.hoisted(() => ({
-  recoverSignerAtHeads: vi.fn(),
   submitBeaconTransaction: vi.fn(),
 }));
-
-vi.mock(
-  '../../src/state/recover-signer-at-heads.js',
-  () => ({
-    recoverSignerAtHeads: mocks.recoverSignerAtHeads,
-  }),
-);
 
 vi.mock(
   '../../src/rounds/submit-beacon-transaction.js',
@@ -51,9 +35,8 @@ vi.mock(
 import {
   createBeaconSubmitter,
   type BeaconSubmissionRequest,
+  type CreateBeaconSubmitterOptions,
 } from '../../src/rounds/create-beacon-submitter.js';
-
-const ACCOUNT = privateKeyToAccount(`0x${'11'.repeat(32)}`);
 
 const REGISTRY =
   '0x2222222222222222222222222222222222222222' as const;
@@ -62,9 +45,9 @@ const HASH = `0x${'aa'.repeat(32)}` as const;
 const SIGNATURE = `0x${'11'.repeat(48)}` as const;
 
 function retainedAttempt(
-  phase: AttemptSummary['phase'],
-): AttemptSummary {
-  const transactionHashes: AttemptSummary['transactionHashes'] = [
+  phase: TransactionAttemptSummary['phase'],
+): TransactionAttemptSummary {
+  const transactionHashes: TransactionAttemptSummary['transactionHashes'] = [
     HASH,
   ];
 
@@ -80,97 +63,80 @@ function retainedAttempt(
 }
 
 function setup() {
-  const events: string[] = [];
   const controller = new AbortController();
 
-  const recoveryResult: SignerRecoveryCycleResult = {
-    inspection: {
-      status: 'no-attempt',
-      observation: {
-        anchor: {
-          blockNumber: 100n,
-          blockHash: HASH,
-        },
-        nonce: 4n,
-      },
-    },
-    inclusions: null,
+  const status: TransactionManagerStatus = {
+    chainId: 4663,
+    journalInitialized: true,
+    busy: false,
+    open: true,
+    primaryReason: null,
+    blockers: [],
+    recoveryComplete: true,
+    inclusionChecksComplete: true,
+    persistenceState: 'idle',
+    blockedSince: null,
+    attempts: [],
+  };
+
+  const readStatus = vi.fn<() => TransactionManagerStatus>()
+    .mockReturnValue(status);
+
+  const recoveryResult: TransactionReconciliationReport = {
+    state: status,
+    recoveryStatus: 'no-attempt',
+    inclusionStatus: 'inspected',
     broadcast: null,
     retryDelayMs: null,
   };
 
   const submissionResult = {
-    status: 'acknowledged',
-    attemptId: '11111111-1111-4111-8111-111111111111',
-    transactionHash: HASH,
-    nonce: 4n,
-  } as const;
-
-  mocks.recoverSignerAtHeads.mockImplementation(async () => {
-    events.push('recover');
-    return recoveryResult;
-  });
-
-  mocks.submitBeaconTransaction.mockImplementation(async () => {
-    events.push('submit');
-    return submissionResult;
-  });
-
-  const readStatus = vi.fn<
-    () => Pick<SignerCoordinator['status'], 'open' | 'primaryReason'>
-  >().mockReturnValue({
-    open: true,
-    primaryReason: null,
-  });
-
-  const observationEvents: string[] = [];
-
-  const observeReconciliation = vi.fn(
-    async <T>(
-      action: () => Promise<T>,
-      _cycle?: number,
-    ): Promise<T> => {
-      observationEvents.push('start');
-
-      try {
-        return await action();
-      } finally {
-        observationEvents.push('finish');
-      }
+    status: 'submitted',
+    broadcast: {
+      status: 'acknowledged',
+      workId:
+        'quicknet-round:v1:4663:' +
+        '0x2222222222222222222222222222222222222222:20791007',
+      attemptId: '11111111-1111-4111-8111-111111111111',
+      transactionHash: HASH,
+      nonce: 4n,
     },
-  );
+  } as const satisfies SubmitTransactionWorkResult;
 
-  const readAttempts = vi.fn<
-    () => SignerCoordinator['attempts']
-  >().mockReturnValue(Object.freeze([]));
+  const reconcile =
+    vi.fn<CreateBeaconSubmitterOptions['manager']['reconcile']>()
+      .mockResolvedValue(recoveryResult);
 
-  const coordinator = {
-    observeReconciliation,
+  const submit =
+    vi.fn<CreateBeaconSubmitterOptions['manager']['submit']>();
 
-    get attempts() {
-      return readAttempts();
-    },
-
+  const manager = {
     get status() {
       return readStatus();
     },
-  } as unknown as SignerCoordinator;
+    reconcile,
+    submit,
+  } satisfies CreateBeaconSubmitterOptions['manager'];
 
-  const recovery = {} as SignerRecoveryCycle;
+  const getBlock = vi.fn<PublicClient['getBlock']>()
+    .mockImplementation(async ({ blockNumber } = {}) => ({
+      number: blockNumber,
+      hash: HASH,
+    }) as never);
+
+  const readChainHeads =
+    vi.fn<CreateBeaconSubmitterOptions['readChainHeads']>()
+      .mockResolvedValue({
+        durableBlock: 100n,
+        latestBlock: 110n,
+      });
 
   const options = {
-    publicClient: {} as PublicClient,
-    walletClient: {} as WalletClient,
-    account: ACCOUNT,
-    coordinator,
-    recovery,
-    readChainHeads: vi.fn().mockResolvedValue({
-      durableBlock: 100n,
-      latestBlock: 110n,
-    }),
-    maxBlockRange: 2n,
+    publicClient: { getBlock } as unknown as PublicClient,
+    manager,
+    readChainHeads,
     signal: controller.signal,
-  };
+  } satisfies CreateBeaconSubmitterOptions;
 
   const request = {
     address: REGISTRY,
@@ -180,15 +146,18 @@ function setup() {
     gas: 150_000n,
   } as const satisfies BeaconSubmissionRequest;
 
+  mocks.submitBeaconTransaction.mockResolvedValue(submissionResult);
+
   return {
     options,
     request,
     controller,
-    events,
-    observeReconciliation,
-    observationEvents,
-    readAttempts,
+    status,
     readStatus,
+    getBlock,
+    readChainHeads,
+    reconcile,
+    submit,
     recoveryResult,
     submissionResult,
     submitter: createBeaconSubmitter(options),
@@ -200,412 +169,204 @@ describe('beacon submitter', () => {
     vi.resetAllMocks();
   });
 
-  it('exposes recovery using the shared runner without submitting a new beacon', async () => {
+  it('captures durable and latest anchors before reconciling', async () => {
     const t = setup();
 
-    const result = await t.submitter.recover(7);
+    await expect(t.submitter.recover(7)).resolves.toBe(t.recoveryResult);
 
-    expect(result).toBe(t.recoveryResult);
+    expect(t.readChainHeads).toHaveBeenCalledOnce();
+    expect(t.getBlock).toHaveBeenCalledTimes(2);
 
-    expect(t.observeReconciliation)
-      .toHaveBeenCalledExactlyOnceWith(expect.any(Function), 7);
+    expect(t.getBlock.mock.calls.map(([options]) => options?.blockNumber))
+      .toEqual([100n, 110n]);
 
-    expect(t.observationEvents).toEqual(['start', 'finish']);
-
-    expect(mocks.recoverSignerAtHeads)
-      .toHaveBeenCalledExactlyOnceWith({
-        publicClient: t.options.publicClient,
-        recovery: t.options.recovery,
-        readChainHeads: t.options.readChainHeads,
-        maxBlockRange: 2n,
-        signal: t.controller.signal,
-      }, 7);
+    expect(t.reconcile).toHaveBeenCalledExactlyOnceWith({
+      durable: {
+        blockNumber: 100n,
+        blockHash: HASH,
+      },
+      head: {
+        blockNumber: 110n,
+        blockHash: HASH,
+      },
+      signal: t.controller.signal,
+      cycle: 7,
+    });
 
     expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
+    expect(t.submit).not.toHaveBeenCalled();
     expect(Object.isFrozen(t.submitter)).toBe(true);
   });
 
-  it('awaits recovery before submitting and forwards the cycle', async () => {
+  it('reads a shared durable and latest block only once', async () => {
     const t = setup();
 
-    let finishRecovery!: () => void;
+    t.readChainHeads.mockResolvedValueOnce({
+      durableBlock: 100n,
+      latestBlock: 100n,
+    });
 
-    mocks.recoverSignerAtHeads.mockImplementationOnce(
-      () => new Promise<SignerRecoveryCycleResult>((resolve) => {
-        t.events.push('recover');
+    await t.submitter.recover();
 
-        finishRecovery = () => {
-          resolve(t.recoveryResult);
-        };
-      }),
-    );
+    expect(t.getBlock).toHaveBeenCalledOnce();
 
-    const pending = t.submitter.submit(t.request, 8);
+    expect(t.reconcile).toHaveBeenCalledExactlyOnceWith({
+      durable: {
+        blockNumber: 100n,
+        blockHash: HASH,
+      },
+      head: {
+        blockNumber: 100n,
+        blockHash: HASH,
+      },
+      signal: t.controller.signal,
+      cycle: undefined,
+    });
+  });
 
-    try {
-      expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
-      expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
-      expect(t.readStatus).not.toHaveBeenCalled();
-      expect(t.observeReconciliation)
-        .toHaveBeenCalledExactlyOnceWith(expect.any(Function), 8);
+  it('rejects reversed heads before reading blocks or reconciling', async () => {
+    const t = setup();
 
-      expect(t.observationEvents).toEqual(['start']);
-    } finally {
-      finishRecovery();
-    }
+    t.readChainHeads.mockResolvedValueOnce({
+      durableBlock: 110n,
+      latestBlock: 100n,
+    });
 
-    expect(await pending).toBe(t.submissionResult);
-    expect(t.observationEvents).toEqual(['start', 'finish']);
-    expect(t.readStatus).toHaveBeenCalledOnce();
-    expect(t.events).toEqual(['recover', 'submit']);
+    await expect(t.submitter.recover()).rejects.toThrow();
 
-    expect(mocks.recoverSignerAtHeads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        recovery: t.options.recovery,
-      }),
-      8,
-    );
+    expect(t.getBlock).not.toHaveBeenCalled();
+    expect(t.reconcile).not.toHaveBeenCalled();
+  });
+
+  it('propagates head-selection failure without reconciling', async () => {
+    const t = setup();
+    const failure = new Error('Head selection failed');
+
+    t.readChainHeads.mockRejectedValueOnce(failure);
+
+    await expect(t.submitter.recover()).rejects.toBe(failure);
+
+    expect(t.getBlock).not.toHaveBeenCalled();
+    expect(t.reconcile).not.toHaveBeenCalled();
+  });
+
+  it('propagates an anchor-read failure without reconciling', async () => {
+    const t = setup();
+    const failure = new Error('Anchor read failed');
+
+    t.getBlock.mockRejectedValueOnce(failure);
+
+    await expect(t.submitter.recover()).rejects.toBe(failure);
+
+    expect(t.reconcile).not.toHaveBeenCalled();
+  });
+
+  it('propagates reconciliation failure without retrying', async () => {
+    const t = setup();
+    const failure = new Error('Recovery failed');
+
+    t.reconcile.mockRejectedValueOnce(failure);
+
+    await expect(t.submitter.recover()).rejects.toBe(failure);
+
+    expect(t.reconcile).toHaveBeenCalledOnce();
+    expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
+  });
+
+  it('does no recovery work when already cancelled', async () => {
+    const t = setup();
+    const reason = new Error('Stop');
+
+    t.controller.abort(reason);
+
+    await expect(t.submitter.recover()).rejects.toBe(reason);
+
+    expect(t.readChainHeads).not.toHaveBeenCalled();
+    expect(t.getBlock).not.toHaveBeenCalled();
+    expect(t.reconcile).not.toHaveBeenCalled();
+  });
+
+  it('stops when cancellation arrives during head selection', async () => {
+    const t = setup();
+    const reason = new Error('Stop');
+
+    t.readChainHeads.mockImplementationOnce(async () => {
+      t.controller.abort(reason);
+
+      return {
+        durableBlock: 100n,
+        latestBlock: 110n,
+      };
+    });
+
+    await expect(t.submitter.recover()).rejects.toBe(reason);
+
+    expect(t.getBlock).not.toHaveBeenCalled();
+    expect(t.reconcile).not.toHaveBeenCalled();
+  });
+
+  it('forwards submission to the adapter without a separate recovery pass', async () => {
+    const t = setup();
+
+    const result = await t.submitter.submit(t.request, 8);
+    const statusReadsDuringSubmission = t.readStatus.mock.calls.length;
+
+    expect(result).toBe(t.submissionResult);
+    expect(statusReadsDuringSubmission).toBe(0);
 
     expect(mocks.submitBeaconTransaction)
       .toHaveBeenCalledExactlyOnceWith({
-        publicClient: t.options.publicClient,
-        walletClient: t.options.walletClient,
-        account: ACCOUNT,
-        coordinator: t.options.coordinator,
+        manager: t.options.manager,
         request: t.request,
         signal: t.controller.signal,
       }, 8);
 
     expect(mocks.submitBeaconTransaction.mock.calls[0]![0].request)
       .toBe(t.request);
+
+    expect(t.readChainHeads).not.toHaveBeenCalled();
+    expect(t.getBlock).not.toHaveBeenCalled();
+    expect(t.reconcile).not.toHaveBeenCalled();
   });
 
-  it('forwards already-retained unchanged after recovery and an open-gate check', async () => {
-    const t = setup();
+  it.each([
+    {
+      status: 'already-retained',
+      retained: {
+        attemptId: '11111111-1111-4111-8111-111111111111',
+        workId: 'test-work:retained',
+      },
+    },
+    {
+      status: 'deferred',
+      primaryReason: 'unresolved-attempt',
+      reasons: ['unresolved-attempt'],
+    },
+  ] as const satisfies readonly SubmitTransactionWorkResult[])(
+    'forwards the adapter’s $status result unchanged',
+    async (result) => {
+      const t = setup();
 
-    const retained = Object.freeze({
-      status: 'already-retained' as const,
-      attemptId: '11111111-1111-4111-8111-111111111111',
-      workId:
-        'quicknet-round:v1:4663:' +
-        '0x2222222222222222222222222222222222222222:20791007',
-    });
+      mocks.submitBeaconTransaction.mockResolvedValueOnce(result);
 
-    mocks.submitBeaconTransaction.mockImplementationOnce(async () => {
-      t.events.push('submit');
+      await expect(t.submitter.submit(t.request, 7)).resolves.toBe(result);
 
-      expect(t.readStatus).toHaveBeenCalledOnce();
-
-      return retained;
-    });
-
-    const result = await t.submitter.submit(t.request, 7);
-
-    expect(result).toBe(retained);
-    expect(t.events).toEqual(['recover', 'submit']);
-    expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
-    expect(t.readStatus).toHaveBeenCalledOnce();
-
-    expect(mocks.submitBeaconTransaction)
-      .toHaveBeenCalledExactlyOnceWith({
-        publicClient: t.options.publicClient,
-        walletClient: t.options.walletClient,
-        account: ACCOUNT,
-        coordinator: t.options.coordinator,
-        request: t.request,
-        signal: t.controller.signal,
-      }, 7);
-  });
-
-  it('does not submit when recovery fails', async () => {
-    const t = setup();
-    const error = new Error('Recovery failed');
-
-    mocks.recoverSignerAtHeads.mockRejectedValueOnce(error);
-
-    await expect(
-      t.submitter.submit(t.request),
-    ).rejects.toBe(error);
-
-    expect(t.observeReconciliation).toHaveBeenCalledOnce();
-    expect(t.observationEvents).toEqual(['start', 'finish']);
-
-    expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
-    expect(t.readStatus).not.toHaveBeenCalled();
-  });
-
-  it('does not submit when cancellation arrives during recovery', async () => {
-    const t = setup();
-    const reason = new Error('Stop');
-
-    mocks.recoverSignerAtHeads.mockImplementationOnce(async () => {
-      t.controller.abort(reason);
-      return t.recoveryResult;
-    });
-
-    await expect(
-      t.submitter.submit(t.request),
-    ).rejects.toBe(reason);
-
-    expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
-    expect(t.readStatus).not.toHaveBeenCalled();
-  });
+      expect(t.readStatus).not.toHaveBeenCalled();
+      expect(mocks.submitBeaconTransaction).toHaveBeenCalledOnce();
+      expect(t.reconcile).not.toHaveBeenCalled();
+    },
+  );
 
   it('propagates submission failure without retrying', async () => {
     const t = setup();
-    const error = new Error('Transaction broadcast outcome is uncertain');
+    const failure = new Error('Submission failed');
 
-    mocks.submitBeaconTransaction.mockRejectedValueOnce(error);
+    mocks.submitBeaconTransaction.mockRejectedValueOnce(failure);
 
-    await expect(
-      t.submitter.submit(t.request),
-    ).rejects.toBe(error);
+    await expect(t.submitter.submit(t.request)).rejects.toBe(failure);
 
-    expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
     expect(mocks.submitBeaconTransaction).toHaveBeenCalledOnce();
-  });
-
-  it('defers when fresh recovery leaves the signer blocked', async () => {
-    const t = setup();
-
-    mocks.recoverSignerAtHeads.mockImplementationOnce(async () => {
-      t.readStatus.mockReturnValue({
-        open: false,
-        primaryReason: 'unresolved-attempt',
-      });
-
-      return t.recoveryResult;
-    });
-
-    await expect(t.submitter.submit(t.request, 9)).resolves.toEqual({
-      status: 'signer-unavailable',
-      blocker: 'unresolved-attempt',
-    });
-
-    expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
-    expect(t.readStatus).toHaveBeenCalledOnce();
-    expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
-  });
-
-  it('submits when fresh recovery releases a previously blocked gate', async () => {
-    const t = setup();
-
-    t.readStatus.mockReturnValue({
-      open: false,
-      primaryReason: 'unresolved-attempt',
-    });
-
-    mocks.recoverSignerAtHeads.mockImplementationOnce(async () => {
-      t.readStatus.mockReturnValue({
-        open: true,
-        primaryReason: null,
-      });
-
-      return t.recoveryResult;
-    });
-
-    await expect(t.submitter.submit(t.request))
-      .resolves.toBe(t.submissionResult);
-
-    expect(t.readStatus).toHaveBeenCalledOnce();
-    expect(mocks.submitBeaconTransaction).toHaveBeenCalledOnce();
-  });
-
-  it('throws when the gate is closed without a classified blocker', async () => {
-    const t = setup();
-
-    t.readStatus.mockReturnValue({
-      open: false,
-      primaryReason: null,
-    });
-
-    await expect(t.submitter.submit(t.request)).rejects.toThrow(
-      'Signer gate is closed without a reported blocker.',
-    );
-
-    expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
-  });
-
-  it.each(['recover', 'submit'] as const)(
-    'reports completed recovery through %s',
-    async (operation) => {
-      const t = setup();
-      const onRecoveryCompleted = vi.fn();
-
-      const submitter = createBeaconSubmitter({
-        ...t.options,
-        onRecoveryCompleted,
-      });
-
-      if (operation === 'recover') {
-        expect(await submitter.recover(7)).toBe(t.recoveryResult);
-      } else {
-        expect(await submitter.submit(t.request, 7))
-          .toBe(t.submissionResult);
-      }
-
-      expect(onRecoveryCompleted).toHaveBeenCalledExactlyOnceWith({
-        retryDelayMs: null,
-      });
-
-      const observed = onRecoveryCompleted.mock.calls[0]![0];
-
-      expect(Object.isFrozen(observed)).toBe(true);
-      expect(Object.keys(observed)).toEqual(['retryDelayMs']);
-
-      if (operation === 'submit') {
-        expect(
-          onRecoveryCompleted.mock.invocationCallOrder[0]!,
-        ).toBeLessThan(
-          mocks.submitBeaconTransaction.mock.invocationCallOrder[0]!,
-        );
-      }
-    },
-  );
-
-  it('reports the delay only after recovery finishes', async () => {
-    const t = setup();
-    const onRecoveryCompleted = vi.fn();
-
-    let finish!: (result: SignerRecoveryCycleResult) => void;
-
-    mocks.recoverSignerAtHeads.mockReturnValueOnce(
-      new Promise<SignerRecoveryCycleResult>((resolve) => {
-        finish = resolve;
-      }),
-    );
-
-    const submitter = createBeaconSubmitter({
-      ...t.options,
-      onRecoveryCompleted,
-    });
-
-    const pending = submitter.recover();
-
-    try {
-      expect(onRecoveryCompleted).not.toHaveBeenCalled();
-    } finally {
-      finish({
-        ...t.recoveryResult,
-        retryDelayMs: 5_000,
-      });
-      await pending;
-    }
-
-    expect(onRecoveryCompleted).toHaveBeenCalledExactlyOnceWith({
-      retryDelayMs: 5_000,
-    });
-  });
-
-  it('does not report completed recovery when recovery fails', async () => {
-    const t = setup();
-    const failure = new Error('Recovery failed');
-    const onRecoveryCompleted = vi.fn();
-
-    mocks.recoverSignerAtHeads.mockRejectedValueOnce(failure);
-
-    const submitter = createBeaconSubmitter({
-      ...t.options,
-      onRecoveryCompleted,
-    });
-
-    await expect(submitter.submit(t.request)).rejects.toBe(failure);
-
-    expect(onRecoveryCompleted).not.toHaveBeenCalled();
-    expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
-  });
-
-  it.each(['recover', 'submit'] as const)(
-    'preserves %s when the recovery observer throws',
-    async (operation) => {
-      const t = setup();
-
-      const submitter = createBeaconSubmitter({
-        ...t.options,
-        onRecoveryCompleted() {
-          throw new Error('Diagnostic observer failed');
-        },
-      });
-
-      if (operation === 'recover') {
-        await expect(submitter.recover())
-          .resolves.toBe(t.recoveryResult);
-      } else {
-        await expect(submitter.submit(t.request))
-          .resolves.toBe(t.submissionResult);
-
-        expect(mocks.submitBeaconTransaction).toHaveBeenCalledOnce();
-      }
-
-      expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
-    },
-  );
-
-  it('awaits reconciliation completion before publishing recovery or submitting', async () => {
-    const t = setup();
-
-    let notifyRecovered!: () => void;
-    let finishObservation!: () => void;
-
-    const recovered = new Promise<void>((resolve) => {
-      notifyRecovered = resolve;
-    });
-
-    const observationFinished = new Promise<void>((resolve) => {
-      finishObservation = resolve;
-    });
-
-    t.observeReconciliation.mockImplementationOnce(
-      async <T>(action: () => Promise<T>): Promise<T> => {
-        const result = await action();
-
-        notifyRecovered();
-        await observationFinished;
-
-        return result;
-      },
-    );
-
-    const onRecoveryCompleted = vi.fn();
-
-    const submitter = createBeaconSubmitter({
-      ...t.options,
-      onRecoveryCompleted,
-    });
-
-    const pending = submitter.submit(t.request, 9);
-
-    try {
-      await Promise.race([recovered, pending]);
-
-      expect(mocks.recoverSignerAtHeads).toHaveBeenCalledOnce();
-      expect(onRecoveryCompleted).not.toHaveBeenCalled();
-      expect(t.readStatus).not.toHaveBeenCalled();
-      expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
-    } finally {
-      finishObservation();
-      await pending;
-    }
-
-    expect(await pending).toBe(t.submissionResult);
-
-    expect(t.observeReconciliation)
-      .toHaveBeenCalledExactlyOnceWith(expect.any(Function), 9);
-
-    expect(onRecoveryCompleted).toHaveBeenCalledExactlyOnceWith({
-      retryDelayMs: null,
-    });
-
-    expect(t.readStatus).toHaveBeenCalledOnce();
-    expect(mocks.submitBeaconTransaction).toHaveBeenCalledOnce();
-
-    expect(onRecoveryCompleted.mock.invocationCallOrder[0]!)
-      .toBeLessThan(t.readStatus.mock.invocationCallOrder[0]!);
-
-    expect(t.readStatus.mock.invocationCallOrder[0]!)
-      .toBeLessThan(
-        mocks.submitBeaconTransaction.mock.invocationCallOrder[0]!,
-      );
+    expect(t.reconcile).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -615,24 +376,24 @@ describe('beacon submitter', () => {
   ] as const)(
     'returns the existing frozen summary for retained work in phase %s',
     (phase) => {
-      const t = setup();
-      const retained = retainedAttempt(phase);
+        const t = setup();
+        const retained = retainedAttempt(phase);
 
-      t.readAttempts.mockReturnValue(Object.freeze([retained]));
+        t.readStatus.mockReturnValue({
+        ...t.status,
+        attempts: Object.freeze([retained]),
+      });
 
       const result = t.submitter.findRetainedWork(retained.workId);
 
       expect(result).toBe(retained);
       expect(Object.isFrozen(result)).toBe(true);
       expect(Object.isFrozen(result!.transactionHashes)).toBe(true);
-      expect(t.readAttempts).toHaveBeenCalledOnce();
+      expect(t.readStatus).toHaveBeenCalledOnce();
 
-      expect(t.readStatus).not.toHaveBeenCalled();
-      expect(t.observeReconciliation).not.toHaveBeenCalled();
+      expect(t.reconcile).not.toHaveBeenCalled();
       expect(t.options.readChainHeads).not.toHaveBeenCalled();
-      expect(mocks.recoverSignerAtHeads).not.toHaveBeenCalled();
       expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
-      expect(t.events).toEqual([]);
     },
   );
 
@@ -640,16 +401,17 @@ describe('beacon submitter', () => {
     const t = setup();
     const retained = retainedAttempt('included');
 
-    const unrelated: AttemptSummary = Object.freeze({
+    const unrelated: TransactionAttemptSummary = Object.freeze({
       ...retained,
       attemptId: '22222222-2222-4222-8222-222222222222',
       workId: 'test-work:unrelated',
       nonce: 3n,
     });
 
-    t.readAttempts.mockReturnValue(
-      Object.freeze([unrelated, retained]),
-    );
+    t.readStatus.mockReturnValue({
+      ...t.status,
+      attempts: Object.freeze([unrelated, retained]),
+    });
 
     expect(t.submitter.findRetainedWork(retained.workId))
       .toBe(retained);
@@ -663,9 +425,8 @@ describe('beacon submitter', () => {
     expect(t.submitter.findRetainedWork('test-work:retained '))
       .toBeNull();
 
-    expect(t.readAttempts).toHaveBeenCalledTimes(4);
-    expect(t.readStatus).not.toHaveBeenCalled();
-    expect(mocks.recoverSignerAtHeads).not.toHaveBeenCalled();
+    expect(t.readStatus).toHaveBeenCalledTimes(4);
+    expect(t.reconcile).not.toHaveBeenCalled();
     expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
   });
 
@@ -676,20 +437,23 @@ describe('beacon submitter', () => {
     // The submitter already exists before the retained record appears.
     expect(t.submitter.findRetainedWork(retained.workId)).toBeNull();
 
-    t.readAttempts.mockReturnValue(Object.freeze([retained]));
+    t.readStatus.mockReturnValue({
+      ...t.status,
+      attempts: Object.freeze([retained]),
+    });
 
     expect(t.submitter.findRetainedWork(retained.workId))
       .toBe(retained);
 
-    // Removing the record must also be visible through the same submitter.
-    t.readAttempts.mockReturnValue(Object.freeze([]));
+    t.readStatus.mockReturnValue({
+      ...t.status,
+      attempts: Object.freeze([]),
+    });
 
     expect(t.submitter.findRetainedWork(retained.workId)).toBeNull();
 
-    expect(t.readAttempts).toHaveBeenCalledTimes(3);
-    expect(t.readStatus).not.toHaveBeenCalled();
-    expect(t.observeReconciliation).not.toHaveBeenCalled();
-    expect(mocks.recoverSignerAtHeads).not.toHaveBeenCalled();
+    expect(t.readStatus).toHaveBeenCalledTimes(3);
+    expect(t.reconcile).not.toHaveBeenCalled();
     expect(mocks.submitBeaconTransaction).not.toHaveBeenCalled();
   });
 });

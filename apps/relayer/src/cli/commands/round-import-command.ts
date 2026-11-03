@@ -37,6 +37,10 @@ import {
   importQuicknetRoundWhenAvailable,
 } from '../../rounds/import-round-when-available.js';
 
+import {
+  submissionRecording,
+} from '../../state/transaction-manager.js';
+
 import type {
   CliOutputHandler,
 } from '../output/cli-output.js';
@@ -146,6 +150,19 @@ export async function runRoundImportCommand(
         });
       }
     } catch (error) {
+      const recording = submissionRecording(error);
+
+      if (
+        recording !== undefined &&
+        recording.status !== 'none'
+      ) {
+        output({
+          type: 'submission-recording',
+          round: command.round,
+          recording,
+        });
+      }
+
       if (isOperationCancelled(error, signal)) {
         throw error;
       }

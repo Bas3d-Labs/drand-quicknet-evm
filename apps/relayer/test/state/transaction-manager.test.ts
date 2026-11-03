@@ -94,6 +94,7 @@ async function rejectedValue(
 async function managerFixture(options: {
   maxRetainedAttempts?: number;
   durableRecovery?: TransactionManagerOptions['durableRecovery'];
+  onRecoveryCompleted?: TransactionManagerOptions['onRecoveryCompleted'];
 } = {}) {
   const observation = {
     anchor: DURABLE,
@@ -192,6 +193,9 @@ async function managerFixture(options: {
     },
     readChainHeads,
     maxBlockRange: 2n,
+    ...(options.onRecoveryCompleted === undefined
+      ? {}
+      : { onRecoveryCompleted: options.onRecoveryCompleted }),
     retry: {
       initialDelayMs: 1_000,
       maxDelayMs: 10_000,
@@ -851,7 +855,11 @@ describe('transaction manager submission', () => {
   });
 
   it('reports the work identity of an eligible rebroadcast', async () => {
-    const t = await managerFixture();
+    const onRecoveryCompleted = vi.fn<
+      NonNullable<TransactionManagerOptions['onRecoveryCompleted']>
+    >();
+
+    const t = await managerFixture({ onRecoveryCompleted });
     const controller = new AbortController();
     const persist = t.save.getMockImplementation()!;
 
@@ -881,6 +889,8 @@ describe('transaction manager submission', () => {
       throw new TransactionReceiptNotFoundError({ hash });
     });
 
+    onRecoveryCompleted.mockClear();
+
     const report = await t.manager.reconcile({
       head: HEAD,
       durable: DURABLE,
@@ -905,6 +915,20 @@ describe('transaction manager submission', () => {
 
     expect(Object.isFrozen(report.broadcast)).toBe(true);
     expect(report.state).toEqual(t.manager.status);
+
+    expect(onRecoveryCompleted).toHaveBeenCalledExactlyOnceWith({
+      retryDelayMs: 1_000,
+    });
+
+    expect(Object.isFrozen(
+      onRecoveryCompleted.mock.calls[0]![0],
+    )).toBe(true);
+
+    expect(t.request.mock.invocationCallOrder[0]!)
+      .toBeLessThan(
+        onRecoveryCompleted.mock.invocationCallOrder[0]!,
+      );
+
     expect(t.request).toHaveBeenCalledTimes(1);
     expect(t.signTransaction).toHaveBeenCalledTimes(1);
 
@@ -947,6 +971,236 @@ describe('transaction manager submission', () => {
     });
 
     expect(report.state.open).toBe(true);
+  });
+});
+
+describe('transaction manager recovery notifications', () => {
+  type RecoveryObserver =
+    NonNullable<TransactionManagerOptions['onRecoveryCompleted']>;
+
+  it.each(['reconcile', 'submit'] as const)(
+    'notifies through %s while ownership is held',
+    async (operation) => {
+      let manager!: TransactionManager;
+      let busyDuringNotification: boolean | undefined;
+      let overlap: Promise<unknown> | undefined;
+
+      const onRecoveryCompleted = vi.fn<RecoveryObserver>(() => {
+        busyDuringNotification = manager.status.busy;
+
+        // Attach rejection handling immediately. The observer itself is
+        // synchronous and does not wait for the rejected operation.
+        overlap = rejectedValue(manager.reconcile({
+          head: HEAD,
+          durable: DURABLE,
+        }));
+      });
+
+      const t = await managerFixture({ onRecoveryCompleted });
+      manager = t.manager;
+
+      if (operation === 'reconcile') {
+        await manager.reconcile({
+          head: HEAD,
+          durable: DURABLE,
+        });
+      } else {
+        await manager.submit(submissionOptions());
+      }
+
+      expect(onRecoveryCompleted).toHaveBeenCalledExactlyOnceWith({
+        retryDelayMs: null,
+      });
+
+      const observation = onRecoveryCompleted.mock.calls[0]![0];
+
+      expect(Object.isFrozen(observation)).toBe(true);
+      expect(Object.keys(observation)).toEqual(['retryDelayMs']);
+      expect(busyDuringNotification).toBe(true);
+
+      if (overlap === undefined) {
+        throw new Error('Expected an overlapping reconciliation attempt.');
+      }
+
+      const error = await overlap;
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe(
+        'Transaction manager operation is already in progress.',
+      );
+      expect(submissionRecording(error)).toBeUndefined();
+
+      if (operation === 'submit') {
+        expect(onRecoveryCompleted.mock.invocationCallOrder[0]!)
+          .toBeLessThan(
+            t.prepareTransactionRequest.mock.invocationCallOrder[0]!,
+          );
+      } else {
+        expect(t.prepareTransactionRequest).not.toHaveBeenCalled();
+      }
+
+      expect(manager.status.busy).toBe(false);
+    },
+  );
+
+  it('waits for the inclusion write before notifying or preparing', async () => {
+    const onRecoveryCompleted = vi.fn<RecoveryObserver>();
+    const t = await managerFixture({ onRecoveryCompleted });
+    const entered = deferred();
+    const release = deferred();
+    const persist = t.save.getMockImplementation()!;
+
+    t.save.mockImplementation(async (snapshot) => {
+      // Durable recovery uses block 100; inclusion inspection uses 110.
+      if (
+        snapshot.lastObservation.anchor.blockNumber === HEAD.blockNumber &&
+        snapshot.attempts.length === 0
+      ) {
+        entered.resolve();
+        await release.promise;
+      }
+
+      await persist(snapshot);
+    });
+
+    const pending = t.manager.submit(submissionOptions());
+
+    try {
+      await Promise.race([entered.promise, pending]);
+
+      expect(t.manager.status).toMatchObject({
+        busy: true,
+        open: false,
+        persistenceState: 'writing',
+      });
+
+      expect(onRecoveryCompleted).not.toHaveBeenCalled();
+      expect(t.prepareTransactionRequest).not.toHaveBeenCalled();
+      expect(t.signTransaction).not.toHaveBeenCalled();
+      expect(t.request).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await pending;
+    }
+
+    expect(await pending).toMatchObject({
+      status: 'submitted',
+      broadcast: {
+        status: 'acknowledged',
+      },
+    });
+
+    expect(onRecoveryCompleted).toHaveBeenCalledExactlyOnceWith({
+      retryDelayMs: null,
+    });
+
+    expect(onRecoveryCompleted.mock.invocationCallOrder[0]!)
+      .toBeLessThan(
+        t.prepareTransactionRequest.mock.invocationCallOrder[0]!,
+      );
+  });
+
+  it.each(['reconcile', 'submit'] as const)(
+    'does not notify when recovery fails through %s',
+    async (operation) => {
+      const onRecoveryCompleted = vi.fn<RecoveryObserver>();
+      const t = await managerFixture({ onRecoveryCompleted });
+      const failure = new Error('Recovery RPC failed.');
+
+      t.getTransactionCount.mockRejectedValueOnce(failure);
+
+      let error: unknown;
+
+      if (operation === 'reconcile') {
+        error = await rejectedValue(t.manager.reconcile({
+          head: HEAD,
+          durable: DURABLE,
+        }));
+
+        expect(error).toBe(failure);
+      } else {
+        error = await rejectedValue(
+          t.manager.submit(submissionOptions()),
+        );
+
+        expect((error as Error).cause).toBe(failure);
+        expect(submissionRecording(error)).toEqual({
+          status: 'none',
+        });
+      }
+
+      expect(onRecoveryCompleted).not.toHaveBeenCalled();
+      expect(t.prepareTransactionRequest).not.toHaveBeenCalled();
+      expect(t.signTransaction).not.toHaveBeenCalled();
+      expect(t.request).not.toHaveBeenCalled();
+      expect(t.manager.status.busy).toBe(false);
+    },
+  );
+
+  it.each(['reconcile', 'submit'] as const)(
+    'preserves %s when the recovery observer throws',
+    async (operation) => {
+      const onRecoveryCompleted = vi.fn<RecoveryObserver>(() => {
+        throw new Error('Diagnostic observer failed.');
+      });
+
+      const t = await managerFixture({ onRecoveryCompleted });
+
+      if (operation === 'reconcile') {
+        await expect(t.manager.reconcile({
+          head: HEAD,
+          durable: DURABLE,
+        })).resolves.toMatchObject({
+          recoveryStatus: 'no-attempt',
+          inclusionStatus: 'inspected',
+          state: {
+            busy: false,
+            open: true,
+          },
+        });
+      } else {
+        await expect(t.manager.submit(submissionOptions()))
+          .resolves.toMatchObject({
+            status: 'submitted',
+            broadcast: {
+              status: 'acknowledged',
+            },
+          });
+
+        expect(t.signTransaction).toHaveBeenCalledOnce();
+        expect(t.request).toHaveBeenCalledOnce();
+      }
+
+      expect(onRecoveryCompleted).toHaveBeenCalledOnce();
+      expect(t.manager.status.busy).toBe(false);
+    },
+  );
+
+  it('delivers recovery notification before a later preparation failure', async () => {
+    const onRecoveryCompleted = vi.fn<RecoveryObserver>();
+    const t = await managerFixture({ onRecoveryCompleted });
+    const failure = new Error('Fee preparation failed.');
+
+    t.prepareTransactionRequest.mockRejectedValueOnce(failure);
+
+    const error = await rejectedValue(
+      t.manager.submit(submissionOptions()),
+    );
+
+    expect(onRecoveryCompleted).toHaveBeenCalledExactlyOnceWith({
+      retryDelayMs: null,
+    });
+
+    expect(onRecoveryCompleted.mock.invocationCallOrder[0]!)
+      .toBeLessThan(
+        t.prepareTransactionRequest.mock.invocationCallOrder[0]!,
+      );
+
+    expect((error as Error).cause).toBe(failure);
+    expect(submissionRecording(error)).toEqual({ status: 'none' });
+    expect(t.signTransaction).not.toHaveBeenCalled();
+    expect(t.request).not.toHaveBeenCalled();
+    expect(t.manager.status.busy).toBe(false);
   });
 });
 

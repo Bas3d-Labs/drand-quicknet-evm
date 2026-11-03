@@ -64,6 +64,14 @@ export function writeSignerCrashPreload(
       moduleUrl('state/read-signer-runtime-observation.js'),
     )};
 
+    import {
+      SignerCoordinator,
+    } from ${JSON.stringify(moduleUrl('state/signer-coordinator.js'))};
+
+    import {
+      SignerRecoveryCycle,
+    } from ${JSON.stringify(moduleUrl('state/signer-recovery-cycle.js'))};
+
     const CHAIN_ID = 4663;
     const WORK_ID = 'test-work:crash-recovery';
     const RUN_ID = '11111111-1111-4111-8111-111111111111';
@@ -145,8 +153,54 @@ export function writeSignerCrashPreload(
         }),
       });
 
+      async function readChainHeads() {
+        const durable = await publicClient.getBlock({
+          blockTag: 'safe',
+        });
+
+        const latest = await publicClient.getBlock({
+          blockTag: 'latest',
+        });
+
+        return {
+          durableBlock: durable.number,
+          latestBlock: latest.number,
+        };
+      }
+
+      // This process-death fixture inspects internal authorization and pauses
+      // between preparation and broadcast. Capture the real coordinator without
+      // exposing those operations through the production manager API.
+      let coordinator;
+
+      const createCoordinator = SignerCoordinator.create;
+
+      SignerCoordinator.create = async function (...args) {
+        const created = await createCoordinator.apply(this, args);
+        assert.equal(coordinator, undefined);
+        coordinator = created;
+        return created;
+      };
+
+      // The public report omits resolution evidence. Retain the real cycle
+      // result so existing crash assertions still inspect that evidence.
+      let lastCycleResult;
+
+      const runRecoveryCycle = SignerRecoveryCycle.prototype.run;
+
+      SignerRecoveryCycle.prototype.run = async function (...args) {
+        const result = await runRecoveryCycle.apply(this, args);
+        lastCycleResult = result;
+        return result;
+      };
+
       const runtime = await openSignerRuntime({
         identity,
+        publicClient,
+        walletClient,
+        account,
+        readChainHeads,
+        maxBlockRange: 10n,
         log: createRelayerLog({
           chainId: CHAIN_ID,
           runId: RUN_ID,
@@ -174,30 +228,26 @@ export function writeSignerCrashPreload(
         }),
       });
 
-      const { coordinator } = runtime;
+      SignerCoordinator.create = createCoordinator;
+
+      assert.ok(coordinator);
 
       const submitter = createBeaconSubmitter({
         publicClient,
-        walletClient,
-        account,
-        coordinator,
-        recovery: runtime.recovery,
-        maxBlockRange: 10n,
-        async readChainHeads() {
-          const durable = await publicClient.getBlock({
-            blockTag: 'safe',
-          });
-
-          const latest = await publicClient.getBlock({
-            blockTag: 'latest',
-          });
-
-          return {
-            durableBlock: durable.number,
-            latestBlock: latest.number,
-          };
-        },
+        manager: runtime,
+        readChainHeads,
       });
+
+      async function recover() {
+        lastCycleResult = undefined;
+
+        // Reconciliation runs through the manager, including ownership and
+        // report projection, before the fixture inspects the internal evidence.
+        await submitter.recover();
+
+        assert.ok(lastCycleResult);
+        return lastCycleResult;
+      }
 
       const transaction = {
         type: 'eip1559',
@@ -266,7 +316,7 @@ export function writeSignerCrashPreload(
       }
 
       if (mode === 'initial') {
-        await submitter.recover();
+        await recover();
 
         assert.equal(coordinator.journalInitialized, true);
         assert.equal(coordinator.status.open, true);
@@ -292,7 +342,7 @@ export function writeSignerCrashPreload(
         });
 
         publisher.onInitialized(
-          () => readSignerRuntimeObservation(coordinator),
+          () => readSignerRuntimeObservation(runtime),
         );
 
         await publisher.publish();
@@ -331,7 +381,7 @@ export function writeSignerCrashPreload(
         assert.equal(signCalls, 0);
         await checkpoint('opened');
 
-        const resolved = await submitter.recover();
+        const resolved = await recover();
         await checkpoint('resolved', resolved);
 
         assert.equal(signCalls, 0);
@@ -369,21 +419,21 @@ export function writeSignerCrashPreload(
 
         // This pass contradicts the saved inclusion and starts the
         // restored attempt's retry schedule. It grants no send permit.
-        const invalidated = await submitter.recover();
+        const invalidated = await recover();
         await checkpoint('reorg-invalidated', invalidated);
 
         // Inspect the now-unresolved attempt again, without advancing
         // the clock. Fresh evidence can authorize broadcasting, but
         // the retry delay must still prevent a send.
-        const authorized = await submitter.recover();
+        const authorized = await recover();
         await checkpoint('reorg-authorized', authorized);
 
         clock = INITIAL_DELAY_MS - 1;
-        const before = await submitter.recover();
+        const before = await recover();
         await checkpoint('retry-before', before);
 
         clock = INITIAL_DELAY_MS;
-        const due = await submitter.recover();
+        const due = await recover();
         await checkpoint('rebroadcast', due);
 
         assert.equal(signCalls, 0);
@@ -420,14 +470,14 @@ export function writeSignerCrashPreload(
       if (mode === 'restored-signed') {
         // A signed attempt is immediately retry-eligible, but only
         // fresh recovery can authorize its first broadcast.
-        const due = await submitter.recover();
+        const due = await recover();
         await checkpoint('rebroadcast', due);
       } else if (
         mode === 'included' ||
         mode === 'resolve-crash' ||
         mode === 'replaced'
       ) {
-        const included = await submitter.recover();
+        const included = await recover();
         await checkpoint('included', included);
 
         // Opening and non-durable inclusion persistence have completed.
@@ -436,7 +486,7 @@ export function writeSignerCrashPreload(
           persistenceArmed = true;
         }
 
-        const resolved = await submitter.recover();
+        const resolved = await recover();
 
         if (mode === 'resolve-crash') {
           throw new Error('Resolution unexpectedly passed the kill boundary.');
@@ -444,15 +494,15 @@ export function writeSignerCrashPreload(
 
         await checkpoint('resolved', resolved);
       } else {
-        const start = await submitter.recover();
+        const start = await recover();
         await checkpoint('retry-start', start);
 
         clock = INITIAL_DELAY_MS - 1;
-        const before = await submitter.recover();
+        const before = await recover();
         await checkpoint('retry-before', before);
 
         clock = INITIAL_DELAY_MS;
-        const due = await submitter.recover();
+        const due = await recover();
         await checkpoint('rebroadcast', due);
       }
 

@@ -16,8 +16,9 @@ import type {
   SignerRecoveryResult,
 } from './signer-coordinator.js';
 
-import type {
-  SignerBlocker,
+import {
+  BLOCKER_PRECEDENCE,
+  type SignerBlocker,
 } from './signer-gate.js';
 
 import type {
@@ -144,4 +145,10 @@ export interface TransactionReconciliationReport {
 
 export interface TransactionRecoveryObservation {
   readonly retryDelayMs: number | null;
+}
+
+export function isTransactionAdmissionReason(
+  value: unknown,
+): value is TransactionAdmissionReason {
+  return BLOCKER_PRECEDENCE.some((reason) => reason === value);
 }

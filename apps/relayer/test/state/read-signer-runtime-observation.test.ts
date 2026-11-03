@@ -14,8 +14,8 @@ import {
 } from '../../src/state/read-signer-runtime-observation.js';
 
 import type {
-  SignerBlocker,
-} from '../../src/state/signer-gate.js';
+  TransactionAdmissionReason,
+} from '../../src/state/transaction-manager-types.js';
 
 const FIRST_HASH: Hash = `0x${'aa'.repeat(32)}`;
 const SECOND_HASH: Hash = `0x${'bb'.repeat(32)}`;
@@ -26,7 +26,7 @@ const WORK_ID = ' work:e\u0301 ';
 const BLOCKED_SINCE = '2026-10-12T12:00:00.000Z';
 
 function fixture() {
-  const blockers: SignerBlocker[] = ['unresolved-attempt'];
+  const blockers: TransactionAdmissionReason[] = ['unresolved-attempt'];
 
   const transactionHashes: [Hash, ...Hash[]] = [
     FIRST_HASH,
@@ -34,8 +34,10 @@ function fixture() {
   ];
 
   const source = {
-    journalInitialized: true,
     status: {
+      chainId: 4663,
+      journalInitialized: true,
+      busy: false,
       open: false,
       primaryReason: 'unresolved-attempt' as const,
       blockers,
@@ -43,17 +45,17 @@ function fixture() {
       inclusionChecksComplete: true,
       persistenceState: 'idle' as const,
       blockedSince: BLOCKED_SINCE,
+      attempts: [{
+        attemptId: ATTEMPT_ID,
+        workId: WORK_ID,
+        nonce: 4n,
+        phase: 'signed' as const,
+        transactionHashes,
+        signedTransaction: 'signed-bytes-canary',
+        extra: 'attempt-private',
+      }],
       extra: 'status-private',
     },
-    attempts: [{
-      attemptId: ATTEMPT_ID,
-      workId: WORK_ID,
-      nonce: 4n,
-      phase: 'signed' as const,
-      transactionHashes,
-      signedTransaction: 'signed-bytes-canary',
-      extra: 'attempt-private',
-    }],
     extra: 'root-private',
   };
 
@@ -100,7 +102,7 @@ describe('readSignerRuntimeObservation', () => {
     // Projection must not delete or modify input fields.
     expect(source.extra).toBe('root-private');
     expect(source.status.extra).toBe('status-private');
-    expect(source.attempts[0]!.signedTransaction)
+    expect(source.status.attempts[0]!.signedTransaction)
       .toBe('signed-bytes-canary');
   });
 
@@ -123,12 +125,12 @@ describe('readSignerRuntimeObservation', () => {
     ).toBe(true);
 
     expect(observation.status).not.toBe(source.status);
-    expect(observation.attempts[0]).not.toBe(source.attempts[0]);
+    expect(observation.attempts[0]).not.toBe(source.status.attempts[0]);
 
     blockers.push('retention-capacity-reached');
     transactionHashes.push(THIRD_HASH);
-    source.attempts[0]!.nonce = 99n;
-    source.attempts[0]!.workId = 'different-work';
+    source.status.attempts[0]!.nonce = 99n;
+    source.status.attempts[0]!.workId = 'different-work';
     source.status.blockedSince = '2026-10-12T13:00:00.000Z';
 
     expect(observation.status.blockers)
@@ -149,6 +151,22 @@ describe('readSignerRuntimeObservation', () => {
 
   it('preserves missing-journal and incomplete-recovery state', () => {
     const source: SignerRuntimeObservationSource = {
+      status: {
+        chainId: 4663,
+        journalInitialized: false,
+        busy: false,
+        open: false,
+        primaryReason: 'recovery-incomplete',
+        blockers: ['recovery-incomplete'],
+        recoveryComplete: false,
+        inclusionChecksComplete: false,
+        persistenceState: 'idle',
+        blockedSince: BLOCKED_SINCE,
+        attempts: [],
+      },
+    };
+
+    expect(readSignerRuntimeObservation(source)).toEqual({
       journalInitialized: false,
       status: {
         open: false,
@@ -160,13 +178,27 @@ describe('readSignerRuntimeObservation', () => {
         blockedSince: BLOCKED_SINCE,
       },
       attempts: [],
-    };
-
-    expect(readSignerRuntimeObservation(source)).toEqual(source);
+    });
   });
 
   it('preserves a closed gate without inventing a blocker', () => {
     const source: SignerRuntimeObservationSource = {
+      status: {
+        chainId: 4663,
+        journalInitialized: true,
+        busy: true,
+        open: false,
+        primaryReason: null,
+        blockers: [],
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+        persistenceState: 'writing',
+        blockedSince: null,
+        attempts: [],
+      },
+    };
+
+    expect(readSignerRuntimeObservation(source)).toEqual({
       journalInitialized: true,
       status: {
         open: false,
@@ -178,8 +210,6 @@ describe('readSignerRuntimeObservation', () => {
         blockedSince: null,
       },
       attempts: [],
-    };
-
-    expect(readSignerRuntimeObservation(source)).toEqual(source);
+    });
   });
 });

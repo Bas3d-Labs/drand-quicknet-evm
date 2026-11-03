@@ -47,6 +47,10 @@ import type {
   TransactionRecoveryObservation,
 } from './transaction-manager-types.js';
 
+export {
+  validateBroadcastRetryOptions as validateTransactionRetryOptions,
+} from './broadcast-retry-schedule.js';
+
 const registeredRecordings = new WeakMap<object, SubmissionRecording>();
 
 function captureSubmissionRecording(

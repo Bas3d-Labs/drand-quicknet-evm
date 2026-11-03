@@ -12,8 +12,8 @@ import type {
 } from '../rounds/import-round.js';
 
 import type {
-  SignerBlocker,
-} from '../state/signer-gate.js';
+  TransactionAdmissionReason,
+} from '../state/transaction-manager-types.js';
 
 import type {
   QuicknetRandomnessRequest,
@@ -63,7 +63,7 @@ export type QuicknetRoundOutcome = {
   | {
       status: 'deferred';
       reason: 'signer-unavailable';
-      blocker: SignerBlocker;
+      blocker: TransactionAdmissionReason;
     }
   | {
       status: 'deferred';
@@ -104,7 +104,9 @@ export async function processQuicknetRequestsWithOutcomes(
 
   const outcomes: QuicknetRoundOutcome[] = [];
 
-  function recordIncomplete(outcome: IncompleteQuicknetRoundOutcome): void {
+  function recordIncomplete(
+    outcome: IncompleteQuicknetRoundOutcome,
+  ): void {
     outcomes.push(outcome);
 
     try {
@@ -115,7 +117,7 @@ export async function processQuicknetRequestsWithOutcomes(
   }
 
   let failed = false;
-  let signerUnavailable: SignerBlocker | undefined;
+  let signerUnavailable: TransactionAdmissionReason | undefined;
 
   for (const [round, firstRequestBlock] of firstBlocks) {
     if (failed) {

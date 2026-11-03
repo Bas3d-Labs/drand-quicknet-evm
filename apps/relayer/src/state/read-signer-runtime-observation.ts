@@ -1,49 +1,57 @@
 import type {
-  AttemptSummary,
-  SignerCoordinator,
-} from './signer-coordinator.js';
+  TransactionManager,
+} from './transaction-manager.js';
 
-export type SignerRuntimeObservationSource = Pick<
-  SignerCoordinator,
-  'journalInitialized' | 'status' | 'attempts'
->;
+import type {
+  TransactionAttemptSummary,
+  TransactionManagerStatus,
+} from './transaction-manager-types.js';
+
+export type SignerRuntimeObservationSource =
+  Pick<TransactionManager, 'status'>;
 
 export interface SignerRuntimeObservation {
   readonly journalInitialized: boolean;
-  readonly status: SignerCoordinator['status'];
-  readonly attempts: readonly AttemptSummary[];
+  readonly status: Pick<
+    TransactionManagerStatus,
+    | 'open'
+    | 'primaryReason'
+    | 'blockers'
+    | 'recoveryComplete'
+    | 'inclusionChecksComplete'
+    | 'persistenceState'
+    | 'blockedSince'
+  >;
+  readonly attempts: readonly TransactionAttemptSummary[];
 }
 
 /**
- * Projects trusted coordinator state into detached public fields.
+ * Captures one manager observation while preserving the persisted
+ * daemon-status schema.
  */
 export function readSignerRuntimeObservation(
   source: SignerRuntimeObservationSource,
 ): SignerRuntimeObservation {
-  const journalInitialized = source.journalInitialized;
-  const status = source.status;
-  const attempts = source.attempts;
+  const current = source.status;
 
   return Object.freeze({
-    journalInitialized,
+    journalInitialized: current.journalInitialized,
     status: Object.freeze({
-      open: status.open,
-      primaryReason: status.primaryReason,
-      blockers: Object.freeze([...status.blockers]),
-      recoveryComplete: status.recoveryComplete,
-      inclusionChecksComplete: status.inclusionChecksComplete,
-      persistenceState: status.persistenceState,
-      blockedSince: status.blockedSince,
+      open: current.open,
+      primaryReason: current.primaryReason,
+      blockers: Object.freeze([...current.blockers]),
+      recoveryComplete: current.recoveryComplete,
+      inclusionChecksComplete: current.inclusionChecksComplete,
+      persistenceState: current.persistenceState,
+      blockedSince: current.blockedSince,
     }),
     attempts: Object.freeze(
-      attempts.map((attempt): AttemptSummary => {
+      current.attempts.map((attempt): TransactionAttemptSummary => {
         const [first, ...remaining] = attempt.transactionHashes;
 
         const transactionHashes:
-          AttemptSummary['transactionHashes'] = Object.freeze([
-            first,
-            ...remaining,
-          ]);
+          TransactionAttemptSummary['transactionHashes'] =
+            Object.freeze([first, ...remaining]);
 
         return Object.freeze({
           attemptId: attempt.attemptId,

@@ -1,17 +1,10 @@
 import type {
-  LocalAccount,
-  PublicClient,
-  WalletClient,
-} from 'viem';
-
-import {
-  submitTransaction,
-  type SubmitTransactionResult,
-} from '../execution/submit-transaction.js';
+  TransactionManager,
+} from '../state/transaction-manager.js';
 
 import type {
-  SignerCoordinator,
-} from '../state/signer-coordinator.js';
+  SubmitTransactionWorkResult,
+} from '../state/transaction-manager-types.js';
 
 import {
   createBeaconWorkId,
@@ -23,10 +16,7 @@ import {
 } from './encode-beacon-submission.js';
 
 export interface SubmitBeaconTransactionOptions {
-  readonly publicClient: PublicClient;
-  readonly walletClient: WalletClient;
-  readonly account: LocalAccount;
-  readonly coordinator: SignerCoordinator;
+  readonly manager: Pick<TransactionManager, 'status' | 'submit'>;
   readonly request: BeaconSubmissionRequest & {
     readonly gas?: bigint | undefined;
   };
@@ -43,40 +33,32 @@ export interface SubmitBeaconTransactionOptions {
 export async function submitBeaconTransaction(
   options: SubmitBeaconTransactionOptions,
   cycle?: number,
-): Promise<SubmitTransactionResult> {
+): Promise<SubmitTransactionWorkResult> {
   const {
-    publicClient,
-    walletClient,
-    account,
-    coordinator,
+    manager,
     request,
     signal,
   } = options;
 
   signal?.throwIfAborted();
 
-  if (!coordinator.status.open) {
-    throw new Error('The signer gate must be open before submitting a beacon.');
-  }
-
   const workId = createBeaconWorkId({
-    chainId: coordinator.chainId,
+    chainId: manager.status.chainId,
     registry: request.address,
     round: request.args[0],
   });
 
   const call = encodeBeaconSubmission(request);
 
-  return submitTransaction({
-    publicClient,
-    walletClient,
-    account,
-    coordinator,
-    call: {
-      ...call,
-      gas: request.gas,
+  return manager.submit({
+    work: {
+      workId,
+      call: {
+        ...call,
+        gas: request.gas,
+      },
     },
-    workId,
     signal,
-  }, cycle);
+    cycle,
+  });
 }

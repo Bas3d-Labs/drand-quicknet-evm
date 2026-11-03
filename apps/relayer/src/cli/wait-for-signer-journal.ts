@@ -11,13 +11,13 @@ import {
 } from '../shared/sleep-for.js';
 
 import type {
-  SignerCoordinator,
-} from '../state/signer-coordinator.js';
+  TransactionManager,
+} from '../state/transaction-manager.js';
 
 export interface WaitForSignerJournalOptions {
-  readonly coordinator: Pick<
-    SignerCoordinator,
-    'journalInitialized'
+  readonly manager: Pick<
+    TransactionManager,
+    'status'
   >;
   readonly submitter: Pick<BeaconSubmitter, 'recover'>;
   readonly pollIntervalMs: number;
@@ -39,7 +39,7 @@ export async function waitForSignerJournal(
   options: WaitForSignerJournalOptions,
 ): Promise<void> {
   const {
-    coordinator,
+    manager,
     submitter,
     pollIntervalMs,
     signal,
@@ -56,18 +56,18 @@ export async function waitForSignerJournal(
 
   signal?.throwIfAborted();
 
-  while (!coordinator.journalInitialized) {
+  while (!manager.status.journalInitialized) {
     const result = await submitter.recover();
 
     signal?.throwIfAborted();
 
-    if (coordinator.journalInitialized) {
+    if (manager.status.journalInitialized) {
       return;
     }
 
     if (
-      result.inspection.status !== 'bootstrap-deferred' &&
-      result.inspection.status !== 'anchor-changed'
+      result.recoveryStatus !== 'bootstrap-deferred' &&
+      result.recoveryStatus !== 'anchor-changed'
     ) {
       throw new Error(
         'Signer recovery completed without initializing the journal.'
