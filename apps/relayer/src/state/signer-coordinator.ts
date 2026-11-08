@@ -267,7 +267,6 @@ export interface SignerInspection {
 }
 
 interface InspectionOwner {
-  readonly generation: bigint;
   activeOperation: Promise<unknown> | null;
   abandonment: Promise<void> | null;
   abandoning: boolean;
@@ -288,7 +287,6 @@ export class SignerCoordinator {
   private emitting = false;
   private broadcastPermit: string | undefined;
 
-  private inspectionGeneration = 0n;
   private inspectionOwner: InspectionOwner | null = null;
 
   private pendingWrite: PendingWrite | undefined;
@@ -383,10 +381,7 @@ export class SignerCoordinator {
       throw new Error('A pending journal write must be retried first.');
     }
 
-    this.inspectionGeneration += 1n;
-
     const owner: InspectionOwner = {
-      generation: this.inspectionGeneration,
       activeOperation: null,
       abandonment: null,
       abandoning: false,
@@ -1377,10 +1372,7 @@ export class SignerCoordinator {
   private assertInspectionOwner(
     owner: InspectionOwner,
   ): void {
-    if (
-      this.inspectionOwner !== owner ||
-      this.inspectionGeneration !== owner.generation
-    ) {
+    if (this.inspectionOwner !== owner) {
       throw new Error('Signer inspection is no longer active.');
     }
   }
