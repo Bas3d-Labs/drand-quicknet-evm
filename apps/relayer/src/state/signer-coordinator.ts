@@ -70,10 +70,12 @@ import {
 
 import {
   evaluateSignerGate,
-  BLOCKER_PRECEDENCE,
   type CoordinatorBlocker,
-  type SignerBlocker,
 } from './signer-gate.js';
+
+import {
+  SignerGateDiagnostics,
+} from './signer-gate-diagnostics.js';
 
 import type {
   SubmissionRecording,
@@ -289,8 +291,6 @@ export class SignerCoordinator {
   private inspectionGeneration = 0n;
   private inspectionOwner: InspectionOwner | null = null;
 
-  private blockedSince: string | null = null;
-  private previousBlockers: readonly SignerBlocker[] = [];
   private pendingWrite: PendingWrite | undefined;
   private attemptLog: ScopedRelayerLog | undefined;
   private lastBootstrapDeferral: {
@@ -302,7 +302,9 @@ export class SignerCoordinator {
   private committedDurableRecoveryRevision = '';
 
   private readonly blockers = new Set<CoordinatorBlocker>();
-  private readonly episodeReasons = new Set<SignerBlocker>();
+  private readonly gateDiagnostics = new SignerGateDiagnostics(
+    () => this.timestamp(),
+  );
 
   private constructor(
     private readonly persistence: JournalPersistence,
@@ -359,7 +361,7 @@ export class SignerCoordinator {
           throw new Error('Could not configure signed attempt diagnostics.');
         }
 
-        coordinator.blockedSince = first.createdAt;
+        coordinator.gateDiagnostics.blockedSince = first.createdAt;
       }
     }
     
@@ -602,7 +604,7 @@ export class SignerCoordinator {
       recoveryComplete: this.recoveryComplete,
       inclusionChecksComplete: this.inclusionChecksComplete,
       persistenceState: this.persistence.state,
-      blockedSince: this.blockedSince,
+      blockedSince: this.gateDiagnostics.blockedSince,
     });
   }
 
@@ -662,7 +664,7 @@ export class SignerCoordinator {
     }
 
     const previousAttemptLog = this.attemptLog;
-    const previousBlockedSince = this.blockedSince;
+    const previousBlockedSince = this.gateDiagnostics.blockedSince;
     const previousInclusionChecksComplete = this.inclusionChecksComplete;
 
     this.broadcastPermit = undefined;
@@ -724,7 +726,7 @@ export class SignerCoordinator {
         ],
       }, this.identity);
 
-      this.blockedSince ??= createdAt;
+      this.gateDiagnostics.blockedSince ??= createdAt;
       this.inclusionChecksComplete = false;
       this.pendingWrite = { kind: 'prepared' };
 
@@ -745,7 +747,7 @@ export class SignerCoordinator {
         // diagnostic policy and inclusion authorization.
         this.pendingWrite = undefined;
         this.attemptLog = previousAttemptLog;
-        this.blockedSince = previousBlockedSince;
+        this.gateDiagnostics.blockedSince = previousBlockedSince;
         this.inclusionChecksComplete = previousInclusionChecksComplete;
       } else {
         // Preserve the expanded diagnostic policy through every retry.
@@ -1625,49 +1627,26 @@ export class SignerCoordinator {
 
     const status = this.status;
 
-    const blockersChanged =
-      status.blockers.length !== this.previousBlockers.length ||
-      status.blockers.some(
-        (reason, index) => reason !== this.previousBlockers[index],
-      );
+    this.gateDiagnostics.observe(status, (event) => {
+      this.emit((log) => {
+        if (event.kind === 'blocked') {
+          log.signerBlocked({
+            signer: this.identity.signer,
+            reason: event.reason,
+            blockers: event.blockers,
+            blockedSince: event.blockedSince,
+          });
 
-    if (status.blockers.length > 0) {
-      if (this.blockedSince === null) {
-        this.blockedSince = this.timestamp();
-      }
+          return;
+        }
 
-      for (const reason of status.blockers) {
-        this.episodeReasons.add(reason);
-      }
-
-      if (blockersChanged) {
-        this.emit((log) => log.signerBlocked({
+        log.signerGateReleased({
           signer: this.identity.signer,
-          reason: status.primaryReason!,
-          blockers: status.blockers,
-          blockedSince: this.blockedSince!,
-        }), cycle, operation);
-      }
-    }
-
-    this.previousBlockers = [...status.blockers];
-
-    if (status.open && this.blockedSince !== null) {
-      const blockedSince = this.blockedSince;
-
-      const cleared = BLOCKER_PRECEDENCE.filter(
-        (reason) => this.episodeReasons.has(reason),
-      );
-
-      this.emit((log) => log.signerGateReleased({
-        signer: this.identity.signer,
-        cleared,
-        blockedSince,
-      }), cycle, operation);
-
-      this.blockedSince = null;
-      this.episodeReasons.clear();
-    }
+          cleared: event.cleared,
+          blockedSince: event.blockedSince,
+        });
+      }, cycle, operation);
+    });
 
     const current = this.persistence.current;
 
