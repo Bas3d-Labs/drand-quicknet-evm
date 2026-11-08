@@ -62,6 +62,10 @@ import {
 } from './journal-persistence.js';
 
 import {
+  planAttemptPreparation,
+} from './plan-attempt-preparation.js';
+
+import {
   planSignerInclusions,
 } from './plan-signer-inclusions.js';
 
@@ -88,10 +92,6 @@ import type {
   JournalIdentity,
   TransactionJournalStore,
 } from './transaction-journal.js';
-
-import {
-  validateJournalSnapshotStructure,
-} from './transaction-journal-validation.js';
 
 export interface SignerCoordinatorOptions {
   readonly identity: JournalIdentity;
@@ -636,31 +636,14 @@ export class SignerCoordinator {
         throw new Error('Could not configure signed attempt diagnostics.');
       }
 
-      const attempt: JournalAttempt = {
+      const next = planAttemptPreparation({
+        identity: this.identity,
+        snapshot: current.snapshot,
         attemptId,
         workId,
-        nonce: signed.nonce,
         createdAt,
-        signedTransactions: [{
-          transactionHash: signed.transactionHash,
-          signedTransaction: signed.signedTransaction,
-        }],
-        phase: 'signed',
-        inclusion: null,
-        replacementSearch: {
-          lowerBound: current.snapshot.lastObservation,
-          searchedThrough: null,
-        },
-      };
-
-      const next = validateJournalSnapshotStructure({
-        ...current.snapshot,
-        nextNonce: current.snapshot.nextNonce + 1n,
-        attempts: [
-          ...current.snapshot.attempts,
-          attempt,
-        ],
-      }, this.identity);
+        signed,
+      });
 
       this.gateDiagnostics.blockedSince ??= createdAt;
       this.inclusionChecksComplete = false;
