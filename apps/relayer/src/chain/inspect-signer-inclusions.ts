@@ -79,32 +79,14 @@ export type SignerInclusionInspection =
       readonly broadcastAttemptId: string | null;
     };
 
+/**
+ * Inspects retained attempts against a selected head.
+ * 
+ * Non-empty queues receive enclosing head checks around the evidence
+ * reads. Empty queues retain the anchored nonce reader's own checks.
+ */
 export async function inspectSignerInclusions(
   options: InspectSignerInclusionsOptions,
-): Promise<SignerInclusionInspection> {
-  return inspectSignerInclusionsInternal(options, true);
-}
-
-/**
- * Inspects retained attempts inside a caller-owned head bracket.
- * 
- * The caller must check the selected head before beginning the enclosing
- * pass and check that same head again after this function completes.
- * Until the closing check succeeds, this result must not be accepted
- * for persistence or action authorization.
- * 
- * Inner receipt, nonce, and replacement-search checks remain enabled.
- */
-export async function inspectSignerInclusionsWithinPass(
-  options: InspectSignerInclusionsOptions,
-): Promise<SignerInclusionInspection> {
-  return inspectSignerInclusionsInternal(options, false);
-}
-
-
-export async function inspectSignerInclusionsInternal(
-  options: InspectSignerInclusionsOptions,
-  checkOuterHead: boolean,
 ): Promise<SignerInclusionInspection> {
   const publicClient = options.publicClient;
 
@@ -137,7 +119,7 @@ export async function inspectSignerInclusionsInternal(
     throw new TypeError('Invalid signer inclusion input.');
   }
 
-  if (checkOuterHead && snapshot.attempts.length > 0) {
+  if (snapshot.attempts.length > 0) {
     const openingHead = await checkBlockAnchor(publicClient, head, {
       operation: 'signer-inclusions',
     });
@@ -329,7 +311,7 @@ export async function inspectSignerInclusionsInternal(
     }
   }
 
-  if (checkOuterHead && snapshot.attempts.length > 0) {
+  if (snapshot.attempts.length > 0) {
     // Close every non-empty path after receipt, nonce, and replacement
     // inspection. No updated queue or broadcast eligibility may escape
     // when the selected head changed during the pass.
