@@ -333,13 +333,7 @@ export class SignerCoordinator {
 
   beginInspection(): SignerInspection {
     this.assertAvailable();
-
-    if (
-      this.pendingWrite !== undefined ||
-      this.persistence.state !== 'idle'
-    ) {
-      throw new Error('A pending journal write must be retried first.');
-    }
+    this.assertPersistenceIdle();
 
     const owner: InspectionOwner = {
       activeOperation: null,
@@ -561,13 +555,7 @@ export class SignerCoordinator {
     cycle?: number,
   ): Promise<PrepareAttemptResult> {
     this.assertAvailable();
-
-    if (
-      this.pendingWrite !== undefined ||
-      this.persistence.state !== 'idle'
-    ) {
-      throw new Error('A pending journal write must be retried first.');
-    }
+    this.assertPersistenceIdle();
 
     const current = this.persistence.current;
 
@@ -690,13 +678,7 @@ export class SignerCoordinator {
     cycle?: number,
   ): Promise<BroadcastAttemptResult> {
     this.assertAvailable();
-
-    if (
-      this.pendingWrite !== undefined ||
-      this.persistence.state !== 'idle'
-    ) {
-      throw new Error('A pending journal write must be retried first.');
-    }
+    this.assertPersistenceIdle();
 
     const current = this.persistence.current;
 
@@ -840,12 +822,7 @@ export class SignerCoordinator {
       throw new TypeError('Invalid signer recovery input.');
     }
 
-    if (
-      this.pendingWrite !== undefined ||
-      this.persistence.state !== 'idle'
-    ) {
-      throw new Error('A pending journal write must be retried first.');
-    }
+    this.assertPersistenceIdle();
 
     const current = this.persistence.current;
 
@@ -940,13 +917,7 @@ export class SignerCoordinator {
     cycle?: number,
   ): Promise<SignerInclusionInspection> {
     this.assertAvailable(owner);
-
-    if (
-      this.pendingWrite !== undefined ||
-      this.persistence.state !== 'idle'
-    ) {
-      throw new Error('A pending journal write must be retried first.');
-    }
+    this.assertPersistenceIdle();
 
     const current = this.persistence.current;
 
@@ -1449,6 +1420,15 @@ export class SignerCoordinator {
 
     if (this.busy || this.emitting) {
       throw new Error('Signer coordinator operation is already in progress.');
+    }
+  }
+
+  private assertPersistenceIdle(): void {
+    if (
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      throw new Error('A pending journal write must be retried first.');
     }
   }
 
