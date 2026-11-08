@@ -3278,6 +3278,73 @@ describe('signer inspection ownership', () => {
       record.event === 'signer_gate_released',
     )).toEqual([]);
   });
+
+  it.each([
+    33,
+    undefined,
+  ])('defers inspection release to the enclosing reconciliation cycle: %s', async (
+    observationCycle,
+  ) => {
+    const t = await setup({ empty: true });
+    const options = receiptRecoveryOptions(t, 4);
+    const blockedSince = t.coordinator.status.blockedSince;
+
+    expect(blockedSince).not.toBeNull();
+
+    t.lines.length = 0;
+
+    await t.coordinator.observeReconciliation(async () => {
+      const inspection = t.coordinator.beginInspection();
+
+      await inspection.recover(options, 11);
+
+      await inspection.checkInclusions({
+        publicClient: options.publicClient,
+        head: options.anchor,
+      }, 22);
+
+      // Ownership still prevents admission after both operations finish.
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        blockers: [],
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+      });
+      expect(t.records()).toEqual([]);
+
+      inspection.finish();
+
+      // Observation batches diagnostics; it does not retain ownership.
+      // The gate is open, but its release has not been published.
+      expect(t.coordinator.status).toMatchObject({
+        open: true,
+        blockers: [],
+        blockedSince,
+      });
+      expect(t.records()).toEqual([]);
+    }, observationCycle);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: true,
+      blockers: [],
+      blockedSince: null,
+    });
+
+    const records = t.records();
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      event: 'signer_gate_released',
+      operation: { name: 'reconcile-attempt' },
+      blockedSince,
+    });
+
+    if (observationCycle === undefined) {
+      expect(records[0]).not.toHaveProperty('cycle');
+    } else {
+      expect(records[0].cycle).toBe(observationCycle);
+    }
+  });
 });
 
 describe('submission recording capture', () => {
