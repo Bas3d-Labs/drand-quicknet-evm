@@ -730,7 +730,7 @@ export class SignerCoordinator {
 
       await this.persistence.save(next);
 
-      this.finishWrite(cycle);
+      this.applyCommittedWrite(cycle);
       this.broadcastPermit = attemptId;
 
       return Object.freeze({
@@ -827,8 +827,8 @@ export class SignerCoordinator {
           ),
         });
 
-        // Keep exclusive ownership through the RPC call. finishWrite
-        // would release it before the broadcast outcome is known.
+        // Complete the marker write without publishing an intermediate
+        // gate transition.
         this.pendingWrite = undefined;
       }
 
@@ -1037,7 +1037,7 @@ export class SignerCoordinator {
         });
 
         this.recoveryComplete = true;
-        this.finishWrite(cycle);
+        this.applyCommittedWrite(cycle);
 
         return {
           status: 'no-attempt',
@@ -1069,7 +1069,7 @@ export class SignerCoordinator {
       await this.persistence.save(plan.snapshot);
 
       this.recoveryComplete = true;
-      this.finishWrite(cycle);
+      this.applyCommittedWrite(cycle);
 
       const inspectedAttempt = current.snapshot.attempts[0];
 
@@ -1235,7 +1235,7 @@ export class SignerCoordinator {
       await this.persistence.save(next);
 
       this.inclusionChecksComplete = result.inclusionChecksComplete;
-      this.finishWrite(cycle);
+      this.applyCommittedWrite(cycle);
 
       const attempt = next.attempts.find(
         (candidate) => candidate.phase !== 'included',
@@ -1499,14 +1499,16 @@ export class SignerCoordinator {
     this.refresh(owner.cycle);
   }
 
-  private finishWrite(cycle?: number): void {
+  private applyCommittedWrite(
+    cycle?: number
+  ): SignerEventOperation {
     const pending = this.pendingWrite!;
 
     if (pending.kind === 'resolution') {
       this.blockers.delete('conflict-search-exhausted');
 
-      // Keep the gate closed and the attempt policy alive through
-      // this emission.
+      // Keep ownership and the signed-byte diagnostic policy through
+      // resolution reporting.
       this.emit(
         (log) => log.attemptResolved(pending.event),
         cycle,
@@ -1520,7 +1522,6 @@ export class SignerCoordinator {
     }
 
     this.pendingWrite = undefined;
-    this.busy = false;
 
     this.latchUnattributedActivity();
     this.latchExhaustedSearch();
@@ -1535,6 +1536,8 @@ export class SignerCoordinator {
     }
 
     this.refresh(cycle, operation);
+
+    return operation;
   }
 
   private latchUnattributedActivity(): void {
@@ -1586,7 +1589,9 @@ export class SignerCoordinator {
    * Retries the retained journal snapshot after a persistence failure,
    * then applies the corresponding observation or resolution transition.
    */
-  async retryPersistence(cycle?: number): Promise<void> {
+  async retryPersistence(
+    cycle?: number,
+  ): Promise<void> {
     this.assertAvailable();
 
     if (
@@ -1596,18 +1601,18 @@ export class SignerCoordinator {
       throw new Error('No failed journal write is available to retry.');
     }
 
+    let operation: SignerEventOperation = 'reconcile-attempt';
+
     this.busy = true;
 
     try {
       await this.persistence.retry();
-    } catch (error) {
+
+      operation = this.applyCommittedWrite(cycle);
+    } finally {
       this.busy = false;
-      this.refresh(cycle);
-
-      throw error;
+      this.refresh(cycle, operation);
     }
-
-    this.finishWrite(cycle);
   }
 
   private refresh(
