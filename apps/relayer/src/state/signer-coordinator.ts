@@ -706,9 +706,7 @@ export class SignerCoordinator {
           ),
         });
 
-        // Complete the marker write without publishing an intermediate
-        // gate transition.
-        this.pendingWrite = undefined;
+        this.completeCommittedWrite(cycle);
       }
 
       const identity = {
@@ -1223,6 +1221,16 @@ export class SignerCoordinator {
   }
 
   private applyCommittedWrite(
+    cycle?: number,
+  ): SignerEventOperation {
+    const operation = this.completeCommittedWrite(cycle);
+
+    this.refresh(cycle, operation);
+
+    return operation;
+  }
+
+  private completeCommittedWrite(
     cycle?: number
   ): SignerEventOperation {
     const pending = this.pendingWrite!;
@@ -1257,8 +1265,6 @@ export class SignerCoordinator {
     } else if (pending.kind === 'broadcast') {
       operation = 'broadcast-attempt';
     }
-
-    this.refresh(cycle, operation);
 
     return operation;
   }

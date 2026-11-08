@@ -10,7 +10,6 @@ import type {
 import {
   validateJournalSnapshotStructure,
 } from './transaction-journal-validation.js';
-import { Transaction } from 'viem';
 
 export interface PlanSignerInclusionsOptions {
   readonly identity: JournalIdentity;
