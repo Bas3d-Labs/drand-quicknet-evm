@@ -4,6 +4,7 @@ import {
 
 import type {
   Hash,
+  Hex,
   LocalAccount,
   PublicClient,
 } from 'viem';
@@ -305,19 +306,8 @@ export class SignerCoordinator {
       const first = attempts[0];
 
       if (first !== undefined) {
-        const signedTransactions = attempts.flatMap((attempt) => 
-          attempt.signedTransactions.map(
-            (transaction) => transaction.signedTransaction
-          ),
-        );
-
-        try {
-          coordinator.attemptLog = coordinator.log.withErrorSummary(
-            options.createErrorSummary(signedTransactions),
-          );
-        } catch {
-          throw new Error('Could not configure signed attempt diagnostics.');
-        }
+        coordinator.attemptLog =
+          coordinator.createSignedAttemptLog(attempts);
 
         coordinator.gateDiagnostics.blockedSince = first.createdAt;
       }
@@ -333,13 +323,7 @@ export class SignerCoordinator {
 
   beginInspection(): SignerInspection {
     this.assertAvailable();
-
-    if (
-      this.pendingWrite !== undefined ||
-      this.persistence.state !== 'idle'
-    ) {
-      throw new Error('A pending journal write must be retried first.');
-    }
+    this.assertPersistenceIdle();
 
     const owner: InspectionOwner = {
       activeOperation: null,
@@ -561,13 +545,7 @@ export class SignerCoordinator {
     cycle?: number,
   ): Promise<PrepareAttemptResult> {
     this.assertAvailable();
-
-    if (
-      this.pendingWrite !== undefined ||
-      this.persistence.state !== 'idle'
-    ) {
-      throw new Error('A pending journal write must be retried first.');
-    }
+    this.assertPersistenceIdle();
 
     const current = this.persistence.current;
 
@@ -617,24 +595,10 @@ export class SignerCoordinator {
         transaction: options.transaction,
       });
 
-      const signedTransactions = [
-        ...current.snapshot.attempts.flatMap((attempt) => 
-          attempt.signedTransactions.map(
-            (transaction) => transaction.signedTransaction,
-          ),
-        ),
+      this.attemptLog = this.createSignedAttemptLog(
+        current.snapshot.attempts,
         signed.signedTransaction,
-      ];
-
-      // Install protection for both retained and newly signed bytes before
-      // persistence can fail. Queue-wide diagnostics have no one attemptId.
-      try {
-        this.attemptLog = this.log.withErrorSummary(
-          this.createErrorSummary(signedTransactions)
-        );
-      } catch {
-        throw new Error('Could not configure signed attempt diagnostics.');
-      }
+      );
 
       const next = planAttemptPreparation({
         identity: this.identity,
@@ -690,13 +654,7 @@ export class SignerCoordinator {
     cycle?: number,
   ): Promise<BroadcastAttemptResult> {
     this.assertAvailable();
-
-    if (
-      this.pendingWrite !== undefined ||
-      this.persistence.state !== 'idle'
-    ) {
-      throw new Error('A pending journal write must be retried first.');
-    }
+    this.assertPersistenceIdle();
 
     const current = this.persistence.current;
 
@@ -818,16 +776,9 @@ export class SignerCoordinator {
     options: RecoverSignerOptions,
     cycle?: number,
   ): Promise<SignerRecoveryResult> {
-    const inspection = this.beginInspection();
-
-    try {
-      const result = await inspection.recover(options, cycle);
-      inspection.finish();
-      return result;
-    } catch (error) {
-      await inspection.abandon();
-      throw error;
-    }
+    return this.runStandaloneInspection(
+      (inspection) => inspection.recover(options, cycle),
+    );
   }
 
   private async recoverOwned(
@@ -847,12 +798,7 @@ export class SignerCoordinator {
       throw new TypeError('Invalid signer recovery input.');
     }
 
-    if (
-      this.pendingWrite !== undefined ||
-      this.persistence.state !== 'idle'
-    ) {
-      throw new Error('A pending journal write must be retried first.');
-    }
+    this.assertPersistenceIdle();
 
     const current = this.persistence.current;
 
@@ -936,16 +882,9 @@ export class SignerCoordinator {
     options: CheckSignerInclusionsOptions,
     cycle?: number,
   ): Promise<SignerInclusionInspection> {
-    const inspection = this.beginInspection();
-
-    try {
-      const result = await inspection.checkInclusions(options, cycle);
-      inspection.finish();
-      return result;
-    } catch (error) {
-      await inspection.abandon();
-      throw error;
-    }
+    return this.runStandaloneInspection(
+      (inspection) => inspection.checkInclusions(options, cycle),
+    );
   }
 
   private async checkInclusionsOwned(
@@ -954,13 +893,7 @@ export class SignerCoordinator {
     cycle?: number,
   ): Promise<SignerInclusionInspection> {
     this.assertAvailable(owner);
-
-    if (
-      this.pendingWrite !== undefined ||
-      this.persistence.state !== 'idle'
-    ) {
-      throw new Error('A pending journal write must be retried first.');
-    }
+    this.assertPersistenceIdle();
 
     const current = this.persistence.current;
 
@@ -1042,6 +975,33 @@ export class SignerCoordinator {
     } finally {
       this.busy = false;
       this.refresh(cycle);
+    }
+  }
+
+  /**
+   * Creates diagnostic protedction for every retained signed transaction
+   * and, during preparation, the newly signed transaction.
+   */
+  private createSignedAttemptLog(
+    attempts: readonly JournalAttempt[],
+    additionalSignedTransaction?: Hex,
+  ): ScopedRelayerLog {
+    const signedTransactions = attempts.flatMap((attempt) => 
+      attempt.signedTransactions.map(
+        (transaction) => transaction.signedTransaction,
+      ),
+    );
+
+    if (additionalSignedTransaction !== undefined) {
+      signedTransactions.push(additionalSignedTransaction);
+    }
+
+    try {
+      return this.log.withErrorSummary(
+        this.createErrorSummary(signedTransactions),
+      );
+    } catch {
+      throw new Error('Could not configure signed attempt diagnostics.');
     }
   }
 
@@ -1421,6 +1381,24 @@ export class SignerCoordinator {
     }
   }
 
+  /**
+   * Runs one operation in a dedicated inspection.
+   */
+  private async runStandaloneInspection<T>(
+    action: (inspection: SignerInspection) => Promise<T>,
+  ): Promise<T> {
+    const inspection = this.beginInspection();
+
+    try {
+      const result = await action(inspection);
+      inspection.finish();
+      return result;
+    } catch (error) {
+      await inspection.abandon();
+      throw error;
+    }
+  }
+
   private updateDurableRecoveryRevision(): void {
     this.committedDurableRecoveryRevision = computeDurableRecoveryRevision(
       this.persistence.current,
@@ -1445,6 +1423,15 @@ export class SignerCoordinator {
 
     if (this.busy || this.emitting) {
       throw new Error('Signer coordinator operation is already in progress.');
+    }
+  }
+
+  private assertPersistenceIdle(): void {
+    if (
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      throw new Error('A pending journal write must be retried first.');
     }
   }
 
