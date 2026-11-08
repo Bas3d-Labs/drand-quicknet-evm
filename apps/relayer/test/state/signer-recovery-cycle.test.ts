@@ -342,9 +342,6 @@ function observeInspectionCalls(coordinator: SignerCoordinator) {
     const inspection = beginInspection();
 
     return Object.freeze({
-      openHead: (...args: Parameters<SignerInspection['openHead']>) =>
-        inspection.openHead(...args),
-
       recover: (...args: Parameters<SignerInspection['recover']>) =>
         recover(inspection, ...args),
 
