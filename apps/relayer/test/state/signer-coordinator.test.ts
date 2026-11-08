@@ -886,6 +886,71 @@ describe('signer coordinator transitions', () => {
     expect(t.lines.join('')).not.toContain(KEY);
   });
 
+  it('retains signed-byte protection through deferred release logging', async () => {
+    const t = await setup({ brokenLog: true });
+    const blockedSince = t.coordinator.status.blockedSince;
+
+    expect(blockedSince).not.toBeNull();
+
+    t.lines.length = 0;
+
+    await t.coordinator.observeReconciliation(async () => {
+      await t.coordinator.recover(
+        receiptRecoveryOptions(t),
+        11,
+      );
+
+      expect(t.coordinator.attempts).toEqual([]);
+      expect(t.coordinator.status.open).toBe(false);
+
+      // Resolution reporting happens at commit, even inside observation.
+      expect(t.records()).toEqual([
+        expect.objectContaining({
+          event: 'logging_failed',
+          cycle: 11,
+          operation: { name: 'reconcile-attempt' },
+        }),
+      ]);
+
+      await checkEmptyInclusions(t.coordinator, 5, 22);
+
+      // The journal is empty and admission is open, but publication
+      // and signed-byte policy cleanup remain deferred.
+      expect(t.coordinator.status).toMatchObject({
+        open: true,
+        blockers: [],
+        blockedSince,
+      });
+      expect(t.records()).toHaveLength(1);
+    }, 33);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: true,
+      blockedSince: null,
+    });
+
+    // The fixture throws errors containing signed bytes from both
+    // attemptResolved and signerGateReleased. Their logging_failed
+    // summaries must use the protected policy, including at scope end.
+    expect(t.records()).toEqual([
+      expect.objectContaining({
+        event: 'logging_failed',
+        cycle: 11,
+        operation: { name: 'reconcile-attempt' },
+      }),
+      expect.objectContaining({
+        event: 'logging_failed',
+        cycle: 33,
+        operation: { name: 'reconcile-attempt' },
+      }),
+    ]);
+
+    const output = t.lines.join('');
+
+    expect(output).not.toContain(t.bytes);
+    expect(output).not.toContain(KEY);
+  });
+
   it('does not emit a release event before clean startup inclusion checks complete', async () => {
     const t = await setup({ empty: true });
 
