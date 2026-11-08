@@ -127,9 +127,46 @@ describe('signer recovery planning', () => {
 
     expect(plan(snapshot, inspection)).toEqual({
       kind: 'unchanged',
+      reason: 'inspection-not-committable',
     });
     expect(snapshot).toEqual(before);
   });
+
+  it.each([
+    {
+      status: 'boundary-changed',
+      boundary: 'lower-bound',
+      observedAnchor: anchorAt(100n),
+    },
+    {
+      status: 'anchor-behind-search',
+    },
+  ] as const)(
+    'classifies $status before considering higher-observation preservation',
+    async (search) => {
+      const original = await createSnapshot();
+      const snapshot: TransactionJournalSnapshot = {
+        ...original,
+        lastObservation: observationAt(110n, 7n),
+      };
+      const before = structuredClone(snapshot);
+
+      const result = plan(snapshot, {
+        status: 'unresolved',
+        observation: observationAt(105n, 5n),
+        receipt: {
+          status: 'receipt-not-found',
+        },
+        search,
+      }, true);
+
+      expect(result).toEqual({
+        kind: 'unchanged',
+        reason: 'inspection-not-committable',
+      });
+      expect(snapshot).toEqual(before);
+    },
+  );
 
   it.each(['success', 'reverted'] as const)(
     'removes only the oldest attempt after %s',
@@ -227,11 +264,16 @@ describe('signer recovery planning', () => {
     const result = plan(snapshot, {
       status: 'unresolved',
       observation: observationAt(105n, 5n),
-      receipt: { status: 'receipt-not-found' },
+      receipt: {
+        status: 'receipt-not-found',
+      },
       search: null,
     }, true);
 
-    expect(result).toEqual({ kind: 'unchanged' });
+    expect(result).toEqual({
+      kind: 'unchanged',
+      reason: 'preserved-higher-observation',
+    });
     expect(snapshot).toEqual(before);
   });
 
@@ -248,7 +290,9 @@ describe('signer recovery planning', () => {
       const result = plan(snapshot, {
         status: 'unresolved',
         observation,
-        receipt: { status: 'receipt-not-found' },
+        receipt: {
+          status: 'receipt-not-found',
+        },
         search: {
           status: 'not-found',
           searchedThrough: anchorAt(through),

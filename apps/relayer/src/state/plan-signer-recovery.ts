@@ -56,6 +56,9 @@ export interface PlanSignerRecoveryOptions {
 export type SignerRecoveryPlan =
   | {
       readonly kind: 'unchanged';
+      readonly reason:
+        | 'inspection-not-committable'
+        | 'preserved-higher-observation';
     }
   | {
       readonly kind: 'persist';
@@ -81,7 +84,10 @@ export function planSignerRecovery(
     inspection.status === 'nonce-behind-journal' ||
     inspection.status === 'inconsistent-observations'
   ) {
-    return { kind: 'unchanged' };
+    return {
+      kind: 'unchanged',
+      reason: 'inspection-not-committable',
+    };
   }
 
   if (
@@ -91,7 +97,10 @@ export function planSignerRecovery(
       inspection.search?.status === 'anchor-behind-search'
     )
   ) {
-    return { kind: 'unchanged' };
+    return {
+      kind: 'unchanged',
+      reason: 'inspection-not-committable',
+    };
   }
 
   let lastObservation = inspection.observation;
@@ -102,7 +111,10 @@ export function planSignerRecovery(
   ) {
     // Resolution may proceed without erasing the higher observation.
     if (inspection.status !== 'resolution-available') {
-      return { kind: 'unchanged' };
+      return {
+        kind: 'unchanged',
+        reason: 'preserved-higher-observation',
+      };
     }
 
     lastObservation = snapshot.lastObservation;
