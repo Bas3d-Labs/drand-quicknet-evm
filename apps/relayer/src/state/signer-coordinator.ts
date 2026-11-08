@@ -44,11 +44,6 @@ import type {
 } from '../diagnostics/relayer-log.js';
 
 import {
-  snapshotResolutionEvidence,
-  assertResolutionTransaction,
-} from '../diagnostics/resolution-validation.js';
-
-import {
   isWorkId,
 } from '../execution/work-identity.js';
 
@@ -69,6 +64,11 @@ import {
 } from './journal-persistence.js';
 
 import {
+  planSignerRecovery,
+  type RecoveryWriteCompletion,
+} from './plan-signer-recovery.js';
+
+import {
   evaluateSignerGate,
   BLOCKER_PRECEDENCE,
   type CoordinatorBlocker,
@@ -80,7 +80,6 @@ import type {
 } from './transaction-manager-types.js';
 
 import type {
-  AnchoredNonceObservation,
   JournalAttempt,
   JournalIdentity,
   TransactionJournalStore,
@@ -112,23 +111,10 @@ export type SignerRecoveryResult =
       { status: 'bootstrap-deferred' }
     >;
 
-type ResolutionEvent =
-  Parameters<ScopedRelayerLog['attemptResolved']>[0];
-
 type PendingWrite =
+  | RecoveryWriteCompletion
   | {
       kind: 'bootstrap';
-    }
-  | {
-      kind: 'resolution';
-      event: ResolutionEvent;
-    }
-  | {
-      kind: 'observation';
-    }
-  | {
-      kind: 'search-progress';
-      exhausted: boolean;
     }
   | {
       kind: 'prepared';
@@ -1066,132 +1052,21 @@ export class SignerCoordinator {
         maxBlockRange: options.maxBlockRange,
       });
 
-      if (
-        result.status === 'anchor-changed' ||
-        result.status === 'nonce-behind-journal' ||
-        result.status === 'inconsistent-observations'
-      ) {
+      const plan = planSignerRecovery({
+        identity: this.identity,
+        snapshot: current.snapshot,
+        inspection: result,
+        unattributedActivity:
+          this.blockers.has('unattributed-signer-activity'),
+      });
+
+      if (plan.kind === 'unchanged') {
         return result;
       }
 
-      if (
-        result.status === 'unresolved' &&
-        (
-          result.search?.status === 'boundary-changed' ||
-          result.search?.status === 'anchor-behind-search'
-        )
-      ) {
-        return result;
-      }
+      this.pendingWrite = plan.completion;
 
-      let lastObservation = result.observation;
-
-      if (
-        this.blockers.has('unattributed-signer-activity') &&
-        current.snapshot.lastObservation.nonce > lastObservation.nonce
-      ) {
-        // Resolving the attempt must not erase evidence of other activity.
-        // Search progress belongs to the newly inspected anchor though.
-        if (result.status !== 'resolution-available') {
-          return result;
-        }
-
-        lastObservation = current.snapshot.lastObservation;
-      }
-
-      const oldest = current.snapshot.attempts[0];
-
-      let attempts = current.snapshot.attempts;
-      let durableNextNonce = current.snapshot.durableNextNonce;
-
-      let pending: PendingWrite = {
-        kind: 'observation',
-      };
-
-      if (result.status === 'resolution-available') {
-        if (oldest === undefined) {
-          throw new Error('No recorded attempt is available to resolve.');
-        }
-
-        const resolution = snapshotResolutionEvidence(result.evidence);
-
-        assertResolutionTransaction(oldest, resolution);
-
-        pending = {
-          kind: 'resolution',
-          event: Object.freeze({
-            signer: this.identity.signer,
-            attemptId: oldest.attemptId,
-            transactionHash: resolution.outcome === 'replaced'
-              ? oldest.signedTransactions[0].transactionHash
-              : resolution.transactionHash,
-            nonce: oldest.nonce,
-            resolution,
-          }),
-        };
-
-        durableNextNonce = oldest.nonce + 1n;
-        attempts = attempts.slice(1);
-      } else if (oldest !== undefined) {
-        let replacementSearch = oldest.replacementSearch;
-        if (replacementSearch === null) {
-          let lowerBound: AnchoredNonceObservation | undefined;
-
-          if (lastObservation.nonce <= oldest.nonce) {
-            lowerBound = lastObservation;
-          } else if (
-            current.snapshot.lastObservation.nonce <= oldest.nonce
-          ) {
-            lowerBound = current.snapshot.lastObservation;
-          }
-
-          if (lowerBound !== undefined) {
-            replacementSearch = {
-              lowerBound,
-              searchedThrough: null,
-            };
-          }
-        }
-
-        if (
-          result.status === 'unresolved' &&
-          result.search?.status === 'not-found' &&
-          result.search.scannedBlocks > 0n
-        ) {
-          if (replacementSearch === null) {
-            throw new Error('Search progress requires a recorded lower bound.');
-          }
-
-          replacementSearch = {
-            ...replacementSearch,
-            searchedThrough: result.search.searchedThrough,
-          };
-
-          pending = {
-            kind: 'search-progress',
-            exhausted: result.search.remainingBlocks === 0n,
-          };
-        }
-
-        attempts = [
-          {
-            ...oldest,
-            replacementSearch,
-          },
-          ...attempts.slice(1),
-        ];
-      }
-
-      const next = validateJournalSnapshotStructure({
-        ...current.snapshot,
-        lastObservation,
-        durableNextNonce,
-        attempts,
-      }, this.identity);
-
-      this.pendingWrite = pending;
-
-      await this.persistence.save(next);
+      await this.persistence.save(plan.snapshot);
 
       this.recoveryComplete = true;
       this.finishWrite(cycle);
