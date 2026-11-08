@@ -4,6 +4,7 @@ import {
 
 import type {
   Hash,
+  Hex,
   LocalAccount,
   PublicClient,
 } from 'viem';
@@ -305,19 +306,8 @@ export class SignerCoordinator {
       const first = attempts[0];
 
       if (first !== undefined) {
-        const signedTransactions = attempts.flatMap((attempt) => 
-          attempt.signedTransactions.map(
-            (transaction) => transaction.signedTransaction
-          ),
-        );
-
-        try {
-          coordinator.attemptLog = coordinator.log.withErrorSummary(
-            options.createErrorSummary(signedTransactions),
-          );
-        } catch {
-          throw new Error('Could not configure signed attempt diagnostics.');
-        }
+        coordinator.attemptLog =
+          coordinator.createSignedAttemptLog(attempts);
 
         coordinator.gateDiagnostics.blockedSince = first.createdAt;
       }
@@ -605,24 +595,10 @@ export class SignerCoordinator {
         transaction: options.transaction,
       });
 
-      const signedTransactions = [
-        ...current.snapshot.attempts.flatMap((attempt) => 
-          attempt.signedTransactions.map(
-            (transaction) => transaction.signedTransaction,
-          ),
-        ),
+      this.attemptLog = this.createSignedAttemptLog(
+        current.snapshot.attempts,
         signed.signedTransaction,
-      ];
-
-      // Install protection for both retained and newly signed bytes before
-      // persistence can fail. Queue-wide diagnostics have no one attemptId.
-      try {
-        this.attemptLog = this.log.withErrorSummary(
-          this.createErrorSummary(signedTransactions)
-        );
-      } catch {
-        throw new Error('Could not configure signed attempt diagnostics.');
-      }
+      );
 
       const next = planAttemptPreparation({
         identity: this.identity,
@@ -999,6 +975,33 @@ export class SignerCoordinator {
     } finally {
       this.busy = false;
       this.refresh(cycle);
+    }
+  }
+
+  /**
+   * Creates diagnostic protedction for every retained signed transaction
+   * and, during preparation, the newly signed transaction.
+   */
+  private createSignedAttemptLog(
+    attempts: readonly JournalAttempt[],
+    additionalSignedTransaction?: Hex,
+  ): ScopedRelayerLog {
+    const signedTransactions = attempts.flatMap((attempt) => 
+      attempt.signedTransactions.map(
+        (transaction) => transaction.signedTransaction,
+      ),
+    );
+
+    if (additionalSignedTransaction !== undefined) {
+      signedTransactions.push(additionalSignedTransaction);
+    }
+
+    try {
+      return this.log.withErrorSummary(
+        this.createErrorSummary(signedTransactions),
+      );
+    } catch {
+      throw new Error('Could not configure signed attempt diagnostics.');
     }
   }
 
