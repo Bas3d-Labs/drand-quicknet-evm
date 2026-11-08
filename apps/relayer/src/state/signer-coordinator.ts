@@ -634,8 +634,7 @@ export class SignerCoordinator {
         this.inclusionChecksComplete = previousInclusionChecksComplete;
       } else {
         // Preserve the expanded diagnostic policy through every retry.
-        this.recoveryComplete = false;
-        this.inclusionChecksComplete = false;
+        this.invalidateRecoveryAuthorization();
       }
 
       throw error;
@@ -684,9 +683,7 @@ export class SignerCoordinator {
 
     const publicClient = options.publicClient;
 
-    this.broadcastPermit = undefined;
-    this.recoveryComplete = false;
-    this.inclusionChecksComplete = false;
+    this.invalidateRecoveryAuthorization();
     this.busy = true;
 
     try {
@@ -800,9 +797,7 @@ export class SignerCoordinator {
 
     const current = this.persistence.current;
 
-    this.broadcastPermit = undefined;
-    this.busy = true;
-    this.recoveryComplete = false;
+    this.invalidateRecoveryAuthorization();
     this.inclusionChecksComplete = false;
 
     try {
@@ -901,8 +896,7 @@ export class SignerCoordinator {
       )
     }
 
-    this.broadcastPermit = undefined;
-    this.inclusionChecksComplete = false;
+    this.revokeActionAuthorization();
     this.busy = true;
 
     try {
@@ -1114,6 +1108,11 @@ export class SignerCoordinator {
   private revokeActionAuthorization(): void {
     this.broadcastPermit = undefined;
     this.inclusionChecksComplete = false;
+  }
+
+  private invalidateRecoveryAuthorization(): void {
+    this.recoveryComplete = false;
+    this.revokeActionAuthorization();
   }
 
   private assertInspectionOwner(
