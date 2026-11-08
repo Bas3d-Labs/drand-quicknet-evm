@@ -818,16 +818,9 @@ export class SignerCoordinator {
     options: RecoverSignerOptions,
     cycle?: number,
   ): Promise<SignerRecoveryResult> {
-    const inspection = this.beginInspection();
-
-    try {
-      const result = await inspection.recover(options, cycle);
-      inspection.finish();
-      return result;
-    } catch (error) {
-      await inspection.abandon();
-      throw error;
-    }
+    return this.runStandaloneInspection(
+      (inspection) => inspection.recover(options, cycle),
+    );
   }
 
   private async recoverOwned(
@@ -936,16 +929,9 @@ export class SignerCoordinator {
     options: CheckSignerInclusionsOptions,
     cycle?: number,
   ): Promise<SignerInclusionInspection> {
-    const inspection = this.beginInspection();
-
-    try {
-      const result = await inspection.checkInclusions(options, cycle);
-      inspection.finish();
-      return result;
-    } catch (error) {
-      await inspection.abandon();
-      throw error;
-    }
+    return this.runStandaloneInspection(
+      (inspection) => inspection.checkInclusions(options, cycle),
+    );
   }
 
   private async checkInclusionsOwned(
@@ -1418,6 +1404,24 @@ export class SignerCoordinator {
       current.snapshot.attempts.length === 0
     ) {
       this.attemptLog = undefined;
+    }
+  }
+
+  /**
+   * Runs one operation in a dedicated inspection.
+   */
+  private async runStandaloneInspection<T>(
+    action: (inspection: SignerInspection) => Promise<T>,
+  ): Promise<T> {
+    const inspection = this.beginInspection();
+
+    try {
+      const result = await action(inspection);
+      inspection.finish();
+      return result;
+    } catch (error) {
+      await inspection.abandon();
+      throw error;
     }
   }
 
