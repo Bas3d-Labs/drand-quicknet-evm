@@ -64,6 +64,10 @@ import {
 } from './journal-persistence.js';
 
 import {
+  planSignerInclusions,
+} from './plan-signer-inclusions.js';
+
+import {
   planSignerRecovery,
   type RecoveryWriteCompletion,
 } from './plan-signer-recovery.js';
@@ -1211,19 +1215,13 @@ export class SignerCoordinator {
         }
       }
 
-      // Preserve previously recorded evidence of unattributed activity.
-      // A lower observation cannot clear that condition.
-      const lastObservation =
-        this.blockers.has('unattributed-signer-activity') &&
-        current.snapshot.lastObservation.nonce > result.observation.nonce
-          ? current.snapshot.lastObservation
-          : result.observation;
-
-      const next = validateJournalSnapshotStructure({
-        ...current.snapshot,
-        lastObservation,
-        attempts: result.attempts,
-      }, this.identity);
+      const next = planSignerInclusions({
+        identity: this.identity,
+        snapshot: current.snapshot,
+        inspection: result,
+        unattributedActivity:
+          this.blockers.has('unattributed-signer-activity'),
+      });
 
       this.pendingWrite = {
         kind: 'observation',
