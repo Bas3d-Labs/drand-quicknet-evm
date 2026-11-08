@@ -14,6 +14,10 @@ import {
 } from '../chain/block-anchor.js';
 
 import {
+  broadcastSignedTransaction,
+} from '../chain/broadcast-signed-transaction.js';
+
+import {
   inspectSignerBootstrap,
   type SignerBootstrapDecision,
 } from '../chain/inspect-signer-bootstrap.js';
@@ -46,10 +50,6 @@ import {
 } from '../execution/work-identity.js';
 
 import {
-  isFixedHex,
-} from '../shared/hex.js';
-
-import {
   isPositiveSafeInteger,
 } from '../shared/integer.js';
 
@@ -60,6 +60,10 @@ import {
 import {
   JournalPersistence,
 } from './journal-persistence.js';
+
+import {
+  planAttemptPreparation,
+} from './plan-attempt-preparation.js';
 
 import {
   planSignerInclusions,
@@ -88,10 +92,6 @@ import type {
   JournalIdentity,
   TransactionJournalStore,
 } from './transaction-journal.js';
-
-import {
-  validateJournalSnapshotStructure,
-} from './transaction-journal-validation.js';
 
 export interface SignerCoordinatorOptions {
   readonly identity: JournalIdentity;
@@ -636,31 +636,14 @@ export class SignerCoordinator {
         throw new Error('Could not configure signed attempt diagnostics.');
       }
 
-      const attempt: JournalAttempt = {
+      const next = planAttemptPreparation({
+        identity: this.identity,
+        snapshot: current.snapshot,
         attemptId,
         workId,
-        nonce: signed.nonce,
         createdAt,
-        signedTransactions: [{
-          transactionHash: signed.transactionHash,
-          signedTransaction: signed.signedTransaction,
-        }],
-        phase: 'signed',
-        inclusion: null,
-        replacementSearch: {
-          lowerBound: current.snapshot.lastObservation,
-          searchedThrough: null,
-        },
-      };
-
-      const next = validateJournalSnapshotStructure({
-        ...current.snapshot,
-        nextNonce: current.snapshot.nextNonce + 1n,
-        attempts: [
-          ...current.snapshot.attempts,
-          attempt,
-        ],
-      }, this.identity);
+        signed,
+      });
 
       this.gateDiagnostics.blockedSince ??= createdAt;
       this.inclusionChecksComplete = false;
@@ -777,64 +760,28 @@ export class SignerCoordinator {
         nonce: attempt.nonce,
       };
 
-      const notAcknowledged = Object.freeze({
-        status: 'not-acknowledged',
-        attemptId: attempt.attemptId,
+      const result = await broadcastSignedTransaction({
+        publicClient,
+        signedTransaction: transaction.signedTransaction,
         transactionHash: transaction.transactionHash,
-        nonce: attempt.nonce,
-      } as const);
+      });
 
-      let returnedHash: unknown;
+      if (result.status === 'not-acknowledged') {
+        this.emit(
+          (log) => log.attemptBroadcastNotAcknowledged({
+            ...identity,
+            ...result.failure,
+          }),
+          cycle,
+          'broadcast-attempt',
+        );
 
-      try {
-        returnedHash = await publicClient.request({
-          method: 'eth_sendRawTransaction',
-          params: [transaction.signedTransaction],
-        }, {
-          retryCount: 0,
+        return Object.freeze({
+          status: 'not-acknowledged',
+          attemptId: attempt.attemptId,
+          transactionHash: transaction.transactionHash,
+          nonce: attempt.nonce,
         });
-      } catch (error) {
-        this.emit(
-          (log) => log.attemptBroadcastNotAcknowledged({
-            ...identity,
-            observation: 'request-error',
-            error,
-          }),
-          cycle,
-          'broadcast-attempt',
-        );
-
-        return notAcknowledged;
-      }
-
-      if (!isFixedHex(returnedHash, 32)) {
-        this.emit(
-          (log) => log.attemptBroadcastNotAcknowledged({
-            ...identity,
-            observation: 'invalid-response',
-          }),
-          cycle,
-          'broadcast-attempt',
-        );
-
-        return notAcknowledged;
-      }
-
-      if (
-        returnedHash.toLowerCase() !==
-        transaction.transactionHash.toLowerCase()
-      ) {
-        this.emit(
-          (log) => log.attemptBroadcastNotAcknowledged({
-            ...identity,
-            observation: 'hash-mismatch',
-            returnedTransactionHash: returnedHash,
-          }),
-          cycle,
-          'broadcast-attempt',
-        );
-
-        return notAcknowledged;
       }
 
       this.emit(
@@ -916,70 +863,7 @@ export class SignerCoordinator {
 
     try {
       if (current.kind === 'missing') {
-        const result = await this.readBootstrapObservation(options);
-
-        if (result.status === 'bootstrap-deferred') {
-          const { observation, latestNonce, pendingNonce } = result;
-          const previous = this.lastBootstrapDeferral;
-
-          if (
-            previous === undefined ||
-            previous.durableNonce !== observation.nonce ||
-            previous.latestNonce !== latestNonce ||
-            previous.pendingNonce !== pendingNonce
-          ) {
-            this.lastBootstrapDeferral = {
-              durableNonce: observation.nonce,
-              latestNonce,
-              pendingNonce,
-            };
-
-            this.emit(
-              (log) => log.signerBootstrapDeferred({
-                signer: this.identity.signer,
-                durableBlock: observation.anchor.blockNumber,
-                durableBlockHash: observation.anchor.blockHash,
-                durableNonce: observation.nonce,
-                latestNonce,
-                pendingNonce,
-              }),
-              cycle,
-            );
-          }
-
-          return result;
-        }
-
-        if (result.status === 'anchor-changed') {
-          return result;
-        }
-
-        this.lastBootstrapDeferral = undefined;
-
-        const { observation } = result;
-
-        this.pendingWrite = {
-          kind: 'bootstrap',
-        };
-
-        await this.persistence.save({
-          version: 1,
-          identity: this.identity,
-          baseline: observation,
-          lastObservation: observation,
-          nextNonce: observation.nonce,
-          durableNextNonce: observation.nonce,
-          repairs: [],
-          attempts: [],
-        });
-
-        this.recoveryComplete = true;
-        this.applyCommittedWrite(cycle);
-
-        return {
-          status: 'no-attempt',
-          observation,
-        };
+        return await this.bootstrapOwned(options, cycle);
       }
       
       const result = await inspectSignerRecovery({
@@ -1184,21 +1068,89 @@ export class SignerCoordinator {
   }
 
   /**
-   * Checks whether a missing journal can adopt the selected durable nonce.
-   * Only a ready decision may proceed to baseline persistence.
+   * Establishes the first durable nonce baseline.
    */
-  private async readBootstrapObservation(
+  private async bootstrapOwned(
     options: RecoverSignerOptions,
-  ): Promise<SignerBootstrapDecision> {
+    cycle?: number,
+  ): Promise<SignerRecoveryResult> {
     if (this.blockers.size !== 0) {
       throw new Error('Cannot bootstrap while coordinator blockers remain.');
     }
 
-    return inspectSignerBootstrap({
+    const result = await inspectSignerBootstrap({
       publicClient: options.publicClient,
       signer: this.identity.signer,
       anchor: options.anchor,
     });
+
+    if (result.status === 'bootstrap-deferred') {
+      const {
+        observation,
+        latestNonce,
+        pendingNonce,
+      } = result;
+
+      const previous = this.lastBootstrapDeferral;
+
+      if (
+        previous === undefined ||
+        previous.durableNonce !== observation.nonce ||
+        previous.latestNonce !== latestNonce ||
+        previous.pendingNonce !== pendingNonce
+      ) {
+        this.lastBootstrapDeferral = {
+          durableNonce: observation.nonce,
+          latestNonce,
+          pendingNonce,
+        };
+
+        this.emit(
+          (log) => log.signerBootstrapDeferred({
+            signer: this.identity.signer,
+            durableBlock: observation.anchor.blockNumber,
+            durableBlockHash: observation.anchor.blockHash,
+            durableNonce: observation.nonce,
+            latestNonce,
+            pendingNonce,
+          }),
+          cycle,
+        );
+      }
+
+      return result;
+    }
+
+    if (result.status === 'anchor-changed') {
+      return result;
+    }
+
+    this.lastBootstrapDeferral = undefined;
+
+    const { observation } = result;
+
+    this.pendingWrite = {
+      kind: 'bootstrap',
+    };
+
+    await this.persistence.save({
+      version: 1,
+      identity: this.identity,
+      baseline: observation,
+      lastObservation: observation,
+      nextNonce: observation.nonce,
+      durableNextNonce: observation.nonce,
+      repairs: [],
+      attempts: [],
+    });
+
+    this.recoveryComplete = true;
+    this.applyCommittedWrite(cycle);
+
+    return {
+      status: 'no-attempt',
+      observation,
+    };
   }
 
   private revokeActionAuthorization(): void {
