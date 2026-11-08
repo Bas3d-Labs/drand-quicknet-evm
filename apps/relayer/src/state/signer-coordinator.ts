@@ -1343,6 +1343,10 @@ export class SignerCoordinator {
     }
   }
 
+  /**
+   * Publishes gate transitions and then releases signed-byte diagnostic
+   * protection when the signer is open and no attempts remain.
+   */
   private refresh(
     cycle?: number,
     operation: SignerEventOperation = 'reconcile-attempt',
@@ -1376,6 +1380,8 @@ export class SignerCoordinator {
 
     const current = this.persistence.current;
 
+    // Keep signed-byte protection trhough gate publication, including
+    // logging-failure reporting, before releasing the attempt logger.
     if (
       status.open &&
       this.pendingWrite === undefined &&
