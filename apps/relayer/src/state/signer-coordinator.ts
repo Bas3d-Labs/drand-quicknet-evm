@@ -10,7 +10,6 @@ import type {
 
 import {
   blockAnchorsMatch,
-  checkBlockAnchor,
   type BlockAnchor,
 } from '../chain/block-anchor.js';
 
@@ -21,7 +20,6 @@ import {
 
 import {
   inspectSignerInclusions,
-  inspectSignerInclusionsWithinPass,
   type SignerInclusionInspection,
 } from '../chain/inspect-signer-inclusions.js';
 
@@ -62,6 +60,10 @@ import {
 import {
   JournalPersistence,
 } from './journal-persistence.js';
+
+import {
+  planSignerInclusions,
+} from './plan-signer-inclusions.js';
 
 import {
   planSignerRecovery,
@@ -197,45 +199,7 @@ export interface CheckSignerInclusionsOptions {
   readonly maxReplacementBlockRange?: bigint;
 }
 
-export interface OpenSignerInspectionHeadOptions {
-  readonly publicClient: PublicClient;
-  readonly head: Readonly<BlockAnchor>;
-}
-
-export type SignerInspectionHeadResult =
-  | {
-      readonly status: 'anchor-changed';
-      readonly observedAnchor: Readonly<BlockAnchor>;
-    }
-  | null;
-
-type InspectionHeadBracket =
-  | {
-      readonly state: 'none';
-    }
-  | {
-      readonly state: 'open';
-      readonly publicClient: PublicClient;
-      readonly head: Readonly<BlockAnchor>;
-    }
-  | {
-      readonly state: 'closed';
-    }
-  | {
-      readonly state: 'failed';
-    };
-
 export interface SignerInspection {
-  /**
-   * Opens an enclosing head bracket before any recovery or inclusion work.
-   * 
-   * A successful opening binds this inspection to the captured client and
-   * head.
-   */
-  openHead(
-    options: OpenSignerInspectionHeadOptions,
-  ): Promise<SignerInspectionHeadResult>; 
-
   recover(
     options: RecoverSignerOptions,
     cycle?: number,
@@ -249,11 +213,9 @@ export interface SignerInspection {
   /**
    * Releases a successfully completed inspection.
    * 
-   * Rejects while an operation is running, persistence is pending, or an
-   * enclosing head bracket is open or failed.
-   * 
-   * An open or failed bracket must be abandoned.
-   * Pending persistence must be retried before another inspection begins.
+   * Rejects while an operation is running or persistence is pending.
+   * Pending persistence must be retried after abandoning ownership,
+   * before another inspection begins.
    */
   finish(): void;
 
@@ -271,8 +233,6 @@ interface InspectionOwner {
   abandonment: Promise<void> | null;
   abandoning: boolean;
   cycle: number | undefined;
-  hasRunOperation: boolean;
-  headBracket: InspectionHeadBracket;
 }
 
 /**
@@ -386,31 +346,12 @@ export class SignerCoordinator {
       abandonment: null,
       abandoning: false,
       cycle: undefined,
-      hasRunOperation: false,
-      headBracket: { state: 'none' },
     };
 
     this.inspectionOwner = owner;
     this.revokeActionAuthorization();
 
     return Object.freeze({
-      openHead: (
-        options: OpenSignerInspectionHeadOptions,
-       ) => {
-        const captured: OpenSignerInspectionHeadOptions = {
-          publicClient: options.publicClient,
-          head: Object.freeze({
-            blockNumber: options.head.blockNumber,
-            blockHash: options.head.blockHash,
-          }),
-        };
-
-        return this.runInspectionOperation(
-          owner,
-          () => this.openInspectionHeadOwned(captured, owner),
-        );
-      },
-
       recover: (
         options: RecoverSignerOptions,
         cycle?: number,
@@ -459,7 +400,7 @@ export class SignerCoordinator {
       finish: () => this.finishInspection(owner),
 
       abandon: () => this.abandonInspection(owner),
-    })
+    });
   }
 
   /**
@@ -947,8 +888,7 @@ export class SignerCoordinator {
     owner: InspectionOwner,
     cycle?: number,
   ): Promise<SignerRecoveryResult> {
-    this.assertInspectionWorkAllowed(owner);
-    owner.hasRunOperation = true;
+    this.assertAvailable(owner);
 
     const { maxBlockRange } = options;
 
@@ -1129,8 +1069,7 @@ export class SignerCoordinator {
     owner: InspectionOwner,
     cycle?: number,
   ): Promise<SignerInclusionInspection> {
-    this.assertInspectionWorkAllowed(owner);
-    owner.hasRunOperation = true;
+    this.assertAvailable(owner);
 
     if (
       this.pendingWrite !== undefined ||
@@ -1154,8 +1093,6 @@ export class SignerCoordinator {
     try {
       const maxReplacementBlockRange = options.maxReplacementBlockRange;
 
-      const bracket = owner.headBracket;
-
       const inspectionOptions = {
         publicClient: options.publicClient,
         snapshot: current.snapshot,
@@ -1165,29 +1102,9 @@ export class SignerCoordinator {
           : { maxReplacementBlockRange }),
       };
 
-      let result: SignerInclusionInspection;
-
-      if (bracket.state === 'open') {
-        if (
-          options.publicClient !== bracket.publicClient ||
-          !blockAnchorsMatch(options.head, bracket.head)
-        ) {
-          throw new Error(
-            'Inclusion checking must use the inspection head and client.'
-          );
-        }
-
-        result = await inspectSignerInclusionsWithinPass(inspectionOptions);
-      } else {
-        result = await inspectSignerInclusions(inspectionOptions);
-      }
+      const result = await inspectSignerInclusions(inspectionOptions);
 
       if (result.status !== 'inspected') {
-        if (bracket.state === 'open') {
-          owner.headBracket = { state: 'failed' };
-          this.revokeActionAuthorization();
-        }
-
         if (
           result.status === 'nonce-behind-journal' ||
           result.status === 'inconsistent-observations'
@@ -1198,32 +1115,13 @@ export class SignerCoordinator {
         return result;
       }
 
-      if (bracket.state === 'open') {
-        const changed = await checkBlockAnchor(
-          bracket.publicClient,
-          bracket.head,
-        );
-
-        if (changed !== null) {
-          owner.headBracket = { state: 'failed' };
-          this.revokeActionAuthorization();
-          return changed;
-        }
-      }
-
-      // Preserve previously recorded evidence of unattributed activity.
-      // A lower observation cannot clear that condition.
-      const lastObservation =
-        this.blockers.has('unattributed-signer-activity') &&
-        current.snapshot.lastObservation.nonce > result.observation.nonce
-          ? current.snapshot.lastObservation
-          : result.observation;
-
-      const next = validateJournalSnapshotStructure({
-        ...current.snapshot,
-        lastObservation,
-        attempts: result.attempts,
-      }, this.identity);
+      const next = planSignerInclusions({
+        identity: this.identity,
+        snapshot: current.snapshot,
+        inspection: result,
+        unattributedActivity:
+          this.blockers.has('unattributed-signer-activity'),
+      });
 
       this.pendingWrite = {
         kind: 'observation',
@@ -1246,10 +1144,6 @@ export class SignerCoordinator {
         next.lastObservation.nonce === attempt.nonce
       ) {
         this.broadcastPermit = attempt.attemptId;
-      }
-
-      if (bracket.state === 'open') {
-        owner.headBracket = { state: 'closed' };
       }
 
       return result;
@@ -1307,63 +1201,6 @@ export class SignerCoordinator {
     });
   }
 
-  private assertInspectionWorkAllowed(
-    owner: InspectionOwner,
-  ): void {
-    this.assertAvailable(owner);
-
-    if (owner.headBracket.state === 'failed') {
-      throw new Error('Signer inspection head bracket failed.');
-    }
-
-    if (owner.headBracket.state === 'closed') {
-      throw new Error('Signer inspection head bracket is already closed.');
-    }
-  }
-
-  private async openInspectionHeadOwned(
-    options: OpenSignerInspectionHeadOptions,
-    owner: InspectionOwner,
-  ): Promise<SignerInspectionHeadResult> {
-    this.assertInspectionWorkAllowed(owner);
-
-    if (
-      owner.hasRunOperation ||
-      owner.headBracket.state !== 'none'
-    ) {
-      throw new Error(
-        'The head bracket must be opened before recovery or inclusion work.'
-      );
-    }
-
-    // Until opening succeeds, this inspection may only be abandoned.
-    owner.headBracket = { state: 'failed' };
-
-    const { publicClient, head } = options;
-
-    if (
-      typeof head.blockNumber !== 'bigint' ||
-      head.blockNumber < 0n ||
-      head.blockNumber >= (1n << 256n) ||
-      !isFixedHex(head.blockHash, 32)
-    ) {
-      throw new TypeError('Invalid signer inspection head.');
-    }
-
-    const changed = await checkBlockAnchor(publicClient, head);
-    if (changed !== null) {
-      return changed;
-    }
-
-    owner.headBracket = {
-      state: 'open',
-      publicClient,
-      head,
-    };
-    
-    return null;
-  }
-
   private revokeActionAuthorization(): void {
     this.broadcastPermit = undefined;
     this.inclusionChecksComplete = false;
@@ -1382,7 +1219,7 @@ export class SignerCoordinator {
     operation: () => Promise<T>,
     cycle?: number,
   ): Promise<T> {
-    this.assertInspectionWorkAllowed(owner);
+    this.assertAvailable(owner);
 
     if (owner.activeOperation !== null) {
       throw new Error('Signer inspection operation is already in progress.');
@@ -1390,10 +1227,9 @@ export class SignerCoordinator {
 
     owner.cycle = cycle;
 
-    // Register the promise before entering operation mode. This also
-    // covers synchronous callbacks made before its first awaited RPC.
+    // Register before execution so abandonment also covers queued work.
     const pending = Promise.resolve().then(() => {
-      this.assertInspectionWorkAllowed(owner);
+      this.assertAvailable(owner);
       return operation();
     });
 
@@ -1401,13 +1237,6 @@ export class SignerCoordinator {
 
     try {
       return await pending;
-    } catch (error) {
-      if (owner.headBracket.state === 'open') {
-        owner.headBracket = { state: 'failed' };
-        this.revokeActionAuthorization();
-      }
-
-      throw error;
     } finally {
       owner.activeOperation = null;
     }
@@ -1428,18 +1257,6 @@ export class SignerCoordinator {
 
     if (this.busy || this.emitting) {
       throw new Error('Signer coordinator operation is already in progress.');
-    }
-
-    if (owner.headBracket.state === 'open') {
-      throw new Error(
-        'Signer inspection head bracket is still open.'
-      );
-    }
-
-    if (owner.headBracket.state === 'failed') {
-      throw new Error(
-        'Signer inspection head bracket failed.'
-      );
     }
 
     if (

@@ -18,7 +18,6 @@ import {
 
 import {
   inspectSignerInclusions,
-  inspectSignerInclusionsWithinPass,
 } from '../../src/chain/inspect-signer-inclusions.js';
 
 import type {
@@ -1337,33 +1336,6 @@ describe('signer inclusion inspection', () => {
     expect(standaloneTrace).toHaveLength(37);
     expect(standaloneTrace[0]).toBe('block:130');
     expect(standaloneTrace.at(-1)).toBe('block:130');
-
-    t.getBlock.mockClear();
-    t.getTransactionReceipt.mockClear();
-    t.getTransactionCount.mockClear();
-
-    const withinPass = await inspectSignerInclusionsWithinPass({
-      publicClient: {
-        getBlock: t.getBlock,
-        getTransactionReceipt: t.getTransactionReceipt,
-        getTransactionCount: t.getTransactionCount,
-      } as unknown as PublicClient,
-      snapshot: input,
-      head: anchorAt(130n),
-    });
-
-    expect(withinPass).toEqual(result);
-
-    // Only the two enclosing head reads move to the caller.
-    // All evidence reads, including the nonce bracket, retain their order.
-    expect(rpcTrace()).toEqual(standaloneTrace.slice(1, -1));
-    expect(rpcTrace()).toHaveLength(35);
-
-    expect(t.getBlock).toHaveBeenCalledTimes(18);
-    expect(t.getTransactionReceipt).toHaveBeenCalledTimes(16);
-    expect(t.getTransactionCount).toHaveBeenCalledTimes(1);
-
-    expect(input).toEqual(before);
   });
 
   it('discards refreshed inclusions when the head changes during the last receipt read', async () => {
@@ -1419,7 +1391,7 @@ describe('signer inclusion inspection', () => {
     expect(t.snapshot).toEqual(before);
   });
 
-  it('keeps the same nonce bracket for empty standalone and within-pass inspections', async () => {
+  it('checks an empty queue using only the anchored nonce bracket', async () => {
     const t = await setup();
 
     const snapshot: TransactionJournalSnapshot = {
@@ -1452,15 +1424,13 @@ describe('signer inclusion inspection', () => {
       getTransactionReceipt: vi.fn(),
     };
 
-    const options = {
+    const result = await inspectSignerInclusions({
       publicClient: publicClient as unknown as PublicClient,
       snapshot,
       head: anchorAt(130n),
-    };
+    });
 
-    const standalone = await inspectSignerInclusions(options);
-
-    expect(standalone).toMatchObject({
+    expect(result).toMatchObject({
       status: 'inspected',
       inclusionChecksComplete: true,
       attempts: [],
@@ -1471,20 +1441,6 @@ describe('signer inclusion inspection', () => {
       },
     });
 
-    expect(trace).toEqual([
-      'block:130',
-      'nonce',
-      'block:130',
-    ]);
-
-    trace.length = 0;
-
-    const withinPass = await inspectSignerInclusionsWithinPass(options);
-
-    expect(withinPass).toEqual(standalone);
-
-    // Empty standalone inspection already omits the outer bracket.
-    // The within-pass entry must still retain readAnchoredNonce's checks.
     expect(trace).toEqual([
       'block:130',
       'nonce',
