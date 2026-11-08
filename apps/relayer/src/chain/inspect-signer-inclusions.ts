@@ -17,7 +17,6 @@ import {
 } from '../state/transaction-journal-validation.js';
 
 import {
-  checkBlockAnchor,
   type BlockAnchor,
 } from './block-anchor.js';
 
@@ -80,10 +79,13 @@ export type SignerInclusionInspection =
     };
 
 /**
- * Inspects retained attempts against a selected head.
- * 
- * Non-empty queues receive enclosing head checks around the evidence
- * reads. Empty queues retain the anchored nonce reader's own checks.
+ * Collects provisional inclusion evidence while the coordinator holds ownership.
+ * The coordinator reads the selected latest block before the inspection and
+ * checks it again afterwards. It must complete that final check before saving
+ * this result or using it to authorize preparation or broadcast.
+ *
+ * The nonce reader also checks the selected latest block immediately before
+ * and after reading the signer nonce. Those separate checks remain here.
  */
 export async function inspectSignerInclusions(
   options: InspectSignerInclusionsOptions,
@@ -117,15 +119,6 @@ export async function inspectSignerInclusions(
     )
   ) {
     throw new TypeError('Invalid signer inclusion input.');
-  }
-
-  if (snapshot.attempts.length > 0) {
-    const openingHead = await checkBlockAnchor(publicClient, head, {
-      operation: 'signer-inclusions',
-    });
-    if (openingHead !== null) {
-      return openingHead;
-    }
   }
 
   const attempts: JournalAttempt[] = [];
@@ -308,18 +301,6 @@ export async function inspectSignerInclusions(
         },
       };
       verifiedIndices.add(index);
-    }
-  }
-
-  if (snapshot.attempts.length > 0) {
-    // Close every non-empty path after receipt, nonce, and replacement
-    // inspection. No updated queue or broadcast eligibility may escape
-    // when the selected head changed during the pass.
-    const closingHead = await checkBlockAnchor(publicClient, head, {
-      operation: 'signer-inclusions',
-    });
-    if (closingHead !== null) {
-      return closingHead;
     }
   }
 

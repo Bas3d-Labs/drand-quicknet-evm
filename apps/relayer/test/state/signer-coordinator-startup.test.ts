@@ -68,6 +68,15 @@ const OBSERVED_AT = {
   blockHash: HASH,
 };
 
+function anchorClient(): PublicClient {
+  return {
+    getBlock: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => ({
+      number: blockNumber,
+      hash: HASH,
+    })),
+  } as unknown as PublicClient;
+}
+
 function emptySnapshot(): TransactionJournalSnapshot {
   return {
     version: 1,
@@ -283,7 +292,7 @@ async function preparationSetup(maxRetainedAttempts = 3) {
 
   try {
     await coordinator.checkInclusions({
-      publicClient: {} as PublicClient,
+      publicClient: anchorClient(),
       head: OBSERVED_AT,
     });
   } finally {
@@ -975,7 +984,7 @@ describe('signer coordinator startup', () => {
     });
 
     const options = {
-      publicClient: {} as PublicClient,
+      publicClient: anchorClient(),
       head: { ...observation.anchor },
     };
 
@@ -1937,7 +1946,7 @@ describe('signer coordinator startup', () => {
 
     try {
       const checking = coordinator.checkInclusions({
-        publicClient: {} as PublicClient,
+        publicClient: anchorClient(),
         head: OBSERVED_AT,
       });
 
@@ -1987,7 +1996,7 @@ describe('signer coordinator startup', () => {
 
     try {
       await coordinator.checkInclusions({
-        publicClient: {} as PublicClient,
+        publicClient: anchorClient(),
         head: OBSERVED_AT,
       });
 
@@ -2025,7 +2034,7 @@ describe('signer coordinator startup', () => {
 
     try {
       await coordinator.checkInclusions({
-        publicClient: {} as PublicClient,
+        publicClient: anchorClient(),
         head: OBSERVED_AT,
       });
 
@@ -2067,7 +2076,7 @@ describe('signer coordinator startup', () => {
 
     try {
       await coordinator.checkInclusions({
-        publicClient: {} as PublicClient,
+        publicClient: anchorClient(),
         head: OBSERVED_AT,
       });
 
@@ -2112,7 +2121,7 @@ describe('signer coordinator startup', () => {
     t.save.mockRejectedValueOnce(new Error('Injected write failure'));
 
     const options = {
-      publicClient: {} as PublicClient,
+      publicClient: anchorClient(),
       head: OBSERVED_AT,
     };
 
@@ -2278,7 +2287,7 @@ describe('signer coordinator startup', () => {
     }).mockResolvedValueOnce(changed);
 
     const options = {
-      publicClient: {} as PublicClient,
+      publicClient: anchorClient(),
       head: OBSERVED_AT,
     };
 

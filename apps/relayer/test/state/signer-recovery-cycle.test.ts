@@ -338,8 +338,8 @@ function observeInspectionCalls(coordinator: SignerCoordinator) {
     ) => inspection.checkInclusions(...args),
   );
 
-  vi.spyOn(coordinator, 'beginInspection').mockImplementation(() => {
-    const inspection = beginInspection();
+  vi.spyOn(coordinator, 'beginInspection').mockImplementation((options) => {
+    const inspection = beginInspection(options);
 
     return Object.freeze({
       recover: (...args: Parameters<SignerInspection['recover']>) =>
@@ -3701,7 +3701,7 @@ describe('signer recovery cycle', () => {
     },
   );
 
-  it('uses 44 RPC calls in durable-then-latest order for 16 retained inclusions', async () => {
+  it('uses 44 RPC calls with latest-block checks enclosing durable and latest work for 16 retained inclusions', async () => {
     const t = await setup({
       empty: true,
       maxRetainedAttempts: 16,
@@ -3815,9 +3815,10 @@ describe('signer recovery cycle', () => {
     });
 
     // Durable recovery: 4 receipt-reconciliation calls + 3 nonce calls.
-    // Latest inclusion validation: 37 calls.
+    // Latest inspector: 35 calls; coordinator opening and closing block checks: 2 calls.
     // Head selection before run() and persistence are outside the RPC tally.
     expect(trace).toEqual([
+      'block:130',
       'block:100',
       `receipt:${hashes[0]}`,
       'block:110',
@@ -3829,8 +3830,6 @@ describe('signer recovery cycle', () => {
 
       'save:start',
       'save:ack',
-
-      'block:130',
 
       ...hashes.flatMap((hash) => [
         'block:110',
@@ -4196,5 +4195,520 @@ describe('signer recovery cycle', () => {
     expect(t.coordinator.status.open).toBe(true);
     expect(t.signTransaction).not.toHaveBeenCalled();
     expect(t.request).not.toHaveBeenCalled();
+  });
+});
+describe('inspection bracket ordering, anchors, and nonce consistency', () => {
+  const HEAD = { blockNumber: 130n, blockHash: HASH };
+
+  it.each([
+    { entry: 'cycle', boundary: 'opening' },
+    { entry: 'cycle', boundary: 'closing' },
+    { entry: 'standalone', boundary: 'opening' },
+    { entry: 'standalone', boundary: 'closing' },
+  ] as const)(
+    'holds ownership and withholds latest persistence at $entry $boundary',
+    async ({ entry, boundary }) => {
+      const t = await setup({ empty: true });
+      const entered = deferred();
+      const release = deferred();
+      const read = t.getBlock.getMockImplementation()!;
+      let headReads = 0;
+
+      t.getBlock.mockImplementation(async (request) => {
+        if (request?.blockNumber === HEAD.blockNumber) {
+          headReads += 1;
+
+          if (headReads === (boundary === 'opening' ? 1 : 4)) {
+            entered.resolve();
+            await release.promise;
+          }
+        }
+
+        return read(request);
+      });
+
+      const pending = entry === 'cycle'
+        ? t.cycle.run({ ...t.recovery, head: HEAD })
+        : t.coordinator.checkInclusions({
+          publicClient: t.recovery.publicClient,
+          head: HEAD,
+        });
+
+      try {
+        await entered.promise;
+
+        expect(t.coordinator.status.open).toBe(false);
+        expect(t.coordinator.canBroadcast).toBe(false);
+        expect(() => t.coordinator.beginInspection()).toThrow();
+        expect(t.request).not.toHaveBeenCalled();
+
+        const durableCommitted = entry === 'cycle' && boundary === 'closing';
+        expect(t.save).toHaveBeenCalledTimes(durableCommitted ? 1 : 0);
+
+        if (durableCommitted) {
+          expect(t.save.mock.calls[0]![0].lastObservation.anchor).toEqual(ANCHOR);
+        }
+      } finally {
+        release.resolve();
+      }
+
+      await pending;
+
+      expect(t.coordinator.status.open).toBe(true);
+      expect(t.save).toHaveBeenCalledTimes(entry === 'cycle' ? 2 : 1);
+      expect(t.save.mock.calls.at(-1)![0].lastObservation.anchor).toEqual(HEAD);
+    },
+  );
+
+  it('uses eight RPCs for an initialized empty fresh cycle', async () => {
+    const t = await setup({ empty: true });
+    const trace: string[] = [];
+
+    t.getBlock.mockImplementation(async ({ blockNumber } = {}) => {
+      trace.push(`block:${blockNumber}`);
+      return { number: blockNumber, hash: HASH } as never;
+    });
+
+    t.getTransactionCount.mockImplementation(async ({ blockNumber }) => {
+      trace.push(`nonce:${blockNumber}`);
+      return 4;
+    });
+
+    await t.cycle.run({ ...t.recovery, head: HEAD });
+
+    expect(trace).toEqual([
+      'block:130',
+      'block:100', 'nonce:100', 'block:100',
+      'block:130', 'nonce:130', 'block:130',
+      'block:130',
+    ]);
+    expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+    expect(t.save).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['cycle', 'standalone'] as const)(
+    'refuses a changed opening before any body reads at the %s entry',
+    async (entry) => {
+      const t = await setup();
+
+      t.getBlock.mockResolvedValueOnce({
+        number: HEAD.blockNumber,
+        hash: OTHER,
+      } as never);
+
+      const result = entry === 'cycle'
+        ? (await t.cycle.run({ ...t.recovery, head: HEAD })).inspection
+        : await t.coordinator.checkInclusions({
+          publicClient: t.recovery.publicClient,
+          head: HEAD,
+        });
+
+      expect(result).toMatchObject({ status: 'anchor-changed' });
+      expect(t.getBlock).toHaveBeenCalledOnce();
+      expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+      expect(t.getTransactionCount).not.toHaveBeenCalled();
+      expect(t.save).not.toHaveBeenCalled();
+      expect(t.coordinator.canBroadcast).toBe(false);
+    },
+  );
+
+  it.each([
+    { population: 'included', failure: 'changed' },
+    { population: 'included', failure: 'rpc-error' },
+    { population: 'unresolved', failure: 'changed' },
+    { population: 'unresolved', failure: 'rpc-error' },
+  ] as const)(
+    'discards provisional $population results on closing $failure',
+    async ({ population, failure }) => {
+      const t = await setup();
+      const before = t.visible();
+      const error = new Error('Closing head read failed.');
+      const read = t.getBlock.getMockImplementation()!;
+      let headReads = 0;
+
+      if (population === 'included') {
+        t.getTransactionReceipt.mockResolvedValue({
+          transactionHash: t.coordinator.attempts[0]!.transactionHashes[0],
+          blockNumber: 110n,
+          blockHash: HASH,
+          status: 'success',
+        } as never);
+        t.getTransactionCount.mockResolvedValue(5);
+      }
+
+      t.getBlock.mockImplementation(async (request) => {
+        if (request?.blockNumber === HEAD.blockNumber && ++headReads === 4) {
+          if (failure === 'rpc-error') {
+            throw error;
+          }
+
+          return { number: HEAD.blockNumber, hash: OTHER } as never;
+        }
+
+        return read(request);
+      });
+
+      const pending = t.coordinator.checkInclusions({
+        publicClient: t.recovery.publicClient,
+        head: HEAD,
+      });
+
+      if (failure === 'rpc-error') {
+        await expect(pending).rejects.toBe(error);
+      } else {
+        expect(await pending).toMatchObject({ status: 'anchor-changed' });
+      }
+
+      expect(headReads).toBe(4);
+      expect(t.visible()).toBe(before);
+      expect(t.save).not.toHaveBeenCalled();
+      expect(t.coordinator.canBroadcast).toBe(false);
+      expect(t.coordinator.status.open).toBe(false);
+
+      const next = t.coordinator.beginInspection();
+      await next.abandon();
+    },
+  );
+
+  it('preserves durable commits but discards a changed latest close', async () => {
+    const t = await setup();
+    const read = t.getBlock.getMockImplementation()!;
+    let headReads = 0;
+
+    t.getTransactionReceipt.mockResolvedValue({
+      transactionHash: t.coordinator.attempts[0]!.transactionHashes[0],
+      blockNumber: 90n,
+      blockHash: HASH,
+      status: 'success',
+    } as never);
+    t.getTransactionCount.mockResolvedValue(5);
+
+    t.getBlock.mockImplementation(async (request) => {
+      if (request?.blockNumber === HEAD.blockNumber && ++headReads === 4) {
+        return { number: HEAD.blockNumber, hash: OTHER } as never;
+      }
+
+      return read(request);
+    });
+
+    const result = await t.cycle.run({ ...t.recovery, head: HEAD });
+
+    expect(result.inspection.status).toBe('resolution-available');
+    expect(result.inclusions?.status).toBe('anchor-changed');
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.coordinator.attempts).toEqual([]);
+    expect(t.visible()).toMatchObject({
+      kind: 'present',
+      snapshot: { durableNextNonce: 5n },
+    });
+    expect(t.coordinator.status.open).toBe(false);
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.request).not.toHaveBeenCalled();
+  });
+
+  it('rejects differing nonces at the same durable anchor before planning the second resolution', async () => {
+    const t = await setupTwoAttempts();
+
+    t.getTransactionReceipt.mockImplementation(async ({ hash }) => ({
+      transactionHash: hash,
+      blockNumber: 90n,
+      blockHash: HASH,
+      status: 'success',
+    }) as never);
+    t.getTransactionCount.mockResolvedValueOnce(6).mockResolvedValueOnce(7);
+
+    const result = await t.cycle.run({ ...t.recovery, head: HEAD });
+
+    expect(result.inspection).toMatchObject({
+      status: 'inconsistent-observations',
+      observation: { nonce: 7n },
+    });
+    expect(result.inclusions).toBeNull();
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.coordinator.attempts.map((attempt) => attempt.nonce)).toEqual([5n]);
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.request).not.toHaveBeenCalled();
+  });
+
+  it.each(['unresolved', 'included'] as const)(
+    'reevaluates the durable permit against the latest %s result before release',
+    async (latest) => {
+      const t = await setup();
+      const owner = t.coordinator.beginInspection({
+        publicClient: t.recovery.publicClient,
+        head: HEAD,
+        durableAnchor: ANCHOR,
+      });
+
+      expect(() => owner.finish()).toThrow('bracket has not completed');
+      await owner.recover(t.recovery);
+      expect(t.coordinator.canBroadcast).toBe(false);
+      expect(() => owner.finish()).toThrow('bracket has not completed');
+
+      if (latest === 'included') {
+        t.getTransactionReceipt.mockResolvedValue({
+          transactionHash: t.coordinator.attempts[0]!.transactionHashes[0],
+          blockNumber: 110n,
+          blockHash: HASH,
+          status: 'success',
+        } as never);
+        t.getTransactionCount.mockResolvedValue(5);
+      }
+
+      await owner.checkInclusions({
+        publicClient: t.recovery.publicClient,
+        head: HEAD,
+      });
+
+      expect(t.coordinator.canBroadcast).toBe(false);
+      owner.finish();
+      expect(t.coordinator.canBroadcast).toBe(latest === 'unresolved');
+    },
+  );
+});
+
+describe('inspection bracket provisional evidence', () => {
+  const HEAD = { blockNumber: 130n, blockHash: HASH };
+
+  it.each([6, 7])(
+    'compares durable nonce %i before a higher-activity observation can be skipped',
+    async (secondNonce) => {
+      const t = await setupTwoAttempts();
+      const original = t.visible();
+
+      if (original.kind !== 'present') {
+        throw new Error('Expected initialized journal.');
+      }
+
+      const save = vi.fn<TransactionJournalStore['save']>().mockResolvedValue();
+      const coordinator = await SignerCoordinator.create({
+        identity: IDENTITY,
+        maxRetainedAttempts: 3,
+        store: {
+          load: async () => ({
+            kind: 'present',
+            snapshot: {
+              ...original.snapshot,
+              lastObservation: { anchor: HEAD, nonce: 9n },
+            },
+          }),
+          save,
+        },
+        log: createRelayerLog({
+          chainId: IDENTITY.chainId,
+          destination: { write() {} },
+        }),
+        createErrorSummary: (secrets = []) => ({
+          scrubText: createScrubber({ privateKey: KEY, rpcUrls: [], secrets }),
+        }),
+      });
+
+      t.getTransactionReceipt.mockResolvedValueOnce({
+        transactionHash: t.first.transactionHashes[0],
+        blockNumber: 90n,
+        blockHash: HASH,
+        status: 'success',
+      } as never);
+      t.getTransactionCount.mockResolvedValueOnce(6).mockResolvedValueOnce(secondNonce);
+
+      const owner = coordinator.beginInspection({
+        publicClient: t.recovery.publicClient,
+        head: HEAD,
+        durableAnchor: ANCHOR,
+      });
+
+      expect((await owner.recover(t.recovery)).status).toBe('resolution-available');
+      expect(coordinator.status.recoveryComplete).toBe(true);
+      expect(save).toHaveBeenCalledOnce();
+      expect(save.mock.calls[0]![0].lastObservation.nonce).toBe(9n);
+
+      const result = await owner.recover(t.recovery);
+
+      // Same nonce reaches the planner's unchanged branch; a different nonce
+      // must be rejected before that branch can conceal the disagreement.
+      expect(result.status).toBe(secondNonce === 6 ? 'unresolved' : 'inconsistent-observations');
+      expect(save).toHaveBeenCalledOnce();
+      expect(coordinator.attempts.map((attempt) => attempt.nonce)).toEqual([5n]);
+      expect(coordinator.status.recoveryComplete).toBe(false);
+      expect(coordinator.canBroadcast).toBe(false);
+      expect(() => owner.finish()).toThrow('bracket has not completed');
+
+      await expect(owner.checkInclusions({
+        publicClient: t.recovery.publicClient,
+        head: HEAD,
+      })).rejects.toThrow('bracket cannot accept another operation');
+
+      await owner.abandon();
+    },
+  );
+
+  it('discards replacement discovery when the owner closing check changes', async () => {
+    const t = await setup();
+
+    // Establish a lower bound without consuming the attempt's nonce.
+    await t.coordinator.recover(t.recovery);
+    expect(t.coordinator.canBroadcast).toBe(true);
+    t.save.mockClear();
+    const before = t.visible();
+    let scanned = false;
+    let headChecksAfterScan = 0;
+
+    t.getTransactionCount.mockResolvedValue(5);
+    t.getBlock.mockImplementation(async ({ blockNumber, includeTransactions } = {}) => {
+      let hash = HASH as Hash;
+
+      if (includeTransactions) {
+        scanned = true;
+      } else if (scanned && blockNumber === HEAD.blockNumber) {
+        headChecksAfterScan += 1;
+
+        // Search closing succeeds; owner closing fails afterwards.
+        if (headChecksAfterScan === 2) {
+          hash = OTHER;
+        }
+      }
+
+      return {
+        number: blockNumber,
+        hash,
+        parentHash: HASH,
+        transactions: blockNumber === 101n ? [{
+          hash: OTHER,
+          from: ACCOUNT.address,
+          nonce: 4,
+        }] : [],
+      } as never;
+    });
+
+    expect(await t.coordinator.checkInclusions({
+      publicClient: t.recovery.publicClient,
+      head: HEAD,
+      maxReplacementBlockRange: 2n,
+    })).toMatchObject({ status: 'anchor-changed' });
+
+    expect(headChecksAfterScan).toBe(2);
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.visible()).toBe(before);
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.request).not.toHaveBeenCalled();
+  });
+
+  it.each(['unresolved', 'included'] as const)(
+    'replaces a standalone durable permit using the latest %s result',
+    async (latest) => {
+      const t = await setup();
+
+      await t.coordinator.recover(t.recovery);
+      expect(t.coordinator.canBroadcast).toBe(true);
+
+      if (latest === 'included') {
+        t.getTransactionReceipt.mockResolvedValue({
+          transactionHash: t.coordinator.attempts[0]!.transactionHashes[0],
+          blockNumber: 110n,
+          blockHash: HASH,
+          status: 'success',
+        } as never);
+        t.getTransactionCount.mockResolvedValue(5);
+      }
+
+      await t.coordinator.checkInclusions({
+        publicClient: t.recovery.publicClient,
+        head: HEAD,
+      });
+
+      expect(t.coordinator.canBroadcast).toBe(latest === 'unresolved');
+    },
+  );
+
+  it('abandoning a paused close prevents latest persistence and permit grants', async () => {
+    const t = await setup();
+    const entered = deferred();
+    const release = deferred();
+    const read = t.getBlock.getMockImplementation()!;
+    let headReads = 0;
+    const owner = t.coordinator.beginInspection({
+      publicClient: t.recovery.publicClient,
+      head: HEAD,
+      durableAnchor: ANCHOR,
+    });
+
+    await owner.recover(t.recovery);
+    t.save.mockClear();
+
+    t.getBlock.mockImplementation(async (request) => {
+      // Recovery already performed the opening latest-block check. Pause at
+      // the owner's closing check, after the nonce reader has completed its
+      // own block check, nonce read, and second block check.
+      if (request?.blockNumber === HEAD.blockNumber && ++headReads === 3) {
+        entered.resolve();
+        await release.promise;
+      }
+
+      return read(request);
+    });
+
+    const pending = owner.checkInclusions({
+      publicClient: t.recovery.publicClient,
+      head: HEAD,
+    });
+    const rejected = expect(pending).rejects.toThrow('being abandoned');
+
+    await entered.promise;
+    const abandoned = owner.abandon();
+    release.resolve();
+    await Promise.all([rejected, abandoned]);
+
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.coordinator.status.open).toBe(false);
+  });
+});
+
+describe('inspection bracket final nonce and anchor validation', () => {
+  it('rejects a latest nonce below the durable observation before latest save', async () => {
+    const t = await setup({ empty: true });
+    const head = { blockNumber: 130n, blockHash: HASH };
+
+    // Both values are above durableNextNonce (4), so the latest inspector's
+    // resolved-history check cannot mask the owner's cross-pass comparison.
+    t.getTransactionCount.mockResolvedValueOnce(6).mockResolvedValueOnce(5);
+
+    const result = await t.cycle.run({ ...t.recovery, head });
+
+    expect(result.inspection.status).toBe('no-attempt');
+    expect(result.inclusions).toMatchObject({
+      status: 'inconsistent-observations',
+      observation: { nonce: 5n },
+    });
+    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.visible()).toMatchObject({
+      kind: 'present',
+      snapshot: { lastObservation: { anchor: ANCHOR, nonce: 6n } },
+    });
+    expect(t.getBlock.mock.calls.filter(
+      ([request]) => request?.blockNumber === head.blockNumber,
+    )).toHaveLength(4);
+    expect(t.coordinator.status.recoveryComplete).toBe(false);
+    expect(t.coordinator.status.open).toBe(false);
+    expect(t.coordinator.canBroadcast).toBe(false);
+  });
+
+  it.each([
+    { blockNumber: 99n, blockHash: HASH },
+    { blockNumber: 100n, blockHash: OTHER },
+  ])('rejects incompatible latest and durable anchors before ownership or RPCs: $blockNumber', async (head) => {
+    const t = await setup({ empty: true });
+
+    expect(() => t.coordinator.beginInspection({
+      publicClient: t.recovery.publicClient,
+      head,
+      durableAnchor: ANCHOR,
+    })).toThrow('Invalid signer inspection anchors.');
+
+    expect(t.getBlock).not.toHaveBeenCalled();
+    expect(t.coordinator.status.open).toBe(true);
+
+    const next = t.coordinator.beginInspection();
+    await next.abandon();
   });
 });
