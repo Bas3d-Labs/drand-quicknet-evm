@@ -916,70 +916,7 @@ export class SignerCoordinator {
 
     try {
       if (current.kind === 'missing') {
-        const result = await this.readBootstrapObservation(options);
-
-        if (result.status === 'bootstrap-deferred') {
-          const { observation, latestNonce, pendingNonce } = result;
-          const previous = this.lastBootstrapDeferral;
-
-          if (
-            previous === undefined ||
-            previous.durableNonce !== observation.nonce ||
-            previous.latestNonce !== latestNonce ||
-            previous.pendingNonce !== pendingNonce
-          ) {
-            this.lastBootstrapDeferral = {
-              durableNonce: observation.nonce,
-              latestNonce,
-              pendingNonce,
-            };
-
-            this.emit(
-              (log) => log.signerBootstrapDeferred({
-                signer: this.identity.signer,
-                durableBlock: observation.anchor.blockNumber,
-                durableBlockHash: observation.anchor.blockHash,
-                durableNonce: observation.nonce,
-                latestNonce,
-                pendingNonce,
-              }),
-              cycle,
-            );
-          }
-
-          return result;
-        }
-
-        if (result.status === 'anchor-changed') {
-          return result;
-        }
-
-        this.lastBootstrapDeferral = undefined;
-
-        const { observation } = result;
-
-        this.pendingWrite = {
-          kind: 'bootstrap',
-        };
-
-        await this.persistence.save({
-          version: 1,
-          identity: this.identity,
-          baseline: observation,
-          lastObservation: observation,
-          nextNonce: observation.nonce,
-          durableNextNonce: observation.nonce,
-          repairs: [],
-          attempts: [],
-        });
-
-        this.recoveryComplete = true;
-        this.applyCommittedWrite(cycle);
-
-        return {
-          status: 'no-attempt',
-          observation,
-        };
+        return await this.bootstrapOwned(options, cycle);
       }
       
       const result = await inspectSignerRecovery({
@@ -1184,21 +1121,89 @@ export class SignerCoordinator {
   }
 
   /**
-   * Checks whether a missing journal can adopt the selected durable nonce.
-   * Only a ready decision may proceed to baseline persistence.
+   * Establishes the first durable nonce baseline.
    */
-  private async readBootstrapObservation(
+  private async bootstrapOwned(
     options: RecoverSignerOptions,
-  ): Promise<SignerBootstrapDecision> {
+    cycle?: number,
+  ): Promise<SignerRecoveryResult> {
     if (this.blockers.size !== 0) {
       throw new Error('Cannot bootstrap while coordinator blockers remain.');
     }
 
-    return inspectSignerBootstrap({
+    const result = await inspectSignerBootstrap({
       publicClient: options.publicClient,
       signer: this.identity.signer,
       anchor: options.anchor,
     });
+
+    if (result.status === 'bootstrap-deferred') {
+      const {
+        observation,
+        latestNonce,
+        pendingNonce,
+      } = result;
+
+      const previous = this.lastBootstrapDeferral;
+
+      if (
+        previous === undefined ||
+        previous.durableNonce !== observation.nonce ||
+        previous.latestNonce !== latestNonce ||
+        previous.pendingNonce !== pendingNonce
+      ) {
+        this.lastBootstrapDeferral = {
+          durableNonce: observation.nonce,
+          latestNonce,
+          pendingNonce,
+        };
+
+        this.emit(
+          (log) => log.signerBootstrapDeferred({
+            signer: this.identity.signer,
+            durableBlock: observation.anchor.blockNumber,
+            durableBlockHash: observation.anchor.blockHash,
+            durableNonce: observation.nonce,
+            latestNonce,
+            pendingNonce,
+          }),
+          cycle,
+        );
+      }
+
+      return result;
+    }
+
+    if (result.status === 'anchor-changed') {
+      return result;
+    }
+
+    this.lastBootstrapDeferral = undefined;
+
+    const { observation } = result;
+
+    this.pendingWrite = {
+      kind: 'bootstrap',
+    };
+
+    await this.persistence.save({
+      version: 1,
+      identity: this.identity,
+      baseline: observation,
+      lastObservation: observation,
+      nextNonce: observation.nonce,
+      durableNextNonce: observation.nonce,
+      repairs: [],
+      attempts: [],
+    });
+
+    this.recoveryComplete = true;
+    this.applyCommittedWrite(cycle);
+
+    return {
+      status: 'no-attempt',
+      observation,
+    };
   }
 
   private revokeActionAuthorization(): void {
