@@ -1,15 +1,19 @@
 import type {
-  SignerRecoveryInspection,
-} from '../chain/inspect-signer-recovery.js';
+  Hash,
+} from 'viem';
 
 import type {
-  ScopedRelayerLog,
-} from '../diagnostics/relayer-log.js';
+  SignerRecoveryInspection,
+} from '../chain/inspect-signer-recovery.js';
 
 import {
   assertResolutionTransaction,
   snapshotResolutionEvidence,
 } from '../diagnostics/resolution-validation.js';
+
+import type {
+  AttemptResolutionEvidence,
+} from '../diagnostics/transaction-evidence.js';
 
 import type {
   AnchoredNonceObservation,
@@ -21,14 +25,21 @@ import {
   validateJournalSnapshotStructure,
 } from './transaction-journal-validation.js';
 
+export interface CommittedAttemptResolution {
+  readonly signer: JournalIdentity['signer'];
+  readonly attemptId: string;
+  readonly transactionHash: Hash;
+  readonly nonce: bigint;
+  readonly resolution: AttemptResolutionEvidence;
+}
+
 export type RecoveryWriteCompletion =
   | {
       readonly kind: 'observation';
     }
   | {
       readonly kind: 'resolution';
-      readonly event:
-        Parameters<ScopedRelayerLog['attemptResolved']>[0];
+      readonly event: CommittedAttemptResolution;
     }
   | {
       readonly kind: 'search-progress';

@@ -39,6 +39,9 @@ import type {
   TransactionJournalStore,
 } from '../../src/state/transaction-journal.js';
 
+import * as journalVerification
+  from '../../src/state/transaction-journal-verification.js';
+
 const KEY = `0x${'11'.repeat(32)}` as const;
 const ACCOUNT = privateKeyToAccount(KEY);
 
@@ -90,6 +93,7 @@ async function setup(options: {
   unrecovered?: boolean;
   brokenLog?: boolean;
   maxRetainedAttempts?: number;
+  diagnosticProbe?: () => string;
 } = {}) {
   const snapshot: TransactionJournalSnapshot = {
     version: 1,
@@ -142,7 +146,7 @@ async function setup(options: {
     },
   });
 
-  if (options.brokenLog) {
+  if (options.brokenLog || options.diagnosticProbe !== undefined) {
     const wrap = (
       current: ScopedRelayerLog,
     ): ScopedRelayerLog => ({
@@ -152,6 +156,10 @@ async function setup(options: {
       withErrorSummary: (policy) =>
         wrap(current.withErrorSummary(policy)),
       signerBlocked() {
+        if (options.diagnosticProbe !== undefined) {
+          throw new Error(options.diagnosticProbe());
+        }
+
         let bytes = '';
 
         if (visible.kind === 'present') {
@@ -243,10 +251,19 @@ async function setup(options: {
   };
 }
 
-async function setupIncludedWork(maxRetainedAttempts = 3) {
-  // Duplicate detection requires included work below capacity.
-  // An explicitly configured capacity of 1 keeps the gate closed.
-  const t = await setup({ maxRetainedAttempts });
+async function setupIncludedWork(
+  maxRetainedAttempts = 3,
+  diagnosticProbe?: () => string,
+) {
+  const setupOptions: Parameters<typeof setup>[0] = {
+    maxRetainedAttempts,
+  };
+
+  if (diagnosticProbe !== undefined) {
+    setupOptions.diagnosticProbe = diagnosticProbe;
+  }
+
+  const t = await setup(setupOptions);
   const prepared = await t.prepare();
 
   if (prepared.status !== 'prepared') {
@@ -1156,5 +1173,132 @@ describe('durable attempt preparation', () => {
     expect(t.save).not.toHaveBeenCalled();
     expect(t.coordinator.status.open).toBe(true);
     expect(t.records()).toEqual([]);
+  });
+
+  describe.each([
+    'signing',
+    'validation',
+  ] as const)('preparation rollback after %s failure', (failureStage) => {
+    it.each([
+      'preparation',
+      'diagnostic-policy',
+    ] as const)('restores state for subsequent %s', async (followUp) => {
+      let probeMessage = 'Fixture diagnostic probe';
+
+      const t = await setupIncludedWork(
+        3,
+        () => probeMessage,
+      );
+
+      const before = t.coordinator.status;
+      const revisionBefore = t.coordinator.durableRecoveryRevision;
+      const journalBefore = await t.load();
+
+      if (journalBefore.kind !== 'present') {
+        throw new Error('Expected a retained journal.');
+      }
+
+      const retainedBytes =
+        journalBefore.snapshot.attempts[0]!
+          .signedTransactions[0].signedTransaction;
+
+      let uncommittedBytes = '';
+
+      t.signTransaction.mockImplementationOnce(async (input) => {
+        const bytes = await ACCOUNT.signTransaction(input);
+        uncommittedBytes = bytes;
+
+        if (failureStage === 'signing') {
+          throw new Error('Injected signing failure');
+        }
+
+        return bytes;
+      });
+
+      let restoreVerification: (() => void) | undefined;
+
+      if (failureStage === 'validation') {
+        const verification = vi.spyOn(
+          journalVerification,
+          'verifyJournalSnapshot',
+        ).mockRejectedValueOnce(
+          new TypeError('Injected snapshot verification failure'),
+        );
+
+        restoreVerification = () => verification.mockRestore();
+      }
+
+      let expectedError = 'Could not sign';
+
+      if (failureStage === 'validation') {
+        expectedError = 'Invalid journal persistence snapshot.';
+      }
+
+      try {
+        await expect(
+          t.prepare('test-work:failed-preparation'),
+        ).rejects.toThrow(expectedError);
+      } finally {
+        restoreVerification?.();
+      }
+
+      expect(uncommittedBytes).not.toBe('');
+      expect(uncommittedBytes).not.toBe(retainedBytes);
+
+      expect(t.save).not.toHaveBeenCalled();
+      expect(await t.load()).toBe(journalBefore);
+      expect(t.coordinator.durableRecoveryRevision)
+        .toBe(revisionBefore);
+
+      // Includes blockedSince and both authorization flags.
+      expect(t.coordinator.status).toEqual(before);
+      expect(t.coordinator.status.open).toBe(true);
+      expect(t.coordinator.canBroadcast).toBe(false);
+      expect(t.records()).toEqual([]);
+
+      if (failureStage === 'signing') {
+        expect(t.factory).not.toHaveBeenCalled();
+      } else {
+        // The expanded policy was installed before verification rejected.
+        expect(t.factory).toHaveBeenCalledExactlyOnceWith([
+          retainedBytes,
+          uncommittedBytes,
+        ]);
+      }
+
+      if (followUp === 'preparation') {
+        // No recovery or inclusion check occurs between failure and retry.
+        const prepared = await t.prepare('test-work:after-rollback');
+
+        expect(prepared).toMatchObject({
+          status: 'prepared',
+          nonce: 5n,
+        });
+
+        expect(t.save).toHaveBeenCalledTimes(1);
+        expect(t.coordinator.attempts).toHaveLength(2);
+        return;
+      }
+
+      probeMessage =
+        `retained=${retainedBytes} uncommitted=${uncommittedBytes}`;
+
+      // Force a gate diagnostic before another preparation can replace
+      // the restored policy. The probe throws inside that diagnostic;
+      // emit reports it through the selected logger's error summary.
+      const inspection = t.coordinator.beginInspection();
+      inspection.finish();
+
+      expect(t.records()).toEqual([
+        expect.objectContaining({
+          event: 'logging_failed',
+        }),
+      ]);
+
+      const output = t.lines.join('');
+
+      expect(output).not.toContain(retainedBytes);
+      expect(output).toContain(uncommittedBytes);
+    });
   });
 });

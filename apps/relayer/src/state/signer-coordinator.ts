@@ -91,6 +91,7 @@ import type {
 import type {
   JournalAttempt,
   JournalIdentity,
+  TransactionJournalRead,
   TransactionJournalStore,
 } from './transaction-journal.js';
 
@@ -611,7 +612,7 @@ export class SignerCoordinator {
 
       this.gateDiagnostics.blockedSince ??= createdAt;
       this.inclusionChecksComplete = false;
-      this.pendingWrite = { kind: 'prepared' };
+      this.stageWrite({ kind: 'prepared' });
 
       await this.persistence.save(next);
 
@@ -625,17 +626,23 @@ export class SignerCoordinator {
         nonce: signed.nonce,
       });
     } catch (error) {
-      if (this.persistence.state === 'idle') {
-        // No retained write: restore the previously committed queue's
-        // diagnostic policy and inclusion authorization.
-        this.pendingWrite = undefined;
+      const unacknowledged =
+        this.persistence.state === 'idle' &&
+        this.persistence.current === current;
+
+      if (unacknowledged) {
+        this.discardUnacknowledgedWrite(current);
+        
+        // Restore the previous queue's policy and authorization only
+        // when this operation did not acknowledge a new journal state.
         this.attemptLog = previousAttemptLog;
         this.gateDiagnostics.blockedSince = previousBlockedSince;
         this.inclusionChecksComplete = previousInclusionChecksComplete;
       } else {
-        // Preserve the expanded diagnostic policy through every retry.
-        this.recoveryComplete = false;
-        this.inclusionChecksComplete = false;
+        // Retain protection for newly signed bytes after acknowledgement
+        // or an uncertain write, and require fresh recovery.
+        this.invalidateRecoveryAuthorization();
+        this.discardUnacknowledgedWrite(current);
       }
 
       throw error;
@@ -684,14 +691,12 @@ export class SignerCoordinator {
 
     const publicClient = options.publicClient;
 
-    this.broadcastPermit = undefined;
-    this.recoveryComplete = false;
-    this.inclusionChecksComplete = false;
+    this.invalidateRecoveryAuthorization();
     this.busy = true;
 
     try {
       if (attempt.phase === 'signed') {
-        this.pendingWrite = { kind: 'broadcast' };
+        this.stageWrite({ kind: 'broadcast' });
 
         await this.persistence.save({
           ...current.snapshot,
@@ -706,9 +711,7 @@ export class SignerCoordinator {
           ),
         });
 
-        // Complete the marker write without publishing an intermediate
-        // gate transition.
-        this.pendingWrite = undefined;
+        this.completeCommittedWrite(cycle);
       }
 
       const identity = {
@@ -755,10 +758,7 @@ export class SignerCoordinator {
         nonce: attempt.nonce,
       });
     } catch (error) {
-      if (this.persistence.state === 'idle') {
-        this.pendingWrite = undefined;
-      }
-
+      this.discardUnacknowledgedWrite(current);
       throw error;
     } finally {
       this.busy = false;
@@ -802,9 +802,7 @@ export class SignerCoordinator {
 
     const current = this.persistence.current;
 
-    this.broadcastPermit = undefined;
-    this.busy = true;
-    this.recoveryComplete = false;
+    this.invalidateRecoveryAuthorization();
     this.inclusionChecksComplete = false;
 
     try {
@@ -831,7 +829,7 @@ export class SignerCoordinator {
         return result;
       }
 
-      this.pendingWrite = plan.completion;
+      this.stageWrite(plan.completion);
 
       await this.persistence.save(plan.snapshot);
 
@@ -858,11 +856,7 @@ export class SignerCoordinator {
       return result;
     } catch (error) {
       this.recoveryComplete = false;
-
-      if (this.persistence.state === 'idle') {
-        this.pendingWrite = undefined;
-      }
-
+      this.discardUnacknowledgedWrite(current);
       throw error;
     } finally {
       this.busy = false;
@@ -903,8 +897,7 @@ export class SignerCoordinator {
       )
     }
 
-    this.broadcastPermit = undefined;
-    this.inclusionChecksComplete = false;
+    this.revokeActionAuthorization();
     this.busy = true;
 
     try {
@@ -940,9 +933,7 @@ export class SignerCoordinator {
           this.blockers.has('unattributed-signer-activity'),
       });
 
-      this.pendingWrite = {
-        kind: 'observation',
-      };
+      this.stageWrite({ kind: 'observation' });
 
       await this.persistence.save(next);
 
@@ -966,11 +957,7 @@ export class SignerCoordinator {
       return result;
     } catch (error) {
       this.inclusionChecksComplete = false;
-
-      if (this.persistence.state === 'idle') {
-        this.pendingWrite = undefined;
-      }
-
+      this.discardUnacknowledgedWrite(current);
       throw error;
     } finally {
       this.busy = false;
@@ -1089,9 +1076,7 @@ export class SignerCoordinator {
 
     const { observation } = result;
 
-    this.pendingWrite = {
-      kind: 'bootstrap',
-    };
+    this.stageWrite({ kind: 'bootstrap' });
 
     await this.persistence.save({
       version: 1,
@@ -1116,6 +1101,11 @@ export class SignerCoordinator {
   private revokeActionAuthorization(): void {
     this.broadcastPermit = undefined;
     this.inclusionChecksComplete = false;
+  }
+
+  private invalidateRecoveryAuthorization(): void {
+    this.recoveryComplete = false;
+    this.revokeActionAuthorization();
   }
 
   private assertInspectionOwner(
@@ -1222,7 +1212,53 @@ export class SignerCoordinator {
     this.refresh(owner.cycle);
   }
 
+  private stageWrite(
+    completion: PendingWrite,
+  ): void {
+    if (this.pendingWrite !== undefined) {
+      throw new Error('A journal write is already signed.');
+    }
+
+    this.pendingWrite = completion;
+  }
+
+  /**
+   * Discards completion metadata only when persistence is idle and
+   * no new journal state was acknowledged during this operation.
+   */
+  private discardUnacknowledgedWrite(
+    previousCommitted: TransactionJournalRead,
+  ): void {
+    if (
+      this.pendingWrite === undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      return;
+    }
+
+    if (this.persistence.current !== previousCommitted) {
+      throw new Error(
+        'Journal persistence was acknowledged, but coordinator completion failed. ' +
+        'The committed journal is retained. ' +
+        'Restart the relayer to reload it and run recovery; ' +
+        'persistence retry is unavailable.'
+      );
+    }
+
+    this.pendingWrite = undefined;
+  }
+
   private applyCommittedWrite(
+    cycle?: number,
+  ): SignerEventOperation {
+    const operation = this.completeCommittedWrite(cycle);
+
+    this.refresh(cycle, operation);
+
+    return operation;
+  }
+
+  private completeCommittedWrite(
     cycle?: number
   ): SignerEventOperation {
     const pending = this.pendingWrite!;
@@ -1257,8 +1293,6 @@ export class SignerCoordinator {
     } else if (pending.kind === 'broadcast') {
       operation = 'broadcast-attempt';
     }
-
-    this.refresh(cycle, operation);
 
     return operation;
   }
@@ -1324,6 +1358,7 @@ export class SignerCoordinator {
       throw new Error('No failed journal write is available to retry.');
     }
 
+    const previousCommitted = this.persistence.current;
     let operation: SignerEventOperation = 'reconcile-attempt';
 
     this.busy = true;
@@ -1332,12 +1367,19 @@ export class SignerCoordinator {
       await this.persistence.retry();
 
       operation = this.applyCommittedWrite(cycle);
+    } catch (error) {
+      this.discardUnacknowledgedWrite(previousCommitted);
+      throw error;
     } finally {
       this.busy = false;
       this.refresh(cycle, operation);
     }
   }
 
+  /**
+   * Publishes gate transitions and then releases signed-byte diagnostic
+   * protection when the signer is open and no attempts remain.
+   */
   private refresh(
     cycle?: number,
     operation: SignerEventOperation = 'reconcile-attempt',
@@ -1371,6 +1413,8 @@ export class SignerCoordinator {
 
     const current = this.persistence.current;
 
+    // Keep signed-byte protection trhough gate publication, including
+    // logging-failure reporting, before releasing the attempt logger.
     if (
       status.open &&
       this.pendingWrite === undefined &&

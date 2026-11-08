@@ -1206,4 +1206,112 @@ describe('journaled transaction broadcast', () => {
 
     expect(t.request).toHaveBeenCalledTimes(1);
   });
+
+  it('completes marker bookkeeping before the broadcast settles', async () => {
+    const t = await setup();
+    const ordinarySave = t.save.getMockImplementation()!;
+
+    const saveEntered = deferred();
+    const releaseSave = deferred();
+    const sendEntered = deferred();
+    const releaseSend = deferred();
+
+    const gateEvents = () => t.records().filter((record) =>
+      record.event === 'signer_blocked' ||
+      record.event === 'signer_gate_released',
+    );
+
+    const revisionBefore = t.coordinator.durableRecoveryRevision;
+    const eventsBefore = gateEvents();
+
+    expect(t.coordinator.canBroadcast).toBe(true);
+    expect(eventsBefore).toEqual([]);
+
+    t.save.mockImplementationOnce(async (snapshot) => {
+      saveEntered.resolve();
+      await releaseSave.promise;
+      await ordinarySave(snapshot);
+    });
+
+    t.request.mockImplementationOnce(async () => {
+      sendEntered.resolve();
+      await releaseSend.promise;
+
+      return t.prepared.transactionHash;
+    });
+
+    const pending = t.broadcast();
+    let committedRevision = revisionBefore;
+
+    try {
+      await Promise.race([saveEntered.promise, pending]);
+
+      const savingStatus = t.coordinator.status;
+
+      expect(savingStatus).toMatchObject({
+        persistenceState: 'writing',
+        open: false,
+        recoveryComplete: false,
+        inclusionChecksComplete: false,
+      });
+      expect(t.coordinator.canBroadcast).toBe(false);
+      expect(t.request).not.toHaveBeenCalled();
+
+      expect(t.coordinator.durableRecoveryRevision)
+        .toBe(revisionBefore);
+      expect(gateEvents()).toEqual(eventsBefore);
+
+      releaseSave.resolve();
+
+      await Promise.race([sendEntered.promise, pending]);
+
+      // The phase is the only changed journal field.
+      expect(t.visible()).toEqual({
+        kind: 'present',
+        snapshot: {
+          ...t.signed,
+          attempts: [{
+            ...t.signed.attempts[0]!,
+            phase: 'broadcast-may-have-occurred',
+          }],
+        },
+      });
+
+      expect(t.coordinator.status).toEqual({
+        ...savingStatus,
+        persistenceState: 'idle',
+      });
+      expect(t.coordinator.status.open).toBe(false);
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      committedRevision = t.coordinator.durableRecoveryRevision;
+
+      expect(committedRevision).not.toBe(revisionBefore);
+      expect(gateEvents()).toEqual(eventsBefore);
+
+      // Committed bookkeeping must not release operation ownership.
+      await expect(t.broadcast())
+        .rejects.toThrow('already in progress');
+    } finally {
+      releaseSave.resolve();
+      releaseSend.resolve();
+      await pending;
+    }
+
+    expect(t.coordinator.durableRecoveryRevision)
+      .toBe(committedRevision);
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.coordinator.status.open).toBe(false);
+
+    // This fixture has no blocker-set change at settlement.
+    expect(gateEvents()).toEqual(eventsBefore);
+
+    expect(t.records()).toEqual([
+      expect.objectContaining({
+        event: 'attempt_broadcast_accepted',
+        cycle: 7,
+        operation: { name: 'broadcast-attempt' },
+      }),
+    ]);
+  });
 });
