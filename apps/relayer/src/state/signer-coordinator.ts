@@ -14,6 +14,10 @@ import {
 } from '../chain/block-anchor.js';
 
 import {
+  broadcastSignedTransaction,
+} from '../chain/broadcast-signed-transaction.js';
+
+import {
   inspectSignerBootstrap,
   type SignerBootstrapDecision,
 } from '../chain/inspect-signer-bootstrap.js';
@@ -44,10 +48,6 @@ import type {
 import {
   isWorkId,
 } from '../execution/work-identity.js';
-
-import {
-  isFixedHex,
-} from '../shared/hex.js';
 
 import {
   isPositiveSafeInteger,
@@ -777,64 +777,28 @@ export class SignerCoordinator {
         nonce: attempt.nonce,
       };
 
-      const notAcknowledged = Object.freeze({
-        status: 'not-acknowledged',
-        attemptId: attempt.attemptId,
+      const result = await broadcastSignedTransaction({
+        publicClient,
+        signedTransaction: transaction.signedTransaction,
         transactionHash: transaction.transactionHash,
-        nonce: attempt.nonce,
-      } as const);
+      });
 
-      let returnedHash: unknown;
+      if (result.status === 'not-acknowledged') {
+        this.emit(
+          (log) => log.attemptBroadcastNotAcknowledged({
+            ...identity,
+            ...result.failure,
+          }),
+          cycle,
+          'broadcast-attempt',
+        );
 
-      try {
-        returnedHash = await publicClient.request({
-          method: 'eth_sendRawTransaction',
-          params: [transaction.signedTransaction],
-        }, {
-          retryCount: 0,
+        return Object.freeze({
+          status: 'not-acknowledged',
+          attemptId: attempt.attemptId,
+          transactionHash: transaction.transactionHash,
+          nonce: attempt.nonce,
         });
-      } catch (error) {
-        this.emit(
-          (log) => log.attemptBroadcastNotAcknowledged({
-            ...identity,
-            observation: 'request-error',
-            error,
-          }),
-          cycle,
-          'broadcast-attempt',
-        );
-
-        return notAcknowledged;
-      }
-
-      if (!isFixedHex(returnedHash, 32)) {
-        this.emit(
-          (log) => log.attemptBroadcastNotAcknowledged({
-            ...identity,
-            observation: 'invalid-response',
-          }),
-          cycle,
-          'broadcast-attempt',
-        );
-
-        return notAcknowledged;
-      }
-
-      if (
-        returnedHash.toLowerCase() !==
-        transaction.transactionHash.toLowerCase()
-      ) {
-        this.emit(
-          (log) => log.attemptBroadcastNotAcknowledged({
-            ...identity,
-            observation: 'hash-mismatch',
-            returnedTransactionHash: returnedHash,
-          }),
-          cycle,
-          'broadcast-attempt',
-        );
-
-        return notAcknowledged;
       }
 
       this.emit(
