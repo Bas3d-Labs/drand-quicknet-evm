@@ -44,11 +44,6 @@ import type {
 } from '../diagnostics/relayer-log.js';
 
 import {
-  snapshotResolutionEvidence,
-  assertResolutionTransaction,
-} from '../diagnostics/resolution-validation.js';
-
-import {
   isWorkId,
 } from '../execution/work-identity.js';
 
@@ -69,18 +64,24 @@ import {
 } from './journal-persistence.js';
 
 import {
+  planSignerRecovery,
+  type RecoveryWriteCompletion,
+} from './plan-signer-recovery.js';
+
+import {
   evaluateSignerGate,
-  BLOCKER_PRECEDENCE,
   type CoordinatorBlocker,
-  type SignerBlocker,
 } from './signer-gate.js';
+
+import {
+  SignerGateDiagnostics,
+} from './signer-gate-diagnostics.js';
 
 import type {
   SubmissionRecording,
 } from './transaction-manager-types.js';
 
 import type {
-  AnchoredNonceObservation,
   JournalAttempt,
   JournalIdentity,
   TransactionJournalStore,
@@ -112,23 +113,10 @@ export type SignerRecoveryResult =
       { status: 'bootstrap-deferred' }
     >;
 
-type ResolutionEvent =
-  Parameters<ScopedRelayerLog['attemptResolved']>[0];
-
 type PendingWrite =
+  | RecoveryWriteCompletion
   | {
       kind: 'bootstrap';
-    }
-  | {
-      kind: 'resolution';
-      event: ResolutionEvent;
-    }
-  | {
-      kind: 'observation';
-    }
-  | {
-      kind: 'search-progress';
-      exhausted: boolean;
     }
   | {
       kind: 'prepared';
@@ -279,7 +267,6 @@ export interface SignerInspection {
 }
 
 interface InspectionOwner {
-  readonly generation: bigint;
   activeOperation: Promise<unknown> | null;
   abandonment: Promise<void> | null;
   abandoning: boolean;
@@ -300,11 +287,8 @@ export class SignerCoordinator {
   private emitting = false;
   private broadcastPermit: string | undefined;
 
-  private inspectionGeneration = 0n;
   private inspectionOwner: InspectionOwner | null = null;
 
-  private blockedSince: string | null = null;
-  private previousBlockers: readonly SignerBlocker[] = [];
   private pendingWrite: PendingWrite | undefined;
   private attemptLog: ScopedRelayerLog | undefined;
   private lastBootstrapDeferral: {
@@ -316,7 +300,9 @@ export class SignerCoordinator {
   private committedDurableRecoveryRevision = '';
 
   private readonly blockers = new Set<CoordinatorBlocker>();
-  private readonly episodeReasons = new Set<SignerBlocker>();
+  private readonly gateDiagnostics = new SignerGateDiagnostics(
+    () => this.timestamp(),
+  );
 
   private constructor(
     private readonly persistence: JournalPersistence,
@@ -373,7 +359,7 @@ export class SignerCoordinator {
           throw new Error('Could not configure signed attempt diagnostics.');
         }
 
-        coordinator.blockedSince = first.createdAt;
+        coordinator.gateDiagnostics.blockedSince = first.createdAt;
       }
     }
     
@@ -395,10 +381,7 @@ export class SignerCoordinator {
       throw new Error('A pending journal write must be retried first.');
     }
 
-    this.inspectionGeneration += 1n;
-
     const owner: InspectionOwner = {
-      generation: this.inspectionGeneration,
       activeOperation: null,
       abandonment: null,
       abandoning: false,
@@ -616,7 +599,7 @@ export class SignerCoordinator {
       recoveryComplete: this.recoveryComplete,
       inclusionChecksComplete: this.inclusionChecksComplete,
       persistenceState: this.persistence.state,
-      blockedSince: this.blockedSince,
+      blockedSince: this.gateDiagnostics.blockedSince,
     });
   }
 
@@ -676,7 +659,7 @@ export class SignerCoordinator {
     }
 
     const previousAttemptLog = this.attemptLog;
-    const previousBlockedSince = this.blockedSince;
+    const previousBlockedSince = this.gateDiagnostics.blockedSince;
     const previousInclusionChecksComplete = this.inclusionChecksComplete;
 
     this.broadcastPermit = undefined;
@@ -738,13 +721,13 @@ export class SignerCoordinator {
         ],
       }, this.identity);
 
-      this.blockedSince ??= createdAt;
+      this.gateDiagnostics.blockedSince ??= createdAt;
       this.inclusionChecksComplete = false;
       this.pendingWrite = { kind: 'prepared' };
 
       await this.persistence.save(next);
 
-      this.finishWrite(cycle);
+      this.applyCommittedWrite(cycle);
       this.broadcastPermit = attemptId;
 
       return Object.freeze({
@@ -759,7 +742,7 @@ export class SignerCoordinator {
         // diagnostic policy and inclusion authorization.
         this.pendingWrite = undefined;
         this.attemptLog = previousAttemptLog;
-        this.blockedSince = previousBlockedSince;
+        this.gateDiagnostics.blockedSince = previousBlockedSince;
         this.inclusionChecksComplete = previousInclusionChecksComplete;
       } else {
         // Preserve the expanded diagnostic policy through every retry.
@@ -841,8 +824,8 @@ export class SignerCoordinator {
           ),
         });
 
-        // Keep exclusive ownership through the RPC call. finishWrite
-        // would release it before the broadcast outcome is known.
+        // Complete the marker write without publishing an intermediate
+        // gate transition.
         this.pendingWrite = undefined;
       }
 
@@ -1051,7 +1034,7 @@ export class SignerCoordinator {
         });
 
         this.recoveryComplete = true;
-        this.finishWrite(cycle);
+        this.applyCommittedWrite(cycle);
 
         return {
           status: 'no-attempt',
@@ -1066,135 +1049,24 @@ export class SignerCoordinator {
         maxBlockRange: options.maxBlockRange,
       });
 
-      if (
-        result.status === 'anchor-changed' ||
-        result.status === 'nonce-behind-journal' ||
-        result.status === 'inconsistent-observations'
-      ) {
+      const plan = planSignerRecovery({
+        identity: this.identity,
+        snapshot: current.snapshot,
+        inspection: result,
+        unattributedActivity:
+          this.blockers.has('unattributed-signer-activity'),
+      });
+
+      if (plan.kind === 'unchanged') {
         return result;
       }
 
-      if (
-        result.status === 'unresolved' &&
-        (
-          result.search?.status === 'boundary-changed' ||
-          result.search?.status === 'anchor-behind-search'
-        )
-      ) {
-        return result;
-      }
+      this.pendingWrite = plan.completion;
 
-      let lastObservation = result.observation;
-
-      if (
-        this.blockers.has('unattributed-signer-activity') &&
-        current.snapshot.lastObservation.nonce > lastObservation.nonce
-      ) {
-        // Resolving the attempt must not erase evidence of other activity.
-        // Search progress belongs to the newly inspected anchor though.
-        if (result.status !== 'resolution-available') {
-          return result;
-        }
-
-        lastObservation = current.snapshot.lastObservation;
-      }
-
-      const oldest = current.snapshot.attempts[0];
-
-      let attempts = current.snapshot.attempts;
-      let durableNextNonce = current.snapshot.durableNextNonce;
-
-      let pending: PendingWrite = {
-        kind: 'observation',
-      };
-
-      if (result.status === 'resolution-available') {
-        if (oldest === undefined) {
-          throw new Error('No recorded attempt is available to resolve.');
-        }
-
-        const resolution = snapshotResolutionEvidence(result.evidence);
-
-        assertResolutionTransaction(oldest, resolution);
-
-        pending = {
-          kind: 'resolution',
-          event: Object.freeze({
-            signer: this.identity.signer,
-            attemptId: oldest.attemptId,
-            transactionHash: resolution.outcome === 'replaced'
-              ? oldest.signedTransactions[0].transactionHash
-              : resolution.transactionHash,
-            nonce: oldest.nonce,
-            resolution,
-          }),
-        };
-
-        durableNextNonce = oldest.nonce + 1n;
-        attempts = attempts.slice(1);
-      } else if (oldest !== undefined) {
-        let replacementSearch = oldest.replacementSearch;
-        if (replacementSearch === null) {
-          let lowerBound: AnchoredNonceObservation | undefined;
-
-          if (lastObservation.nonce <= oldest.nonce) {
-            lowerBound = lastObservation;
-          } else if (
-            current.snapshot.lastObservation.nonce <= oldest.nonce
-          ) {
-            lowerBound = current.snapshot.lastObservation;
-          }
-
-          if (lowerBound !== undefined) {
-            replacementSearch = {
-              lowerBound,
-              searchedThrough: null,
-            };
-          }
-        }
-
-        if (
-          result.status === 'unresolved' &&
-          result.search?.status === 'not-found' &&
-          result.search.scannedBlocks > 0n
-        ) {
-          if (replacementSearch === null) {
-            throw new Error('Search progress requires a recorded lower bound.');
-          }
-
-          replacementSearch = {
-            ...replacementSearch,
-            searchedThrough: result.search.searchedThrough,
-          };
-
-          pending = {
-            kind: 'search-progress',
-            exhausted: result.search.remainingBlocks === 0n,
-          };
-        }
-
-        attempts = [
-          {
-            ...oldest,
-            replacementSearch,
-          },
-          ...attempts.slice(1),
-        ];
-      }
-
-      const next = validateJournalSnapshotStructure({
-        ...current.snapshot,
-        lastObservation,
-        durableNextNonce,
-        attempts,
-      }, this.identity);
-
-      this.pendingWrite = pending;
-
-      await this.persistence.save(next);
+      await this.persistence.save(plan.snapshot);
 
       this.recoveryComplete = true;
-      this.finishWrite(cycle);
+      this.applyCommittedWrite(cycle);
 
       const inspectedAttempt = current.snapshot.attempts[0];
 
@@ -1360,7 +1232,7 @@ export class SignerCoordinator {
       await this.persistence.save(next);
 
       this.inclusionChecksComplete = result.inclusionChecksComplete;
-      this.finishWrite(cycle);
+      this.applyCommittedWrite(cycle);
 
       const attempt = next.attempts.find(
         (candidate) => candidate.phase !== 'included',
@@ -1500,10 +1372,7 @@ export class SignerCoordinator {
   private assertInspectionOwner(
     owner: InspectionOwner,
   ): void {
-    if (
-      this.inspectionOwner !== owner ||
-      this.inspectionGeneration !== owner.generation
-    ) {
+    if (this.inspectionOwner !== owner) {
       throw new Error('Signer inspection is no longer active.');
     }
   }
@@ -1624,14 +1493,16 @@ export class SignerCoordinator {
     this.refresh(owner.cycle);
   }
 
-  private finishWrite(cycle?: number): void {
+  private applyCommittedWrite(
+    cycle?: number
+  ): SignerEventOperation {
     const pending = this.pendingWrite!;
 
     if (pending.kind === 'resolution') {
       this.blockers.delete('conflict-search-exhausted');
 
-      // Keep the gate closed and the attempt policy alive through
-      // this emission.
+      // Keep ownership and the signed-byte diagnostic policy through
+      // resolution reporting.
       this.emit(
         (log) => log.attemptResolved(pending.event),
         cycle,
@@ -1645,7 +1516,6 @@ export class SignerCoordinator {
     }
 
     this.pendingWrite = undefined;
-    this.busy = false;
 
     this.latchUnattributedActivity();
     this.latchExhaustedSearch();
@@ -1660,6 +1530,8 @@ export class SignerCoordinator {
     }
 
     this.refresh(cycle, operation);
+
+    return operation;
   }
 
   private latchUnattributedActivity(): void {
@@ -1711,7 +1583,9 @@ export class SignerCoordinator {
    * Retries the retained journal snapshot after a persistence failure,
    * then applies the corresponding observation or resolution transition.
    */
-  async retryPersistence(cycle?: number): Promise<void> {
+  async retryPersistence(
+    cycle?: number,
+  ): Promise<void> {
     this.assertAvailable();
 
     if (
@@ -1721,18 +1595,18 @@ export class SignerCoordinator {
       throw new Error('No failed journal write is available to retry.');
     }
 
+    let operation: SignerEventOperation = 'reconcile-attempt';
+
     this.busy = true;
 
     try {
       await this.persistence.retry();
-    } catch (error) {
+
+      operation = this.applyCommittedWrite(cycle);
+    } finally {
       this.busy = false;
-      this.refresh(cycle);
-
-      throw error;
+      this.refresh(cycle, operation);
     }
-
-    this.finishWrite(cycle);
   }
 
   private refresh(
@@ -1745,49 +1619,26 @@ export class SignerCoordinator {
 
     const status = this.status;
 
-    const blockersChanged =
-      status.blockers.length !== this.previousBlockers.length ||
-      status.blockers.some(
-        (reason, index) => reason !== this.previousBlockers[index],
-      );
+    this.gateDiagnostics.observe(status, (event) => {
+      this.emit((log) => {
+        if (event.kind === 'blocked') {
+          log.signerBlocked({
+            signer: this.identity.signer,
+            reason: event.reason,
+            blockers: event.blockers,
+            blockedSince: event.blockedSince,
+          });
 
-    if (status.blockers.length > 0) {
-      if (this.blockedSince === null) {
-        this.blockedSince = this.timestamp();
-      }
+          return;
+        }
 
-      for (const reason of status.blockers) {
-        this.episodeReasons.add(reason);
-      }
-
-      if (blockersChanged) {
-        this.emit((log) => log.signerBlocked({
+        log.signerGateReleased({
           signer: this.identity.signer,
-          reason: status.primaryReason!,
-          blockers: status.blockers,
-          blockedSince: this.blockedSince!,
-        }), cycle, operation);
-      }
-    }
-
-    this.previousBlockers = [...status.blockers];
-
-    if (status.open && this.blockedSince !== null) {
-      const blockedSince = this.blockedSince;
-
-      const cleared = BLOCKER_PRECEDENCE.filter(
-        (reason) => this.episodeReasons.has(reason),
-      );
-
-      this.emit((log) => log.signerGateReleased({
-        signer: this.identity.signer,
-        cleared,
-        blockedSince,
-      }), cycle, operation);
-
-      this.blockedSince = null;
-      this.episodeReasons.clear();
-    }
+          cleared: event.cleared,
+          blockedSince: event.blockedSince,
+        });
+      }, cycle, operation);
+    });
 
     const current = this.persistence.current;
 
