@@ -687,7 +687,7 @@ describe('signer coordinator transitions', () => {
       maxBlockRange: 5n,
     };
 
-    // An advanced anchor allows partial progress and clears exhaustion.
+    // An advanced anchor allows partial progress but retains exhaustion.
     expect(await t.coordinator.recover(advanced)).toMatchObject({
       status: 'unresolved',
       search: {
@@ -697,7 +697,7 @@ describe('signer coordinator transitions', () => {
       },
     });
 
-    expect(t.coordinator.status.primaryReason).toBe('unresolved-attempt');
+    expect(t.coordinator.status.primaryReason).toBe('conflict-search-exhausted');
 
     // More partial progress leaves the entire blocker set unchanged.
     expect(await t.coordinator.recover({
@@ -714,12 +714,10 @@ describe('signer coordinator transitions', () => {
 
     expect(t.records().map((record) => record.event)).toEqual([
       'signer_blocked',
-      'signer_blocked',
     ]);
 
     expect(t.records().map((record) => record.reason)).toEqual([
       'conflict-search-exhausted',
-      'unresolved-attempt',
     ]);
 
     expect(
@@ -2000,7 +1998,7 @@ describe('durable replacement search progress', () => {
     };
   }
 
-  it('persists the boundary before clearing the search blocker', async () => {
+  it('persists partial progress without clearing the exhaustion fact or blocker', async () => {
     const t = await prepareExhaustedSearch();
 
     let finish!: () => void;
@@ -2058,7 +2056,7 @@ describe('durable replacement search progress', () => {
       attempts: [{
         attemptId: t.attempt.attemptId,
         replacementSearch: {
-          exhausted: null,
+          exhausted: t.exhausted.attempts[0]!.replacementSearch!.exhausted,
           lowerBound: t.snapshot.lastObservation,
           searchedThrough: {
             blockNumber: 115n,
@@ -2070,20 +2068,13 @@ describe('durable replacement search progress', () => {
 
     expect(t.coordinator.status).toMatchObject({
       open: false,
-      primaryReason: 'unresolved-attempt',
+      primaryReason: 'conflict-search-exhausted',
     });
 
     expect(t.coordinator.status.blockers)
-      .not.toContain('conflict-search-exhausted');
+      .toContain('conflict-search-exhausted');
 
-    expect(t.records().map((record) => record.event))
-      .toEqual(['signer_blocked']);
-
-    expect(t.records()[0]).toMatchObject({
-      cycle: 7,
-      blockedSince: CREATED,
-      reason: 'unresolved-attempt',
-    });
+    expect(t.records()).toEqual([]);
   });
 
   it('retains the exact failed progress write and its blocker effect through retries', async () => {
@@ -2102,7 +2093,7 @@ describe('durable replacement search progress', () => {
 
     expect(visible).toBe(pending);
     expect(pending.attempts[0]!.replacementSearch).toEqual({
-      exhausted: null,
+      exhausted: t.exhausted.attempts[0]!.replacementSearch!.exhausted,
       lowerBound: t.snapshot.lastObservation,
       searchedThrough: {
         blockNumber: 115n,
@@ -2146,11 +2137,11 @@ describe('durable replacement search progress', () => {
       open: false,
       recoveryComplete: false,
       inclusionChecksComplete: false,
-      primaryReason: 'unresolved-attempt',
+      primaryReason: 'conflict-search-exhausted',
     });
 
     expect(t.coordinator.status.blockers)
-      .not.toContain('conflict-search-exhausted');
+      .toContain('conflict-search-exhausted');
 
     expect(t.records().some((record) =>
       record.event === 'attempt_resolved' ||
@@ -2497,7 +2488,10 @@ describe('durable replacement search progress', () => {
       attempts: [{
         attemptId: t.attempt.attemptId,
         replacementSearch: {
-          exhausted: null,
+          exhausted: {
+            anchor: { blockNumber: 110n, blockHash: HASH },
+            nonce: 8n,
+          },
           lowerBound: t.snapshot.lastObservation,
           searchedThrough: {
             blockNumber: 115n,
@@ -2515,7 +2509,7 @@ describe('durable replacement search progress', () => {
     });
 
     expect(t.coordinator.status.blockers)
-      .not.toContain('conflict-search-exhausted');
+      .toContain('conflict-search-exhausted');
 
     expect(t.records().some((record) =>
       record.event === 'attempt_resolved' ||

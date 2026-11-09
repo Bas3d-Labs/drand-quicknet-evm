@@ -319,7 +319,6 @@ describe('signer recovery planning', () => {
 
       expect(result.completion).toEqual({
         kind: 'search-progress',
-        exhausted,
       });
       expect(result.snapshot.nextNonce).toBe(6n);
       expect(result.snapshot.durableNextNonce).toBe(4n);
@@ -328,7 +327,7 @@ describe('signer recovery planning', () => {
         {
           ...snapshot.attempts[0],
           replacementSearch: {
-            exhausted: null,
+            exhausted: exhausted ? observation : null,
             lowerBound: snapshot.lastObservation,
             searchedThrough: anchorAt(through),
           },
@@ -357,5 +356,98 @@ describe('signer recovery planning', () => {
     })).toThrow('Invalid attempt resolution evidence.');
 
     expect(snapshot).toEqual(before);
+  });
+});
+
+
+describe('persisted exhaustion planning', () => {
+  function progress(through: bigint, remaining: bigint): SignerRecoveryInspection {
+    return {
+      status: 'unresolved',
+      observations: [],
+      observation: observationAt(110n, 6n),
+      receipt: { status: 'receipt-not-found', observations: [] },
+      search: {
+        status: 'not-found',
+        observations: [],
+        searchedThrough: anchorAt(through),
+        scannedBlocks: 2n,
+        remainingBlocks: remaining,
+      },
+    };
+  }
+
+  it.each([104n, 108n])('retains the fact through partial progress to %s', async (through) => {
+    const snapshot = await createSnapshot();
+    const exhausted = observationAt(105n, 6n);
+    const input: TransactionJournalSnapshot = {
+      ...snapshot,
+      attempts: [{
+        ...snapshot.attempts[0]!,
+        replacementSearch: {
+          lowerBound: snapshot.baseline,
+          searchedThrough: anchorAt(102n),
+          exhausted,
+        },
+      }, snapshot.attempts[1]!],
+    };
+    const result = plan(input, progress(through, 110n - through));
+    if (result.kind !== 'persist') throw new Error('Expected persist.');
+
+    expect(result.snapshot.attempts[0]!.replacementSearch?.exhausted)
+      .toEqual(exhausted);
+  });
+
+  it('replaces the fact when a higher anchor is exhausted', async () => {
+    const snapshot = await createSnapshot();
+    const input: TransactionJournalSnapshot = {
+      ...snapshot,
+      attempts: [{
+        ...snapshot.attempts[0]!,
+        replacementSearch: {
+          lowerBound: snapshot.baseline,
+          searchedThrough: anchorAt(108n),
+          exhausted: observationAt(105n, 6n),
+        },
+      }, snapshot.attempts[1]!],
+    };
+    const result = plan(input, progress(110n, 0n));
+    if (result.kind !== 'persist') throw new Error('Expected persist.');
+
+    expect(result.snapshot.attempts[0]!.replacementSearch?.exhausted)
+      .toEqual(observationAt(110n, 6n));
+    expect(input.attempts[0]!.replacementSearch?.exhausted)
+      .toEqual(observationAt(105n, 6n));
+    expect(result.completion).toEqual({ kind: 'search-progress' });
+  });
+
+  it('refuses exhaustion whose cursor does not equal the selected anchor', async () => {
+    const snapshot = await createSnapshot();
+    expect(() => plan(snapshot, progress(109n, 0n)))
+      .toThrow('Exhausted search must reach the selected anchor.');
+  });
+
+  it.each([
+    'anchor-behind-exhaustion',
+    'exhaustion-anchor-changed',
+  ] as const)('classifies %s before higher-observation preservation', async (status) => {
+    const snapshot = await createSnapshot();
+    const exhausted = observationAt(105n, 6n);
+    let anchor = anchorAt(104n);
+    if (status === 'exhaustion-anchor-changed') {
+      anchor = { ...anchorAt(105n), blockHash: anchorAt(106n).blockHash };
+    }
+
+    expect(plan({
+      ...snapshot,
+      lastObservation: observationAt(130n, 9n),
+    }, {
+      status,
+      anchor,
+      exhausted,
+    }, true)).toEqual({
+      kind: 'unchanged',
+      reason: 'inspection-not-committable',
+    });
   });
 });

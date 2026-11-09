@@ -2,6 +2,10 @@ import type {
   Hash,
 } from 'viem';
 
+import {
+  blockAnchorsMatch,
+} from '../chain/block-anchor.js';
+
 import type {
   SignerRecoveryInspection,
 } from '../chain/inspect-signer-recovery.js';
@@ -43,7 +47,6 @@ export type RecoveryWriteCompletion =
     }
   | {
       readonly kind: 'search-progress';
-      readonly exhausted: boolean;
     };
 
 export interface PlanSignerRecoveryOptions {
@@ -81,6 +84,8 @@ export function planSignerRecovery(
 
   if (
     inspection.status === 'anchor-changed' ||
+    inspection.status === 'anchor-behind-exhaustion' ||
+    inspection.status === 'exhaustion-anchor-changed' ||
     inspection.status === 'nonce-behind-journal' ||
     inspection.status === 'inconsistent-observations'
   ) {
@@ -196,10 +201,24 @@ export function planSignerRecovery(
         searchedThrough: inspection.search.searchedThrough,
       };
 
-      completion = {
-        kind: 'search-progress',
-        exhausted: inspection.search.remainingBlocks === 0n,
-      };
+      if (inspection.search.remainingBlocks === 0n) {
+        if (!blockAnchorsMatch(
+          inspection.search.searchedThrough,
+          inspection.observation.anchor,
+        )) {
+          throw new Error('Exhausted search must reach the selected anchor.');
+        }
+
+        replacementSearch = {
+          ...replacementSearch,
+          exhausted: {
+            anchor: inspection.search.searchedThrough,
+            nonce: inspection.observation.nonce,
+          },
+        };
+      }
+
+      completion = { kind: 'search-progress' };
     }
 
     attempts = [

@@ -19,8 +19,9 @@ import {
   validateJournalSnapshotStructure,
 } from '../state/transaction-journal-validation.js';
 
-import type {
-  BlockAnchor,
+import {
+  blockAnchorsMatch,
+  type BlockAnchor,
 } from './block-anchor.js';
 
 import {
@@ -62,6 +63,16 @@ export interface InspectSignerRecoveryOptions {
 }
 
 export type SignerRecoveryInspection =
+  | {
+      status: 'anchor-behind-exhaustion';
+      anchor: Readonly<BlockAnchor>;
+      exhausted: AnchoredNonceObservation;
+    }
+  | {
+      status: 'exhaustion-anchor-changed';
+      anchor: Readonly<BlockAnchor>;
+      exhausted: AnchoredNonceObservation;
+    }
   | {
       status: 'anchor-changed';
       observedAnchor: Readonly<BlockAnchor>;
@@ -133,6 +144,30 @@ export async function inspectSignerRecovery(
     throw new TypeError('Invalid signer recovery input.');
   }
 
+  for (const retained of snapshot.attempts) {
+    if (retained.replacementSearch === null) {
+      continue;
+    }
+
+    const exhausted = retained.replacementSearch.exhausted;
+    if (
+      exhausted !== null &&
+      anchor.blockNumber < exhausted.anchor.blockNumber
+    ) {
+      return { status: 'anchor-behind-exhaustion', anchor, exhausted };
+    }
+
+    // Until closed-bracket invalidation is supported, this contradiction
+    // must not be overwritten by ordinary re-exhaustion.
+    if (
+      exhausted !== null &&
+      anchor.blockNumber === exhausted.anchor.blockNumber &&
+      !blockAnchorsMatch(anchor, exhausted.anchor)
+    ) {
+      return { status: 'exhaustion-anchor-changed', anchor, exhausted };
+    }
+  }
+
   const attempt = snapshot.attempts[0];
   let receipt: AttemptReceiptResult | null = null;
 
@@ -167,6 +202,21 @@ export async function inspectSignerRecovery(
   }
 
   const { observation } = nonce;
+
+  for (const retained of snapshot.attempts) {
+    if (retained.replacementSearch === null) {
+      continue;
+    }
+
+    const exhausted = retained.replacementSearch.exhausted;
+    if (
+      exhausted !== null &&
+      blockAnchorsMatch(anchor, exhausted.anchor) &&
+      observation.nonce !== exhausted.nonce
+    ) {
+      return { status: 'inconsistent-observations', observation };
+    }
+  }
 
   if (observation.nonce < snapshot.durableNextNonce) {
     return {

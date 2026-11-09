@@ -1,4 +1,28 @@
 import {
+  mkdtemp,
+  readFile,
+  rm,
+} from 'node:fs/promises';
+import {
+  tmpdir,
+} from 'node:os';
+import {
+  join,
+} from 'node:path';
+
+import {
+  FileTransactionJournalStore,
+} from '../../src/state/file-transaction-journal-store.js';
+
+import {
+  SignerRecoveryCycle,
+} from '../../src/state/signer-recovery-cycle.js';
+
+import {
+  BroadcastRetrySchedule,
+} from '../../src/state/broadcast-retry-schedule.js';
+
+import {
   describe,
   expect,
   it,
@@ -20,6 +44,9 @@ import * as inclusionInspection from
 
 import * as recoveryInspection from
   '../../src/chain/inspect-signer-recovery.js'
+
+import * as recoveryPlanning from
+  '../../src/state/plan-signer-recovery.js';
 
 import * as transactionSigning from
   '../../src/chain/sign-prepared-transaction.js';
@@ -391,9 +418,11 @@ function setup(
     save,
     lines,
     factory,
-    create: () => SignerCoordinator.create({
+    create: (
+      store: TransactionJournalStore = { load, save },
+    ) => SignerCoordinator.create({
       identity: IDENTITY,
-      store: { load, save },
+      store,
       maxRetainedAttempts,
       log,
       createErrorSummary: factory,
@@ -586,7 +615,7 @@ describe('signer coordinator startup', () => {
   });
 
   it.each([false, true])(
-    'reconstructs search exhaustion only for an unresolved record: %s',
+    'reconstructs search exhaustion independently of phase; unresolved: %s',
     async (unresolved) => {
       const snapshot = await queueSnapshot();
       const first = snapshot.attempts[0]!;
@@ -594,7 +623,7 @@ describe('signer coordinator startup', () => {
       const searched = {
         ...first,
         replacementSearch: {
-          exhausted: null,
+          exhausted: { anchor: OBSERVED_AT, nonce: 6n },
           lowerBound: BASELINE,
           searchedThrough: OBSERVED_AT,
         },
@@ -622,7 +651,7 @@ describe('signer coordinator startup', () => {
         coordinator.status.blockers.includes(
           'conflict-search-exhausted',
         ),
-      ).toBe(unresolved);
+      ).toBe(true);
 
       expect(t.save).not.toHaveBeenCalled();
     },
@@ -1202,7 +1231,7 @@ describe('signer coordinator startup', () => {
     });
 
     expect(pending.attempts[0]!.replacementSearch).toEqual({
-      exhausted: null,
+      exhausted: { anchor: OBSERVED_AT, nonce: 6n },
       lowerBound: BASELINE,
       searchedThrough: {
         blockNumber: 122n,
@@ -1215,7 +1244,7 @@ describe('signer coordinator startup', () => {
     expect(pending.durableNextNonce).toBe(4n);
 
     expect(t.coordinator.status.blockers)
-      .not.toContain('conflict-search-exhausted');
+      .toContain('conflict-search-exhausted');
     expect(t.coordinator.status.blockers)
       .toContain('unresolved-attempt');
 
@@ -3043,17 +3072,15 @@ describe('signer coordinator startup', () => {
       anchor: OBSERVED_AT,
       maxBlockRange: 5n,
     })).toMatchObject({
-      status: 'unresolved',
+      status: 'inconsistent-observations',
       observation: {
         anchor: OBSERVED_AT,
         nonce: 4n,
       },
-      receipt: { status: 'receipt-not-found' },
-      search: null,
     });
 
-    expect(t.save).toHaveBeenCalledOnce();
-    expect(t.coordinator.status.recoveryComplete).toBe(true);
+    expect(t.save).not.toHaveBeenCalled();
+    expect(t.coordinator.status.recoveryComplete).toBe(false);
     expect(t.coordinator.status.blockers)
       .toContain('conflict-search-exhausted');
     expect(t.coordinator.canBroadcast).toBe(false);
@@ -3064,6 +3091,334 @@ describe('signer coordinator startup', () => {
     })).rejects.toThrow('Fresh reconciliation');
 
     expect(request).not.toHaveBeenCalled();
-    expect(t.save).toHaveBeenCalledOnce();
+    expect(t.save).not.toHaveBeenCalled();
+  });
+});
+
+describe('committed exhaustion facts', () => {
+  it('publishes cursor and fact only after ack and derives exhaustion from durable and latest files', async () => {
+    const t = await searchSetup();
+    const directory = await mkdtemp(join(tmpdir(), 'exhaustion-journal-'));
+    const filePath = join(directory, 'journal.json');
+
+    try {
+      const store = await FileTransactionJournalStore.open({ filePath, identity: IDENTITY });
+      await store.save(t.snapshot);
+      let entered!: () => void;
+      let release!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const acknowledged = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const save = vi.fn(async (snapshot: TransactionJournalSnapshot) => {
+        entered();
+        await acknowledged;
+        await store.save(snapshot);
+      });
+      const coordinator = await t.create({ load: () => store.load(), save });
+      expect(coordinator.status.blockers).not.toContain('conflict-search-exhausted');
+
+      const publicClient = recoveryClientWithMissingReceipts(6);
+      const revisionBefore = coordinator.durableRecoveryRevision;
+      const attemptsBefore = coordinator.attempts;
+      const pending = coordinator.recover({
+        publicClient,
+        anchor: OBSERVED_AT,
+        maxBlockRange: 20n,
+      });
+      await started;
+      try {
+        expect(coordinator.attempts).toEqual(attemptsBefore);
+        expect(coordinator.durableRecoveryRevision).toBe(revisionBefore);
+        expect(await store.load()).toEqual({ kind: 'present', snapshot: t.snapshot });
+        expect(coordinator.status.blockers).not.toContain('conflict-search-exhausted');
+        const staged = save.mock.calls[0]![0];
+        expect(staged.attempts[0]!.replacementSearch?.exhausted)
+          .toEqual({ anchor: OBSERVED_AT, nonce: 6n });
+        const oldProcess = await t.create(await FileTransactionJournalStore.open({ filePath, identity: IDENTITY }));
+        expect(oldProcess.status.blockers).not.toContain('conflict-search-exhausted');
+      } finally {
+        release();
+        await pending;
+      }
+
+      expect(coordinator.durableRecoveryRevision).not.toBe(revisionBefore);
+      const durable = await store.load();
+      if (durable.kind !== 'present') throw new Error('Expected journal.');
+      expect(durable.snapshot.attempts[0]!.replacementSearch?.searchedThrough).toEqual(OBSERVED_AT);
+      expect(coordinator.status.blockers).toContain('conflict-search-exhausted');
+      const durableRestart = await t.create(await FileTransactionJournalStore.open({ filePath, identity: IDENTITY }));
+      expect(durableRestart.status.blockers).toContain('conflict-search-exhausted');
+
+      const head = { blockNumber: 130n, blockHash: HASH };
+      expect(await coordinator.checkInclusions({ publicClient, head }))
+        .toMatchObject({ status: 'inspected' });
+      const latest = await store.load();
+      if (latest.kind !== 'present') throw new Error('Expected journal.');
+      expect(latest.snapshot.lastObservation).toEqual({ anchor: head, nonce: 6n });
+      expect(latest.snapshot.attempts[0]!.replacementSearch?.exhausted)
+        .toEqual({ anchor: OBSERVED_AT, nonce: 6n });
+      const latestRestart = await t.create(await FileTransactionJournalStore.open({ filePath, identity: IDENTITY }));
+      expect(latestRestart.status.blockers).toContain('conflict-search-exhausted');
+      expect(latestRestart.status.open).toBe(false);
+      expect(latestRestart.canBroadcast).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('resolution removes only its own fact and clears the blocker after the last fact is removed', async () => {
+    const snapshot = await queueSnapshot();
+    const fact = { anchor: OBSERVED_AT, nonce: 6n };
+    const input: TransactionJournalSnapshot = {
+      ...snapshot,
+      lastObservation: { anchor: { blockNumber: 130n, blockHash: HASH }, nonce: 6n },
+      attempts: snapshot.attempts.map((attempt) => ({
+        ...attempt,
+        replacementSearch: { lowerBound: BASELINE, searchedThrough: null, exhausted: fact },
+      })),
+    };
+    const t = setup({ kind: 'present', snapshot: input });
+    const coordinator = await t.create();
+    const publicClient = recoveryClientWithMissingReceipts(6);
+    vi.mocked(publicClient.getTransactionReceipt).mockImplementation(async ({ hash }) => {
+      if (!input.attempts.some((attempt) => attempt.signedTransactions[0].transactionHash === hash)) {
+        throw new TransactionReceiptNotFoundError({ hash });
+      }
+      return {
+      transactionHash: hash,
+      blockNumber: 110n,
+      blockHash: HASH,
+      status: 'success',
+      } as never;
+    });
+
+    expect(coordinator.status.blockers).toContain('conflict-search-exhausted');
+    await coordinator.recover({ publicClient, anchor: OBSERVED_AT, maxBlockRange: 2n });
+    expect(coordinator.attempts).toHaveLength(1);
+    expect(t.save.mock.calls[0]![0].attempts[0]!.replacementSearch?.exhausted).toEqual(fact);
+    expect(coordinator.status.blockers).toContain('conflict-search-exhausted');
+
+    await coordinator.recover({ publicClient, anchor: OBSERVED_AT, maxBlockRange: 2n });
+    expect(coordinator.attempts).toHaveLength(0);
+    expect(coordinator.status.blockers).not.toContain('conflict-search-exhausted');
+  });
+
+  it('re-exhausts at a higher anchor without losing the blocker', async () => {
+    const t = await searchSetup();
+    const publicClient = recoveryClientWithMissingReceipts(6);
+    await t.coordinator.recover({ publicClient, anchor: OBSERVED_AT, maxBlockRange: 20n });
+    const previous = t.coordinator.durableRecoveryRevision;
+    const anchor = { blockNumber: 125n, blockHash: HASH };
+
+    await t.coordinator.recover({ publicClient, anchor, maxBlockRange: 5n });
+
+    expect(t.save.mock.calls[0]![0].attempts[0]!.replacementSearch?.exhausted)
+      .toEqual({ anchor: OBSERVED_AT, nonce: 6n });
+    expect(t.save.mock.calls[1]![0].attempts[0]!.replacementSearch?.exhausted)
+      .toEqual({ anchor, nonce: 6n });
+    expect(t.coordinator.durableRecoveryRevision).not.toBe(previous);
+    expect(t.coordinator.status.blockers).toContain('conflict-search-exhausted');
+  });
+
+  it.each([6n, 9n])('abandons a cycle below a later retained fact with last nonce %s', async (nonce) => {
+    const snapshot = await queueSnapshot();
+    const input: TransactionJournalSnapshot = {
+      ...snapshot,
+      lastObservation: { anchor: { blockNumber: 130n, blockHash: HASH }, nonce },
+      attempts: [snapshot.attempts[0]!, {
+        ...snapshot.attempts[1]!,
+        replacementSearch: {
+          lowerBound: BASELINE,
+          searchedThrough: null,
+          exhausted: { anchor: OBSERVED_AT, nonce: 6n },
+        },
+      }],
+    };
+    const t = setup({ kind: 'present', snapshot: input });
+    const coordinator = await t.create();
+    const publicClient = recoveryClientWithMissingReceipts(6);
+    const cycle = new SignerRecoveryCycle({
+      coordinator,
+      schedule: new BroadcastRetrySchedule({ initialDelayMs: 100, maxDelayMs: 1000 }),
+    });
+    const result = await cycle.run({
+      publicClient,
+      anchor: { blockNumber: 115n, blockHash: HASH },
+      head: { blockNumber: 130n, blockHash: HASH },
+      maxBlockRange: 2n,
+    });
+
+    expect(result.inspection.status).toBe('anchor-behind-exhaustion');
+    expect(result.inclusions).toBeNull();
+    expect(t.save).not.toHaveBeenCalled();
+    expect(publicClient.getBlock).toHaveBeenCalledTimes(1);
+    expect(publicClient.getTransactionReceipt).not.toHaveBeenCalled();
+    expect(publicClient.getTransactionCount).not.toHaveBeenCalled();
+    expect(coordinator.status.open).toBe(false);
+    expect(coordinator.canBroadcast).toBe(false);
+    coordinator.beginInspection().abandon();
+  });
+});
+
+
+describe('exhaustion preservation across latest writes and skipped recovery', () => {
+  it('persists a latest-only cursor reset without changing the exhaustion fact', async () => {
+    const snapshot = await queueSnapshot();
+    const exhausted = {
+      anchor: { blockNumber: 108n, blockHash: HASH },
+      nonce: 6n,
+    };
+    const input: TransactionJournalSnapshot = {
+      ...snapshot,
+      attempts: [{
+        ...snapshot.attempts[0]!,
+        replacementSearch: {
+          lowerBound: BASELINE,
+          searchedThrough: { blockNumber: 105n, blockHash: HASH },
+          exhausted,
+        },
+      }, snapshot.attempts[1]!],
+    };
+    const directory = await mkdtemp(join(tmpdir(), 'latest-exhaustion-reset-'));
+    const filePath = join(directory, 'journal.json');
+
+    try {
+      const store = await FileTransactionJournalStore.open({ filePath, identity: IDENTITY });
+      await store.save(input);
+      const before = JSON.parse(await readFile(filePath, 'utf8'));
+      const t = setup({ kind: 'present', snapshot: input });
+      const coordinator = await t.create(store);
+      const publicClient = recoveryClientWithMissingReceipts(6);
+      const read = vi.mocked(publicClient.getBlock).getMockImplementation()!;
+      vi.mocked(publicClient.getBlock).mockImplementation(async (request) => {
+        const block = await read(request);
+        if (request?.blockNumber === 110n) {
+          return { ...block, hash: `0x${'bb'.repeat(32)}` } as typeof block;
+        }
+        return block;
+      });
+
+      expect(await coordinator.checkInclusions({
+        publicClient,
+        head: { blockNumber: 130n, blockHash: HASH },
+      })).toMatchObject({ status: 'inspected' });
+
+      const saved = await store.load();
+      if (saved.kind !== 'present') throw new Error('Expected journal.');
+      expect(saved.snapshot.attempts[0]).toMatchObject({
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+        replacementSearch: { searchedThrough: null, exhausted },
+      });
+      const after = JSON.parse(await readFile(filePath, 'utf8'));
+      expect(JSON.stringify(after.attempts[0].replacementSearch.exhausted))
+        .toBe(JSON.stringify(before.attempts[0].replacementSearch.exhausted));
+      expect(coordinator.status.blockers).toContain('conflict-search-exhausted');
+      expect(vi.mocked(publicClient.getBlock).mock.calls.some(([request]) => request?.blockNumber === 108n)).toBe(false);
+      const restarted = await t.create(await FileTransactionJournalStore.open({ filePath, identity: IDENTITY }));
+      expect(restarted.status.blockers).toContain('conflict-search-exhausted');
+      expect(restarted.status.open).toBe(false);
+      expect(restarted.canBroadcast).toBe(false);
+      expect(input.attempts[0]!.replacementSearch?.searchedThrough?.blockNumber).toBe(105n);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('abandons a preservation-only cycle without writing or advancing the durable revision', async () => {
+    const original = await searchSetup();
+    const input: TransactionJournalSnapshot = {
+      ...original.snapshot,
+      lastObservation: { anchor: { blockNumber: 130n, blockHash: HASH }, nonce: 9n },
+      attempts: original.snapshot.attempts.map((attempt) => ({
+        ...attempt,
+        replacementSearch: {
+          lowerBound: BASELINE,
+          searchedThrough: OBSERVED_AT,
+          exhausted: { anchor: OBSERVED_AT, nonce: 6n },
+        },
+      })),
+    };
+    const t = setup({ kind: 'present', snapshot: input });
+    const coordinator = await t.create();
+    const revision = coordinator.durableRecoveryRevision;
+    const attempts = coordinator.attempts;
+    const blockers = coordinator.status.blockers;
+    const latest = vi.spyOn(inclusionInspection, 'inspectSignerInclusions');
+    const planning = vi.spyOn(recoveryPlanning, 'planSignerRecovery');
+    const publicClient = recoveryClientWithMissingReceipts(6);
+    const cycle = new SignerRecoveryCycle({
+      coordinator,
+      schedule: new BroadcastRetrySchedule({ initialDelayMs: 100, maxDelayMs: 1000 }),
+    });
+
+    try {
+      const result = await cycle.run({
+        publicClient,
+        anchor: { blockNumber: 125n, blockHash: HASH },
+        head: { blockNumber: 130n, blockHash: HASH },
+        maxBlockRange: 2n,
+      });
+
+      expect(result.inspection).toMatchObject({
+        status: 'unresolved',
+        search: { status: 'not-found', scannedBlocks: 2n, remainingBlocks: 3n },
+      });
+      expect(result.inclusions).toBeNull();
+      expect(planning).toHaveReturnedWith({
+        kind: 'unchanged',
+        reason: 'preserved-higher-observation',
+      });
+      expect(latest).not.toHaveBeenCalled();
+      expect(t.save).not.toHaveBeenCalled();
+      expect(coordinator.attempts).toEqual(attempts);
+      expect(coordinator.status.blockers).toEqual(blockers);
+      expect(coordinator.durableRecoveryRevision).toBe(revision);
+      expect(coordinator.status.recoveryComplete).toBe(false);
+      expect(coordinator.status.open).toBe(false);
+      expect(coordinator.canBroadcast).toBe(false);
+      coordinator.beginInspection().abandon();
+    } finally {
+      latest.mockRestore();
+      planning.mockRestore();
+    }
+  });
+
+  it.each([false, true])('preserves the higher observation on resolution; survivor fact: %s', async (survivorHasFact) => {
+    const snapshot = await queueSnapshot();
+    const exhausted = { anchor: OBSERVED_AT, nonce: 6n };
+    const search = { lowerBound: BASELINE, searchedThrough: OBSERVED_AT, exhausted };
+    const input: TransactionJournalSnapshot = {
+      ...snapshot,
+      lastObservation: { anchor: { blockNumber: 130n, blockHash: HASH }, nonce: 9n },
+      attempts: [{ ...snapshot.attempts[0]!, replacementSearch: search }, {
+        ...snapshot.attempts[1]!,
+        replacementSearch: { ...search, exhausted: survivorHasFact ? exhausted : null },
+      }],
+    };
+    const t = setup({ kind: 'present', snapshot: input });
+    const coordinator = await t.create();
+    const publicClient = recoveryClientWithMissingReceipts(6);
+    const transactionHash = input.attempts[0]!.signedTransactions[0].transactionHash;
+    vi.mocked(publicClient.getTransactionReceipt).mockImplementation(async ({ hash }) => {
+      if (hash !== transactionHash) throw new TransactionReceiptNotFoundError({ hash });
+      return { transactionHash, blockNumber: 110n, blockHash: HASH, status: 'success' } as never;
+    });
+
+    expect(await coordinator.recover({ publicClient, anchor: OBSERVED_AT, maxBlockRange: 2n }))
+      .toMatchObject({ status: 'resolution-available' });
+
+    expect(t.save).toHaveBeenCalledTimes(1);
+    const saved = t.save.mock.calls[0]![0];
+    expect(saved.lastObservation).toEqual(input.lastObservation);
+    expect(saved.durableNextNonce).toBe(5n);
+    expect(saved.attempts).toEqual([input.attempts[1]]);
+    expect(coordinator.status.blockers.includes('conflict-search-exhausted')).toBe(survivorHasFact);
+    expect(coordinator.status.blockers).toContain('unattributed-signer-activity');
+    expect(coordinator.canBroadcast).toBe(false);
+    expect(input.attempts[0]!.replacementSearch?.exhausted).toEqual(exhausted);
   });
 });

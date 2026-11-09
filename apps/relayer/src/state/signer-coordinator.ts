@@ -356,7 +356,7 @@ export class SignerCoordinator {
     }
     
     coordinator.latchUnattributedActivity();
-    coordinator.latchExhaustedSearch();
+    coordinator.reconcileExhaustedSearch();
     coordinator.refresh();
     coordinator.updateDurableRecoveryRevision();
 
@@ -1662,26 +1662,18 @@ export class SignerCoordinator {
     const pending = this.pendingWrite!;
 
     if (pending.kind === 'resolution') {
-      this.blockers.delete('conflict-search-exhausted');
-
       // Keep ownership and the signed-byte diagnostic policy through
       // resolution reporting.
       this.emit(
         (log) => log.attemptResolved(pending.event),
         cycle,
       );
-    } else if (pending.kind === 'search-progress') {
-      if (pending.exhausted) {
-        this.blockers.add('conflict-search-exhausted');
-      } else {
-        this.blockers.delete('conflict-search-exhausted');
-      }
     }
 
     this.pendingWrite = undefined;
 
     this.latchUnattributedActivity();
-    this.latchExhaustedSearch();
+    this.reconcileExhaustedSearch();
     this.updateDurableRecoveryRevision();
 
     let operation: SignerEventOperation = 'reconcile-attempt';
@@ -1710,33 +1702,18 @@ export class SignerCoordinator {
     }
   }
 
-  private latchExhaustedSearch(): void {
+  private reconcileExhaustedSearch(): void {
     const current = this.persistence.current;
+    const exhausted = current.kind === 'present' &&
+      current.snapshot.attempts.some((attempt) =>
+        attempt.replacementSearch !== null &&
+        attempt.replacementSearch.exhausted !== null,
+      );
 
-    if (current.kind !== 'present') {
-      return;
-    }
-
-    const attempt = current.snapshot.attempts.find(
-      (candidate) => candidate.phase !== 'included',
-    );
-
-    if (attempt === undefined) {
-      return;
-    }
-
-    const through = attempt.replacementSearch?.searchedThrough;
-
-    if (
-      through !== null &&
-      through !== undefined &&
-      current.snapshot.lastObservation.nonce > attempt.nonce &&
-      blockAnchorsMatch(
-        through,
-        current.snapshot.lastObservation.anchor,
-      )
-    ) {
+    if (exhausted) {
       this.blockers.add('conflict-search-exhausted');
+    } else {
+      this.blockers.delete('conflict-search-exhausted');
     }
   }
 

@@ -858,3 +858,90 @@ describe('durable inspection block observations', () => {
     expect(result).not.toHaveProperty('observations');
   });
 });
+
+
+describe('stored exhaustion consistency', () => {
+  it('refuses an anchor below a retained fact before RPC', async () => {
+    const t = await setup();
+    const exhausted = { anchor: anchorAt(106n), nonce: 5n };
+    const snapshot: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: [{
+        ...t.snapshot.attempts[0]!,
+        replacementSearch: {
+          lowerBound: t.snapshot.baseline,
+          searchedThrough: null,
+          exhausted,
+        },
+      }],
+    };
+    expect(await t.run({ snapshot })).toEqual({
+      status: 'anchor-behind-exhaustion', anchor: anchorAt(105n), exhausted,
+    });
+    expect(t.order).toEqual([]);
+    expect(t.getBlock).not.toHaveBeenCalled();
+  });
+
+  it.each([null, anchorAt(105n)])(
+    'refuses a changed exhaustion hash before RPC with cursor %s',
+    async (searchedThrough) => {
+      const t = await setup();
+      const exhausted = { anchor: anchorAt(105n), nonce: 5n };
+      const anchor = { blockNumber: 105n, blockHash: OTHER };
+      const snapshot: TransactionJournalSnapshot = {
+        ...t.snapshot,
+        attempts: [{
+          ...t.snapshot.attempts[0]!,
+          replacementSearch: {
+            lowerBound: t.snapshot.baseline,
+            searchedThrough,
+            exhausted,
+          },
+        }],
+      };
+      const before = structuredClone(snapshot);
+
+      expect(await t.run({ snapshot, anchor })).toEqual({
+        status: 'exhaustion-anchor-changed',
+        anchor,
+        exhausted,
+      });
+      expect(t.order).toEqual([]);
+      expect(t.getBlock).not.toHaveBeenCalled();
+      expect(t.getTransactionReceipt).not.toHaveBeenCalled();
+      expect(t.getTransactionCount).not.toHaveBeenCalled();
+      expect(snapshot).toEqual(before);
+    },
+  );
+
+  it.each([5n, 6n])('compares nonce %s at the same anchor using case-insensitive hashes', async (nonce) => {
+    const t = await setup();
+    const anchor = { blockNumber: 105n, blockHash: OTHER };
+    t.getBlock.mockImplementation(async (request) => ({
+      number: request.blockNumber,
+      hash: OTHER,
+      parentHash: OTHER,
+      transactions: [],
+    }));
+    t.getTransactionReceipt.mockResolvedValue({
+      transactionHash: t.hash, blockNumber: 102n, blockHash: OTHER, status: 'success',
+    });
+    t.getTransactionCount.mockResolvedValue(Number(nonce));
+    const snapshot: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: [{
+        ...t.snapshot.attempts[0]!,
+        replacementSearch: {
+          lowerBound: t.snapshot.baseline,
+          searchedThrough: null,
+          exhausted: {
+            anchor: { ...anchor, blockHash: ('0x' + OTHER.slice(2).toUpperCase()) as Hash },
+            nonce: 5n,
+          },
+        },
+      }],
+    };
+    const result = await t.run({ snapshot, anchor });
+    expect(result.status).toBe(nonce === 5n ? 'resolution-available' : 'inconsistent-observations');
+  });
+});
