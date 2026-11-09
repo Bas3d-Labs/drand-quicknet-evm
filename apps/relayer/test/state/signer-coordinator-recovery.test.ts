@@ -269,6 +269,7 @@ describe('coordinator recovery', () => {
 
     await expect(t.coordinator.recover(t.options))
       .resolves.toEqual({
+        observations: [],
         status: 'no-attempt',
         observation: {
           anchor: t.options.anchor,
@@ -863,6 +864,7 @@ describe('coordinator recovery', () => {
 
     await expect(t.coordinator.recover(t.options))
       .resolves.toEqual({
+        observations: [],
         status: 'no-attempt',
         observation: {
           anchor: t.options.anchor,
@@ -922,6 +924,7 @@ describe('coordinator recovery', () => {
     const coordinator = await t.create();
 
     expect(await coordinator.recover(t.options)).toEqual({
+      observations: [],
       status: 'no-attempt',
       observation: {
         anchor: t.options.anchor,

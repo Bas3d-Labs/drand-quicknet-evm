@@ -127,9 +127,50 @@ describe('signer recovery planning', () => {
 
     expect(plan(snapshot, inspection)).toEqual({
       kind: 'unchanged',
+      reason: 'inspection-not-committable',
     });
     expect(snapshot).toEqual(before);
   });
+
+  it.each([
+    {
+      observations: [],
+      status: 'boundary-changed',
+      boundary: 'lower-bound',
+      observedAnchor: anchorAt(100n),
+    },
+    {
+      observations: [],
+      status: 'anchor-behind-search',
+    },
+  ] as const)(
+    'classifies $status before considering higher-observation preservation',
+    async (search) => {
+      const original = await createSnapshot();
+      const snapshot: TransactionJournalSnapshot = {
+        ...original,
+        lastObservation: observationAt(110n, 7n),
+      };
+      const before = structuredClone(snapshot);
+
+      const result = plan(snapshot, {
+        observations: [],
+        status: 'unresolved',
+        observation: observationAt(105n, 5n),
+        receipt: {
+          observations: [],
+          status: 'receipt-not-found',
+        },
+        search,
+      }, true);
+
+      expect(result).toEqual({
+        kind: 'unchanged',
+        reason: 'inspection-not-committable',
+      });
+      expect(snapshot).toEqual(before);
+    },
+  );
 
   it.each(['success', 'reverted'] as const)(
     'removes only the oldest attempt after %s',
@@ -141,6 +182,7 @@ describe('signer recovery planning', () => {
         oldest.signedTransactions[0].transactionHash;
 
       const inspection: SignerRecoveryInspection = {
+        observations: [],
         status: 'resolution-available',
         observation: observationAt(105n, 5n),
         evidence: {
@@ -189,6 +231,7 @@ describe('signer recovery planning', () => {
     const before = structuredClone(snapshot);
 
     const result = plan(snapshot, {
+      observations: [],
       status: 'resolution-available',
       observation: observationAt(105n, 5n),
       evidence: {
@@ -225,13 +268,20 @@ describe('signer recovery planning', () => {
     const before = structuredClone(snapshot);
 
     const result = plan(snapshot, {
+      observations: [],
       status: 'unresolved',
       observation: observationAt(105n, 5n),
-      receipt: { status: 'receipt-not-found' },
+      receipt: {
+        observations: [],
+        status: 'receipt-not-found',
+      },
       search: null,
     }, true);
 
-    expect(result).toEqual({ kind: 'unchanged' });
+    expect(result).toEqual({
+      kind: 'unchanged',
+      reason: 'preserved-higher-observation',
+    });
     expect(snapshot).toEqual(before);
   });
 
@@ -246,10 +296,15 @@ describe('signer recovery planning', () => {
       const observation = observationAt(105n, 5n);
 
       const result = plan(snapshot, {
+        observations: [],
         status: 'unresolved',
         observation,
-        receipt: { status: 'receipt-not-found' },
+        receipt: {
+          observations: [],
+          status: 'receipt-not-found',
+        },
         search: {
+          observations: [],
           status: 'not-found',
           searchedThrough: anchorAt(through),
           scannedBlocks: scanned,
@@ -288,6 +343,7 @@ describe('signer recovery planning', () => {
     const before = structuredClone(snapshot);
 
     expect(() => plan(snapshot, {
+      observations: [],
       status: 'resolution-available',
       observation: observationAt(105n, 6n),
       evidence: {

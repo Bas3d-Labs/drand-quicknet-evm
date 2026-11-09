@@ -67,7 +67,7 @@ export type SignerRecoveryInspection =
       observedAnchor: Readonly<BlockAnchor>;
     }
   | {
-      status: 'nonce-behind-journal' | 'no-attempt';
+      status: 'nonce-behind-journal';
       observation: AnchoredNonceObservation;
     }
   | {
@@ -75,12 +75,19 @@ export type SignerRecoveryInspection =
       observation: AnchoredNonceObservation;
     }
   | {
+      status: 'no-attempt';
+      observation: AnchoredNonceObservation;
+      readonly observations: readonly Readonly<BlockAnchor>[];
+    }
+  | {
       status: 'resolution-available';
+      readonly observations: readonly Readonly<BlockAnchor>[];
       observation: AnchoredNonceObservation;
       evidence: AttemptResolutionEvidence;
     }
   | {
       status: 'unresolved';
+      readonly observations: readonly Readonly<BlockAnchor>[];
       observation: AnchoredNonceObservation;
       receipt: UnresolvedReceipt;
       search: UnresolvedSearch | null;
@@ -92,7 +99,10 @@ export type SignerRecoveryInspection =
  * no durable receipt is available, searches a bounded range for the 
  * transaction that used it.
  * 
- * Returns observations for the coordinator to apply.
+ * Eligible results carry block observations from successfully closed receipt
+ * and search brackets, restricted to heights at or below the durable anchor.
+ * The coordinator must still validate the nonce and planner disposition before
+ * admitting them to an inspection's consistency evidence.
  */
 export async function inspectSignerRecovery(
   options: InspectSignerRecoveryOptions,
@@ -136,7 +146,10 @@ export async function inspectSignerRecovery(
     });
 
     if (receipt.status === 'anchor-changed') {
-      return receipt;
+      return {
+        status: 'anchor-changed',
+        observedAnchor: receipt.observedAnchor,
+      };
     }
   }
 
@@ -165,9 +178,16 @@ export async function inspectSignerRecovery(
   if (attempt === undefined || receipt === null) {
     return {
       status: 'no-attempt',
+      observations: Object.freeze([]),
       observation,
     };
   }
+
+  // Above-anchor receipt reads classify receipts but cannot establish durable
+  // canonical evidence. Keep every eligible read, including repeated heights.
+  const observations = receipt.observations.filter(
+    (block) => block.blockNumber <= anchor.blockNumber,
+  );
 
   const consumed = observation.nonce > attempt.nonce;
 
@@ -181,6 +201,7 @@ export async function inspectSignerRecovery(
 
     return {
       status: 'resolution-available',
+      observations: Object.freeze(observations),
       observation,
       evidence: receipt.evidence,
     };
@@ -196,6 +217,7 @@ export async function inspectSignerRecovery(
   if (!consumed) {
     return {
       status: 'unresolved',
+      observations: Object.freeze(observations),
       observation,
       receipt,
       search: null,
@@ -219,12 +241,20 @@ export async function inspectSignerRecovery(
   });
 
   if (search.status === 'anchor-changed') {
-    return search;
+    return {
+      status: 'anchor-changed',
+      observedAnchor: search.observedAnchor,
+    };
   }
+
+  observations.push(...search.observations.filter(
+    (block) => block.blockNumber <= anchor.blockNumber,
+  ));
 
   if (search.status === 'replacement-found') {
     return {
       status: 'resolution-available',
+      observations: Object.freeze(observations),
       observation,
       evidence: search.evidence,
     };
@@ -235,6 +265,7 @@ export async function inspectSignerRecovery(
   // polling loop.
   return {
     status: 'unresolved',
+    observations: Object.freeze(observations),
     observation,
     receipt,
     search,

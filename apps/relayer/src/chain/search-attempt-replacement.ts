@@ -48,7 +48,7 @@ export interface SearchAttemptReplacementOptions {
   maxBlockRange: bigint;
 }
 
-export type ReplacementSearchResult =
+type ReplacementSearchClassification =
   | {
       /** There is no justified starting point. Keep the attempt unresolved. */
       status: 'missing-lower-bound';
@@ -107,6 +107,16 @@ export type ReplacementSearchResult =
       scannedBlocks: bigint;
       remainingBlocks: bigint;
     };
+
+/**
+ * By-number reads inside a successfully closed search bracket, in read order:
+ * saved-boundary validation and scanned full-block headers. Enclosing anchor
+ * checks validate the interval and are not repeated in this list.
+ * Failed or unopened brackets expose an empty list.
+ */
+export type ReplacementSearchResult = ReplacementSearchClassification & {
+  readonly observations: readonly Readonly<BlockAnchor>[];
+};
 
 /**
  * Searches a boudned chunk of full blocks to identify which transaction
@@ -170,6 +180,7 @@ export async function searchAttemptReplacement(
   if (replacementSearch === null) {
     return {
       status: 'missing-lower-bound',
+      observations: Object.freeze([]),
     };
   }
 
@@ -196,22 +207,31 @@ export async function searchAttemptReplacement(
   ) {
     return {
       status: 'anchor-behind-search',
+      observations: Object.freeze([]),
     };
   }
 
   const before = await checkBlockAnchor(publicClient, anchor);
   if (before !== null) {
-    return before;
+    return {
+      ...before,
+      observations: Object.freeze([]),
+    };
   }
+
+  const observations: Readonly<BlockAnchor>[] = [];
 
   const observedLower = await getBlockAnchor(
     publicClient,
     lower.blockNumber,
   );
 
+  observations.push(Object.freeze(observedLower));
+
   if (!blockAnchorsMatch(lower, observedLower)) {
     return {
       status: 'boundary-changed',
+      observations: Object.freeze([]),
       boundary: 'lower-bound',
       observedAnchor: Object.freeze(observedLower),
     };
@@ -223,9 +243,12 @@ export async function searchAttemptReplacement(
       boundary.blockNumber,
     );
 
+    observations.push(Object.freeze(observed));
+
     if (!blockAnchorsMatch(boundary, observed)) {
       return {
         status: 'boundary-changed',
+        observations: Object.freeze([]),
         boundary: 'searched-through',
         observedAnchor: Object.freeze(observed),
       };
@@ -277,9 +300,12 @@ export async function searchAttemptReplacement(
     ) {
       return {
         status: 'anchor-changed',
+        observations: Object.freeze([]),
         observedAnchor: inclusion,
       };
     }
+
+    observations.push(inclusion);
 
     for (const transaction of block.transactions) {
       if (
@@ -319,7 +345,10 @@ export async function searchAttemptReplacement(
 
   const after = await checkBlockAnchor(publicClient, anchor);
   if (after !== null) {
-    return after;
+    return {
+      ...after,
+      observations: Object.freeze([]),
+    };
   }
 
   if (match !== undefined) {
@@ -327,6 +356,7 @@ export async function searchAttemptReplacement(
     if (recordedHash !== undefined) {
       return {
         status: 'recorded-transaction-found',
+        observations: Object.freeze(observations),
         transactionHash: recordedHash,
         anchor,
         inclusion: match.inclusion,
@@ -335,6 +365,7 @@ export async function searchAttemptReplacement(
 
     return {
       status: 'replacement-found',
+      observations: Object.freeze(observations),
       evidence: Object.freeze({
         outcome: 'replaced',
         anchor,
@@ -347,6 +378,7 @@ export async function searchAttemptReplacement(
 
   return {
     status: 'not-found',
+    observations: Object.freeze(observations),
     searchedThrough: previous,
     scannedBlocks,
     remainingBlocks: anchor.blockNumber - previous.blockNumber,

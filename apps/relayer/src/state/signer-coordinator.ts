@@ -11,6 +11,7 @@ import type {
 
 import {
   blockAnchorsMatch,
+  checkBlockAnchor,
   type BlockAnchor,
 } from '../chain/block-anchor.js';
 
@@ -51,6 +52,10 @@ import {
 } from '../execution/work-identity.js';
 
 import {
+  isFixedHex,
+} from '../shared/hex.js';
+
+import {
   isPositiveSafeInteger,
 } from '../shared/integer.js';
 
@@ -89,6 +94,7 @@ import type {
 } from './transaction-manager-types.js';
 
 import type {
+  AnchoredNonceObservation,
   JournalAttempt,
   JournalIdentity,
   TransactionJournalRead,
@@ -201,6 +207,39 @@ export interface CheckSignerInclusionsOptions {
   readonly maxReplacementBlockRange?: bigint;
 }
 
+/**
+ * Selects the latest block to check before and after the owned inspection.
+ * Fresh recovery also supplies the durable recovery anchor: the block at which
+ * durable receipts and the signer nonce are checked.
+ *
+ * Without this selection, standalone recovery checks only its durable anchor.
+ * The first inclusion operation starts its own latest-block checks. This also
+ * applies when the cycle reuses a previously completed durable recovery pass.
+ */
+export interface OpenSignerInspectionOptions {
+  readonly publicClient: PublicClient;
+  readonly head: Readonly<BlockAnchor>;
+  readonly durableAnchor?: Readonly<BlockAnchor>;
+}
+
+interface InspectionBracket {
+  readonly publicClient: PublicClient;
+  readonly head: Readonly<BlockAnchor>;
+  readonly durableAnchor: Readonly<BlockAnchor> | undefined;
+  durableNonce: bigint | undefined;
+
+  /** Observed hashes for this inspection only; never persisted or cached. */
+  durableObservations: ReadonlyMap<bigint, Hash>;
+  phase:
+    | 'opening'
+    | 'durable'
+    | 'latest'
+    | 'closing'
+    | 'persisting'
+    | 'completed'
+    | 'failed';
+}
+
 export interface SignerInspection {
   recover(
     options: RecoverSignerOptions,
@@ -215,7 +254,8 @@ export interface SignerInspection {
   /**
    * Releases a successfully completed inspection.
    * 
-   * Rejects while an operation is running or persistence is pending.
+   * Rejects while an operation is running, persistence is pending, or an
+   * opened bracket has not completed its latest commit.
    * Pending persistence must be retried after abandoning ownership,
    * before another inspection begins.
    */
@@ -231,6 +271,7 @@ export interface SignerInspection {
 }
 
 interface InspectionOwner {
+  bracket: InspectionBracket | null;
   activeOperation: Promise<unknown> | null;
   abandonment: Promise<void> | null;
   abandoning: boolean;
@@ -322,11 +363,22 @@ export class SignerCoordinator {
     return coordinator;
   }
 
-  beginInspection(): SignerInspection {
+  /**
+   * Acquires ownership synchronously. The first owned operation performs
+   * the selected opening read before its body. Once a bracket is opened,
+   * finish requires a successful latest commit.
+   * An unsuccessful bracket must be abandoned, preserving durable commits.
+   */
+  beginInspection(
+    options?: OpenSignerInspectionOptions,
+  ): SignerInspection {
     this.assertAvailable();
     this.assertPersistenceIdle();
 
     const owner: InspectionOwner = {
+      bracket: options === undefined
+        ? null
+        : this.createInspectionBracket(options),
       activeOperation: null,
       abandonment: null,
       abandoning: false,
@@ -803,11 +855,32 @@ export class SignerCoordinator {
     const current = this.persistence.current;
 
     this.invalidateRecoveryAuthorization();
-    this.inclusionChecksComplete = false;
+    this.busy = true;
 
     try {
+      if (owner.bracket !== null) {
+        const bracket = owner.bracket;
+
+        if (
+          bracket.publicClient !== options.publicClient ||
+          bracket.durableAnchor === undefined ||
+          !blockAnchorsMatch(bracket.durableAnchor, options.anchor)
+        ) {
+          throw new Error('Recovery does not match the inspection anchors.');
+        }
+
+        const changed = await this.openInspectionBracket(owner);
+
+        if (changed !== null) {
+          return {
+            status: 'anchor-changed',
+            observedAnchor: changed,
+          };
+        }
+      }
+
       if (current.kind === 'missing') {
-        return await this.bootstrapOwned(options, cycle);
+        return await this.bootstrapOwned(options, owner, cycle);
       }
       
       const result = await inspectSignerRecovery({
@@ -817,6 +890,16 @@ export class SignerCoordinator {
         maxBlockRange: options.maxBlockRange,
       });
 
+      if (
+        'observation' in result &&
+        !this.observeInspectionDurableNonce(owner, result.observation)
+      ) {
+        return {
+          status: 'inconsistent-observations',
+          observation: result.observation,
+        };
+      }
+
       const plan = planSignerRecovery({
         identity: this.identity,
         snapshot: current.snapshot,
@@ -825,7 +908,25 @@ export class SignerCoordinator {
           this.blockers.has('unattributed-signer-activity'),
       });
 
+      // Admit only after nonce validation and planning. A preservation-only
+      // skip still carries valid evidence, even though recovery stays incomplete.
+      if (
+        (
+          plan.kind === 'persist' ||
+          plan.reason === 'preserved-higher-observation'
+        ) &&
+        'observations' in result &&
+        !this.admitDurableBlockObservations(owner, result.observations)
+      ) {
+        this.failInspectionBracket(owner);
+        return {
+          status: 'inconsistent-observations',
+          observation: result.observation,
+        };
+      }
+
       if (plan.kind === 'unchanged') {
+        this.failInspectionBracket(owner);
         return result;
       }
 
@@ -856,6 +957,7 @@ export class SignerCoordinator {
       return result;
     } catch (error) {
       this.recoveryComplete = false;
+      this.failInspectionBracket(owner);
       this.discardUnacknowledgedWrite(current);
       throw error;
     } finally {
@@ -876,9 +978,22 @@ export class SignerCoordinator {
     options: CheckSignerInclusionsOptions,
     cycle?: number,
   ): Promise<SignerInclusionInspection> {
-    return this.runStandaloneInspection(
-      (inspection) => inspection.checkInclusions(options, cycle),
-    );
+    const inspection = this.beginInspection();
+
+    try {
+      const result = await inspection.checkInclusions(options, cycle);
+
+      if (result.status === 'inspected') {
+        inspection.finish();
+      } else {
+        await inspection.abandon();
+      }
+
+      return result;
+    } catch (error) {
+      await inspection.abandon();
+      throw error;
+    }
   }
 
   private async checkInclusionsOwned(
@@ -901,6 +1016,36 @@ export class SignerCoordinator {
     this.busy = true;
 
     try {
+      if (owner.bracket === null) {
+        owner.bracket = this.createInspectionBracket(options);
+      }
+
+      const bracket = owner.bracket;
+
+      if (
+        bracket.publicClient !== options.publicClient ||
+        !blockAnchorsMatch(bracket.head, options.head)
+      ) {
+        throw new Error('Inclusion inspection does not match the selected head.');
+      }
+
+      const changed = await this.openInspectionBracket(owner);
+
+      if (changed !== null) {
+        return {
+          status: 'anchor-changed',
+          observedAnchor: changed,
+        };
+      }
+
+      if (bracket.durableAnchor !== undefined && !this.recoveryComplete) {
+        throw new Error(
+          'Fresh durable recovery must complete before latest inspection.',
+        );
+      }
+
+      bracket.phase = 'latest';
+
       const maxReplacementBlockRange = options.maxReplacementBlockRange;
 
       const inspectionOptions = {
@@ -915,6 +1060,8 @@ export class SignerCoordinator {
       const result = await inspectSignerInclusions(inspectionOptions);
 
       if (result.status !== 'inspected') {
+        this.failInspectionBracket(owner);
+
         if (
           result.status === 'nonce-behind-journal' ||
           result.status === 'inconsistent-observations'
@@ -924,6 +1071,53 @@ export class SignerCoordinator {
 
         return result;
       }
+
+      // Keep the result uncommitted until the owner confirms that the selected
+      // latest block still matches the hash checked before the inspection.
+      bracket.phase = 'closing';
+
+      const closing = await checkBlockAnchor(
+        options.publicClient,
+        bracket.head,
+        { operation: 'signer-inclusions' },
+      );
+
+      this.assertInspectionContinuing(owner);
+
+      if (closing !== null) {
+        this.failInspectionBracket(owner);
+        return closing;
+      }
+
+      if (
+        bracket.durableNonce !== undefined &&
+        result.observation.nonce < bracket.durableNonce
+      ) {
+        this.recoveryComplete = false;
+        this.failInspectionBracket(owner);
+        return {
+          status: 'inconsistent-observations',
+          observation: result.observation,
+        };
+      }
+
+      // Check repeated heights within the latest pass as well as overlaps with
+      // durable evidence. This runs after the closing check, before planning.
+      const latestEvidence = this.mergeBlockObservations(
+        bracket.durableObservations,
+        result.observations,
+      );
+
+      if (latestEvidence === null) {
+        this.recoveryComplete = false;
+        this.failInspectionBracket(owner);
+        return {
+          status: 'inconsistent-observations',
+          observation: result.observation,
+        };
+      }
+
+      bracket.phase = 'persisting';
 
       const next = planSignerInclusions({
         identity: this.identity,
@@ -954,9 +1148,14 @@ export class SignerCoordinator {
         this.broadcastPermit = attempt.attemptId;
       }
 
+      // The durable permit was revoked on entry. Only the acknowledged latest
+      // result above may grant a replacement permit before successful finish.
+      bracket.phase = 'completed';
+
       return result;
     } catch (error) {
       this.inclusionChecksComplete = false;
+      this.failInspectionBracket(owner);
       this.discardUnacknowledgedWrite(current);
       throw error;
     } finally {
@@ -1019,6 +1218,7 @@ export class SignerCoordinator {
    */
   private async bootstrapOwned(
     options: RecoverSignerOptions,
+    owner: InspectionOwner,
     cycle?: number,
   ): Promise<SignerRecoveryResult> {
     if (this.blockers.size !== 0) {
@@ -1031,7 +1231,18 @@ export class SignerCoordinator {
       anchor: options.anchor,
     });
 
+    if (
+      'observation' in result &&
+      !this.observeInspectionDurableNonce(owner, result.observation)
+    ) {
+      return {
+        status: 'inconsistent-observations',
+        observation: result.observation,
+      };
+    }
+
     if (result.status === 'bootstrap-deferred') {
+      this.failInspectionBracket(owner);
       const {
         observation,
         latestNonce,
@@ -1069,6 +1280,7 @@ export class SignerCoordinator {
     }
 
     if (result.status === 'anchor-changed') {
+      this.failInspectionBracket(owner);
       return result;
     }
 
@@ -1094,8 +1306,179 @@ export class SignerCoordinator {
 
     return {
       status: 'no-attempt',
+      observations: Object.freeze([]),
       observation,
     };
+  }
+
+  private createInspectionBracket(
+    options: OpenSignerInspectionOptions,
+  ): InspectionBracket {
+    const head = Object.freeze({ ...options.head });
+    const durable = options.durableAnchor;
+
+    if (
+      typeof head.blockNumber !== 'bigint' ||
+      head.blockNumber < 0n ||
+      head.blockNumber >= (1n << 256n) ||
+      !isFixedHex(head.blockHash, 32) ||
+      (
+        durable !== undefined &&
+        (
+          typeof durable.blockNumber !== 'bigint' ||
+          durable.blockNumber < 0n ||
+          !isFixedHex(durable.blockHash, 32) ||
+          head.blockNumber < durable.blockNumber ||
+          (
+            head.blockNumber === durable.blockNumber &&
+            !blockAnchorsMatch(head, durable)
+          )
+        )
+      )
+    ) {
+      throw new TypeError('Invalid signer inspection anchors.');
+    }
+
+    return {
+      publicClient: options.publicClient,
+      head,
+      durableAnchor: durable === undefined
+        ? undefined
+        : Object.freeze({ ...durable }),
+      durableNonce: undefined,
+      durableObservations: new Map(),
+      phase: 'opening',
+    };
+  }
+
+  private assertInspectionContinuing(owner: InspectionOwner): void {
+    this.assertInspectionOwner(owner);
+
+    if (owner.abandoning) {
+      throw new Error('Signer inspection is being abandoned.');
+    }
+  }
+
+  private async openInspectionBracket(
+    owner: InspectionOwner,
+  ): Promise<Readonly<BlockAnchor> | null> {
+    const bracket = owner.bracket!;
+
+    if (bracket.phase === 'durable') {
+      return null;
+    }
+
+    if (bracket.phase !== 'opening') {
+      throw new Error('Signer inspection bracket cannot accept another operation.');
+    }
+
+    const changed = await checkBlockAnchor(
+      bracket.publicClient,
+      bracket.head,
+      { operation: 'signer-inclusions' },
+    );
+
+    this.assertInspectionContinuing(owner);
+
+    if (changed !== null) {
+      this.failInspectionBracket(owner);
+      return changed.observedAnchor;
+    }
+
+    bracket.phase = 'durable';
+    return null;
+  }
+
+  /**
+   * Compare signer nonces observed at the same durable recovery anchor before
+   * planning a journal change, including observations the planner would skip.
+   */
+  private observeInspectionDurableNonce(
+    owner: InspectionOwner,
+    observation: AnchoredNonceObservation,
+  ): boolean {
+    const bracket = owner.bracket;
+
+    if (bracket === null) {
+      return true;
+    }
+
+    if (
+      bracket.durableAnchor === undefined ||
+      !blockAnchorsMatch(bracket.durableAnchor, observation.anchor)
+    ) {
+      throw new Error('Durable observation does not match the inspection anchor.');
+    }
+
+    if (bracket.durableNonce === undefined) {
+      bracket.durableNonce = observation.nonce;
+      return true;
+    }
+
+    if (bracket.durableNonce !== observation.nonce) {
+      this.recoveryComplete = false;
+      this.failInspectionBracket(owner);
+      return false;
+    }
+
+    return true;
+  }
+
+  /** Matching repeats are allowed. Different hashes at one height fail closed. */
+  private mergeBlockObservations(
+    previous: ReadonlyMap<bigint, Hash>,
+    observations: readonly Readonly<BlockAnchor>[],
+  ): ReadonlyMap<bigint, Hash> | null {
+    const merged = new Map(previous);
+
+    for (const observation of observations) {
+      const known = merged.get(observation.blockNumber);
+
+      if (
+        known !== undefined &&
+        known.toLowerCase() !== observation.blockHash.toLowerCase()
+      ) {
+        return null;
+      }
+
+      merged.set(observation.blockNumber, observation.blockHash);
+    }
+
+    return merged;
+  }
+
+  private admitDurableBlockObservations(
+    owner: InspectionOwner,
+    observations: readonly Readonly<BlockAnchor>[],
+  ): boolean {
+    const bracket = owner.bracket;
+
+    // Standalone durable recovery has no enclosing latest-block interval.
+    // Its observations must not seed a bracket opened later on this handle.
+    if (bracket === null) {
+      return true;
+    }
+
+    const merged = this.mergeBlockObservations(
+      bracket.durableObservations,
+      observations,
+    );
+
+    if (merged === null) {
+      return false;
+    }
+
+    // No rollback is needed if persistence fails: the failed bracket cannot
+    // continue, and abandonment discards this inspection's evidence entirely.
+    bracket.durableObservations = merged;
+    return true;
+  }
+
+  private failInspectionBracket(owner: InspectionOwner): void {
+    if (owner.bracket !== null) {
+      owner.bracket.phase = 'failed';
+      this.revokeActionAuthorization();
+    }
   }
 
   private revokeActionAuthorization(): void {
@@ -1168,6 +1551,16 @@ export class SignerCoordinator {
       throw new Error('Signer inspection has pending persistence.');
     }
 
+    if (owner.bracket !== null && owner.bracket.phase !== 'completed') {
+      throw new Error(
+        'Signer inspection bracket has not completed successfully.',
+      );
+    }
+
+    if (owner.bracket !== null) {
+      owner.bracket.durableObservations = new Map();
+    }
+
     this.inspectionOwner = null;
     this.refresh(owner.cycle);
   }
@@ -1208,6 +1601,11 @@ export class SignerCoordinator {
     this.assertInspectionOwner(owner);
 
     this.revokeActionAuthorization();
+
+    if (owner.bracket !== null) {
+      owner.bracket.durableObservations = new Map();
+    }
+
     this.inspectionOwner = null;
     this.refresh(owner.cycle);
   }

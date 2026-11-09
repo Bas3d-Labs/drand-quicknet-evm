@@ -120,6 +120,7 @@ describe('signer inclusion planning', () => {
   it('records inclusion without removing the attempt or advancing nonce counters', async () => {
     const snapshot = await createSnapshot();
     const inspection: Inspected = {
+      observations: [],
       status: 'inspected',
       observation: observationAt(105n, 5n),
       attempts: [includedAttempt(snapshot.attempts[0]!)],
@@ -152,6 +153,7 @@ describe('signer inclusion planning', () => {
       lastObservation: observationAt(110n, 7n),
     };
     const inspection: Inspected = {
+      observations: [],
       status: 'inspected',
       observation: observationAt(105n, 5n),
       attempts: [includedAttempt(snapshot.attempts[0]!)],
@@ -183,6 +185,7 @@ describe('signer inclusion planning', () => {
       lastObservation: observationAt(110n, 7n),
     };
     const inspection: Inspected = {
+      observations: [],
       status: 'inspected',
       observation: observationAt(115n, 7n),
       attempts: snapshot.attempts,
@@ -205,6 +208,7 @@ describe('signer inclusion planning', () => {
       lastObservation: observationAt(110n, 5n),
     };
     const inspection: Inspected = {
+      observations: [],
       status: 'inspected',
       observation: observationAt(115n, 4n),
       attempts: snapshot.attempts,
@@ -235,6 +239,7 @@ describe('signer inclusion planning', () => {
     };
 
     const inspection: Inspected = {
+      observations: [],
       status: 'inspected',
       observation: observationAt(110n, 4n),
       attempts: [invalidated],

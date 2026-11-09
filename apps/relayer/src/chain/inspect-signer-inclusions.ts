@@ -17,7 +17,6 @@ import {
 } from '../state/transaction-journal-validation.js';
 
 import {
-  checkBlockAnchor,
   type BlockAnchor,
 } from './block-anchor.js';
 
@@ -62,6 +61,7 @@ export type SignerInclusionInspection =
     }
   | {
       readonly status: 'inspected';
+      readonly observations: readonly Readonly<BlockAnchor>[];
       readonly observation: AnchoredNonceObservation;
       readonly attempts: readonly JournalAttempt[];
 
@@ -80,10 +80,13 @@ export type SignerInclusionInspection =
     };
 
 /**
- * Inspects retained attempts against a selected head.
- * 
- * Non-empty queues receive enclosing head checks around the evidence
- * reads. Empty queues retain the anchored nonce reader's own checks.
+ * Collects provisional inclusion evidence while the coordinator holds ownership.
+ * The coordinator reads the selected latest block before the inspection and
+ * checks it again afterwards. It must complete that final check before saving
+ * this result or using it to authorize preparation or broadcast.
+ *
+ * The nonce reader also checks the selected latest block immediately before
+ * and after reading the signer nonce. Those separate checks remain here.
  */
 export async function inspectSignerInclusions(
   options: InspectSignerInclusionsOptions,
@@ -119,15 +122,7 @@ export async function inspectSignerInclusions(
     throw new TypeError('Invalid signer inclusion input.');
   }
 
-  if (snapshot.attempts.length > 0) {
-    const openingHead = await checkBlockAnchor(publicClient, head, {
-      operation: 'signer-inclusions',
-    });
-    if (openingHead !== null) {
-      return openingHead;
-    }
-  }
-
+  const observations: Readonly<BlockAnchor>[] = [];
   const attempts: JournalAttempt[] = [];
   const verifiedNonces: bigint[] = [];
   const verifiedIndices = new Set<number>();
@@ -142,8 +137,13 @@ export async function inspectSignerInclusions(
       });
 
       if (result.status === 'anchor-changed') {
-        return result;
+        return {
+          status: 'anchor-changed',
+          observedAnchor: result.observedAnchor,
+        };
       }
+
+      observations.push(...result.observations);
 
       if (result.status === 'verified-unchanged') {
         attempts.push({
@@ -191,8 +191,17 @@ export async function inspectSignerInclusions(
     });
 
     if (receipt.status === 'anchor-changed') {
-      return receipt;
+      return {
+        status: 'anchor-changed',
+        observedAnchor: receipt.observedAnchor,
+      };
     }
+
+    // Above-head reads classify receipts but are outside the canonical view
+    // checked by this inspection's opening and closing latest-block reads.
+    observations.push(...receipt.observations.filter(
+      (block) => block.blockNumber <= head.blockNumber,
+    ));
 
     if (receipt.status !== 'verified') {
       if (
@@ -287,8 +296,13 @@ export async function inspectSignerInclusions(
       });
 
       if (search.status === 'anchor-changed') {
-        return search;
+        return {
+          status: 'anchor-changed',
+          observedAnchor: search.observedAnchor,
+        };
       }
+
+      observations.push(...search.observations);
 
       if (search.status !== 'replacement-found') {
         continue;
@@ -308,18 +322,6 @@ export async function inspectSignerInclusions(
         },
       };
       verifiedIndices.add(index);
-    }
-  }
-
-  if (snapshot.attempts.length > 0) {
-    // Close every non-empty path after receipt, nonce, and replacement
-    // inspection. No updated queue or broadcast eligibility may escape
-    // when the selected head changed during the pass.
-    const closingHead = await checkBlockAnchor(publicClient, head, {
-      operation: 'signer-inclusions',
-    });
-    if (closingHead !== null) {
-      return closingHead;
     }
   }
 
@@ -356,6 +358,7 @@ export async function inspectSignerInclusions(
 
   return Object.freeze({
     status: 'inspected',
+    observations: Object.freeze(observations),
     observation: inspected.lastObservation,
     attempts: inspected.attempts,
     inclusionChecksComplete,

@@ -28,7 +28,7 @@ type ReceiptResolutionEvidence = Extract<
   { outcome: 'success' | 'reverted' }
 >;
 
-export type AttemptReceiptResult =
+type AttemptReceiptClassification =
   | {
       status: 'verified';
       evidence: ReceiptResolutionEvidence;
@@ -51,6 +51,17 @@ export type AttemptReceiptResult =
       inclusion: Readonly<BlockAnchor>;
       canonicalBlock: Readonly<BlockAnchor>;
     };
+
+/**
+ * By-number receipt-verification reads in candidate order, including hashes
+ * that contradict a receipt and reads above the selected anchor. Enclosing
+ * anchor checks validate the interval and are not repeated in this list.
+ * Failed brackets expose an empty list. Recovery filters above-anchor reads
+ * before forwarding durable evidence; they remain useful for classification.
+ */
+export type AttemptReceiptResult = AttemptReceiptClassification & {
+  readonly observations: readonly Readonly<BlockAnchor>[];
+};
 
 export interface ReconcileAttemptReceiptOptions {
   publicClient: PublicClient;
@@ -94,11 +105,16 @@ export async function reconcileAttemptReceipt(
 
   const before = await checkBlockAnchor(publicClient, anchor);
   if (before !== null) {
-    return before;
+    return {
+      ...before,
+      observations: Object.freeze([]),
+    };
   }
 
-  let included: AttemptReceiptResult | undefined;
-  let fork: AttemptReceiptResult | undefined;
+  const observations: Readonly<BlockAnchor>[] = [];
+
+  let included: AttemptReceiptClassification | undefined;
+  let fork: AttemptReceiptClassification | undefined;
   let conflictingInclusions = false;
 
   for (const transactionHash of transactionHashes) {
@@ -106,6 +122,7 @@ export async function reconcileAttemptReceipt(
       publicClient,
       transactionHash,
       anchor,
+      observations,
     );
 
     switch (result.status) {
@@ -129,15 +146,21 @@ export async function reconcileAttemptReceipt(
 
   const after = await checkBlockAnchor(publicClient, anchor);
   if (after !== null) {
-    return after;
+    return {
+      ...after,
+      observations: Object.freeze([]),
+    };
   }
 
   if (conflictingInclusions) {
     throw new TypeError('Conflicting attempt receipt observations.');
   }
 
-  return included ?? fork ?? {
-    status: 'receipt-not-found',
+  const result = included ?? fork ?? { status: 'receipt-not-found' as const };
+
+  return {
+    ...result,
+    observations: Object.freeze(observations),
   };
 }
 
@@ -145,7 +168,8 @@ async function readReceipt(
   publicClient: PublicClient,
   transactionHash: Hash,
   anchor: Readonly<BlockAnchor>,
-): Promise<AttemptReceiptResult> {
+  observations: Readonly<BlockAnchor>[],
+): Promise<AttemptReceiptClassification> {
   let receipt;
 
   try {
@@ -187,6 +211,9 @@ async function readReceipt(
       inclusion.blockNumber,
     ),
   );
+
+  // Preserve the observed header even when it disproves the receipt's claim.
+  observations.push(canonicalBlock);
 
   if (!blockAnchorsMatch(inclusion, canonicalBlock)) {
     return {

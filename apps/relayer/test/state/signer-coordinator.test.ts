@@ -460,6 +460,7 @@ describe('signer coordinator transitions', () => {
     )).toBe(false);
 
     expect(await t.coordinator.recover(options, 4)).toEqual({
+      observations: [],
       status: 'no-attempt',
       observation: {
         anchor: {
@@ -886,6 +887,71 @@ describe('signer coordinator transitions', () => {
     expect(t.lines.join('')).not.toContain(KEY);
   });
 
+  it('retains signed-byte protection through deferred release logging', async () => {
+    const t = await setup({ brokenLog: true });
+    const blockedSince = t.coordinator.status.blockedSince;
+
+    expect(blockedSince).not.toBeNull();
+
+    t.lines.length = 0;
+
+    await t.coordinator.observeReconciliation(async () => {
+      await t.coordinator.recover(
+        receiptRecoveryOptions(t),
+        11,
+      );
+
+      expect(t.coordinator.attempts).toEqual([]);
+      expect(t.coordinator.status.open).toBe(false);
+
+      // Resolution reporting happens at commit, even inside observation.
+      expect(t.records()).toEqual([
+        expect.objectContaining({
+          event: 'logging_failed',
+          cycle: 11,
+          operation: { name: 'reconcile-attempt' },
+        }),
+      ]);
+
+      await checkEmptyInclusions(t.coordinator, 5, 22);
+
+      // The journal is empty and admission is open, but publication
+      // and signed-byte policy cleanup remain deferred.
+      expect(t.coordinator.status).toMatchObject({
+        open: true,
+        blockers: [],
+        blockedSince,
+      });
+      expect(t.records()).toHaveLength(1);
+    }, 33);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: true,
+      blockedSince: null,
+    });
+
+    // The fixture throws errors containing signed bytes from both
+    // attemptResolved and signerGateReleased. Their logging_failed
+    // summaries must use the protected policy, including at scope end.
+    expect(t.records()).toEqual([
+      expect.objectContaining({
+        event: 'logging_failed',
+        cycle: 11,
+        operation: { name: 'reconcile-attempt' },
+      }),
+      expect.objectContaining({
+        event: 'logging_failed',
+        cycle: 33,
+        operation: { name: 'reconcile-attempt' },
+      }),
+    ]);
+
+    const output = t.lines.join('');
+
+    expect(output).not.toContain(t.bytes);
+    expect(output).not.toContain(KEY);
+  });
+
   it('does not emit a release event before clean startup inclusion checks complete', async () => {
     const t = await setup({ empty: true });
 
@@ -903,6 +969,7 @@ describe('signer coordinator transitions', () => {
     expect(await t.coordinator.recover(
       receiptRecoveryOptions(t, 4),
     )).toEqual({
+      observations: [],
       status: 'no-attempt',
       observation: {
         anchor: t.evidence.anchor,
@@ -945,6 +1012,7 @@ describe('signer coordinator transitions', () => {
     expect(await t.coordinator.recover(
       receiptRecoveryOptions(t, 8),
     )).toEqual({
+      observations: [],
       status: 'no-attempt',
       observation: {
         anchor: t.evidence.anchor,
@@ -1748,6 +1816,7 @@ describe('durable signer observations', () => {
     vi.mocked(options.publicClient.getTransactionReceipt).mockClear();
 
     expect(await restarted.recover(options)).toEqual({
+      observations: [],
       status: 'no-attempt',
       observation: observation(8n),
     });
@@ -3143,6 +3212,207 @@ describe('signer inspection ownership', () => {
     inspection.finish();
 
     expect(t.coordinator.status.open).toBe(true);
+  });
+
+  it.each([
+    22,
+    undefined,
+  ])('attributes inspection release to the last supplied cycle: %s', async (
+    lastCycle,
+  ) => {
+    const t = await setup({ empty: true });
+    const options = receiptRecoveryOptions(t, 4);
+
+    t.lines.length = 0;
+
+    const inspection = t.coordinator.beginInspection();
+
+    await inspection.recover(options, 11);
+
+    await inspection.checkInclusions({
+      publicClient: options.publicClient,
+      head: options.anchor,
+    }, lastCycle);
+
+    // Successful operations do not release the enclosing inspection.
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      blockers: [],
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
+
+    expect(t.records().filter((record) =>
+      record.event === 'signer_gate_released',
+    )).toEqual([]);
+
+    inspection.finish();
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    const releases = t.records().filter((record) =>
+      record.event === 'signer_gate_released',
+    );
+
+    expect(releases).toHaveLength(1);
+    expect(releases[0]).toMatchObject({
+      operation: { name: 'reconcile-attempt' },
+    });
+
+    if (lastCycle === undefined) {
+      expect(releases[0]).not.toHaveProperty('cycle');
+    } else {
+      expect(releases[0].cycle).toBe(lastCycle);
+    }
+  });
+
+  it.each([
+    22,
+    undefined,
+  ])('attributes abandonment to queued work before execution: %s', async (
+    queuedCycle,
+  ) => {
+    const t = await setup({ empty: true });
+    const options = receiptRecoveryOptions(t, 4);
+    const inspection = t.coordinator.beginInspection();
+
+    await inspection.recover(options, 11);
+
+    await inspection.checkInclusions({
+      publicClient: options.publicClient,
+      head: options.anchor,
+    }, 11);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      blockers: [],
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+    });
+
+    t.lines.length = 0;
+    t.save.mockClear();
+
+    vi.mocked(options.publicClient.getBlock).mockClear();
+    vi.mocked(options.publicClient.getTransactionCount).mockClear();
+    vi.mocked(options.publicClient.getTransactionReceipt).mockClear();
+
+    const operation = inspection.recover(options, queuedCycle);
+    const rejected = expect(operation).rejects.toThrow(
+      'Signer inspection is being abandoned.',
+    );
+
+    // Do not await: abandonment must precede the deferred operation body.
+    const abandonment = inspection.abandon();
+
+    await Promise.all([rejected, abandonment]);
+
+    expect(options.publicClient.getBlock).not.toHaveBeenCalled();
+    expect(options.publicClient.getTransactionCount).not.toHaveBeenCalled();
+    expect(options.publicClient.getTransactionReceipt).not.toHaveBeenCalled();
+    expect(t.save).not.toHaveBeenCalled();
+
+    expect(t.coordinator.status).toMatchObject({
+      open: false,
+      recoveryComplete: true,
+      inclusionChecksComplete: false,
+      persistenceState: 'idle',
+    });
+    expect(t.coordinator.canBroadcast).toBe(false);
+
+    const blocked = t.records().filter((record) =>
+      record.event === 'signer_blocked',
+    );
+
+    expect(blocked).toHaveLength(1);
+
+    const blockedSince = t.coordinator.status.blockedSince;
+
+    expect(blockedSince).not.toBeNull();
+    expect(blocked[0].blockedSince).toBe(blockedSince);
+
+    expect(blocked[0]).toMatchObject({
+      reason: 'recovery-incomplete',
+      blockers: ['recovery-incomplete'],
+      operation: { name: 'reconcile-attempt' },
+    });
+
+    if (queuedCycle === undefined) {
+      expect(blocked[0]).not.toHaveProperty('cycle');
+    } else {
+      expect(blocked[0].cycle).toBe(queuedCycle);
+    }
+
+    expect(t.records().filter((record) =>
+      record.event === 'signer_gate_released',
+    )).toEqual([]);
+  });
+
+  it.each([
+    33,
+    undefined,
+  ])('defers inspection release to the enclosing reconciliation cycle: %s', async (
+    observationCycle,
+  ) => {
+    const t = await setup({ empty: true });
+    const options = receiptRecoveryOptions(t, 4);
+    const blockedSince = t.coordinator.status.blockedSince;
+
+    expect(blockedSince).not.toBeNull();
+
+    t.lines.length = 0;
+
+    await t.coordinator.observeReconciliation(async () => {
+      const inspection = t.coordinator.beginInspection();
+
+      await inspection.recover(options, 11);
+
+      await inspection.checkInclusions({
+        publicClient: options.publicClient,
+        head: options.anchor,
+      }, 22);
+
+      // Ownership still prevents admission after both operations finish.
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        blockers: [],
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+      });
+      expect(t.records()).toEqual([]);
+
+      inspection.finish();
+
+      // Observation batches diagnostics; it does not retain ownership.
+      // The gate is open, but its release has not been published.
+      expect(t.coordinator.status).toMatchObject({
+        open: true,
+        blockers: [],
+        blockedSince,
+      });
+      expect(t.records()).toEqual([]);
+    }, observationCycle);
+
+    expect(t.coordinator.status).toMatchObject({
+      open: true,
+      blockers: [],
+      blockedSince: null,
+    });
+
+    const records = t.records();
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      event: 'signer_gate_released',
+      operation: { name: 'reconcile-attempt' },
+      blockedSince,
+    });
+
+    if (observationCycle === undefined) {
+      expect(records[0]).not.toHaveProperty('cycle');
+    } else {
+      expect(records[0].cycle).toBe(observationCycle);
+    }
   });
 });
 

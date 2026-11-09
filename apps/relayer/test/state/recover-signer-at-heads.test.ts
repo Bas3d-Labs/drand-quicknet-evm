@@ -45,6 +45,7 @@ function setup() {
 
   const result: SignerRecoveryCycleResult = {
     inspection: {
+      observations: [],
       status: 'no-attempt',
       observation: {
         anchor,

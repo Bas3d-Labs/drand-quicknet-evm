@@ -26,6 +26,7 @@ import type {
   SignerCoordinator,
   BroadcastAttemptResult,
   RecoverSignerOptions,
+  OpenSignerInspectionOptions,
   SignerRecoveryResult,
 } from './signer-coordinator.js';
 
@@ -162,7 +163,20 @@ export class SignerRecoveryCycle {
           this.coordinator.durableRecoveryRevision &&
         !durableSchedule.isDue(recovery.anchor);
 
-      const owner = this.coordinator.beginInspection();
+      // Reusing a completed durable pass and running without a selected latest
+      // head retain their separate routes. A fresh pass checks the selected
+      // latest block under inspection ownership before any durable RPC begins.
+      let opening: OpenSignerInspectionOptions | undefined;
+
+      if (!canReuseDurablePass && head !== undefined) {
+        opening = {
+          publicClient: recovery.publicClient,
+          head,
+          durableAnchor: recovery.anchor,
+        };
+      }
+
+      const owner = this.coordinator.beginInspection(opening);
 
       let inspection: SignerRecoveryCycleResult['inspection'];
       let inclusions: SignerInclusionInspection | null = null;
@@ -254,7 +268,14 @@ export class SignerRecoveryCycle {
         // the pass and clears any action authorization it produced.
         signal?.throwIfAborted();
 
-        owner.finish();
+        if (
+          (head !== undefined && inclusions === null) ||
+          (inclusions !== null && inclusions.status !== 'inspected')
+        ) {
+          await owner.abandon();
+        } else {
+          owner.finish();
+        }
       } catch (error) {
         // Abandonment preserves acknowledged commits and pending writes.
         // The next run retries failed persistence before beginning again.

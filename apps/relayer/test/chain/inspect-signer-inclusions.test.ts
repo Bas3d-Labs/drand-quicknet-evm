@@ -531,29 +531,6 @@ describe('signer inclusion inspection', () => {
     expect(t.getTransactionReceipt).not.toHaveBeenCalled();
   });
 
-  it('preserves the opening anchor check before inspecting retained attempts', async () => {
-    const t = await setup();
-
-    t.getBlock.mockResolvedValueOnce({
-      number: 130n,
-      hash: FORK,
-      parentHash: hashAt(129n),
-      transactions: [],
-    });
-
-    expect(await t.run()).toEqual({
-      status: 'anchor-changed',
-      observedAnchor: {
-        blockNumber: 130n,
-        blockHash: FORK,
-      },
-    });
-
-    expect(t.getBlock).toHaveBeenCalledOnce();
-    expect(t.getTransactionReceipt).not.toHaveBeenCalled();
-    expect(t.getTransactionCount).not.toHaveBeenCalled();
-  });
-
   it('discovers an external replacement without advancing durable search progress', async () => {
     const t = await setup();
     const first = t.snapshot.attempts[0]!;
@@ -708,73 +685,6 @@ describe('signer inclusion inspection', () => {
     ).toEqual([106n, 107n]);
 
     expect(replacementSearch.searchedThrough).toEqual(anchorAt(105n));
-  });
-
-  it('discards replacement discovery when the final pass head check changes', async () => {
-    const t = await setup();
-    const first = t.snapshot.attempts[0]!;
-    const ownHash = first.signedTransactions[0].transactionHash;
-
-    t.getTransactionReceipt.mockRejectedValueOnce(
-      new TransactionReceiptNotFoundError({ hash: ownHash }),
-    );
-
-    t.transactions.set(101n, [{
-      hash: FORK,
-      from: ACCOUNT.address,
-      nonce: 4,
-    }]);
-
-    const read = t.getBlock.getMockImplementation()!;
-    let scanned = false;
-    let headChecksAfterScan = 0;
-
-    t.getBlock.mockImplementation(async (request) => {
-      const block = await read(request);
-
-      if (request.includeTransactions) {
-        scanned = true;
-      } else if (scanned && request.blockNumber === 130n) {
-        headChecksAfterScan += 1;
-
-        // The search's own closing check succeeds. The enclosing
-        // inclusion pass must still perform its final head check.
-        if (headChecksAfterScan === 2) {
-          return {
-            ...block,
-            hash: FORK,
-          };
-        }
-      }
-
-      return block;
-    });
-
-    const input: TransactionJournalSnapshot = {
-      ...t.snapshot,
-      attempts: [{
-        ...first,
-        phase: 'broadcast-may-have-occurred',
-        inclusion: null,
-        replacementSearch: {
-          lowerBound: t.snapshot.baseline,
-          searchedThrough: null,
-        },
-      }, t.snapshot.attempts[1]!],
-    };
-
-    expect(await t.run(input, 2n)).toEqual({
-      status: 'anchor-changed',
-      observedAnchor: {
-        blockNumber: 130n,
-        blockHash: FORK,
-      },
-    });
-
-    expect(headChecksAfterScan).toBe(2);
-    expect(input.attempts[0]!.phase)
-      .toBe('broadcast-may-have-occurred');
-    expect(input.attempts[0]!.inclusion).toBeNull();
   });
 
   it('identifies only the oldest unresolved attempt for rebroadcast at an unconsumed nonce', async () => {
@@ -1082,103 +992,7 @@ describe('signer inclusion inspection', () => {
     expect(input.durableNextNonce).toBe(4n);
   });
 
-  it.each([
-    { population: 'included', failure: 'changed' },
-    { population: 'included', failure: 'rpc-error' },
-    { population: 'unresolved', failure: 'changed' },
-    { population: 'unresolved', failure: 'rpc-error' },
-  ] as const)(
-    'discards $population inspection when the closing pass check reports $failure without replacement searching',
-    async ({ population, failure }) => {
-      const t = await setup();
-      const error = new Error('Closing head read failed.');
-      const readBlock = t.getBlock.getMockImplementation()!;
-
-      let input = t.snapshot;
-      let nonce = 6;
-
-      if (population === 'unresolved') {
-        input = {
-          ...t.snapshot,
-          attempts: t.snapshot.attempts.map((attempt) => ({
-            ...attempt,
-            phase: 'broadcast-may-have-occurred',
-            inclusion: null,
-          })),
-        };
-
-        nonce = 4;
-
-        t.getTransactionReceipt.mockImplementation(async ({ hash }) => {
-          throw new TransactionReceiptNotFoundError({ hash });
-        });
-      }
-
-      const before = structuredClone(input);
-      let nonceRead = false;
-      let headChecksAfterNonce = 0;
-
-      t.getTransactionCount.mockImplementation(async () => {
-        nonceRead = true;
-        return nonce;
-      });
-
-      t.getBlock.mockImplementation(async (request) => {
-        const block = await readBlock(request);
-
-        if (nonceRead && request.blockNumber === 130n) {
-          headChecksAfterNonce += 1;
-
-          // readAnchoredNonce's own closing check succeeds.
-          // Fail only the enclosing inclusion pass's closing check.
-          if (headChecksAfterNonce === 2) {
-            if (failure === 'rpc-error') {
-              throw error;
-            }
-
-            return {
-              ...block,
-              hash: FORK,
-            };
-          }
-        }
-
-        return block;
-      });
-
-      // Omit the replacement-search budget: neither case may rely on
-      // replacement searching to trigger the enclosing closing check.
-      const inspection = t.run(input);
-
-      if (failure === 'rpc-error') {
-        await expect(inspection).rejects.toBe(error);
-      } else {
-        expect(await inspection).toEqual({
-          status: 'anchor-changed',
-          observedAnchor: {
-            blockNumber: 130n,
-            blockHash: FORK,
-          },
-        });
-      }
-
-      expect(headChecksAfterNonce).toBe(2);
-      expect(t.getTransactionCount).toHaveBeenCalledOnce();
-      expect(t.getTransactionReceipt).toHaveBeenCalledTimes(2);
-
-      expect(
-        t.getBlock.mock.calls.filter(
-          ([request]) => request.includeTransactions,
-        ),
-      ).toEqual([]);
-
-      // Neither refreshed inclusions nor prospective rebroadcast
-      // eligibility may be returned as a partial successful result.
-      expect(input).toEqual(before);
-    },
-  );
-
-  it('uses 37 RPC calls to inspect 16 retained inclusions before block deduplication', async () => {
+  it('uses 35 RPC calls to inspect 16 retained inclusions before block deduplication', async () => {
     const t = await setup();
     const attempts: JournalAttempt[] = [];
 
@@ -1273,20 +1087,13 @@ describe('signer inclusion inspection', () => {
       ([request]) => request.blockNumber === 110n,
     );
 
-    // Previous full-pass baseline: 69 calls.
-    //
-    // Hoisting removes 32 per-attempt head checks:
-    //   2 enclosing pass head checks
-    //   + 16 independent inclusion-block reads
-    //   + 16 independent receipt reads
-    //   + 3 anchored nonce calls
-    //   = 37 calls.
-    //
-    // Deduplicating the shared inclusion block will reduce this to:
-    //   (2 + 1 + 16) + 3 = 22 calls.
-    expect(headReads).toHaveLength(4);
+    // The owner supplies the latest-block checks before and after inspection.
+    // The inspector retains 16 inclusion reads, 16 receipts, and 3 nonce-reader
+    // calls (block check, signer nonce, block check): 35 calls.
+    // Block deduplication remains a separate optimization.
+    expect(headReads).toHaveLength(2);
     expect(inclusionReads).toHaveLength(16);
-    expect(t.getBlock).toHaveBeenCalledTimes(20);
+    expect(t.getBlock).toHaveBeenCalledTimes(18);
     expect(t.getTransactionReceipt).toHaveBeenCalledTimes(16);
 
     expect(t.getTransactionCount).toHaveBeenCalledExactlyOnceWith({
@@ -1298,7 +1105,7 @@ describe('signer inclusion inspection', () => {
       t.getBlock.mock.calls.length
       + t.getTransactionReceipt.mock.calls.length
       + t.getTransactionCount.mock.calls.length,
-    ).toBe(37);
+    ).toBe(35);
 
     expect(t.getTransactionReceipt.mock.calls.map(
       ([request]) => request.hash,
@@ -1333,8 +1140,8 @@ describe('signer inclusion inspection', () => {
 
     const standaloneTrace = rpcTrace();
 
-    expect(standaloneTrace).toHaveLength(37);
-    expect(standaloneTrace[0]).toBe('block:130');
+    expect(standaloneTrace).toHaveLength(35);
+    expect(standaloneTrace[0]).toBe('block:110');
     expect(standaloneTrace.at(-1)).toBe('block:130');
   });
 
@@ -1449,5 +1256,106 @@ describe('signer inclusion inspection', () => {
 
     expect(publicClient.getTransactionReceipt).not.toHaveBeenCalled();
     expect(snapshot).toEqual(before);
+  });
+});
+describe('latest inspection block observations', () => {
+  it.each(['included', 'broadcast-may-have-occurred'] as const)(
+    'forwards the by-number headers from %s attempts',
+    async (phase) => {
+      const t = await setup();
+      const input: TransactionJournalSnapshot = {
+        ...t.snapshot,
+        attempts: t.snapshot.attempts.map((attempt) => {
+          if (phase === 'included') {
+            return attempt;
+          }
+
+          return {
+            ...attempt,
+            phase,
+            inclusion: null,
+          };
+        }),
+      };
+
+      const result = await t.run(input);
+
+      expect(result).toMatchObject({
+        status: 'inspected',
+        observations: [anchorAt(110n), anchorAt(111n)],
+      });
+
+      if (result.status !== 'inspected') {
+        throw new Error('Expected inspected result.');
+      }
+
+      expect(Object.isFrozen(result.observations)).toBe(true);
+    },
+  );
+
+  it('forwards replacement-search headers after the receipt and recheck reads', async () => {
+    const t = await setup();
+    const first = t.snapshot.attempts[0]!;
+    const input: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: [{
+        ...first,
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+        replacementSearch: {
+          lowerBound: t.snapshot.baseline,
+          searchedThrough: null,
+        },
+      }, t.snapshot.attempts[1]!],
+    };
+
+    t.getTransactionReceipt.mockRejectedValueOnce(
+      new TransactionReceiptNotFoundError({
+        hash: first.signedTransactions[0].transactionHash,
+      }),
+    );
+    t.transactions.set(101n, [{
+      hash: FORK,
+      from: ACCOUNT.address,
+      nonce: 4,
+    }]);
+
+    expect(await t.run(input, 2n)).toMatchObject({
+      status: 'inspected',
+      observations: [anchorAt(111n), anchorAt(100n), anchorAt(101n)],
+    });
+  });
+});
+
+describe('latest observation height limit', () => {
+  it('excludes above-head receipt headers from latest evidence', async () => {
+    const t = await setup();
+    const first = t.snapshot.attempts[0]!;
+    const input: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      nextNonce: 5n,
+      lastObservation: t.snapshot.baseline,
+      attempts: [{
+        ...first,
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+      }],
+    };
+
+    t.getTransactionReceipt.mockResolvedValue({
+      transactionHash: first.signedTransactions[0].transactionHash,
+      blockNumber: 131n,
+      blockHash: hashAt(131n),
+      status: 'success',
+    });
+    t.getTransactionCount.mockResolvedValue(4);
+
+    expect(await t.run(input)).toMatchObject({
+      status: 'inspected',
+      observations: [],
+      inclusionChecksComplete: false,
+      broadcastAttemptId: null,
+    });
+    expect(t.getBlock).toHaveBeenCalledWith({ blockNumber: 131n });
   });
 });

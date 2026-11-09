@@ -194,6 +194,7 @@ async function setup(options: {
     const recovery = recoveryOptions();
 
     await expect(coordinator.recover(recovery)).resolves.toEqual({
+      observations: [],
       status: 'no-attempt',
       observation: OBSERVATION,
     });
