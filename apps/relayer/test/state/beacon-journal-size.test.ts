@@ -230,6 +230,10 @@ describe('beacon journal size', () => {
               nonce,
             },
             searchedThrough: anchor(MAX_UINT256 - 2n),
+            exhausted: {
+              anchor: anchor(MAX_UINT256 - 2n),
+              nonce: MAX_UINT256,
+            },
           },
           inclusion: {
             // Replacement evidence is wider than success/revert

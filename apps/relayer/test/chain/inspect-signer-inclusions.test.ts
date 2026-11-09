@@ -339,6 +339,47 @@ describe('signer inclusion inspection', () => {
     },
   );
 
+  it('preserves exhaustion when latest evidence resets the search cursor', async () => {
+    const t = await setup();
+    const read = t.getBlock.getMockImplementation()!;
+    const exhausted = { anchor: anchorAt(108n), nonce: 6n };
+    const search = {
+      lowerBound: t.snapshot.baseline,
+      searchedThrough: anchorAt(105n),
+      exhausted,
+    };
+    const input: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: [{
+        ...t.snapshot.attempts[0]!,
+        replacementSearch: search,
+      }, t.snapshot.attempts[1]!],
+    };
+
+    t.getBlock.mockImplementation(async (request) => {
+      const block = await read(request);
+      if (request.blockNumber === 110n) {
+        return { ...block, hash: FORK };
+      }
+      return block;
+    });
+
+    const result = await t.run(input);
+    if (result.status !== 'inspected') {
+      throw new Error('Expected inspected result.');
+    }
+
+    expect(result.attempts[0]!.phase).toBe('broadcast-may-have-occurred');
+    expect(result.attempts[0]!.inclusion).toBeNull();
+    expect(result.attempts[0]!.replacementSearch).toEqual({
+      ...search,
+      searchedThrough: null,
+    });
+    expect(input.attempts[0]!.replacementSearch).toEqual(search);
+    expect(input.attempts[0]!.replacementSearch!.searchedThrough)
+      .toEqual(anchorAt(105n));
+  });
+
   it('preserves an included record when its receipt is unavailable', async () => {
     const t = await setup();
 
@@ -553,6 +594,7 @@ describe('signer inclusion inspection', () => {
         phase: 'broadcast-may-have-occurred',
         inclusion: null,
         replacementSearch: {
+          exhausted: null,
           lowerBound: t.snapshot.baseline,
           searchedThrough: null,
         },
@@ -576,6 +618,7 @@ describe('signer inclusion inspection', () => {
           observedAt: anchorAt(130n),
         },
         replacementSearch: {
+          exhausted: null,
           lowerBound: t.snapshot.baseline,
           searchedThrough: null,
         },
@@ -613,6 +656,7 @@ describe('signer inclusion inspection', () => {
         phase: 'broadcast-may-have-occurred',
         inclusion: null,
         replacementSearch: {
+          exhausted: null,
           lowerBound: t.snapshot.baseline,
           searchedThrough: null,
         },
@@ -652,6 +696,7 @@ describe('signer inclusion inspection', () => {
     );
 
     const replacementSearch = {
+      exhausted: null,
       lowerBound: t.snapshot.baseline,
       searchedThrough: anchorAt(105n),
     };
@@ -797,6 +842,7 @@ describe('signer inclusion inspection', () => {
             phase: 'broadcast-may-have-occurred',
             inclusion: null,
             replacementSearch: {
+              exhausted: null,
               lowerBound: t.snapshot.baseline,
               searchedThrough: null,
             },
@@ -891,6 +937,7 @@ describe('signer inclusion inspection', () => {
         phase: 'broadcast-may-have-occurred',
         inclusion: null,
         replacementSearch: {
+          exhausted: null,
           lowerBound: t.snapshot.baseline,
           searchedThrough: null,
         },
@@ -940,6 +987,7 @@ describe('signer inclusion inspection', () => {
             observedAt: anchorAt(130n),
           },
           replacementSearch: {
+            exhausted: null,
             lowerBound: t.snapshot.baseline,
             searchedThrough: null,
           },
@@ -950,6 +998,7 @@ describe('signer inclusion inspection', () => {
           phase: 'broadcast-may-have-occurred',
           inclusion: null,
           replacementSearch: {
+            exhausted: null,
             lowerBound: t.snapshot.baseline,
             searchedThrough: null,
           },
@@ -1303,6 +1352,7 @@ describe('latest inspection block observations', () => {
         phase: 'broadcast-may-have-occurred',
         inclusion: null,
         replacementSearch: {
+          exhausted: null,
           lowerBound: t.snapshot.baseline,
           searchedThrough: null,
         },

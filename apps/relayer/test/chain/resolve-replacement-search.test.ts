@@ -27,6 +27,7 @@ describe('resolveReplacementSearch', () => {
     'preserves existing progress when the last observed nonce is %s',
     (nonce) => {
       const existing: ReplacementSearch = {
+        exhausted: null,
         lowerBound: OBSERVATION,
         searchedThrough: OBSERVATION.anchor,
       };
@@ -64,6 +65,7 @@ describe('resolveReplacementSearch', () => {
       const result = resolveReplacementSearch(attempt, observation);
 
       expect(result).toEqual({
+        exhausted: null,
         lowerBound: observation,
         searchedThrough: null,
       });

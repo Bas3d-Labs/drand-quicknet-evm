@@ -109,6 +109,7 @@ async function retainedSnapshot(): Promise<TransactionJournalSnapshot> {
         observedAt: anchorAt(105n),
       },
       replacementSearch: {
+        exhausted: null,
         lowerBound: snapshot.baseline,
         searchedThrough: null,
       },
@@ -155,6 +156,7 @@ describe('attempt preparation planning', () => {
         phase: 'signed',
         inclusion: null,
         replacementSearch: {
+          exhausted: null,
           lowerBound: snapshot.lastObservation,
           searchedThrough: null,
         },
@@ -194,6 +196,7 @@ describe('attempt preparation planning', () => {
       phase: 'signed',
       inclusion: null,
       replacementSearch: {
+        exhausted: null,
         lowerBound: snapshot.lastObservation,
         searchedThrough: null,
       },

@@ -84,6 +84,7 @@ describe('coordinator replacement inclusions', () => {
           phase: 'broadcast-may-have-occurred',
           inclusion: null,
           replacementSearch: {
+            exhausted: null,
             lowerBound: baseline,
             searchedThrough: null,
           },
@@ -262,6 +263,7 @@ describe('coordinator replacement inclusions', () => {
             signedTransaction,
           }],
           replacementSearch: {
+            exhausted: null,
             lowerBound: baseline,
             searchedThrough: null,
           },

@@ -1193,6 +1193,7 @@ describe('durable signer observations', () => {
       attempts: [{
         attemptId: t.attempt.attemptId,
         replacementSearch: {
+          exhausted: null,
           lowerBound: observation(4n),
           searchedThrough: null,
         },
@@ -1223,6 +1224,7 @@ describe('durable signer observations', () => {
     const saved = t.save.mock.calls[0]![0];
 
     expect(saved.attempts[0]!.replacementSearch).toEqual({
+      exhausted: null,
       lowerBound: t.snapshot.lastObservation,
       searchedThrough: {
         blockNumber: 105n,
@@ -1249,6 +1251,7 @@ describe('durable signer observations', () => {
 
     expect(t.save.mock.calls[0]![0].attempts[0]!.replacementSearch)
       .toEqual({
+        exhausted: null,
         lowerBound: observation(4n),
         searchedThrough: null,
       });
@@ -1271,6 +1274,7 @@ describe('durable signer observations', () => {
     const saved = t.save.mock.calls[1]![0];
 
     expect(saved.attempts[0]!.replacementSearch).toEqual({
+      exhausted: null,
       lowerBound: observation(4n),
       searchedThrough: {
         blockNumber: 115n,
@@ -1870,6 +1874,7 @@ describe('durable signer observations', () => {
       attempts: [{
         attemptId: t.attempt.attemptId,
         replacementSearch: {
+          exhausted: null,
           lowerBound: t.snapshot.lastObservation,
           searchedThrough: {
             blockNumber: 105n,
@@ -2053,6 +2058,7 @@ describe('durable replacement search progress', () => {
       attempts: [{
         attemptId: t.attempt.attemptId,
         replacementSearch: {
+          exhausted: null,
           lowerBound: t.snapshot.lastObservation,
           searchedThrough: {
             blockNumber: 115n,
@@ -2096,6 +2102,7 @@ describe('durable replacement search progress', () => {
 
     expect(visible).toBe(pending);
     expect(pending.attempts[0]!.replacementSearch).toEqual({
+      exhausted: null,
       lowerBound: t.snapshot.lastObservation,
       searchedThrough: {
         blockNumber: 115n,
@@ -2315,6 +2322,7 @@ describe('durable replacement search progress', () => {
       attempts: [{
         attemptId: t.attempt.attemptId,
         replacementSearch: {
+          exhausted: null,
           lowerBound: snapshot.attempts[0]!.replacementSearch!.lowerBound,
           searchedThrough: {
             blockNumber: 106n,
@@ -2421,6 +2429,7 @@ describe('durable replacement search progress', () => {
       attempts: [{
         attemptId: t.attempt.attemptId,
         replacementSearch: {
+          exhausted: null,
           lowerBound: saved.attempts[0]!.replacementSearch!.lowerBound,
           searchedThrough: {
             blockNumber: 106n,
@@ -2488,6 +2497,7 @@ describe('durable replacement search progress', () => {
       attempts: [{
         attemptId: t.attempt.attemptId,
         replacementSearch: {
+          exhausted: null,
           lowerBound: t.snapshot.lastObservation,
           searchedThrough: {
             blockNumber: 115n,

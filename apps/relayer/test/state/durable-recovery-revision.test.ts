@@ -66,6 +66,7 @@ function snapshot(): TransactionJournalSnapshot {
         observedAt: anchor(110n),
       },
       replacementSearch: {
+        exhausted: null,
         lowerBound: baseline,
         searchedThrough: null,
       },

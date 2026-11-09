@@ -497,6 +497,7 @@ describe('signer recovery inspection', () => {
         attempts: [{
           ...attempt,
           replacementSearch: {
+            exhausted: null,
             lowerBound: t.snapshot.baseline,
             searchedThrough: anchorAt(102n),
           },

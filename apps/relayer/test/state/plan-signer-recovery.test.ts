@@ -328,6 +328,7 @@ describe('signer recovery planning', () => {
         {
           ...snapshot.attempts[0],
           replacementSearch: {
+            exhausted: null,
             lowerBound: snapshot.lastObservation,
             searchedThrough: anchorAt(through),
           },

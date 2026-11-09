@@ -52,6 +52,7 @@ export function planAttemptPreparation(
     replacementSearch: {
       lowerBound: snapshot.lastObservation,
       searchedThrough: null,
+      exhausted: null,
     },
   };
 

@@ -175,6 +175,7 @@ async function searchSetup(firstIncluded = false) {
         phase: 'broadcast-may-have-occurred',
         inclusion: null,
         replacementSearch: {
+          exhausted: null,
           lowerBound: BASELINE,
           searchedThrough: null,
         },
@@ -593,6 +594,7 @@ describe('signer coordinator startup', () => {
       const searched = {
         ...first,
         replacementSearch: {
+          exhausted: null,
           lowerBound: BASELINE,
           searchedThrough: OBSERVED_AT,
         },
@@ -773,6 +775,7 @@ describe('signer coordinator startup', () => {
     expect(saved.attempts).toHaveLength(2);
 
     expect(saved.attempts[0]!.replacementSearch).toEqual({
+      exhausted: null,
       lowerBound: observation,
       searchedThrough: null,
     });
@@ -820,6 +823,7 @@ describe('signer coordinator startup', () => {
     const saved = t.save.mock.calls[0]![0];
 
     expect(saved.attempts[0]!.replacementSearch).toEqual({
+      exhausted: null,
       lowerBound: BASELINE,
       searchedThrough: {
         blockNumber: 101n,
@@ -836,6 +840,7 @@ describe('signer coordinator startup', () => {
     const snapshot = await queueSnapshot();
 
     const search = {
+      exhausted: null,
       lowerBound: BASELINE,
       searchedThrough: {
         blockNumber: 105n,
@@ -1114,6 +1119,7 @@ describe('signer coordinator startup', () => {
             ? {
                 ...attempt,
                 replacementSearch: {
+                  exhausted: null,
                   lowerBound: BASELINE,
                   searchedThrough: {
                     blockNumber: 105n,
@@ -1196,6 +1202,7 @@ describe('signer coordinator startup', () => {
     });
 
     expect(pending.attempts[0]!.replacementSearch).toEqual({
+      exhausted: null,
       lowerBound: BASELINE,
       searchedThrough: {
         blockNumber: 122n,
@@ -1277,6 +1284,7 @@ describe('signer coordinator startup', () => {
     expect(t.save).not.toHaveBeenCalled();
     expect(t.coordinator.attempts).toEqual(before);
     expect(saved.attempts[0]!.replacementSearch).toEqual({
+      exhausted: null,
       lowerBound: BASELINE,
       searchedThrough: {
         blockNumber: 105n,
@@ -1490,6 +1498,7 @@ describe('signer coordinator startup', () => {
             ? {
                 ...attempt,
                 replacementSearch: {
+                  exhausted: null,
                   lowerBound: BASELINE,
                   searchedThrough: null,
                 },
@@ -1843,6 +1852,7 @@ describe('signer coordinator startup', () => {
       expect(saved.attempts[1]).toEqual(t.snapshot.attempts[1]);
 
       expect(saved.attempts[0]!.replacementSearch).toEqual({
+        exhausted: null,
         lowerBound: BASELINE,
         searchedThrough: t.progress.result.searchedThrough,
       });
@@ -2359,6 +2369,7 @@ describe('signer coordinator startup', () => {
           signedTransaction: t.signed.signedTransaction,
         }],
         replacementSearch: {
+          exhausted: null,
           lowerBound: t.snapshot.lastObservation,
           searchedThrough: null,
         },

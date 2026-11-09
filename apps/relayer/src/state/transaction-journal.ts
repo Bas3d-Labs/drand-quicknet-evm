@@ -55,6 +55,13 @@ export interface ReplacementSearch {
    * canonical chain before skipping previously searched blocks.
    */
   readonly searchedThrough: Readonly<BlockAnchor> | null;
+
+  /**
+   * Durable anchor and nonce where a complete search found no consuming
+   * transaction. Independent of later observations and cursor changes.
+   * Omitted in older version-1 encodings; decoding normalizes it to null.
+   */
+  readonly exhausted: AnchoredNonceObservation | null;
 }
 
 export interface JournalSignedTransaction {

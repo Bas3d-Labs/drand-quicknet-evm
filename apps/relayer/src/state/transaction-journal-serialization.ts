@@ -216,9 +216,16 @@ function decodeSearch(input: unknown) {
     searchedThrough = decodeAnchor(value.searchedThrough);
   }
 
+  let exhausted: ReturnType<typeof decodeObservation> | null = null;
+
+  if (value.exhausted !== undefined && value.exhausted !== null) {
+    exhausted = decodeObservation(value.exhausted);
+  }
+
   return {
     lowerBound: decodeObservation(value.lowerBound),
     searchedThrough,
+    exhausted,
   };
 }
 

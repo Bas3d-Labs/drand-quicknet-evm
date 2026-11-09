@@ -65,6 +65,7 @@ function setup() {
         transactionHash: HASH,
       }],
       replacementSearch: {
+        exhausted: null,
         lowerBound: {
           anchor: anchorAt(100n),
           nonce: 4n,
@@ -178,6 +179,7 @@ describe('bounded replacement search', () => {
     fixture.options.attempt = {
       ...fixture.options.attempt,
       replacementSearch: {
+        exhausted: null,
         lowerBound: {
           anchor: anchorAt(100n),
           nonce: 4n,
@@ -238,6 +240,7 @@ describe('bounded replacement search', () => {
     fixture.options.attempt = {
       ...fixture.options.attempt,
       replacementSearch: {
+        exhausted: null,
         lowerBound: {
           anchor: anchorAt(100n),
           nonce: 4n,
@@ -282,6 +285,7 @@ describe('bounded replacement search', () => {
       fixture.options.attempt = {
         ...fixture.options.attempt,
         replacementSearch: {
+          exhausted: null,
           lowerBound: {
             anchor: anchorAt(100n),
             nonce: 4n,
@@ -363,6 +367,7 @@ describe('bounded replacement search', () => {
     fixture.options.attempt = {
       ...fixture.options.attempt,
       replacementSearch: {
+        exhausted: null,
         lowerBound: {
           anchor: anchorAt(100n),
           nonce: 4n,
@@ -506,6 +511,7 @@ describe('bounded replacement search', () => {
     fixture.options.attempt = {
       ...fixture.options.attempt,
       replacementSearch: {
+        exhausted: null,
         lowerBound: {
           anchor: anchorAt(100n),
           nonce: 5n,

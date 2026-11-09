@@ -175,6 +175,7 @@ export function planSignerRecovery(
         replacementSearch = {
           lowerBound,
           searchedThrough: null,
+          exhausted: null,
         };
       }
     }

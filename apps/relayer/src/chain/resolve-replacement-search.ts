@@ -16,6 +16,7 @@ export function resolveReplacementSearch(
     return {
       lowerBound: lastObservation,
       searchedThrough: null,
+      exhausted: null,
     };
   }
 
