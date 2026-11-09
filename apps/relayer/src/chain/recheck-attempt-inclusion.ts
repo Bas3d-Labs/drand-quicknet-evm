@@ -32,7 +32,7 @@ export interface RecheckAttemptInclusionOptions {
   readonly head: Readonly<BlockAnchor>;
 }
 
-export type InclusionRecheckResult =
+type InclusionRecheckClassification =
   | {
       status: 'verified-unchanged';
       observedAt: Readonly<BlockAnchor>;
@@ -52,6 +52,15 @@ export type InclusionRecheckResult =
       status: 'anchor-changed';
       observedAnchor: Readonly<BlockAnchor>;
     };
+
+/**
+ * The observed inclusion-block header, even when its receipt is unavailable
+ * or the header contradicts the saved inclusion. Within-pass observations
+ * remain provisional until the caller validates its enclosing latest head.
+ */
+export type InclusionRecheckResult = InclusionRecheckClassification & {
+  readonly observations: readonly Readonly<BlockAnchor>[];
+};
 
 /**
  * Rechecks a saved inclusion under an explicit observed head.
@@ -76,19 +85,26 @@ export async function recheckAttemptInclusion(
   if (head.blockNumber < saved.inclusion.blockNumber) {
     return {
       status: 'head-behind-inclusion',
+      observations: Object.freeze([]),
     };
   }
 
   const before = await checkBlockAnchor(publicClient, head);
   if (before !== null) {
-    return before;
+    return {
+      ...before,
+      observations: Object.freeze([]),
+    };
   }
 
   const result = await inspectInclusionEvidence(input);
 
   const after = await checkBlockAnchor(publicClient, head);
   if (after !== null) {
-    return after;
+    return {
+      ...after,
+      observations: Object.freeze([]),
+    };
   }
 
   return result;
@@ -143,6 +159,7 @@ async function inspectInclusionEvidence(
   if (head.blockNumber < saved.inclusion.blockNumber) {
     return {
       status: 'head-behind-inclusion',
+      observations: Object.freeze([]),
     }
   }
 
@@ -153,6 +170,7 @@ async function inspectInclusionEvidence(
   if (!blockAnchorsMatch(saved.inclusion, canonicalBlock)) {
     return {
       status: 'inclusion-block-changed',
+      observations: Object.freeze([canonicalBlock]),
       inclusion: saved.inclusion,
       canonicalBlock,
     };
@@ -177,6 +195,7 @@ async function inspectInclusionEvidence(
   if (receipt === undefined) {
     return {
       status: 'receipt-unavailable',
+      observations: Object.freeze([canonicalBlock]),
     };
   }
 
@@ -200,6 +219,7 @@ async function inspectInclusionEvidence(
 
   return {
     status: 'verified-unchanged',
+    observations: Object.freeze([canonicalBlock]),
     observedAt: head,
   };
 }

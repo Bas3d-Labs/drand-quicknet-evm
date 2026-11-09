@@ -1258,3 +1258,71 @@ describe('signer inclusion inspection', () => {
     expect(snapshot).toEqual(before);
   });
 });
+describe('latest inspection block observations', () => {
+  it.each(['included', 'broadcast-may-have-occurred'] as const)(
+    'forwards the by-number headers from %s attempts',
+    async (phase) => {
+      const t = await setup();
+      const input: TransactionJournalSnapshot = {
+        ...t.snapshot,
+        attempts: t.snapshot.attempts.map((attempt) => {
+          if (phase === 'included') {
+            return attempt;
+          }
+
+          return {
+            ...attempt,
+            phase,
+            inclusion: null,
+          };
+        }),
+      };
+
+      const result = await t.run(input);
+
+      expect(result).toMatchObject({
+        status: 'inspected',
+        observations: [anchorAt(110n), anchorAt(111n)],
+      });
+
+      if (result.status !== 'inspected') {
+        throw new Error('Expected inspected result.');
+      }
+
+      expect(Object.isFrozen(result.observations)).toBe(true);
+    },
+  );
+
+  it('forwards replacement-search headers after the receipt and recheck reads', async () => {
+    const t = await setup();
+    const first = t.snapshot.attempts[0]!;
+    const input: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: [{
+        ...first,
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+        replacementSearch: {
+          lowerBound: t.snapshot.baseline,
+          searchedThrough: null,
+        },
+      }, t.snapshot.attempts[1]!],
+    };
+
+    t.getTransactionReceipt.mockRejectedValueOnce(
+      new TransactionReceiptNotFoundError({
+        hash: first.signedTransactions[0].transactionHash,
+      }),
+    );
+    t.transactions.set(101n, [{
+      hash: FORK,
+      from: ACCOUNT.address,
+      nonce: 4,
+    }]);
+
+    expect(await t.run(input, 2n)).toMatchObject({
+      status: 'inspected',
+      observations: [anchorAt(111n), anchorAt(100n), anchorAt(101n)],
+    });
+  });
+});

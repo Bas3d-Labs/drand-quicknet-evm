@@ -90,6 +90,10 @@ describe('attempt receipt reconciliation', () => {
       const result = await fixture.run();
 
       expect(result).toEqual({
+        observations: [{
+          blockNumber: 109n,
+          blockHash: BLOCK_HASH,
+        }],
         status: 'verified',
         evidence: {
           outcome: status,
@@ -143,6 +147,10 @@ describe('attempt receipt reconciliation', () => {
     fixture.receipt.blockNumber = 111n;
 
     expect(await fixture.run()).toEqual({
+      observations: [{
+        blockNumber: 111n,
+        blockHash: BLOCK_HASH,
+      }],
       status: 'included-not-durable',
       transactionHash: HASH,
       outcome: 'success',
@@ -158,6 +166,10 @@ describe('attempt receipt reconciliation', () => {
     fixture.receipt.blockHash = FORK_HASH as typeof BLOCK_HASH;
 
     expect(await fixture.run()).toEqual({
+      observations: [{
+        blockNumber: 109n,
+        blockHash: BLOCK_HASH,
+      }],
       status: 'fork-served-receipt',
       inclusion: {
         blockNumber: 109n,
@@ -203,6 +215,7 @@ describe('attempt receipt reconciliation', () => {
       });
 
     expect(await fixture.run()).toEqual({
+      observations: [],
       status: 'anchor-changed',
       observedAnchor: {
         blockNumber: 110n,
@@ -221,6 +234,7 @@ describe('attempt receipt reconciliation', () => {
     );
 
     expect(await fixture.run()).toEqual({
+      observations: [],
       status: 'receipt-not-found',
     });
 
@@ -362,6 +376,7 @@ describe('attempt receipt reconciliation', () => {
       transactionHashes: [HASH, BUMP_HASH],
       anchor,
     })).toEqual({
+      observations: [],
       status: 'receipt-not-found',
     });
 
@@ -455,5 +470,37 @@ describe('attempt receipt reconciliation', () => {
 
     expect(fixture.getBlock).not.toHaveBeenCalled();
     expect(fixture.getTransactionReceipt).not.toHaveBeenCalled();
+  });
+});
+describe('receipt block observations', () => {
+  it('retains observed headers from every candidate, including a fork-served receipt', async () => {
+    const t = setup();
+
+    t.getTransactionReceipt
+      .mockResolvedValueOnce({ ...t.receipt, blockHash: FORK_HASH })
+      .mockResolvedValueOnce({
+        ...t.receipt,
+        transactionHash: BUMP_HASH,
+        blockNumber: 108n,
+      });
+
+    const result = await reconcileAttemptReceipt({
+      publicClient: t.publicClient,
+      transactionHashes: [HASH, BUMP_HASH],
+      anchor,
+    });
+
+    expect(result.status).toBe('verified');
+    expect(result.observations).toEqual([
+      { blockNumber: 109n, blockHash: BLOCK_HASH },
+      { blockNumber: 108n, blockHash: BLOCK_HASH },
+    ]);
+    expect(Object.isFrozen(result.observations)).toBe(true);
+
+    for (const observation of result.observations) {
+      expect(Object.isFrozen(observation)).toBe(true);
+    }
+
+    expect(t.getBlock.mock.calls.at(-1)).toEqual([{ blockNumber: 110n }]);
   });
 });

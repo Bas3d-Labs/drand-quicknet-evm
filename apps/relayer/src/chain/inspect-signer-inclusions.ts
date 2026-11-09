@@ -61,6 +61,7 @@ export type SignerInclusionInspection =
     }
   | {
       readonly status: 'inspected';
+      readonly observations: readonly Readonly<BlockAnchor>[];
       readonly observation: AnchoredNonceObservation;
       readonly attempts: readonly JournalAttempt[];
 
@@ -121,6 +122,7 @@ export async function inspectSignerInclusions(
     throw new TypeError('Invalid signer inclusion input.');
   }
 
+  const observations: Readonly<BlockAnchor>[] = [];
   const attempts: JournalAttempt[] = [];
   const verifiedNonces: bigint[] = [];
   const verifiedIndices = new Set<number>();
@@ -135,8 +137,13 @@ export async function inspectSignerInclusions(
       });
 
       if (result.status === 'anchor-changed') {
-        return result;
+        return {
+          status: 'anchor-changed',
+          observedAnchor: result.observedAnchor,
+        };
       }
+
+      observations.push(...result.observations);
 
       if (result.status === 'verified-unchanged') {
         attempts.push({
@@ -184,8 +191,13 @@ export async function inspectSignerInclusions(
     });
 
     if (receipt.status === 'anchor-changed') {
-      return receipt;
+      return {
+        status: 'anchor-changed',
+        observedAnchor: receipt.observedAnchor,
+      };
     }
+
+    observations.push(...receipt.observations);
 
     if (receipt.status !== 'verified') {
       if (
@@ -280,8 +292,13 @@ export async function inspectSignerInclusions(
       });
 
       if (search.status === 'anchor-changed') {
-        return search;
+        return {
+          status: 'anchor-changed',
+          observedAnchor: search.observedAnchor,
+        };
       }
+
+      observations.push(...search.observations);
 
       if (search.status !== 'replacement-found') {
         continue;
@@ -337,6 +354,7 @@ export async function inspectSignerInclusions(
 
   return Object.freeze({
     status: 'inspected',
+    observations: Object.freeze(observations),
     observation: inspected.lastObservation,
     attempts: inspected.attempts,
     inclusionChecksComplete,

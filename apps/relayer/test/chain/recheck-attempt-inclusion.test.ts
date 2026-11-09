@@ -98,6 +98,7 @@ describe('attempt inclusion recheck', () => {
         outcome,
         transactionHash: TRANSACTION,
       })).toEqual({
+        observations: [t.observation.inclusion],
         status: 'verified-unchanged',
         observedAt: t.head,
       });
@@ -119,6 +120,10 @@ describe('attempt inclusion recheck', () => {
       .mockResolvedValueOnce({ number: 110n, hash: FORK });
 
     expect(await t.run()).toEqual({
+      observations: [{
+        blockNumber: 110n,
+        blockHash: FORK,
+      }],
       status: 'inclusion-block-changed',
       inclusion: t.observation.inclusion,
       canonicalBlock: {
@@ -141,6 +146,7 @@ describe('attempt inclusion recheck', () => {
     );
 
     expect(await t.run()).toEqual({
+      observations: [t.observation.inclusion],
       status: 'receipt-unavailable',
     });
 
@@ -179,6 +185,7 @@ describe('attempt inclusion recheck', () => {
       .mockResolvedValueOnce({ number: 130n, hash: FORK });
 
     expect(await t.run()).toEqual({
+      observations: [],
       status: 'anchor-changed',
       observedAnchor: {
         blockNumber: 130n,
@@ -208,6 +215,7 @@ describe('attempt inclusion recheck', () => {
     t.head.blockNumber = 109n;
 
     expect(await t.run()).toEqual({
+      observations: [],
       status: 'head-behind-inclusion',
     });
 
@@ -233,6 +241,7 @@ describe('attempt inclusion recheck', () => {
       inclusion: t.observation.inclusion,
       observedAt: t.observation.observedAt,
     })).toEqual({
+      observations: [t.observation.inclusion],
       status: 'verified-unchanged',
       observedAt: t.head,
     });
@@ -259,6 +268,7 @@ describe('attempt inclusion recheck', () => {
     t.head.blockNumber = 999n;
 
     expect(await pending).toEqual({
+      observations: [t.observation.inclusion],
       status: 'verified-unchanged',
       observedAt: {
         blockNumber: 130n,

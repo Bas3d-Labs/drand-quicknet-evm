@@ -1270,6 +1270,7 @@ export class SignerCoordinator {
 
     return {
       status: 'no-attempt',
+      observations: Object.freeze([]),
       observation,
     };
   }

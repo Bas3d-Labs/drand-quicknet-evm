@@ -767,3 +767,92 @@ describe('signer recovery inspection', () => {
     ]);
   });
 });
+describe('durable inspection block observations', () => {
+  it('forwards receipt and replacement-search headers in read order', async () => {
+    const t = await setup();
+
+    // The receipt claims a different hash. Evidence must retain the hash
+    // actually read at that height, even though the receipt is unusable.
+    t.getTransactionReceipt.mockResolvedValueOnce({
+      transactionHash: t.hash,
+      blockNumber: 102n,
+      blockHash: OTHER,
+      status: 'success',
+    });
+    t.transactions.set(101n, [{
+      hash: OTHER,
+      from: ACCOUNT.address,
+      nonce: 4,
+    }]);
+
+    const result = await t.run();
+
+    expect(result).toMatchObject({
+      status: 'resolution-available',
+      observations: [anchorAt(102n), anchorAt(100n), anchorAt(101n)],
+      evidence: { outcome: 'replaced' },
+    });
+  });
+
+  it('keeps above-anchor receipt reads for classification but excludes them from durable evidence', async () => {
+    const t = await setup();
+
+    t.getTransactionReceipt.mockResolvedValueOnce({
+      transactionHash: t.hash,
+      blockNumber: 106n,
+      blockHash: hashAt(106n),
+      status: 'success',
+    });
+    t.getTransactionCount.mockResolvedValue(4);
+
+    expect(await t.run()).toMatchObject({
+      status: 'unresolved',
+      observations: [],
+      receipt: {
+        status: 'included-not-durable',
+        observations: [anchorAt(106n)],
+      },
+    });
+  });
+
+  it('forwards a fork-served header without requiring a journal write decision', async () => {
+    const t = await setup();
+
+    t.getTransactionReceipt.mockResolvedValueOnce({
+      transactionHash: t.hash,
+      blockNumber: 102n,
+      blockHash: OTHER,
+      status: 'success',
+    });
+    t.getTransactionCount.mockResolvedValue(4);
+
+    expect(await t.run()).toMatchObject({
+      status: 'unresolved',
+      observations: [anchorAt(102n)],
+      receipt: { status: 'fork-served-receipt' },
+      search: null,
+    });
+  });
+
+  it('discards receipt observations when the subsequent nonce bracket fails', async () => {
+    const t = await setup();
+    const read = t.getBlock.getMockImplementation()!;
+    let anchorReads = 0;
+
+    t.getBlock.mockImplementation(async (request) => {
+      const block = await read(request);
+
+      // Receipt opening/closing, then nonce opening/closing.
+      if (request.blockNumber === 105n && ++anchorReads === 4) {
+        return { ...block, hash: OTHER };
+      }
+
+      return block;
+    });
+
+    const result = await t.run();
+
+    expect(result.status).toBe('anchor-changed');
+    expect(result).not.toHaveProperty('observations');
+  });
+});

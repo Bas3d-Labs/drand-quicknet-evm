@@ -100,6 +100,7 @@ describe('bounded replacement search', () => {
     fixture.transactions.set(102n, [transaction()]);
 
     expect(await fixture.run()).toEqual({
+      observations: [anchorAt(100n), anchorAt(101n), anchorAt(102n)],
       status: 'replacement-found',
       evidence: {
         outcome: 'replaced',
@@ -125,6 +126,7 @@ describe('bounded replacement search', () => {
     ]);
 
     expect(await fixture.run()).toEqual({
+      observations: [anchorAt(100n), anchorAt(101n)],
       status: 'recorded-transaction-found',
       transactionHash: HASH,
       anchor: anchorAt(105n),
@@ -162,6 +164,7 @@ describe('bounded replacement search', () => {
     const first = await fixture.run();
 
     expect(first).toEqual({
+      observations: [anchorAt(100n), anchorAt(101n), anchorAt(102n)],
       status: 'not-found',
       searchedThrough: anchorAt(102n),
       scannedBlocks: 2n,
@@ -187,6 +190,7 @@ describe('bounded replacement search', () => {
 
     expect(await fixture.run()).toMatchObject({
       status: 'not-found',
+      observations: [anchorAt(100n), anchorAt(102n), anchorAt(103n), anchorAt(104n)],
       searchedThrough: anchorAt(104n),
       remainingBlocks: 1n,
     });
@@ -205,6 +209,14 @@ describe('bounded replacement search', () => {
     fixture.options.maxBlockRange = 100n;
 
     expect(await fixture.run()).toEqual({
+      observations: [
+        anchorAt(100n),
+        anchorAt(101n),
+        anchorAt(102n),
+        anchorAt(103n),
+        anchorAt(104n),
+        anchorAt(105n),
+      ],
       status: 'not-found',
       searchedThrough: anchorAt(105n),
       scannedBlocks: 5n,
@@ -252,6 +264,7 @@ describe('bounded replacement search', () => {
     };
 
     expect(await fixture.run()).toEqual({
+      observations: [],
       status: 'missing-lower-bound',
     });
 
@@ -329,6 +342,7 @@ describe('bounded replacement search', () => {
 
       expect(await fixture.run()).toMatchObject({
         status: 'anchor-changed',
+        observations: [],
       });
 
       if (stage === 'opening') {
@@ -357,6 +371,7 @@ describe('bounded replacement search', () => {
     };
 
     expect(await fixture.run()).toEqual({
+      observations: [],
       status: 'anchor-behind-search',
     });
 
@@ -566,6 +581,7 @@ describe('bounded replacement search', () => {
     });
 
     expect(await fixture.run()).toEqual({
+      observations: [],
       status: 'anchor-changed',
       observedAnchor: {
         blockNumber: 105n,
@@ -592,6 +608,7 @@ describe('bounded replacement search', () => {
       ]);
 
       expect(await fixture.run()).toEqual({
+        observations: [anchorAt(100n), anchorAt(101n)],
         status: 'recorded-transaction-found',
         transactionHash: hash,
         anchor: anchorAt(105n),
@@ -648,6 +665,7 @@ describe('bounded replacement search', () => {
     signedTransactions.length = 0;
 
     expect(await pending).toEqual({
+      observations: [anchorAt(100n), anchorAt(101n)],
       status: 'recorded-transaction-found',
       transactionHash: BUMP,
       anchor: anchorAt(105n),
