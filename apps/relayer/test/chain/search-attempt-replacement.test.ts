@@ -310,6 +310,7 @@ describe('bounded replacement search', () => {
 
       expect(await fixture.run()).toMatchObject({
         status: 'boundary-changed',
+        observations: [],
         boundary,
       });
 

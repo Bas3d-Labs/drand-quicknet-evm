@@ -197,7 +197,11 @@ export async function inspectSignerInclusions(
       };
     }
 
-    observations.push(...receipt.observations);
+    // Above-head reads classify receipts but are outside the canonical view
+    // checked by this inspection's opening and closing latest-block reads.
+    observations.push(...receipt.observations.filter(
+      (block) => block.blockNumber <= head.blockNumber,
+    ));
 
     if (receipt.status !== 'verified') {
       if (

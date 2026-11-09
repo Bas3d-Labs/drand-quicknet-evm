@@ -227,6 +227,9 @@ interface InspectionBracket {
   readonly head: Readonly<BlockAnchor>;
   readonly durableAnchor: Readonly<BlockAnchor> | undefined;
   durableNonce: bigint | undefined;
+
+  /** Observed hashes for this inspection only; never persisted or cached. */
+  durableObservations: ReadonlyMap<bigint, Hash>;
   phase:
     | 'opening'
     | 'durable'
@@ -905,6 +908,23 @@ export class SignerCoordinator {
           this.blockers.has('unattributed-signer-activity'),
       });
 
+      // Admit only after nonce validation and planning. A preservation-only
+      // skip still carries valid evidence, even though recovery stays incomplete.
+      if (
+        (
+          plan.kind === 'persist' ||
+          plan.reason === 'preserved-higher-observation'
+        ) &&
+        'observations' in result &&
+        !this.admitDurableBlockObservations(owner, result.observations)
+      ) {
+        this.failInspectionBracket(owner);
+        return {
+          status: 'inconsistent-observations',
+          observation: result.observation,
+        };
+      }
+
       if (plan.kind === 'unchanged') {
         this.failInspectionBracket(owner);
         return result;
@@ -1073,6 +1093,22 @@ export class SignerCoordinator {
         bracket.durableNonce !== undefined &&
         result.observation.nonce < bracket.durableNonce
       ) {
+        this.recoveryComplete = false;
+        this.failInspectionBracket(owner);
+        return {
+          status: 'inconsistent-observations',
+          observation: result.observation,
+        };
+      }
+
+      // Check repeated heights within the latest pass as well as overlaps with
+      // durable evidence. This runs after the closing check, before planning.
+      const latestEvidence = this.mergeBlockObservations(
+        bracket.durableObservations,
+        result.observations,
+      );
+
+      if (latestEvidence === null) {
         this.recoveryComplete = false;
         this.failInspectionBracket(owner);
         return {
@@ -1310,6 +1346,7 @@ export class SignerCoordinator {
         ? undefined
         : Object.freeze({ ...durable }),
       durableNonce: undefined,
+      durableObservations: new Map(),
       phase: 'opening',
     };
   }
@@ -1384,6 +1421,56 @@ export class SignerCoordinator {
       return false;
     }
 
+    return true;
+  }
+
+  /** Matching repeats are allowed. Different hashes at one height fail closed. */
+  private mergeBlockObservations(
+    previous: ReadonlyMap<bigint, Hash>,
+    observations: readonly Readonly<BlockAnchor>[],
+  ): ReadonlyMap<bigint, Hash> | null {
+    const merged = new Map(previous);
+
+    for (const observation of observations) {
+      const known = merged.get(observation.blockNumber);
+
+      if (
+        known !== undefined &&
+        known.toLowerCase() !== observation.blockHash.toLowerCase()
+      ) {
+        return null;
+      }
+
+      merged.set(observation.blockNumber, observation.blockHash);
+    }
+
+    return merged;
+  }
+
+  private admitDurableBlockObservations(
+    owner: InspectionOwner,
+    observations: readonly Readonly<BlockAnchor>[],
+  ): boolean {
+    const bracket = owner.bracket;
+
+    // Standalone durable recovery has no enclosing latest-block interval.
+    // Its observations must not seed a bracket opened later on this handle.
+    if (bracket === null) {
+      return true;
+    }
+
+    const merged = this.mergeBlockObservations(
+      bracket.durableObservations,
+      observations,
+    );
+
+    if (merged === null) {
+      return false;
+    }
+
+    // No rollback is needed if persistence fails: the failed bracket cannot
+    // continue, and abandonment discards this inspection's evidence entirely.
+    bracket.durableObservations = merged;
     return true;
   }
 
@@ -1470,6 +1557,10 @@ export class SignerCoordinator {
       );
     }
 
+    if (owner.bracket !== null) {
+      owner.bracket.durableObservations = new Map();
+    }
+
     this.inspectionOwner = null;
     this.refresh(owner.cycle);
   }
@@ -1510,6 +1601,11 @@ export class SignerCoordinator {
     this.assertInspectionOwner(owner);
 
     this.revokeActionAuthorization();
+
+    if (owner.bracket !== null) {
+      owner.bracket.durableObservations = new Map();
+    }
+
     this.inspectionOwner = null;
     this.refresh(owner.cycle);
   }

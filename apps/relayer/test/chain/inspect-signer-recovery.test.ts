@@ -233,6 +233,7 @@ describe('signer recovery inspection', () => {
       },
     })).toMatchObject({
       status: 'no-attempt',
+      observations: [],
       observation: {
         nonce: 5n,
       },

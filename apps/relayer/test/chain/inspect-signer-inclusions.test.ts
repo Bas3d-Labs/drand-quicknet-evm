@@ -1326,3 +1326,36 @@ describe('latest inspection block observations', () => {
     });
   });
 });
+
+describe('latest observation height limit', () => {
+  it('excludes above-head receipt headers from latest evidence', async () => {
+    const t = await setup();
+    const first = t.snapshot.attempts[0]!;
+    const input: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      nextNonce: 5n,
+      lastObservation: t.snapshot.baseline,
+      attempts: [{
+        ...first,
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+      }],
+    };
+
+    t.getTransactionReceipt.mockResolvedValue({
+      transactionHash: first.signedTransactions[0].transactionHash,
+      blockNumber: 131n,
+      blockHash: hashAt(131n),
+      status: 'success',
+    });
+    t.getTransactionCount.mockResolvedValue(4);
+
+    expect(await t.run(input)).toMatchObject({
+      status: 'inspected',
+      observations: [],
+      inclusionChecksComplete: false,
+      broadcastAttemptId: null,
+    });
+    expect(t.getBlock).toHaveBeenCalledWith({ blockNumber: 131n });
+  });
+});
