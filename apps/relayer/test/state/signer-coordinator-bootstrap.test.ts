@@ -133,6 +133,7 @@ describe('signer bootstrap during recovery', () => {
       expect(t.coordinator.canBroadcast).toBe(false);
 
       expect(result).toEqual({
+        observations: [],
         status: 'no-attempt',
         observation: {
           anchor: ANCHOR,
@@ -246,6 +247,7 @@ describe('signer bootstrap during recovery', () => {
 
       // A later pass can initialize after the observations agree.
       expect(await t.coordinator.recover(t.options)).toEqual({
+        observations: [],
         status: 'no-attempt',
         observation: {
           anchor: ANCHOR,
@@ -534,6 +536,7 @@ describe('signer bootstrap during recovery', () => {
     });
 
     expect(await t.coordinator.recover(t.options)).toEqual({
+      observations: [],
       status: 'no-attempt',
       observation: {
         anchor: ANCHOR,

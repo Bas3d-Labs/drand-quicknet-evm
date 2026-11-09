@@ -134,11 +134,13 @@ describe('signer recovery planning', () => {
 
   it.each([
     {
+      observations: [],
       status: 'boundary-changed',
       boundary: 'lower-bound',
       observedAnchor: anchorAt(100n),
     },
     {
+      observations: [],
       status: 'anchor-behind-search',
     },
   ] as const)(
@@ -152,9 +154,11 @@ describe('signer recovery planning', () => {
       const before = structuredClone(snapshot);
 
       const result = plan(snapshot, {
+        observations: [],
         status: 'unresolved',
         observation: observationAt(105n, 5n),
         receipt: {
+          observations: [],
           status: 'receipt-not-found',
         },
         search,
@@ -178,6 +182,7 @@ describe('signer recovery planning', () => {
         oldest.signedTransactions[0].transactionHash;
 
       const inspection: SignerRecoveryInspection = {
+        observations: [],
         status: 'resolution-available',
         observation: observationAt(105n, 5n),
         evidence: {
@@ -226,6 +231,7 @@ describe('signer recovery planning', () => {
     const before = structuredClone(snapshot);
 
     const result = plan(snapshot, {
+      observations: [],
       status: 'resolution-available',
       observation: observationAt(105n, 5n),
       evidence: {
@@ -262,9 +268,11 @@ describe('signer recovery planning', () => {
     const before = structuredClone(snapshot);
 
     const result = plan(snapshot, {
+      observations: [],
       status: 'unresolved',
       observation: observationAt(105n, 5n),
       receipt: {
+        observations: [],
         status: 'receipt-not-found',
       },
       search: null,
@@ -288,12 +296,15 @@ describe('signer recovery planning', () => {
       const observation = observationAt(105n, 5n);
 
       const result = plan(snapshot, {
+        observations: [],
         status: 'unresolved',
         observation,
         receipt: {
+          observations: [],
           status: 'receipt-not-found',
         },
         search: {
+          observations: [],
           status: 'not-found',
           searchedThrough: anchorAt(through),
           scannedBlocks: scanned,
@@ -332,6 +343,7 @@ describe('signer recovery planning', () => {
     const before = structuredClone(snapshot);
 
     expect(() => plan(snapshot, {
+      observations: [],
       status: 'resolution-available',
       observation: observationAt(105n, 6n),
       evidence: {

@@ -541,6 +541,7 @@ describe('beacon transaction submission', () => {
         anchor,
         maxBlockRange: 2n,
       })).toEqual({
+        observations: [],
         status: 'no-attempt',
         observation,
       });

@@ -460,6 +460,7 @@ describe('signer coordinator transitions', () => {
     )).toBe(false);
 
     expect(await t.coordinator.recover(options, 4)).toEqual({
+      observations: [],
       status: 'no-attempt',
       observation: {
         anchor: {
@@ -968,6 +969,7 @@ describe('signer coordinator transitions', () => {
     expect(await t.coordinator.recover(
       receiptRecoveryOptions(t, 4),
     )).toEqual({
+      observations: [],
       status: 'no-attempt',
       observation: {
         anchor: t.evidence.anchor,
@@ -1010,6 +1012,7 @@ describe('signer coordinator transitions', () => {
     expect(await t.coordinator.recover(
       receiptRecoveryOptions(t, 8),
     )).toEqual({
+      observations: [],
       status: 'no-attempt',
       observation: {
         anchor: t.evidence.anchor,
@@ -1813,6 +1816,7 @@ describe('durable signer observations', () => {
     vi.mocked(options.publicClient.getTransactionReceipt).mockClear();
 
     expect(await restarted.recover(options)).toEqual({
+      observations: [],
       status: 'no-attempt',
       observation: observation(8n),
     });

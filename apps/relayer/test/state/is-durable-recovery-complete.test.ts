@@ -33,12 +33,16 @@ function state(
 
 function unresolved(nonce: bigint): SignerRecoveryResult {
   return {
+    observations: [],
     status: 'unresolved',
     observation: {
       anchor: ANCHOR,
       nonce,
     },
-    receipt: { status: 'receipt-not-found' },
+    receipt: {
+      observations: [],
+      status: 'receipt-not-found',
+    },
     search: null,
   };
 }
@@ -46,6 +50,7 @@ function unresolved(nonce: bigint): SignerRecoveryResult {
 describe('durable recovery completion', () => {
   it('completes an empty recovered journal', () => {
     expect(isDurableRecoveryComplete({
+      observations: [],
       status: 'no-attempt',
       observation: {
         anchor: ANCHOR,
@@ -56,6 +61,7 @@ describe('durable recovery completion', () => {
 
   it('rejects a no-attempt result paired with retained attempts', () => {
     expect(isDurableRecoveryComplete({
+      observations: [],
       status: 'no-attempt',
       observation: {
         anchor: ANCHOR,
@@ -91,6 +97,7 @@ describe('durable recovery completion', () => {
       }
 
       const result: SignerRecoveryResult = {
+        observations: [],
         status: 'resolution-available',
         observation: {
           anchor: ANCHOR,
@@ -134,12 +141,14 @@ describe('durable recovery completion', () => {
 
   it('allows an inclusion above the durable anchor to wait', () => {
     expect(isDurableRecoveryComplete({
+      observations: [],
       status: 'unresolved',
       observation: {
         anchor: ANCHOR,
         nonce: 4n,
       },
       receipt: {
+        observations: [],
         status: 'included-not-durable',
         transactionHash: HASH,
         outcome: 'success',
@@ -154,12 +163,14 @@ describe('durable recovery completion', () => {
 
   it('keeps contradictory receipt evidence due', () => {
     expect(isDurableRecoveryComplete({
+      observations: [],
       status: 'unresolved',
       observation: {
         anchor: ANCHOR,
         nonce: 4n,
       },
       receipt: {
+        observations: [],
         status: 'fork-served-receipt',
         inclusion: {
           blockNumber: 99n,

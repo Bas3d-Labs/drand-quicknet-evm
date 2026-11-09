@@ -145,6 +145,7 @@ async function setup(options: {
       anchor: ANCHOR,
       maxBlockRange: 2n,
     })).toEqual({
+      observations: [],
       status: 'no-attempt',
       observation: OBSERVATION,
     });

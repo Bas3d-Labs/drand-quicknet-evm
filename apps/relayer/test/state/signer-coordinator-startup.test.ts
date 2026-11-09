@@ -195,6 +195,7 @@ async function searchSetup(firstIncluded = false) {
     attemptId: input.attempts[targetIndex]!.attemptId,
     observation: input.lastObservation,
     result: {
+      observations: [],
       status: 'not-found' as const,
       searchedThrough: {
         blockNumber: 105n,
@@ -283,6 +284,7 @@ async function preparationSetup(maxRetainedAttempts = 3) {
     inclusionInspection,
     'inspectSignerInclusions',
   ).mockResolvedValueOnce({
+    observations: [],
     status: 'inspected',
     broadcastAttemptId: null,
     observation: snapshot.lastObservation,
@@ -511,6 +513,7 @@ describe('signer coordinator startup', () => {
       anchor: BASELINE.anchor,
       maxBlockRange: 2n,
     })).toEqual({
+      observations: [],
       status: 'no-attempt',
       observation: BASELINE,
     });
@@ -976,6 +979,7 @@ describe('signer coordinator startup', () => {
       inclusionInspection,
       'inspectSignerInclusions',
     ).mockResolvedValueOnce({
+      observations: [],
       status: 'inspected',
       observation,
       attempts: snapshot.attempts,
@@ -1743,6 +1747,7 @@ describe('signer coordinator startup', () => {
     const coordinator = await t.create();
 
     const inspection = {
+      observations: [],
       status: 'resolution-available' as const,
       observation: {
         anchor: OBSERVED_AT,
@@ -1809,9 +1814,11 @@ describe('signer coordinator startup', () => {
     const t = await searchSetup();
 
     const inspection = {
+      observations: [],
       status: 'unresolved' as const,
       observation: t.snapshot.lastObservation,
       receipt: {
+        observations: [],
         status: 'receipt-not-found' as const,
       },
       search: t.progress.result,
@@ -1857,6 +1864,7 @@ describe('signer coordinator startup', () => {
       recoveryInspection,
       'inspectSignerRecovery',
     ).mockResolvedValueOnce({
+      observations: [],
       status: 'resolution-available',
       observation: snapshot.lastObservation,
       evidence: {
@@ -1931,6 +1939,7 @@ describe('signer coordinator startup', () => {
       inclusionInspection,
       'inspectSignerInclusions',
     ).mockResolvedValueOnce({
+      observations: [],
       status: 'inspected',
       broadcastAttemptId: null,
       observation: snapshot.lastObservation,
@@ -1987,6 +1996,7 @@ describe('signer coordinator startup', () => {
       inclusionInspection,
       'inspectSignerInclusions',
     ).mockResolvedValueOnce({
+      observations: [],
       status: 'inspected',
       broadcastAttemptId: null,
       observation: snapshot.lastObservation,
@@ -2025,6 +2035,7 @@ describe('signer coordinator startup', () => {
       inclusionInspection,
       'inspectSignerInclusions',
     ).mockResolvedValueOnce({
+      observations: [],
       status: 'inspected',
       broadcastAttemptId: null,
       observation: snapshot.lastObservation,
@@ -2067,6 +2078,7 @@ describe('signer coordinator startup', () => {
       inclusionInspection,
       'inspectSignerInclusions',
     ).mockResolvedValueOnce({
+      observations: [],
       status: 'inspected',
       broadcastAttemptId: null,
       observation: snapshot.lastObservation,
@@ -2111,6 +2123,7 @@ describe('signer coordinator startup', () => {
       inclusionInspection,
       'inspectSignerInclusions',
     ).mockResolvedValue({
+      observations: [],
       status: 'inspected',
       broadcastAttemptId: null,
       observation: snapshot.lastObservation,
@@ -2221,6 +2234,7 @@ describe('signer coordinator startup', () => {
       inclusionInspection,
       'inspectSignerInclusions',
     ).mockResolvedValueOnce({
+      observations: [],
       status: 'inspected',
       observation: {
         anchor: {
@@ -2279,6 +2293,7 @@ describe('signer coordinator startup', () => {
       inclusionInspection,
       'inspectSignerInclusions',
     ).mockResolvedValueOnce({
+      observations: [],
       status: 'inspected',
       broadcastAttemptId: null,
       observation: snapshot.lastObservation,
@@ -2784,12 +2799,14 @@ describe('signer coordinator startup', () => {
       recoveryInspection,
       'inspectSignerRecovery',
     ).mockResolvedValueOnce({
+      observations: [],
       status: 'unresolved',
       observation: {
         anchor: OBSERVED_AT,
         nonce: first.nonce,
       },
       receipt: {
+        observations: [],
         status: 'receipt-not-found',
       },
       search: null,
@@ -2866,9 +2883,11 @@ describe('signer coordinator startup', () => {
       recoveryInspection,
       'inspectSignerRecovery',
     ).mockResolvedValueOnce({
+      observations: [],
       status: 'unresolved',
       observation: t.snapshot.lastObservation,
       receipt: {
+        observations: [],
         status: 'receipt-not-found',
       },
       search: t.progress.result,
@@ -2896,12 +2915,14 @@ describe('signer coordinator startup', () => {
       recoveryInspection,
       'inspectSignerRecovery',
     ).mockResolvedValueOnce({
+      observations: [],
       status: 'unresolved',
       observation: {
         anchor: OBSERVED_AT,
         nonce: t.snapshot.attempts[0]!.nonce,
       },
       receipt: {
+        observations: [],
         status: 'receipt-not-found',
       },
       search: null,
@@ -2933,12 +2954,14 @@ describe('signer coordinator startup', () => {
       recoveryInspection,
       'inspectSignerRecovery',
     ).mockResolvedValue({
+      observations: [],
       status: 'unresolved',
       observation: {
         anchor: OBSERVED_AT,
         nonce: first.nonce,
       },
       receipt: {
+        observations: [],
         status: 'receipt-not-found',
       },
       search: null,

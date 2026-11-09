@@ -99,6 +99,7 @@ describe('retained inclusion RPC budget', () => {
           observation,
           head: HEAD,
         })).toEqual({
+          observations: [INCLUSION],
           status: 'verified-unchanged',
           observedAt: HEAD,
         });
