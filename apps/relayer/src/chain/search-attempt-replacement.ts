@@ -46,9 +46,23 @@ export interface SearchAttemptReplacementOptions {
 
   /** Maximum full blocks scanned per call, excluding anchor checks. */
   maxBlockRange: bigint;
+
+  /** Durable recovery alone may certify a persisted boundary reset. */
+  confirmDurableSearch?: boolean;
+}
+
+export interface SearchResetEvidence {
+  readonly reason: 'searched-through-changed' | 'exhaustion-anchor-changed';
+  readonly expected: Readonly<BlockAnchor>;
+  readonly observed: Readonly<BlockAnchor>;
+  readonly lowerBound: AnchoredNonceObservation;
 }
 
 type ReplacementSearchClassification =
+  | {
+      status: 'search-reset-required';
+      reset: SearchResetEvidence;
+    }
   | {
       /** There is no justified starting point. Keep the attempt unresolved. */
       status: 'missing-lower-bound';
@@ -119,7 +133,7 @@ export type ReplacementSearchResult = ReplacementSearchClassification & {
 };
 
 /**
- * Searches a boudned chunk of full blocks to identify which transaction
+ * Searches a bounded chunk of full blocks to identify which transaction
  * consumed an attempt's nonce after the anchored count advanced.
  * 
  * Checks saved block references before resuming. Returns a transaction
@@ -211,6 +225,14 @@ export async function searchAttemptReplacement(
     };
   }
 
+  let fact: AnchoredNonceObservation | null = null;
+  if (options.confirmDurableSearch === true) {
+    fact = replacementSearch.exhausted;
+  }
+  if (fact !== null && fact.anchor.blockNumber > anchor.blockNumber) {
+    return { status: 'anchor-behind-search', observations: Object.freeze([]) };
+  }
+
   const before = await checkBlockAnchor(publicClient, anchor);
   if (before !== null) {
     return {
@@ -237,6 +259,30 @@ export async function searchAttemptReplacement(
     };
   }
 
+  // Only a completed durable bracket can authorize discarding saved evidence.
+  const resetAfterClosing = async (
+    reason: SearchResetEvidence['reason'],
+    expected: Readonly<BlockAnchor>,
+    observed: Readonly<BlockAnchor>,
+  ): Promise<ReplacementSearchResult> => {
+    const closing = await checkBlockAnchor(publicClient, anchor);
+    if (closing !== null) {
+      return { ...closing, observations: Object.freeze([]) };
+    }
+    return {
+      status: 'search-reset-required',
+      observations: Object.freeze(observations),
+      reset: Object.freeze({
+        reason,
+        expected: copyAnchor(expected),
+        observed: copyAnchor(observed),
+        lowerBound: replacementSearch.lowerBound,
+      }),
+    };
+  };
+
+  let factConfirmed = fact === null;
+
   if (boundary !== lower) {
     const observed = await getBlockAnchor(
       publicClient,
@@ -246,6 +292,9 @@ export async function searchAttemptReplacement(
     observations.push(Object.freeze(observed));
 
     if (!blockAnchorsMatch(boundary, observed)) {
+      if (options.confirmDurableSearch === true) {
+        return resetAfterClosing('searched-through-changed', boundary, observed);
+      }
       return {
         status: 'boundary-changed',
         observations: Object.freeze([]),
@@ -258,6 +307,40 @@ export async function searchAttemptReplacement(
   let through = boundary.blockNumber + maxBlockRange;
   if (through > anchor.blockNumber) {
     through = anchor.blockNumber;
+  }
+
+  const confirmFact = async (): Promise<ReplacementSearchResult | null> => {
+    if (fact === null || factConfirmed) {
+      return null;
+    }
+    const factAnchor = fact.anchor;
+    let observed = observations.find(
+      (value) => value.blockNumber === factAnchor.blockNumber,
+    );
+    if (observed === undefined) {
+      observed = Object.freeze(await getBlockAnchor(
+        publicClient,
+        factAnchor.blockNumber,
+      ));
+      observations.push(observed);
+    }
+    if (!blockAnchorsMatch(fact.anchor, observed)) {
+      return resetAfterClosing('exhaustion-anchor-changed', fact.anchor, observed);
+    }
+    factConfirmed = true;
+    return null;
+  };
+
+  // Reuse the cursor read, or a forthcoming full-block read. A distinct fact
+  // outside the scan window needs its own read even when a cursor exists.
+  if (fact !== null && (
+    fact.anchor.blockNumber <= boundary.blockNumber ||
+    fact.anchor.blockNumber > through
+  )) {
+    const reset = await confirmFact();
+    if (reset !== null) {
+      return reset;
+    }
   }
 
   let previous = boundary;
@@ -335,12 +418,25 @@ export async function searchAttemptReplacement(
       }
     }
 
+    if (fact !== null && number === fact.anchor.blockNumber) {
+      const reset = await confirmFact();
+      if (reset !== null) {
+        return reset;
+      }
+    }
+
     previous = inclusion;
     scannedBlocks += 1n;
 
     if (match !== undefined) {
       break;
     }
+  }
+
+  // A transaction match can end the scan before its planned fact-height read.
+  const reset = await confirmFact();
+  if (reset !== null) {
+    return reset;
   }
 
   const after = await checkBlockAnchor(publicClient, anchor);

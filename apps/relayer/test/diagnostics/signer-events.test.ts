@@ -139,3 +139,43 @@ describe('signer event projection', () => {
     expect(writeSync).toHaveBeenCalledOnce();
   });
 });
+
+describe('acknowledged search reset diagnostic', () => {
+  it('projects boundary evidence and attribution without undeclared secrets', () => {
+    const { log, lines } = capture();
+    const hash = `0x${'aa'.repeat(32)}` as const;
+    const observed = `0x${'bb'.repeat(32)}` as const;
+    log.withContext({ cycle: 17 }).searchReset({
+      signer: SIGNER,
+      attemptId: '11111111-1111-4111-8111-111111111111',
+      nonce: 4n,
+      reason: 'exhaustion-anchor-changed',
+      expectedBlock: 100n,
+      expectedBlockHash: hash,
+      observedBlock: 100n,
+      observedBlockHash: observed,
+      durableBlock: 104n,
+      durableBlockHash: hash,
+      ...{ signedTransaction: SECRET },
+    });
+
+    expect(lines).toHaveLength(1);
+    
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      event: 'signer_search_reset',
+      level: 40,
+      cycle: 17,
+      reason: 'exhaustion-anchor-changed',
+      nonce: '4',
+      expectedBlock: '100',
+      expectedBlockHash: hash,
+      observedBlock: '100',
+      observedBlockHash: observed,
+      durableBlock: '104',
+      durableBlockHash: hash,
+    });
+
+    expect(lines.join('')).not.toContain(SECRET);
+    expect(JSON.parse(lines[0]!)).not.toHaveProperty('signedTransaction');
+  });
+});

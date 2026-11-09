@@ -934,8 +934,11 @@ export class SignerCoordinator {
 
       await this.persistence.save(plan.snapshot);
 
-      this.recoveryComplete = true;
+      this.recoveryComplete = plan.completion.kind !== 'search-reset';
       this.applyCommittedWrite(cycle);
+      if (plan.completion.kind === 'search-reset') {
+        this.failInspectionBracket(owner);
+      }
 
       const inspectedAttempt = current.snapshot.attempts[0];
 
@@ -1668,6 +1671,11 @@ export class SignerCoordinator {
         (log) => log.attemptResolved(pending.event),
         cycle,
       );
+    }
+
+    if (pending.kind === 'search-reset') {
+      this.invalidateRecoveryAuthorization();
+      this.emit((log) => log.searchReset(pending.event), cycle);
     }
 
     this.pendingWrite = undefined;

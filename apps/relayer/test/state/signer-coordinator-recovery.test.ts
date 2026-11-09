@@ -707,7 +707,7 @@ describe('coordinator recovery', () => {
     },
   );
 
-  it('does not persist a changed search boundary or reopen recovery', async () => {
+  it('persists a confirmed search reset without reopening recovery', async () => {
     const t = await setup();
 
     t.missing();
@@ -734,13 +734,12 @@ describe('coordinator recovery', () => {
     expect(
       await t.coordinator.recover(t.options),
     ).toMatchObject({
-      status: 'unresolved',
-      search: {
-        status: 'boundary-changed',
-      },
+      status: 'search-reset-required',
     });
 
-    expect(t.save).not.toHaveBeenCalled();
+    expect(t.save).toHaveBeenCalledTimes(1);
+    expect(t.save.mock.calls[0]![0].attempts[0]!.replacementSearch)
+      .toMatchObject({ searchedThrough: null, exhausted: null });
 
     expect(t.coordinator.status).toMatchObject({
       open: false,

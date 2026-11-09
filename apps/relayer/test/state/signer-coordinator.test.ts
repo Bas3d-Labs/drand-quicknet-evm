@@ -2331,7 +2331,7 @@ describe('durable replacement search progress', () => {
     });
   });
 
-  it('preserves saved progress when the searched-through boundary changes', async () => {
+  it('resets a changed cursor and resumes from the lower bound next time', async () => {
     const t = await setup();
     const options = {
       ...searchRecoveryOptions(t),
@@ -2363,18 +2363,20 @@ describe('durable replacement search progress', () => {
     }));
 
     expect(await t.coordinator.recover(options)).toMatchObject({
-      status: 'unresolved',
-      search: {
-        status: 'boundary-changed',
-        boundary: 'searched-through',
-        observedAnchor: {
+      status: 'search-reset-required',
+      reset: {
+        reason: 'searched-through-changed',
+        observed: {
           blockNumber: 105n,
           blockHash: OTHER,
         },
       },
     });
 
-    expect(t.save).not.toHaveBeenCalled();
+    expect(t.save).toHaveBeenCalledTimes(1);
+    expect(t.save.mock.calls[0]![0].attempts[0]!.replacementSearch)
+      .toEqual({ lowerBound: saved.attempts[0]!.replacementSearch!.lowerBound, searchedThrough: null, exhausted: null });
+    t.save.mockClear();
 
     expect(getBlock.mock.calls.filter(
       ([args]) => args?.includeTransactions === true,
@@ -2400,9 +2402,9 @@ describe('durable replacement search progress', () => {
       search: {
         status: 'not-found',
         scannedBlocks: 1n,
-        remainingBlocks: 4n,
+        remainingBlocks: 9n,
         searchedThrough: {
-          blockNumber: 106n,
+          blockNumber: 101n,
           blockHash: HASH,
         },
       },
@@ -2411,7 +2413,7 @@ describe('durable replacement search progress', () => {
     expect(getBlock.mock.calls
       .filter(([args]) => args?.includeTransactions === true)
       .map(([args]) => args?.blockNumber))
-      .toEqual([106n]);
+      .toEqual([101n]);
 
     expect(t.save).toHaveBeenCalledOnce();
     expect(t.save.mock.calls[0]![0]).toMatchObject({
@@ -2423,7 +2425,7 @@ describe('durable replacement search progress', () => {
           exhausted: null,
           lowerBound: saved.attempts[0]!.replacementSearch!.lowerBound,
           searchedThrough: {
-            blockNumber: 106n,
+            blockNumber: 101n,
             blockHash: HASH,
           },
         },

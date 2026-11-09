@@ -1260,7 +1260,7 @@ describe('signer coordinator startup', () => {
     expect(t.load).toHaveBeenCalledTimes(1);
   });
 
-  it('preserves saved progress when the searched-through boundary changes', async () => {
+  it('resets saved progress after the changed cursor bracket closes', async () => {
     const t = await searchSetup();
     const publicClient = recoveryClientWithMissingReceipts(6);
 
@@ -1299,18 +1299,19 @@ describe('signer coordinator startup', () => {
     );
 
     expect(await t.coordinator.recover(options)).toMatchObject({
-      status: 'unresolved',
-      search: {
-        status: 'boundary-changed',
-        boundary: 'searched-through',
-        observedAnchor: {
+      status: 'search-reset-required',
+      reset: {
+        reason: 'searched-through-changed',
+        observed: {
           blockNumber: 105n,
           blockHash: changedHash,
         },
       },
     });
 
-    expect(t.save).not.toHaveBeenCalled();
+    expect(t.save).toHaveBeenCalledTimes(1);
+    expect(t.save.mock.calls[0]![0].attempts[0]!.replacementSearch)
+      .toEqual({ lowerBound: BASELINE, searchedThrough: null, exhausted: null });
     expect(t.coordinator.attempts).toEqual(before);
     expect(saved.attempts[0]!.replacementSearch).toEqual({
       exhausted: null,
@@ -3420,5 +3421,343 @@ describe('exhaustion preservation across latest writes and skipped recovery', ()
     expect(coordinator.status.blockers).toContain('unattributed-signer-activity');
     expect(coordinator.canBroadcast).toBe(false);
     expect(input.attempts[0]!.replacementSearch?.exhausted).toEqual(exhausted);
+  });
+});
+
+describe('acknowledged durable search resets', () => {
+  it.each([false, true])('resets through the file store only after acknowledgement; failed first save: %s', async (failFirst) => {
+    const snapshot = await queueSnapshot();
+    const exhausted = { anchor: OBSERVED_AT, nonce: 6n };
+    const input: TransactionJournalSnapshot = {
+      ...snapshot,
+      lastObservation: { anchor: { blockNumber: 130n, blockHash: HASH }, nonce: 9n },
+      attempts: [{
+        ...snapshot.attempts[0]!,
+        phase: 'broadcast-may-have-occurred',
+        inclusion: null,
+        replacementSearch: { lowerBound: BASELINE, searchedThrough: OBSERVED_AT, exhausted },
+      }, snapshot.attempts[1]!],
+    };
+    const directory = await mkdtemp(join(tmpdir(), 'durable-search-reset-'));
+    const filePath = join(directory, 'journal.json');
+
+    try {
+      const store = await FileTransactionJournalStore.open({ filePath, identity: IDENTITY });
+      await store.save(input);
+      const t = setup({ kind: 'present', snapshot: input });
+      let release!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => { entered = resolve; });
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      let writes = 0;
+      const save = vi.fn(async (next: TransactionJournalSnapshot) => {
+        writes += 1;
+        if (writes === 1) {
+          entered();
+          await held;
+          if (failFirst) throw new Error('Injected reset save failure');
+        }
+        await store.save(next);
+      });
+      const coordinator = await t.create({ load: () => store.load(), save });
+      const revision = coordinator.durableRecoveryRevision;
+      const publicClient = recoveryClientWithMissingReceipts(6);
+      const read = vi.mocked(publicClient.getBlock).getMockImplementation()!;
+      const fork = `0x${'bb'.repeat(32)}` as const;
+      vi.mocked(publicClient.getBlock).mockImplementation(async (request) => {
+        const block = await read(request);
+        if (request?.blockNumber === 120n) return { ...block, hash: fork };
+        return block;
+      });
+      const cycle = new SignerRecoveryCycle({
+        coordinator,
+        schedule: new BroadcastRetrySchedule({ initialDelayMs: 100, maxDelayMs: 1000 }),
+      });
+      const events = () => t.lines.map((line) => JSON.parse(line))
+        .filter((record) => record.event === 'signer_search_reset');
+      const latest = vi.spyOn(inclusionInspection, 'inspectSignerInclusions');
+
+      try {
+        // Capture rejection immediately so the failed-save branch has no
+        // unhandled promise while the test inspects the paused write.
+        const pending = cycle.run({
+          publicClient,
+          anchor: { blockNumber: 125n, blockHash: HASH },
+          head: { blockNumber: 130n, blockHash: HASH },
+          maxBlockRange: 2n,
+        }, 17).then((result) => ({ result, error: null }), (error: unknown) => ({ result: null, error }));
+        await started;
+        try {
+          expect(save.mock.calls[0]![0].attempts[0]!.replacementSearch)
+            .toEqual({ lowerBound: BASELINE, searchedThrough: null, exhausted: null });
+          expect(coordinator.durableRecoveryRevision).toBe(revision);
+          expect(coordinator.attempts).toHaveLength(input.attempts.length);
+          expect(coordinator.status.blockers).toContain('conflict-search-exhausted');
+          expect(coordinator.status.open).toBe(false);
+          expect(coordinator.canBroadcast).toBe(false);
+          expect(events()).toEqual([]);
+          expect(await store.load()).toEqual({ kind: 'present', snapshot: input });
+          const beforeRestart = await t.create(await FileTransactionJournalStore.open({ filePath, identity: IDENTITY }));
+          expect(beforeRestart.status.blockers).toContain('conflict-search-exhausted');
+        } finally {
+          release();
+        }
+        const outcome = await pending;
+        if (failFirst) {
+          expect(outcome.error).toBeInstanceOf(Error);
+          expect(events()).toEqual([]);
+          expect(coordinator.status.blockers).toContain('conflict-search-exhausted');
+          expect(await store.load()).toEqual({ kind: 'present', snapshot: input });
+          await coordinator.retryPersistence(18);
+          expect(save).toHaveBeenCalledTimes(2);
+          expect(save.mock.calls[1]![0]).toBe(save.mock.calls[0]![0]);
+        } else {
+          expect(outcome.error).toBeNull();
+          expect(outcome.result).toMatchObject({
+            inspection: { status: 'search-reset-required' },
+            inclusions: null,
+          });
+          expect(save).toHaveBeenCalledTimes(1);
+        }
+
+        const persisted = await store.load();
+        expect(persisted).toEqual({ kind: 'present', snapshot: {
+          ...input,
+          attempts: [{ ...input.attempts[0]!, replacementSearch: {
+            lowerBound: BASELINE, searchedThrough: null, exhausted: null,
+          } }, input.attempts[1]!],
+        } });
+        expect(coordinator.status.blockers).not.toContain('conflict-search-exhausted');
+        expect(coordinator.status.blockers).toContain('unattributed-signer-activity');
+        expect(coordinator.durableRecoveryRevision).not.toBe(revision);
+        expect(coordinator.status.recoveryComplete).toBe(false);
+        expect(coordinator.status.open).toBe(false);
+        expect(coordinator.canBroadcast).toBe(false);
+        expect(latest).not.toHaveBeenCalled();
+        expect(events()).toHaveLength(1);
+        expect(events()[0]).toMatchObject({
+          level: 40,
+          cycle: failFirst ? 18 : 17,
+          signer: ACCOUNT.address,
+          attemptId: input.attempts[0]!.attemptId,
+          nonce: '4',
+          reason: 'searched-through-changed',
+          expectedBlock: '120',
+          expectedBlockHash: HASH,
+          observedBlock: '120',
+          observedBlockHash: fork,
+          durableBlock: '125',
+          durableBlockHash: HASH,
+        });
+        const restarted = await t.create(await FileTransactionJournalStore.open({ filePath, identity: IDENTITY }));
+        expect(restarted.status.blockers).not.toContain('conflict-search-exhausted');
+        expect(restarted.status.open).toBe(false);
+        expect(restarted.canBroadcast).toBe(false);
+        coordinator.beginInspection().abandon();
+      } finally {
+        latest.mockRestore();
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('refused durable reset evidence', () => {
+  it.each(['lower', 'closing', 'nonce', 'conflicting-read'] as const)(
+    'does not save or log a reset after %s disagreement',
+    async (failure) => {
+      const snapshot = await queueSnapshot();
+      const input: TransactionJournalSnapshot = {
+        ...snapshot,
+        attempts: [{
+          ...snapshot.attempts[0]!,
+          phase: 'broadcast-may-have-occurred',
+          inclusion: null,
+          replacementSearch: {
+            lowerBound: BASELINE,
+            searchedThrough: OBSERVED_AT,
+            exhausted: { anchor: OBSERVED_AT, nonce: 6n },
+          },
+        }, snapshot.attempts[1]!],
+      };
+      const t = setup({ kind: 'present', snapshot: input });
+      const coordinator = await t.create();
+      const revision = coordinator.durableRecoveryRevision;
+      const publicClient = recoveryClientWithMissingReceipts(6);
+      const read = vi.mocked(publicClient.getBlock).getMockImplementation()!;
+      const fork = `0x${'bb'.repeat(32)}` as const;
+      let selectedReads = 0;
+      let cursorReads = 0;
+      vi.mocked(publicClient.getBlock).mockImplementation(async (request) => {
+        const block = await read(request);
+        if (request?.blockNumber === 125n) selectedReads += 1;
+        if (request?.blockNumber === 120n) {
+          cursorReads += 1;
+          if (failure === 'nonce') return block;
+          if (failure === 'conflicting-read' && cursorReads === 1) return block;
+          return { ...block, hash: fork };
+        }
+        if ((failure === 'lower' && request?.blockNumber === 100n) ||
+          (failure === 'closing' && selectedReads === 6)) {
+          return { ...block, hash: fork };
+        }
+        return block;
+      });
+      if (failure === 'nonce') {
+        vi.mocked(publicClient.getTransactionCount).mockResolvedValue(7);
+      }
+      if (failure === 'conflicting-read') {
+        // A fork-served receipt contributes the observed header, not its claim.
+        // The subsequent search disagrees at that height inside this inspection.
+        const hash = input.attempts[0]!.signedTransactions[0].transactionHash;
+        vi.mocked(publicClient.getTransactionReceipt).mockImplementation(async (request) => {
+          if (request.hash !== hash) throw new TransactionReceiptNotFoundError(request);
+          return { transactionHash: hash, blockNumber: 120n, blockHash: fork, status: 'success' } as never;
+        });
+      }
+      const cycle = new SignerRecoveryCycle({
+        coordinator,
+        schedule: new BroadcastRetrySchedule({ initialDelayMs: 100, maxDelayMs: 1000 }),
+      });
+      const result = await cycle.run({
+        publicClient,
+        anchor: failure === 'nonce' ? OBSERVED_AT : { blockNumber: 125n, blockHash: HASH },
+        head: { blockNumber: 130n, blockHash: HASH },
+        maxBlockRange: 2n,
+      });
+      expect(result.inclusions).toBeNull();
+      expect(t.save).not.toHaveBeenCalled();
+      expect(coordinator.durableRecoveryRevision).toBe(revision);
+      expect(coordinator.status.blockers).toContain('conflict-search-exhausted');
+      expect(coordinator.status.recoveryComplete).toBe(false);
+      expect(coordinator.canBroadcast).toBe(false);
+      expect(t.lines.map((line) => JSON.parse(line).event)).not.toContain('signer_search_reset');
+      if (failure === 'closing') {
+        expect(result.inspection.status).toBe('anchor-changed');
+      } else if (failure !== 'lower') {
+        expect(result.inspection.status).toBe('inconsistent-observations');
+      }
+    },
+  );
+});
+
+describe('unconsumed nonce with retained exhaustion', () => {
+  it.each([
+    { name: 'changed selected anchor on oldest', targetIndex: 0, height: 120n, changed: true },
+    { name: 'changed selected anchor on later attempt', targetIndex: 1, height: 120n, changed: true },
+    { name: 'changed ancestor on oldest', targetIndex: 0, height: 125n, changed: true },
+    { name: 'matching ancestor on oldest', targetIndex: 0, height: 125n, changed: false },
+  ])('$name retains only confirmed state in the real store', async ({ targetIndex, height, changed }) => {
+    const snapshot = await queueSnapshot();
+    const fact = { anchor: OBSERVED_AT, nonce: 6n };
+    const input: TransactionJournalSnapshot = {
+      ...snapshot,
+      attempts: snapshot.attempts.map((attempt, index) => {
+        if (index !== targetIndex) return attempt;
+        return {
+          ...attempt,
+          phase: 'broadcast-may-have-occurred',
+          inclusion: null,
+          replacementSearch: {
+            lowerBound: BASELINE,
+            searchedThrough: null,
+            exhausted: fact,
+          },
+        };
+      }),
+    };
+    const fork = `0x${'bb'.repeat(32)}` as const;
+    let selectedHash = HASH as `0x${string}`;
+    if (height === 120n && changed) selectedHash = fork;
+    const anchor = { blockNumber: height, blockHash: selectedHash };
+    const directory = await mkdtemp(join(tmpdir(), 'unconsumed-search-reset-'));
+    const filePath = join(directory, 'journal.json');
+
+    try {
+      const store = await FileTransactionJournalStore.open({ filePath, identity: IDENTITY });
+      await store.save(input);
+      const t = setup({ kind: 'present', snapshot: input });
+      const save = vi.fn((next: TransactionJournalSnapshot) => store.save(next));
+      const coordinator = await t.create({ load: () => store.load(), save });
+      const revision = coordinator.durableRecoveryRevision;
+      const publicClient = recoveryClientWithMissingReceipts(4);
+      const read = vi.mocked(publicClient.getBlock).getMockImplementation()!;
+      vi.mocked(publicClient.getBlock).mockImplementation(async (request) => {
+        const block = await read(request);
+        if (changed && request?.blockNumber === 120n) {
+          return { ...block, hash: fork };
+        }
+        return block;
+      });
+      const cycle = new SignerRecoveryCycle({
+        coordinator,
+        schedule: new BroadcastRetrySchedule({ initialDelayMs: 100, maxDelayMs: 1000 }),
+      });
+      const latest = vi.spyOn(inclusionInspection, 'inspectSignerInclusions');
+
+      try {
+        const result = await cycle.run({
+          publicClient,
+          anchor,
+          head: { blockNumber: 130n, blockHash: HASH },
+          maxBlockRange: 2n,
+        }, 21);
+        expect(result.inclusions).toBeNull();
+        expect(latest).not.toHaveBeenCalled();
+        expect(vi.mocked(publicClient.getBlock).mock.calls.every(
+          ([request]) => request?.includeTransactions !== true,
+        )).toBe(true);
+        expect(coordinator.status.open).toBe(false);
+        expect(coordinator.canBroadcast).toBe(false);
+        const events = t.lines.map((line) => JSON.parse(line))
+          .filter((record) => record.event === 'signer_search_reset');
+
+        if (changed) {
+          expect(result.inspection).toMatchObject({
+            status: 'search-reset-required',
+            attemptId: input.attempts[targetIndex]!.attemptId,
+            observation: { anchor, nonce: 4n },
+            reset: { reason: 'exhaustion-anchor-changed' },
+          });
+          expect(save).toHaveBeenCalledTimes(1);
+          expect(await store.load()).toEqual({ kind: 'present', snapshot: {
+            ...input,
+            lastObservation: { anchor, nonce: 4n },
+            attempts: input.attempts.map((attempt, index) => {
+              if (index !== targetIndex) return attempt;
+              return { ...attempt, replacementSearch: {
+                lowerBound: BASELINE, searchedThrough: null, exhausted: null,
+              } };
+            }),
+          } });
+          expect(events).toHaveLength(1);
+          expect(events[0]).toMatchObject({
+            reason: 'exhaustion-anchor-changed',
+            cycle: 21,
+            expectedBlock: '120',
+            expectedBlockHash: HASH,
+            observedBlock: '120',
+            observedBlockHash: fork,
+          });
+          expect(coordinator.status.blockers).not.toContain('conflict-search-exhausted');
+        } else {
+          expect(result.inspection.status).toBe('inconsistent-observations');
+          expect(save).not.toHaveBeenCalled();
+          expect(await store.load()).toEqual({ kind: 'present', snapshot: input });
+          expect(coordinator.durableRecoveryRevision).toBe(revision);
+          expect(coordinator.status.blockers).toContain('conflict-search-exhausted');
+          expect(events).toEqual([]);
+        }
+
+        const restarted = await t.create(await FileTransactionJournalStore.open({ filePath, identity: IDENTITY }));
+        expect(restarted.status.blockers.includes('conflict-search-exhausted')).toBe(!changed);
+        expect(restarted.canBroadcast).toBe(false);
+      } finally {
+        latest.mockRestore();
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
