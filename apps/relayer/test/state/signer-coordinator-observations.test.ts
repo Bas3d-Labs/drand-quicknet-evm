@@ -104,6 +104,7 @@ async function setup(options: {
     let replacementSearch = null;
     if (index === 1 && options.invalidSearchBoundary) {
       replacementSearch = {
+        exhausted: null,
         lowerBound: { anchor: DURABLE, nonce: 4n },
         searchedThrough: null,
       };

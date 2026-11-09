@@ -104,11 +104,24 @@ function projectSearch(
     searchedThrough = projectAnchor(search.searchedThrough);
   }
 
+  let exhausted: {
+    anchor: ReturnType<typeof projectAnchor>;
+    nonce: string;
+  } | null = null;
+
+  if (search.exhausted !== null) {
+    exhausted = {
+      anchor: projectAnchor(search.exhausted.anchor),
+      nonce: search.exhausted.nonce.toString(),
+    };
+  }
+
   return {
     lowerBound: {
       anchor: projectAnchor(search.lowerBound.anchor),
       nonce: search.lowerBound.nonce.toString(),
     },
     searchedThrough,
+    exhausted,
   };
 }

@@ -19,8 +19,11 @@ import {
   validateJournalSnapshotStructure,
 } from '../state/transaction-journal-validation.js';
 
-import type {
-  BlockAnchor,
+import {
+  blockAnchorsMatch,
+  checkBlockAnchor,
+  getBlockAnchor,
+  type BlockAnchor,
 } from './block-anchor.js';
 
 import {
@@ -39,6 +42,7 @@ import {
 import {
   searchAttemptReplacement,
   type ReplacementSearchResult,
+  type SearchResetEvidence,
 } from './search-attempt-replacement.js';
 
 type UnresolvedReceipt = Exclude<
@@ -48,7 +52,7 @@ type UnresolvedReceipt = Exclude<
 
 type UnresolvedSearch = Exclude<
   ReplacementSearchResult,
-  { status: 'replacement-found' | 'anchor-changed' }
+  { status: 'replacement-found' | 'anchor-changed' | 'search-reset-required' }
 >;
 
 export interface InspectSignerRecoveryOptions {
@@ -62,6 +66,18 @@ export interface InspectSignerRecoveryOptions {
 }
 
 export type SignerRecoveryInspection =
+  | {
+      status: 'anchor-behind-exhaustion';
+      anchor: Readonly<BlockAnchor>;
+      exhausted: AnchoredNonceObservation;
+    }
+  | {
+      status: 'search-reset-required';
+      attemptId: string;
+      observation: AnchoredNonceObservation;
+      readonly observations: readonly Readonly<BlockAnchor>[];
+      reset: SearchResetEvidence;
+    }
   | {
       status: 'anchor-changed';
       observedAnchor: Readonly<BlockAnchor>;
@@ -133,6 +149,20 @@ export async function inspectSignerRecovery(
     throw new TypeError('Invalid signer recovery input.');
   }
 
+  for (const retained of snapshot.attempts) {
+    if (retained.replacementSearch === null) {
+      continue;
+    }
+
+    const exhausted = retained.replacementSearch.exhausted;
+    if (
+      exhausted !== null &&
+      anchor.blockNumber < exhausted.anchor.blockNumber
+    ) {
+      return { status: 'anchor-behind-exhaustion', anchor, exhausted };
+    }
+  }
+
   const attempt = snapshot.attempts[0];
   let receipt: AttemptReceiptResult | null = null;
 
@@ -168,6 +198,21 @@ export async function inspectSignerRecovery(
 
   const { observation } = nonce;
 
+  for (const retained of snapshot.attempts) {
+    if (retained.replacementSearch === null) {
+      continue;
+    }
+
+    const exhausted = retained.replacementSearch.exhausted;
+    if (
+      exhausted !== null &&
+      blockAnchorsMatch(anchor, exhausted.anchor) &&
+      observation.nonce !== exhausted.nonce
+    ) {
+      return { status: 'inconsistent-observations', observation };
+    }
+  }
+
   if (observation.nonce < snapshot.durableNextNonce) {
     return {
       status: 'nonce-behind-journal',
@@ -191,26 +236,60 @@ export async function inspectSignerRecovery(
 
   const consumed = observation.nonce > attempt.nonce;
 
-  if (receipt.status === 'verified') {
-    if (!consumed) {
-      return {
-        status: 'inconsistent-observations',
-        observation,
-      };
-    }
+  // Incoherent receipt and nonce evidence cannot certify a reset either.
+  if (
+    (receipt.status === 'verified' && !consumed) ||
+    (receipt.status === 'included-not-durable' && consumed)
+  ) {
+    return {
+      status: 'inconsistent-observations',
+      observation,
+    };
+  }
 
+  // A known contradiction on any retained fact takes priority over ordinary
+  // recovery. Its lower bound and closing durable anchor must still validate.
+  const contradicted = snapshot.attempts.find((retained) => {
+    const fact = retained.replacementSearch?.exhausted;
+    
+    return fact !== undefined &&
+      fact !== null &&
+      fact.anchor.blockNumber === anchor.blockNumber &&
+      !blockAnchorsMatch(fact.anchor, anchor);
+  });
+
+  let confirmationTarget = contradicted;
+
+  // Non-oldest facts below this anchor are deferred until their attempt is
+  // inspected. The oldest fact must not coexist with a newly persisted nonce
+  // observation that regresses below its established consumption.
+  if (
+    confirmationTarget === undefined &&
+    !consumed &&
+    attempt.replacementSearch !== null &&
+    attempt.replacementSearch.exhausted !== null
+  ) {
+    confirmationTarget = attempt;
+  }
+
+  if (confirmationTarget !== undefined) {
+    const search = confirmationTarget.replacementSearch!;
+    return confirmExhaustionInvalidation({
+      publicClient,
+      observation,
+      attemptId: confirmationTarget.attemptId,
+      lowerBound: search.lowerBound,
+      fact: search.exhausted!,
+      observations,
+    });
+  }
+
+  if (receipt.status === 'verified') {
     return {
       status: 'resolution-available',
       observations: Object.freeze(observations),
       observation,
       evidence: receipt.evidence,
-    };
-  }
-
-  if (receipt.status === 'included-not-durable' && consumed) {
-    return {
-      status: 'inconsistent-observations',
-      observation,
     };
   }
 
@@ -238,6 +317,7 @@ export async function inspectSignerRecovery(
     },
     observation,
     maxBlockRange,
+    confirmDurableSearch: true,
   });
 
   if (search.status === 'anchor-changed') {
@@ -250,6 +330,16 @@ export async function inspectSignerRecovery(
   observations.push(...search.observations.filter(
     (block) => block.blockNumber <= anchor.blockNumber,
   ));
+
+  if (search.status === 'search-reset-required') {
+    return {
+      status: 'search-reset-required',
+      attemptId: attempt.attemptId,
+      observation,
+      observations: Object.freeze(observations),
+      reset: search.reset,
+    };
+  }
 
   if (search.status === 'replacement-found') {
     return {
@@ -269,5 +359,94 @@ export async function inspectSignerRecovery(
     observation,
     receipt,
     search,
+  };
+}
+
+
+/**
+ * Confirms a retained lower bound and exhaustion anchor without scanning or
+ * requiring a consumed nonce. Only a closed bracket can certify a reset.
+ */
+async function confirmExhaustionInvalidation(options: {
+  readonly publicClient: PublicClient;
+  readonly observation: AnchoredNonceObservation;
+  readonly attemptId: string;
+  readonly lowerBound: AnchoredNonceObservation;
+  readonly fact: AnchoredNonceObservation;
+  readonly observations: readonly Readonly<BlockAnchor>[];
+}): Promise<SignerRecoveryInspection> {
+  const {
+    publicClient,
+    observation,
+    lowerBound,
+    fact
+  } = options;
+  
+  const anchor = observation.anchor;
+  const opening = Object.freeze(await getBlockAnchor(
+    publicClient,
+    anchor.blockNumber,
+    anchor.blockHash,
+    { operation: 'signer-recovery' },
+  ));
+
+  if (!blockAnchorsMatch(anchor, opening)) {
+    return { status: 'anchor-changed', observedAnchor: opening };
+  }
+
+  const observedLower = Object.freeze(await getBlockAnchor(
+    publicClient,
+    lowerBound.anchor.blockNumber,
+    lowerBound.anchor.blockHash,
+    { operation: 'signer-recovery' },
+  ));
+
+  if (!blockAnchorsMatch(lowerBound.anchor, observedLower)) {
+    // The field a reset would retain is no longer justified. No reset or
+    // ordinary observation write is committable on this evidence.
+    return { status: 'inconsistent-observations', observation };
+  }
+
+  let observedFact = opening;
+  if (fact.anchor.blockNumber !== anchor.blockNumber) {
+    observedFact = Object.freeze(await getBlockAnchor(
+      publicClient,
+      fact.anchor.blockNumber,
+      fact.anchor.blockHash,
+      { operation: 'signer-recovery' },
+    ));
+  }
+
+  const closing = await checkBlockAnchor(
+    publicClient,
+    anchor,
+    { operation: 'signer-recovery' },
+  );
+
+  if (closing !== null) {
+    return closing;
+  }
+
+  if (blockAnchorsMatch(fact.anchor, observedFact)) {
+    // The fact remains confirmed but the descendant nonce contradicts it.
+    // Retain the blocker and refuse to persist the regressed observation.
+    return { status: 'inconsistent-observations', observation };
+  }
+
+  return {
+    status: 'search-reset-required',
+    attemptId: options.attemptId,
+    observation,
+    observations: Object.freeze([
+      ...options.observations,
+      observedLower,
+      observedFact,
+    ]),
+    reset: Object.freeze({
+      reason: 'exhaustion-anchor-changed',
+      expected: fact.anchor,
+      observed: observedFact,
+      lowerBound,
+    }),
   };
 }

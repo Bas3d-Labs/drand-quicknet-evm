@@ -2066,6 +2066,7 @@ describe.skipIf(process.platform !== 'linux')(
           expect(candidate.transactionHash).not.toBe(REPLACEMENT_HASH);
 
           expect(attempt.replacementSearch).toEqual({
+            exhausted: null,
             lowerBound: {
               anchor: {
                 blockNumber: 100n,

@@ -172,6 +172,7 @@ export async function inspectSignerInclusions(
             : {
               lowerBound: attempt.replacementSearch.lowerBound,
               searchedThrough: null,
+              exhausted: attempt.replacementSearch.exhausted,
             },
         });
       } else {
@@ -281,6 +282,7 @@ export async function inspectSignerInclusions(
         replacementSearch = {
           lowerBound: snapshot.lastObservation,
           searchedThrough: null,
+          exhausted: null,
         };
       }
 

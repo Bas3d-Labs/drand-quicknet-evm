@@ -86,6 +86,7 @@ async function fixture(): Promise<TransactionJournalSnapshot> {
       replacementSearch: {
         lowerBound: observation,
         searchedThrough: null,
+        exhausted: null,
       },
     }],
   };
@@ -118,6 +119,93 @@ async function expectRoundTrip(input: TransactionJournalSnapshot) {
 }
 
 describe('transaction journal serialization', () => {
+  it.each(['omitted', 'null'] as const)(
+    'normalizes a %s exhaustion field in a version-1 encoding',
+    async (kind) => {
+      const raw = await encodedFixture();
+      const search = raw.attempts[0].replacementSearch;
+
+      if (kind === 'omitted') {
+        delete search.exhausted;
+      }
+
+      const decoded = await decodeJournalSnapshot(JSON.stringify(raw), IDENTITY);
+
+      expect(decoded.version).toBe(1);
+      expect(decoded.attempts[0]!.replacementSearch?.exhausted).toBeNull();
+      const reencoded = JSON.parse(await encodeJournalSnapshot(decoded, IDENTITY));
+      expect(reencoded.attempts[0].replacementSearch.exhausted).toBeNull();
+    },
+  );
+
+  it('round-trips exhaustion independently of the cursor and last observation', async () => {
+    const input = await fixture();
+    const exhausted = {
+      anchor: { blockNumber: LARGE_BLOCK + 10n, blockHash: OTHER },
+      nonce: 5n,
+    };
+    const populated: TransactionJournalSnapshot = {
+      ...input,
+      attempts: [{
+        ...input.attempts[0]!,
+        replacementSearch: {
+          lowerBound: input.baseline,
+          searchedThrough: null,
+          exhausted,
+        },
+      }],
+    };
+
+    const { contents, decoded } = await expectRoundTrip(populated);
+    const saved = decoded.attempts[0]!.replacementSearch!.exhausted!;
+
+    expect(JSON.parse(contents).attempts[0].replacementSearch.exhausted).toEqual({
+      anchor: { blockNumber: (LARGE_BLOCK + 10n).toString(), blockHash: OTHER },
+      nonce: '5',
+    });
+    expect(Object.isFrozen(saved)).toBe(true);
+    expect(Object.isFrozen(saved.anchor)).toBe(true);
+    exhausted.anchor.blockNumber = 0n;
+    exhausted.nonce = 99n;
+    expect(saved.nonce).toBe(5n);
+    expect(saved.anchor.blockNumber).toBe(LARGE_BLOCK + 10n);
+  });
+
+  it.each([
+    ['unconsumed nonce', {
+      anchor: {
+        blockNumber: (LARGE_BLOCK + 1n).toString(),
+        blockHash: HASH,
+      },
+      nonce: '4',
+    }],
+    ['anchor at lower bound', {
+      anchor: { blockNumber: LARGE_BLOCK.toString(), blockHash: HASH },
+      nonce: '5',
+    }],
+    ['numeric nonce', {
+      anchor: {
+        blockNumber: (LARGE_BLOCK + 1n).toString(),
+        blockHash: HASH,
+      },
+      nonce: 5,
+    }],
+    ['invalid hash', {
+      anchor: {
+        blockNumber: (LARGE_BLOCK + 1n).toString(),
+        blockHash: '0x12',
+      },
+      nonce: '5',
+    }],
+    ['incomplete fact', {}],
+  ])('rejects an encoded exhaustion fact with %s', async (_name, exhausted) => {
+    const raw = await encodedFixture();
+    raw.attempts[0].replacementSearch.exhausted = exhausted;
+
+    await expect(decodeJournalSnapshot(JSON.stringify(raw), IDENTITY))
+      .rejects.toThrow(FAILURE);
+  });
+
   it('pins the v1 layout without integer precision loss', async () => {
     const input = await fixture();
     const { contents, decoded } = await expectRoundTrip(input);
@@ -158,6 +246,7 @@ describe('transaction journal serialization', () => {
             nonce: '4',
           },
           searchedThrough: null,
+          exhausted: null,
         },
         phase: 'broadcast-may-have-occurred',
         inclusion: null,
@@ -263,6 +352,7 @@ describe('transaction journal serialization', () => {
         ...input.attempts[0]!,
         replacementSearch: {
           lowerBound: input.baseline,
+          exhausted: null,
           searchedThrough: {
             blockNumber: LARGE_BLOCK + 10n,
             blockHash: HASH,

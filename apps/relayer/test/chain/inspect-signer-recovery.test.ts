@@ -497,6 +497,7 @@ describe('signer recovery inspection', () => {
         attempts: [{
           ...attempt,
           replacementSearch: {
+            exhausted: null,
             lowerBound: t.snapshot.baseline,
             searchedThrough: anchorAt(102n),
           },
@@ -855,5 +856,301 @@ describe('durable inspection block observations', () => {
 
     expect(result.status).toBe('anchor-changed');
     expect(result).not.toHaveProperty('observations');
+  });
+});
+
+
+describe('stored exhaustion consistency', () => {
+  it('refuses an anchor below a retained fact before RPC', async () => {
+    const t = await setup();
+    const exhausted = { anchor: anchorAt(106n), nonce: 5n };
+    const snapshot: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: [{
+        ...t.snapshot.attempts[0]!,
+        replacementSearch: {
+          lowerBound: t.snapshot.baseline,
+          searchedThrough: null,
+          exhausted,
+        },
+      }],
+    };
+    expect(await t.run({ snapshot })).toEqual({
+      status: 'anchor-behind-exhaustion', anchor: anchorAt(105n), exhausted,
+    });
+    expect(t.order).toEqual([]);
+    expect(t.getBlock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { searchedThrough: null, nonce: 4 },
+    { searchedThrough: null, nonce: 5 },
+    { searchedThrough: null, nonce: 6 },
+    { searchedThrough: anchorAt(105n), nonce: 4 },
+    { searchedThrough: anchorAt(105n), nonce: 5 },
+    { searchedThrough: anchorAt(105n), nonce: 6 },
+  ])(
+    'confirms a changed exhaustion hash without scanning: %#',
+    async ({ searchedThrough, nonce }) => {
+      const t = await setup();
+      const exhausted = { anchor: anchorAt(105n), nonce: 5n };
+      const anchor = { blockNumber: 105n, blockHash: OTHER };
+      const snapshot: TransactionJournalSnapshot = {
+        ...t.snapshot,
+        attempts: [{
+          ...t.snapshot.attempts[0]!,
+          replacementSearch: {
+            lowerBound: t.snapshot.baseline,
+            searchedThrough,
+            exhausted,
+          },
+        }],
+      };
+      const before = structuredClone(snapshot);
+
+      const read = t.getBlock.getMockImplementation()!;
+      t.getBlock.mockImplementation(async (request) => {
+        const block = await read(request);
+        if (request.blockNumber === 105n) return { ...block, hash: OTHER };
+        return block;
+      });
+      t.getTransactionReceipt.mockRejectedValue(new TransactionReceiptNotFoundError({ hash: t.hash }));
+      t.getTransactionCount.mockResolvedValue(nonce);
+      const result = await t.run({ snapshot, anchor });
+      expect(result).toMatchObject({
+        status: 'search-reset-required',
+        attemptId: snapshot.attempts[0]!.attemptId,
+        observation: { anchor, nonce: BigInt(nonce) },
+        reset: {
+          reason: 'exhaustion-anchor-changed',
+          expected: anchorAt(105n),
+          observed: anchor,
+          lowerBound: snapshot.baseline,
+        },
+      });
+      expect(t.getBlock.mock.calls.map(([request]) => request.blockNumber))
+        .toEqual([105n, 105n, 105n, 105n, 105n, 100n, 105n]);
+      expect(t.getBlock.mock.calls.every(([request]) => request.includeTransactions !== true))
+        .toBe(true);
+      expect(t.getTransactionCount).toHaveBeenCalledTimes(1);
+      expect(snapshot).toEqual(before);
+    },
+  );
+
+  it.each([5n, 6n])('compares nonce %s at the same anchor using case-insensitive hashes', async (nonce) => {
+    const t = await setup();
+    const anchor = { blockNumber: 105n, blockHash: OTHER };
+    t.getBlock.mockImplementation(async (request) => ({
+      number: request.blockNumber,
+      hash: OTHER,
+      parentHash: OTHER,
+      transactions: [],
+    }));
+    t.getTransactionReceipt.mockResolvedValue({
+      transactionHash: t.hash, blockNumber: 102n, blockHash: OTHER, status: 'success',
+    });
+    t.getTransactionCount.mockResolvedValue(Number(nonce));
+    const snapshot: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: [{
+        ...t.snapshot.attempts[0]!,
+        replacementSearch: {
+          lowerBound: t.snapshot.baseline,
+          searchedThrough: null,
+          exhausted: {
+            anchor: { ...anchor, blockHash: ('0x' + OTHER.slice(2).toUpperCase()) as Hash },
+            nonce: 5n,
+          },
+        },
+      }],
+    };
+    const result = await t.run({ snapshot, anchor });
+    expect(result.status).toBe(nonce === 5n ? 'resolution-available' : 'inconsistent-observations');
+  });
+});
+
+
+describe('nonce-independent exhaustion confirmation', () => {
+  it.each([
+    {
+      name: 'verified receipt with an unconsumed nonce',
+      inclusionHeight: 102n,
+      nonce: 4,
+    },
+    {
+      name: 'above-durable receipt with a consumed nonce',
+      inclusionHeight: 106n,
+      nonce: 5,
+    },
+  ])(
+    'refuses $name before confirming a contradicted fact',
+    async ({ inclusionHeight, nonce }) => {
+      const t = await setup();
+      const anchor = {
+        blockNumber: 105n,
+        blockHash: OTHER,
+      };
+      const snapshot: TransactionJournalSnapshot = {
+        ...t.snapshot,
+        attempts: [{
+          ...t.snapshot.attempts[0]!,
+          replacementSearch: {
+            lowerBound: t.snapshot.baseline,
+            searchedThrough: null,
+            exhausted: {
+              anchor: anchorAt(105n),
+              nonce: 5n,
+            },
+          },
+        }],
+      };
+      const before = structuredClone(snapshot);
+      const read = t.getBlock.getMockImplementation()!;
+
+      t.getBlock.mockImplementation(async (request) => {
+        const block = await read(request);
+
+        if (request.blockNumber === anchor.blockNumber) {
+          return {
+            ...block,
+            hash: anchor.blockHash,
+          };
+        }
+
+        return block;
+      });
+      t.getTransactionReceipt.mockResolvedValue({
+        transactionHash: t.hash,
+        blockNumber: inclusionHeight,
+        blockHash: anchorAt(inclusionHeight).blockHash,
+        status: 'success',
+      });
+      t.getTransactionCount.mockResolvedValue(nonce);
+
+      const result = await t.run({ snapshot, anchor });
+
+      expect(result).toEqual({
+        status: 'inconsistent-observations',
+        observation: {
+          anchor,
+          nonce: BigInt(nonce),
+        },
+      });
+      expect(result).not.toHaveProperty('reset');
+      expect(result).not.toHaveProperty('observations');
+
+      // Four anchor checks plus the receipt's inclusion-header verification;
+      // no lower-bound read or exhaustion-confirmation bracket follows.
+      expect(t.getBlock.mock.calls.map(([request]) => request))
+        .toEqual([
+          { blockNumber: 105n },
+          { blockNumber: inclusionHeight },
+          { blockNumber: 105n },
+          { blockNumber: 105n },
+          { blockNumber: 105n },
+        ]);
+      expect(snapshot).toEqual(before);
+    },
+  );
+
+  it.each(['opening', 'lower', 'closing', 'closing-rpc'] as const)(
+    'refuses confirmation when %s fails',
+    async (failure) => {
+      const t = await setup();
+      const selected = { blockNumber: 105n, blockHash: OTHER };
+      const snapshot: TransactionJournalSnapshot = {
+        ...t.snapshot,
+        attempts: [{
+          ...t.snapshot.attempts[0]!,
+          replacementSearch: {
+            lowerBound: t.snapshot.baseline,
+            searchedThrough: null,
+            exhausted: { anchor: anchorAt(105n), nonce: 5n },
+          },
+        }],
+      };
+      t.getTransactionReceipt.mockRejectedValue(new TransactionReceiptNotFoundError({ hash: t.hash }));
+      t.getTransactionCount.mockResolvedValue(4);
+      const read = t.getBlock.getMockImplementation()!;
+      let selectedReads = 0;
+      t.getBlock.mockImplementation(async (request) => {
+        const block = await read(request);
+        if (request.blockNumber === 105n) {
+          selectedReads += 1;
+          if (selectedReads === 6 && failure === 'closing-rpc') {
+            throw new Error('Confirmation closing failed');
+          }
+          if ((selectedReads === 5 && failure === 'opening') ||
+            (selectedReads === 6 && failure === 'closing')) {
+            return block;
+          }
+          return { ...block, hash: OTHER };
+        }
+        if (request.blockNumber === 100n && failure === 'lower') {
+          return { ...block, hash: OTHER };
+        }
+        return block;
+      });
+
+      if (failure === 'closing-rpc') {
+        await expect(t.run({ snapshot, anchor: selected }))
+          .rejects.toThrow('Confirmation closing failed');
+      } else {
+        const result = await t.run({ snapshot, anchor: selected });
+        expect(result.status).toBe(failure === 'lower' ? 'inconsistent-observations' : 'anchor-changed');
+        expect(result).not.toHaveProperty('reset');
+        expect(result).not.toHaveProperty('observations');
+      }
+      expect(t.getBlock.mock.calls.every(([request]) => request.includeTransactions !== true))
+        .toBe(true);
+    },
+  );
+
+  it.each([false, true])('confirms an ancestor fact when the nonce is unconsumed; changed: %s', async (changed) => {
+    const t = await setup();
+    const fact = { anchor: anchorAt(105n), nonce: 5n };
+    const snapshot: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: [{
+        ...t.snapshot.attempts[0]!,
+        replacementSearch: {
+          lowerBound: t.snapshot.baseline,
+          searchedThrough: null,
+          exhausted: fact,
+        },
+      }],
+    };
+    t.getTransactionCount.mockResolvedValue(4);
+    t.getTransactionReceipt.mockRejectedValue(new TransactionReceiptNotFoundError({ hash: t.hash }));
+    const read = t.getBlock.getMockImplementation()!;
+    t.getBlock.mockImplementation(async (request) => {
+      const block = await read(request);
+      if (changed && request.blockNumber === 105n) return { ...block, hash: OTHER };
+      return block;
+    });
+
+    const result = await t.run({ snapshot, anchor: anchorAt(110n) });
+
+    expect(t.getBlock.mock.calls.map(([request]) => request.blockNumber))
+      .toEqual([110n, 110n, 110n, 110n, 110n, 100n, 105n, 110n]);
+    expect(t.getBlock.mock.calls.every(([request]) => request.includeTransactions !== true))
+      .toBe(true);
+    if (changed) {
+      expect(result).toMatchObject({
+        status: 'search-reset-required',
+        reset: {
+          reason: 'exhaustion-anchor-changed',
+          expected: fact.anchor,
+          observed: { blockNumber: 105n, blockHash: OTHER },
+          lowerBound: snapshot.baseline,
+        },
+      });
+    } else {
+      expect(result).toEqual({
+        status: 'inconsistent-observations',
+        observation: { anchor: anchorAt(110n), nonce: 4n },
+      });
+    }
+    expect(snapshot.attempts[0]!.replacementSearch?.exhausted).toEqual(fact);
   });
 });

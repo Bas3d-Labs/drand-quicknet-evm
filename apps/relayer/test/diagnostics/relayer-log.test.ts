@@ -177,6 +177,7 @@ describe('createRelayerLog', () => {
       'roundImported',
       'roundPending',
       'rpcUsage',
+      'searchReset',
       'signerBlocked',
       'signerBootstrapDeferred',
       'signerGateReleased',

@@ -66,6 +66,7 @@ function snapshot(): TransactionJournalSnapshot {
         observedAt: anchor(110n),
       },
       replacementSearch: {
+        exhausted: null,
         lowerBound: baseline,
         searchedThrough: null,
       },
@@ -430,4 +431,41 @@ describe('durable recovery revision', () => {
       expect(revision(changed)).not.toBe(revision(input));
     },
   );
+});
+
+describe('exhaustion in durable recovery revisions', () => {
+  function withFact(blockNumber: bigint, nonce: bigint, hash = HASH): TransactionJournalSnapshot {
+    const input = snapshot();
+    return {
+      ...input,
+      attempts: [{
+        ...input.attempts[0]!,
+        replacementSearch: {
+          ...input.attempts[0]!.replacementSearch!,
+          exhausted: { anchor: { blockNumber, blockHash: hash }, nonce },
+        },
+      }, input.attempts[1]!],
+    };
+  }
+
+  it('distinguishes fact presence, height, hash, and nonce', () => {
+    const revisions = [
+      snapshot(),
+      withFact(105n, 6n),
+      withFact(106n, 6n),
+      withFact(105n, 7n),
+      withFact(105n, 6n, OTHER as typeof HASH),
+    ].map((input) => revision(input));
+    expect(new Set(revisions).size).toBe(5);
+  });
+
+  it('normalizes fact hash casing and ignores lastObservation changes', () => {
+    const input = withFact(105n, 6n);
+    const upper = ('0x' + HASH.slice(2).toUpperCase()) as typeof HASH;
+    expect(revision(withFact(105n, 6n, upper))).toBe(revision(input));
+    expect(revision({
+      ...input,
+      lastObservation: { anchor: anchor(130n), nonce: 9n },
+    })).toBe(revision(input));
+  });
 });

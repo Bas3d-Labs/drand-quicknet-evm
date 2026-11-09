@@ -65,6 +65,7 @@ function setup() {
         transactionHash: HASH,
       }],
       replacementSearch: {
+        exhausted: null,
         lowerBound: {
           anchor: anchorAt(100n),
           nonce: 4n,
@@ -178,6 +179,7 @@ describe('bounded replacement search', () => {
     fixture.options.attempt = {
       ...fixture.options.attempt,
       replacementSearch: {
+        exhausted: null,
         lowerBound: {
           anchor: anchorAt(100n),
           nonce: 4n,
@@ -238,6 +240,7 @@ describe('bounded replacement search', () => {
     fixture.options.attempt = {
       ...fixture.options.attempt,
       replacementSearch: {
+        exhausted: null,
         lowerBound: {
           anchor: anchorAt(100n),
           nonce: 4n,
@@ -282,6 +285,7 @@ describe('bounded replacement search', () => {
       fixture.options.attempt = {
         ...fixture.options.attempt,
         replacementSearch: {
+          exhausted: null,
           lowerBound: {
             anchor: anchorAt(100n),
             nonce: 4n,
@@ -363,6 +367,7 @@ describe('bounded replacement search', () => {
     fixture.options.attempt = {
       ...fixture.options.attempt,
       replacementSearch: {
+        exhausted: null,
         lowerBound: {
           anchor: anchorAt(100n),
           nonce: 4n,
@@ -506,6 +511,7 @@ describe('bounded replacement search', () => {
     fixture.options.attempt = {
       ...fixture.options.attempt,
       replacementSearch: {
+        exhausted: null,
         lowerBound: {
           anchor: anchorAt(100n),
           nonce: 5n,
@@ -695,6 +701,149 @@ describe('bounded replacement search', () => {
         .rejects.toThrow('Invalid replacement search input.');
 
       expect(fixture.getBlock).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe('durable search boundary confirmation', () => {
+  it.each([
+    { cursor: null, fact: 104n, reads: [105n, 100n, 104n, 101n, 102n, 105n] },
+    { cursor: null, fact: 102n, reads: [105n, 100n, 101n, 102n, 105n] },
+    { cursor: 102n, fact: 102n, reads: [105n, 100n, 102n, 103n, 104n, 105n] },
+    { cursor: 101n, fact: 104n, reads: [105n, 100n, 101n, 104n, 102n, 103n, 105n] },
+  ])('confirms fact $fact with cursor $cursor without duplicate reads', async ({ cursor, fact, reads }) => {
+    const t = setup();
+    t.options.confirmDurableSearch = true;
+    t.options.attempt = { ...t.options.attempt, replacementSearch: {
+      lowerBound: t.options.attempt.replacementSearch!.lowerBound,
+      searchedThrough: cursor === null ? null : anchorAt(cursor),
+      exhausted: { anchor: anchorAt(fact), nonce: 5n },
+    } };
+    expect(await t.run()).toMatchObject({ status: 'not-found' });
+    expect(t.getBlock.mock.calls.map(([request]) => request.blockNumber)).toEqual(reads);
+  });
+
+  it.each(['cursor', 'dedicated', 'scan'] as const)('closes the bracket before returning a %s mismatch reset', async (source) => {
+    const t = setup();
+    t.options.confirmDurableSearch = true;
+    const height = source === 'dedicated' ? 104n : 102n;
+    t.options.attempt = { ...t.options.attempt, replacementSearch: {
+      lowerBound: t.options.attempt.replacementSearch!.lowerBound,
+      searchedThrough: source === 'cursor' ? anchorAt(height) : null,
+      exhausted: { anchor: anchorAt(height), nonce: 5n },
+    } };
+    const read = t.getBlock.getMockImplementation()!;
+    t.getBlock.mockImplementation(async (request) => {
+      const block = await read(request);
+      if (request.blockNumber === height) return { ...block, hash: FORK };
+      return block;
+    });
+    expect(await t.run()).toMatchObject({
+      status: 'search-reset-required',
+      reset: {
+        reason: source === 'cursor' ? 'searched-through-changed' : 'exhaustion-anchor-changed',
+        expected: anchorAt(height),
+        observed: { blockNumber: height, blockHash: FORK },
+      },
+    });
+    expect(t.getBlock.mock.calls.at(-1)![0]).toEqual({ blockNumber: 105n });
+  });
+
+  it.each(['lower', 'closing', 'rpc'] as const)('does not certify a reset after a %s failure', async (failure) => {
+    const t = setup();
+    t.options.confirmDurableSearch = true;
+    t.options.attempt = { ...t.options.attempt, replacementSearch: {
+      lowerBound: t.options.attempt.replacementSearch!.lowerBound,
+      searchedThrough: anchorAt(102n),
+      exhausted: { anchor: anchorAt(102n), nonce: 5n },
+    } };
+    const read = t.getBlock.getMockImplementation()!;
+    let anchorReads = 0;
+    t.getBlock.mockImplementation(async (request) => {
+      if (request.blockNumber === 105n) anchorReads += 1;
+      if (failure === 'rpc' && anchorReads === 2) throw new Error('Closing RPC failed');
+      const block = await read(request);
+      if (request.blockNumber === 102n ||
+        (failure === 'lower' && request.blockNumber === 100n) ||
+        (failure === 'closing' && anchorReads === 2)) {
+        return { ...block, hash: FORK };
+      }
+      return block;
+    });
+    if (failure === 'rpc') {
+      await expect(t.run()).rejects.toThrow('Closing RPC failed');
+    } else {
+      expect(await t.run()).toMatchObject({
+        status: failure === 'lower' ? 'boundary-changed' : 'anchor-changed',
+        observations: [],
+      });
+    }
+  });
+
+  it('confirms the fact even when a match ends the scan before its height', async () => {
+    const t = setup();
+    t.options.confirmDurableSearch = true;
+    t.options.attempt = { ...t.options.attempt, replacementSearch: {
+      lowerBound: t.options.attempt.replacementSearch!.lowerBound,
+      searchedThrough: null,
+      exhausted: { anchor: anchorAt(102n), nonce: 5n },
+    } };
+    t.transactions.set(101n, [transaction()]);
+    expect(await t.run()).toMatchObject({ status: 'replacement-found' });
+    expect(t.getBlock.mock.calls.map(([request]) => request))
+      .toContainEqual({ blockNumber: 102n });
+    expect(t.scanned()).toEqual([101n]);
+  });
+});
+
+describe('latest search leaves exhaustion facts uninterpreted', () => {
+  it.each([false, true])(
+    'uses latest boundary semantics with a retained fact; cursor changed: %s',
+    async (cursorChanged) => {
+      const t = setup();
+      const search = {
+        lowerBound: t.options.attempt.replacementSearch!.lowerBound,
+        searchedThrough: anchorAt(102n),
+        // Deliberately differs from the scanned header: latest evidence must
+        // neither validate this fact nor turn it into a reset certificate.
+        exhausted: {
+          anchor: { blockNumber: 104n, blockHash: FORK },
+          nonce: 5n,
+        },
+      };
+      t.options.attempt = {
+        ...t.options.attempt,
+        replacementSearch: search,
+      };
+      const before = structuredClone(search);
+      const read = t.getBlock.getMockImplementation()!;
+      t.getBlock.mockImplementation(async (request) => {
+        const block = await read(request);
+        if (cursorChanged && request.blockNumber === 102n) {
+          return { ...block, hash: FORK };
+        }
+        return block;
+      });
+
+      const result = await t.run();
+
+      expect(t.options.confirmDurableSearch).toBeUndefined();
+      expect(t.options.attempt.replacementSearch).toEqual(before);
+      if (cursorChanged) {
+        expect(result).toMatchObject({
+          status: 'boundary-changed',
+          boundary: 'searched-through',
+          observations: [],
+        });
+        expect(t.getBlock.mock.calls.map(([request]) => request.blockNumber))
+          .toEqual([105n, 100n, 102n]);
+      } else {
+        expect(result).toMatchObject({ status: 'not-found' });
+        expect(t.getBlock.mock.calls.map(([request]) => request.blockNumber))
+          .toEqual([105n, 100n, 102n, 103n, 104n, 105n]);
+        expect(t.getBlock.mock.calls.filter(([request]) => request.blockNumber === 104n))
+          .toEqual([[{ blockNumber: 104n, includeTransactions: true }]]);
+      }
     },
   );
 });

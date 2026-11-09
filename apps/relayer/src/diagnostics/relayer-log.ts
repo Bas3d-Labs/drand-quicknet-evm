@@ -116,6 +116,7 @@ interface Values {
     | 'request-error'
     | 'invalid-response'
     | 'hash-mismatch';
+  searchResetReason: 'searched-through-changed' | 'exhaustion-anchor-changed';
   resolution: AttemptResolutionEvidence;
   blocker: SignerBlocker;
   blockers: readonly SignerBlocker[];
@@ -353,6 +354,23 @@ const TRANSACTION_EVENTS = {
       transactionHash: 'hash',
       nonce: 'uint',
       observation: 'broadcastObservation',
+    },
+  ],
+  searchReset: [
+    'warn',
+    'signer_search_reset',
+    'Conflicting durable block observations; search reset persisted',
+    {
+      signer: 'address',
+      attemptId: 'id',
+      nonce: 'uint',
+      reason: 'searchResetReason',
+      expectedBlock: 'uint',
+      expectedBlockHash: 'hash',
+      observedBlock: 'uint',
+      observedBlockHash: 'hash',
+      durableBlock: 'uint',
+      durableBlockHash: 'hash',
     },
   ],
   attemptResolved: [
@@ -1046,6 +1064,12 @@ function scalar(
       value === 'witness-decode-failed'
     )
   ) {
+    return value;
+  }
+
+  if (kind === 'searchResetReason' && (
+    value === 'searched-through-changed' || value === 'exhaustion-anchor-changed'
+  )) {
     return value;
   }
 

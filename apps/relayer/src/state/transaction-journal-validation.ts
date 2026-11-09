@@ -254,9 +254,23 @@ function readReplacementSearch(
     );
   }
 
+  const rawExhausted = field(input, 'exhausted', true);
+  let exhausted: AnchoredNonceObservation | null = null;
+
+  if (rawExhausted !== undefined && rawExhausted !== null) {
+    exhausted = readObservation(rawExhausted);
+
+    requireValid(exhausted.nonce > attemptNonce);
+    requireValid(exhausted.nonce >= lowerBound.nonce);
+    requireValid(
+      exhausted.anchor.blockNumber > lowerBound.anchor.blockNumber
+    );
+  }
+
   return Object.freeze({
     lowerBound,
-    searchedThrough
+    searchedThrough,
+    exhausted,
   });
 }
 
@@ -431,6 +445,7 @@ function readArray<T>(
 function field(
   input: unknown,
   name: string,
+  optional = false,
 ): unknown {
   requireValid(
     typeof input === 'object' &&
@@ -438,12 +453,13 @@ function field(
     !Array.isArray(input),
   )
 
-  return ownValue(input, name);
+  return ownValue(input, name, optional);
 }
 
 function ownValue(
   input: object,
   name: string,
+  optional = false,
 ): unknown {
   let descriptor: PropertyDescriptor | undefined;
 
@@ -451,6 +467,10 @@ function ownValue(
     descriptor = Object.getOwnPropertyDescriptor(input, name);
   } catch {
     throw new TypeError('Invalid transaction journal snapshot.');
+  }
+
+  if (descriptor === undefined && optional) {
+    return undefined;
   }
 
   requireValid(

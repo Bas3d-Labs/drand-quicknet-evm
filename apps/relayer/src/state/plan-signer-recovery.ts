@@ -2,6 +2,10 @@ import type {
   Hash,
 } from 'viem';
 
+import {
+  blockAnchorsMatch,
+} from '../chain/block-anchor.js';
+
 import type {
   SignerRecoveryInspection,
 } from '../chain/inspect-signer-recovery.js';
@@ -42,8 +46,22 @@ export type RecoveryWriteCompletion =
       readonly event: CommittedAttemptResolution;
     }
   | {
+      readonly kind: 'search-reset';
+      readonly event: {
+        readonly signer: JournalIdentity['signer'];
+        readonly attemptId: string;
+        readonly nonce: bigint;
+        readonly reason: 'searched-through-changed' | 'exhaustion-anchor-changed';
+        readonly expectedBlock: bigint;
+        readonly expectedBlockHash: Hash;
+        readonly observedBlock: bigint;
+        readonly observedBlockHash: Hash;
+        readonly durableBlock: bigint;
+        readonly durableBlockHash: Hash;
+      };
+    }
+  | {
       readonly kind: 'search-progress';
-      readonly exhausted: boolean;
     };
 
 export interface PlanSignerRecoveryOptions {
@@ -81,6 +99,7 @@ export function planSignerRecovery(
 
   if (
     inspection.status === 'anchor-changed' ||
+    inspection.status === 'anchor-behind-exhaustion' ||
     inspection.status === 'nonce-behind-journal' ||
     inspection.status === 'inconsistent-observations'
   ) {
@@ -109,8 +128,11 @@ export function planSignerRecovery(
     unattributedActivity &&
     snapshot.lastObservation.nonce > lastObservation.nonce
   ) {
-    // Resolution may proceed without erasing the higher observation.
-    if (inspection.status !== 'resolution-available') {
+    // Resolution and confirmed invalidation preserve the higher observation.
+    if (
+      inspection.status !== 'resolution-available' &&
+      inspection.status !== 'search-reset-required'
+    ) {
       return {
         kind: 'unchanged',
         reason: 'preserved-higher-observation',
@@ -129,7 +151,49 @@ export function planSignerRecovery(
     kind: 'observation',
   };
 
-  if (inspection.status === 'resolution-available') {
+  if (inspection.status === 'search-reset-required') {
+    const target = attempts.find((attempt) => attempt.attemptId === inspection.attemptId);
+    if (
+      target === undefined ||
+      target.replacementSearch === null ||
+      !blockAnchorsMatch(
+        target.replacementSearch.lowerBound.anchor,
+        inspection.reset.lowerBound.anchor,
+      ) ||
+      target.replacementSearch.lowerBound.nonce !== inspection.reset.lowerBound.nonce
+    ) {
+      throw new Error('Reset requires the retained validated lower bound.');
+    }
+    const lowerBound = target.replacementSearch.lowerBound;
+    attempts = attempts.map((attempt) => {
+      if (attempt.attemptId !== target.attemptId) {
+        return attempt;
+      }
+      return {
+        ...attempt,
+        replacementSearch: {
+          lowerBound,
+          searchedThrough: null,
+          exhausted: null,
+        },
+      };
+    });
+    completion = {
+      kind: 'search-reset',
+      event: Object.freeze({
+        signer: identity.signer,
+        attemptId: target.attemptId,
+        nonce: target.nonce,
+        reason: inspection.reset.reason,
+        expectedBlock: inspection.reset.expected.blockNumber,
+        expectedBlockHash: inspection.reset.expected.blockHash,
+        observedBlock: inspection.reset.observed.blockNumber,
+        observedBlockHash: inspection.reset.observed.blockHash,
+        durableBlock: inspection.observation.anchor.blockNumber,
+        durableBlockHash: inspection.observation.anchor.blockHash,
+      }),
+    };
+  } else if (inspection.status === 'resolution-available') {
     if (oldest === undefined) {
       throw new Error('No recorded attempt is available to resolve.');
     }
@@ -175,6 +239,7 @@ export function planSignerRecovery(
         replacementSearch = {
           lowerBound,
           searchedThrough: null,
+          exhausted: null,
         };
       }
     }
@@ -195,10 +260,24 @@ export function planSignerRecovery(
         searchedThrough: inspection.search.searchedThrough,
       };
 
-      completion = {
-        kind: 'search-progress',
-        exhausted: inspection.search.remainingBlocks === 0n,
-      };
+      if (inspection.search.remainingBlocks === 0n) {
+        if (!blockAnchorsMatch(
+          inspection.search.searchedThrough,
+          inspection.observation.anchor,
+        )) {
+          throw new Error('Exhausted search must reach the selected anchor.');
+        }
+
+        replacementSearch = {
+          ...replacementSearch,
+          exhausted: {
+            anchor: inspection.search.searchedThrough,
+            nonce: inspection.observation.nonce,
+          },
+        };
+      }
+
+      completion = { kind: 'search-progress' };
     }
 
     attempts = [

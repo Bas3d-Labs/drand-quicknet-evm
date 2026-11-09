@@ -129,6 +129,66 @@ function expectInvalid(input: unknown) {
 }
 
 describe('journal snapshot structure', () => {
+  it.each(['omitted', 'null'] as const)('normalizes %s exhaustion to null', (kind) => {
+    const input = fixture();
+    if (kind === 'null') {
+      Object.assign(input.attempts[0]!.replacementSearch, { exhausted: null });
+    }
+
+    expect(validate(input).attempts[0]!.replacementSearch?.exhausted).toBeNull();
+  });
+
+  it('rejects an exhaustion accessor without invoking it', () => {
+    const input = fixture();
+    const get = vi.fn(() => null);
+    Object.defineProperty(input.attempts[0]!.replacementSearch, 'exhausted', { get });
+
+    expectInvalid(input);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it.each(['signed', 'broadcast-may-have-occurred', 'included'])(
+    'retains detached exhaustion evidence for an attempt in phase %s',
+    (phase) => {
+      const input = phase === 'included' ? includedFixture() : fixture();
+      input.attempts[0]!.phase = phase;
+      const exhausted = {
+        anchor: { blockNumber: 115n, blockHash: OTHER },
+        nonce: 6n,
+      };
+      Object.assign(input.attempts[0]!.replacementSearch, { exhausted });
+      const saved = validate(input).attempts[0]!.replacementSearch!.exhausted!;
+
+      exhausted.anchor.blockNumber = 0n;
+      exhausted.nonce = 0n;
+      expect(saved).toEqual({
+        anchor: { blockNumber: 115n, blockHash: OTHER },
+        nonce: 6n,
+      });
+      expect(Object.isFrozen(saved)).toBe(true);
+      expect(Object.isFrozen(saved.anchor)).toBe(true);
+    },
+  );
+
+  it.each([
+    ['nonce equal to attempt', 4n, 115n, HASH],
+    ['nonce below lower bound', 3n, 115n, HASH],
+    ['negative nonce', -1n, 115n, HASH],
+    ['overflow nonce', 1n << 256n, 115n, HASH],
+    ['anchor equal to lower bound', 5n, 100n, HASH],
+    ['anchor before lower bound', 5n, 99n, HASH],
+    ['negative height', 5n, -1n, HASH],
+    ['overflow height', 5n, 1n << 256n, HASH],
+    ['malformed hash', 5n, 115n, '0x12'],
+  ])('rejects exhaustion with %s', (_name, nonce, blockNumber, blockHash) => {
+    const input = fixture();
+    Object.assign(input.attempts[0]!.replacementSearch, {
+      exhausted: { anchor: { blockNumber, blockHash }, nonce },
+    });
+
+    expectInvalid(input);
+  });
+
   it('returns a detached, deeply frozen snapshot', () => {
     const input = includedFixture();
     const snapshot = validate(input);
