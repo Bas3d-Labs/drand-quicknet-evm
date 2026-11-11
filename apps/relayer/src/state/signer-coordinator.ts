@@ -900,6 +900,16 @@ export class SignerCoordinator {
         };
       }
 
+      // Slice 4 can plan this correction, but persistence must stay disabled
+      // until its terminal-incomplete acknowledgement lifecycle is implemented.
+      if (
+        result.status === 'search-lower-bound-replacement-required' ||
+        result.status === 'search-lower-bound-replacement-unavailable'
+      ) {
+        this.failInspectionBracket(owner);
+        return result;
+      }
+
       const plan = planSignerRecovery({
         identity: this.identity,
         snapshot: current.snapshot,

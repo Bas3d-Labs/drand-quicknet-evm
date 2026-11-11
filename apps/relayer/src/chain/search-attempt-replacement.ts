@@ -58,7 +58,18 @@ export interface SearchResetEvidence {
   readonly lowerBound: AnchoredNonceObservation;
 }
 
+/** A changed lower bound observed inside a successfully closed durable bracket. */
+export interface ClosedLowerBoundMismatch {
+  readonly durableAnchor: Readonly<BlockAnchor>;
+  readonly lowerBound: AnchoredNonceObservation;
+  readonly observedLower: Readonly<BlockAnchor>;
+}
+
 type ReplacementSearchClassification =
+  | {
+      status: 'search-lower-bound-changed';
+      trigger: ClosedLowerBoundMismatch;
+    }
   | {
       status: 'search-reset-required';
       reset: SearchResetEvidence;
@@ -251,6 +262,30 @@ export async function searchAttemptReplacement(
   observations.push(Object.freeze(observedLower));
 
   if (!blockAnchorsMatch(lower, observedLower)) {
+    if (options.confirmDurableSearch === true) {
+      const closing = await checkBlockAnchor(publicClient, anchor);
+
+      if (closing !== null) {
+        return {
+          ...closing,
+          observations: Object.freeze([]),
+        };
+      }
+
+      return {
+        status: 'search-lower-bound-changed',
+        trigger: Object.freeze({
+          durableAnchor: anchor,
+          lowerBound: Object.freeze({
+            anchor: lower,
+            nonce: lowerNonce,
+          }),
+          observedLower,
+        }),
+        observations: Object.freeze(observations),
+      };
+    }
+
     return {
       status: 'boundary-changed',
       observations: Object.freeze([]),

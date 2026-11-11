@@ -1097,7 +1097,11 @@ describe('nonce-independent exhaustion confirmation', () => {
           .rejects.toThrow('Confirmation closing failed');
       } else {
         const result = await t.run({ snapshot, anchor: selected });
-        expect(result.status).toBe(failure === 'lower' ? 'inconsistent-observations' : 'anchor-changed');
+        if (failure === 'lower') {
+          expect(result.status).toBe('inconsistent-observations');
+        } else {
+          expect(result.status).toBe('anchor-changed');
+        }
         expect(result).not.toHaveProperty('reset');
         expect(result).not.toHaveProperty('observations');
       }
@@ -1153,4 +1157,297 @@ describe('nonce-independent exhaustion confirmation', () => {
     }
     expect(snapshot.attempts[0]!.replacementSearch?.exhausted).toEqual(fact);
   });
+});
+
+describe('durable lower-bound trigger routing', () => {
+  it('refuses a changed synthesized lower bound before handing off to repair', async () => {
+    const fixture = await setup();
+    fixture.missing();
+    const before = structuredClone(fixture.snapshot);
+    const read = fixture.getBlock.getMockImplementation()!;
+
+    fixture.getBlock.mockImplementation(async (request) => {
+      const block = await read(request);
+
+      if (request.blockNumber === 100n) {
+        return { ...block, hash: OTHER };
+      }
+
+      return block;
+    });
+
+    expect(fixture.snapshot.attempts[0]!.replacementSearch).toBeNull();
+    expect(fixture.snapshot.lastObservation).toEqual({
+      anchor: anchorAt(100n),
+      nonce: 4n,
+    });
+
+    expect(await fixture.run()).toEqual({
+      status: 'inconsistent-observations',
+      observation: { anchor: anchorAt(105n), nonce: 5n },
+    });
+    expect(fixture.getBlock.mock.calls).toEqual([
+      [{ blockNumber: 105n }],
+      [{ blockNumber: 105n }],
+      [{ blockNumber: 105n }],
+      [{ blockNumber: 105n }],
+      [{ blockNumber: 105n }],
+      [{ blockNumber: 100n }],
+      [{ blockNumber: 105n }],
+    ]);
+    expect(fixture.getTransactionCount).toHaveBeenCalledTimes(1);
+    expect(fixture.snapshot).toEqual(before);
+  });
+
+  describe.each(['search', 'confirmation'] as const)('%s path', (path) => {
+    it('retains receipt observations when handing off to repair', async () => {
+      const fixture = await setup();
+      fixture.getTransactionReceipt.mockResolvedValue({
+        transactionHash: fixture.hash,
+        blockNumber: 100n,
+        blockHash: OTHER,
+        status: 'success',
+      });
+      fixture.getTransactionCount.mockResolvedValue(4).mockResolvedValueOnce(5);
+      let selected = anchorAt(105n);
+      let exhausted = null;
+
+      if (path === 'confirmation') {
+        selected = { blockNumber: 105n, blockHash: OTHER };
+        exhausted = { anchor: anchorAt(105n), nonce: 5n };
+      }
+
+      const snapshot: TransactionJournalSnapshot = {
+        ...fixture.snapshot,
+        attempts: [{
+          ...fixture.snapshot.attempts[0]!,
+          replacementSearch: {
+            lowerBound: fixture.snapshot.baseline,
+            searchedThrough: null,
+            exhausted,
+          },
+        }],
+      };
+      const before = structuredClone(snapshot);
+      const read = fixture.getBlock.getMockImplementation()!;
+      let lowerReads = 0;
+
+      fixture.getBlock.mockImplementation(async (request) => {
+        const block = await read(request);
+        if (request.blockNumber === 105n) {
+          return { ...block, hash: selected.blockHash };
+        }
+        if (request.blockNumber === 100n) {
+          lowerReads += 1;
+          if (lowerReads > 1) {
+            return { ...block, hash: OTHER };
+          }
+        }
+        return block;
+      });
+
+      expect(await fixture.run({ snapshot, anchor: selected })).toEqual({
+        status: 'inconsistent-observations',
+        observation: { anchor: selected, nonce: 5n },
+      });
+      expect(fixture.getBlock.mock.calls).toEqual([
+        [{ blockNumber: 105n }],
+        [{ blockNumber: 100n }],
+        [{ blockNumber: 105n }],
+        [{ blockNumber: 105n }],
+        [{ blockNumber: 105n }],
+        [{ blockNumber: 105n }],
+        [{ blockNumber: 100n }],
+        [{ blockNumber: 105n }],
+        [{ blockNumber: 105n }],
+        [{ blockNumber: 100n, includeTransactions: false }],
+        [{ blockNumber: 100n, includeTransactions: false }],
+        [{ blockNumber: 105n }],
+      ]);
+      expect(fixture.getTransactionCount).toHaveBeenCalledTimes(2);
+      expect(snapshot).toEqual(before);
+    });
+
+    it.each(['closed', 'changed', 'rpc'] as const)(
+      'requires its trigger closing before starting repair: %s',
+      async (closing) => {
+        const fixture = await setup();
+        fixture.missing();
+        fixture.getTransactionCount.mockResolvedValue(4).mockResolvedValueOnce(5);
+        let selected = anchorAt(105n);
+        let exhausted = null;
+
+        if (path === 'confirmation') {
+          selected = { blockNumber: 105n, blockHash: OTHER };
+          exhausted = { anchor: anchorAt(105n), nonce: 5n };
+        }
+
+        const snapshot: TransactionJournalSnapshot = {
+          ...fixture.snapshot,
+          attempts: [{
+            ...fixture.snapshot.attempts[0]!,
+            replacementSearch: {
+              lowerBound: fixture.snapshot.baseline,
+              searchedThrough: null,
+              exhausted,
+            },
+          }],
+        };
+        const before = structuredClone(snapshot);
+        const read = fixture.getBlock.getMockImplementation()!;
+        const failure = new Error('Trigger closing failed');
+        let selectedReads = 0;
+
+        fixture.getBlock.mockImplementation(async (request) => {
+          const block = await read(request);
+
+          if (request.blockNumber === 105n) {
+            selectedReads += 1;
+            if (selectedReads === 6 && closing === 'rpc') {
+              throw failure;
+            }
+            if (selectedReads === 6 && closing === 'changed') {
+              return { ...block, hash: hashAt(999n) };
+            }
+            return { ...block, hash: selected.blockHash };
+          }
+          if (request.blockNumber === 100n) {
+            return { ...block, hash: OTHER };
+          }
+
+          return block;
+        });
+
+        const pending = fixture.run({ snapshot, anchor: selected });
+
+        if (closing === 'rpc') {
+          await expect(pending).rejects.toBe(failure);
+        } else if (closing === 'changed') {
+          expect(await pending).toEqual({
+            status: 'anchor-changed',
+            observedAnchor: { blockNumber: 105n, blockHash: hashAt(999n) },
+          });
+        } else {
+          const result = await pending;
+          expect(result).toMatchObject({
+            status: 'search-lower-bound-replacement-required',
+            attemptId: snapshot.attempts[0]!.attemptId,
+            observation: { anchor: selected, nonce: 5n },
+            replacement: {
+              trigger: {
+                durableAnchor: selected,
+                lowerBound: snapshot.baseline,
+                observedLower: { blockNumber: 100n, blockHash: OTHER },
+              },
+              replacement: {
+                anchor: { blockNumber: 100n, blockHash: OTHER },
+                nonce: 4n,
+              },
+            },
+          });
+          if (result.status === 'search-lower-bound-replacement-required') {
+            expect(result.observations).toContainEqual({ blockNumber: 100n, blockHash: OTHER });
+            if (path === 'search') {
+              expect(result.replacement.invalidatedFact).toBeNull();
+            } else {
+              expect(result.replacement.invalidatedFact).toEqual({
+                fact: exhausted,
+                observedAnchor: selected,
+              });
+            }
+          }
+        }
+
+        const expectedCalls: Array<[{ blockNumber: bigint; includeTransactions?: boolean }]> = [
+          [{ blockNumber: 105n }],
+          [{ blockNumber: 105n }],
+          [{ blockNumber: 105n }],
+          [{ blockNumber: 105n }],
+          [{ blockNumber: 105n }],
+          [{ blockNumber: 100n }],
+          [{ blockNumber: 105n }],
+        ];
+        if (closing === 'closed') {
+          expectedCalls.push(
+            [{ blockNumber: 105n }],
+            [{ blockNumber: 100n, includeTransactions: false }],
+            [{ blockNumber: 100n, includeTransactions: false }],
+            [{ blockNumber: 105n }],
+          );
+          expect(fixture.getTransactionCount).toHaveBeenCalledTimes(2);
+        } else {
+          expect(fixture.getTransactionCount).toHaveBeenCalledTimes(1);
+        }
+        expect(fixture.getBlock.mock.calls).toEqual(expectedCalls);
+        expect(snapshot).toEqual(before);
+      },
+    );
+  });
+
+  it.each(['unconsumed', 'non-oldest'] as const)(
+    'keeps the changed-lower early refusal for %s confirmation',
+    async (target) => {
+      const fixture = await setup();
+      fixture.missing();
+      const selected = { blockNumber: 105n, blockHash: OTHER };
+      const oldest = fixture.snapshot.attempts[0]!;
+      let attempts = [oldest];
+      let nonce = 4;
+      let nextNonce = 5n;
+
+      if (target === 'unconsumed') {
+        attempts = [{
+          ...oldest,
+          replacementSearch: {
+            lowerBound: fixture.snapshot.baseline,
+            searchedThrough: null,
+            exhausted: { anchor: anchorAt(105n), nonce: 5n },
+          },
+        }];
+      } else {
+        nonce = 6;
+        nextNonce = 6n;
+        attempts = [oldest, {
+          ...oldest,
+          attemptId: '22222222-2222-4222-8222-222222222222',
+          workId: 'test-work:5',
+          nonce: 5n,
+          signedTransactions: [await signedTransaction(5)],
+          replacementSearch: {
+            lowerBound: fixture.snapshot.baseline,
+            searchedThrough: null,
+            exhausted: { anchor: anchorAt(105n), nonce: 6n },
+          },
+        }];
+      }
+
+      const snapshot: TransactionJournalSnapshot = {
+        ...fixture.snapshot,
+        nextNonce,
+        attempts,
+      };
+      const before = structuredClone(snapshot);
+      fixture.getTransactionCount.mockResolvedValue(nonce);
+      const read = fixture.getBlock.getMockImplementation()!;
+
+      fixture.getBlock.mockImplementation(async (request) => {
+        const block = await read(request);
+        return { ...block, hash: OTHER };
+      });
+
+      expect(await fixture.run({ snapshot, anchor: selected })).toEqual({
+        status: 'inconsistent-observations',
+        observation: { anchor: selected, nonce: BigInt(nonce) },
+      });
+      expect(fixture.getBlock.mock.calls).toEqual([
+        [{ blockNumber: 105n }],
+        [{ blockNumber: 105n }],
+        [{ blockNumber: 105n }],
+        [{ blockNumber: 105n }],
+        [{ blockNumber: 105n }],
+        [{ blockNumber: 100n }],
+      ]);
+      expect(snapshot).toEqual(before);
+    },
+  );
 });

@@ -506,3 +506,28 @@ describe('confirmed durable search reset planning', () => {
     expect(input.attempts[0]!.replacementSearch).toEqual(search);
   });
 });
+
+describe('unavailable lower-bound replacement', () => {
+  it.each([
+    { reason: 'probe-budget-exhausted', activity: false },
+    { reason: 'probe-budget-exhausted', activity: true },
+    { reason: 'no-unconsumed-candidate', activity: false },
+    { reason: 'no-unconsumed-candidate', activity: true },
+  ] as const)('refuses unavailable repair before preservation: %j', async ({ reason, activity }) => {
+    const original = await createSnapshot();
+    const snapshot: TransactionJournalSnapshot = {
+      ...original,
+      lastObservation: observationAt(110n, 7n),
+    };
+    const before = structuredClone(snapshot);
+    expect(plan(snapshot, {
+      status: 'search-lower-bound-replacement-unavailable',
+      reason,
+      observation: observationAt(105n, 5n),
+    }, activity)).toEqual({
+      kind: 'unchanged',
+      reason: 'inspection-not-committable',
+    });
+    expect(snapshot).toEqual(before);
+  });
+});

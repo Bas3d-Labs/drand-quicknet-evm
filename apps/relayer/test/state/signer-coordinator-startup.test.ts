@@ -3607,6 +3607,11 @@ describe('refused durable reset evidence', () => {
       if (failure === 'nonce') {
         vi.mocked(publicClient.getTransactionCount).mockResolvedValue(7);
       }
+      if (failure === 'lower') {
+        vi.mocked(publicClient.getTransactionCount)
+          .mockResolvedValue(4)
+          .mockResolvedValueOnce(6);
+      }
       if (failure === 'conflicting-read') {
         // A fork-served receipt contributes the observed header, not its claim.
         // The subsequent search disagrees at that height inside this inspection.
@@ -3626,8 +3631,8 @@ describe('refused durable reset evidence', () => {
         head: { blockNumber: 130n, blockHash: HASH },
         maxBlockRange: 2n,
       });
-      expect(result.inclusions).toBeNull();
       expect(t.save).not.toHaveBeenCalled();
+      expect(result.inclusions).toBeNull();
       expect(coordinator.durableRecoveryRevision).toBe(revision);
       expect(coordinator.status.blockers).toContain('conflict-search-exhausted');
       expect(coordinator.status.recoveryComplete).toBe(false);
@@ -3635,7 +3640,31 @@ describe('refused durable reset evidence', () => {
       expect(t.lines.map((line) => JSON.parse(line).event)).not.toContain('signer_search_reset');
       if (failure === 'closing') {
         expect(result.inspection.status).toBe('anchor-changed');
-      } else if (failure !== 'lower') {
+      } else if (failure === 'lower') {
+        // The pure planner can persist this evidence. Only the coordinator's
+        // explicit lifecycle guard prevents a write in this intermediate slice.
+        expect(result.inspection.status).toBe('search-lower-bound-replacement-required');
+        if (result.inspection.status !== 'search-lower-bound-replacement-required') {
+          throw new Error('Expected valid lower-bound replacement evidence');
+        }
+        const plan = recoveryPlanning.planSignerRecovery({
+          identity: IDENTITY,
+          snapshot: input,
+          inspection: result.inspection,
+          unattributedActivity: coordinator.status.blockers.includes('unattributed-signer-activity'),
+        });
+        expect(plan.kind).toBe('persist');
+        if (plan.kind === 'persist') {
+          expect(plan.completion.kind).toBe('search-lower-bound-replacement');
+          expect(plan.snapshot.attempts[0]!.replacementSearch).toEqual({
+            lowerBound: { anchor: { blockNumber: 100n, blockHash: fork }, nonce: 4n },
+            searchedThrough: null,
+            exhausted: null,
+          });
+        }
+        expect(selectedReads).toBe(8);
+        expect(coordinator.status.open).toBe(false);
+      } else {
         expect(result.inspection.status).toBe('inconsistent-observations');
       }
     },
