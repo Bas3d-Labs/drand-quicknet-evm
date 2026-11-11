@@ -40,9 +40,15 @@ import {
 } from './resolve-replacement-search.js';
 
 import {
+  repairSearchLowerBound,
+  type LowerBoundRepairResult,
+} from './repair-search-lower-bound.js';
+
+import {
   searchAttemptReplacement,
   type ReplacementSearchResult,
   type SearchResetEvidence,
+  type ClosedLowerBoundMismatch,
 } from './search-attempt-replacement.js';
 
 type UnresolvedReceipt = Exclude<
@@ -52,7 +58,13 @@ type UnresolvedReceipt = Exclude<
 
 type UnresolvedSearch = Exclude<
   ReplacementSearchResult,
-  { status: 'replacement-found' | 'anchor-changed' | 'search-reset-required' }
+  {
+    status:
+      | 'replacement-found'
+      | 'anchor-changed'
+      | 'search-reset-required'
+      | 'search-lower-bound-changed';
+  }
 >;
 
 export interface InspectSignerRecoveryOptions {
@@ -66,6 +78,7 @@ export interface InspectSignerRecoveryOptions {
 }
 
 export type SignerRecoveryInspection =
+  | LowerBoundRepairResult
   | {
       status: 'anchor-behind-exhaustion';
       anchor: Readonly<BlockAnchor>;
@@ -274,14 +287,28 @@ export async function inspectSignerRecovery(
 
   if (confirmationTarget !== undefined) {
     const search = confirmationTarget.replacementSearch!;
-    return confirmExhaustionInvalidation({
+    const confirmation = await confirmExhaustionInvalidation({
       publicClient,
       observation,
       attemptId: confirmationTarget.attemptId,
       lowerBound: search.lowerBound,
       fact: search.exhausted!,
+      allowLowerBoundTrigger:
+        consumed && confirmationTarget.attemptId === attempt.attemptId,
       observations,
     });
+
+    if (confirmation.status === 'search-lower-bound-changed') {
+      return repairSearchLowerBound({
+        publicClient,
+        snapshot,
+        observation,
+        trigger: confirmation.trigger,
+        observations,
+      });
+    }
+
+    return confirmation;
   }
 
   if (receipt.status === 'verified') {
@@ -327,6 +354,22 @@ export async function inspectSignerRecovery(
     };
   }
 
+  if (search.status === 'search-lower-bound-changed') {
+    if (attempt.replacementSearch === null) {
+      // Repair requires a committed lower bound. A stale observation used to
+      // synthesize a search cannot authorize replacement of stored state.
+      return { status: 'inconsistent-observations', observation };
+    }
+
+    return repairSearchLowerBound({
+      publicClient,
+      snapshot,
+      observation,
+      trigger: search.trigger,
+      observations: [...observations, ...search.observations],
+    });
+  }
+
   observations.push(...search.observations.filter(
     (block) => block.blockNumber <= anchor.blockNumber,
   ));
@@ -363,6 +406,13 @@ export async function inspectSignerRecovery(
 }
 
 
+type ClosedLowerBoundTrigger = {
+  readonly status: 'search-lower-bound-changed';
+  readonly attemptId: string;
+  readonly observation: AnchoredNonceObservation;
+  readonly trigger: ClosedLowerBoundMismatch;
+};
+
 /**
  * Confirms a retained lower bound and exhaustion anchor without scanning or
  * requiring a consumed nonce. Only a closed bracket can certify a reset.
@@ -373,8 +423,9 @@ async function confirmExhaustionInvalidation(options: {
   readonly attemptId: string;
   readonly lowerBound: AnchoredNonceObservation;
   readonly fact: AnchoredNonceObservation;
+  readonly allowLowerBoundTrigger: boolean;
   readonly observations: readonly Readonly<BlockAnchor>[];
-}): Promise<SignerRecoveryInspection> {
+}): Promise<SignerRecoveryInspection | ClosedLowerBoundTrigger> {
   const {
     publicClient,
     observation,
@@ -402,6 +453,29 @@ async function confirmExhaustionInvalidation(options: {
   ));
 
   if (!blockAnchorsMatch(lowerBound.anchor, observedLower)) {
+    if (options.allowLowerBoundTrigger) {
+      const closing = await checkBlockAnchor(
+        publicClient,
+        anchor,
+        { operation: 'signer-recovery' },
+      );
+
+      if (closing !== null) {
+        return closing;
+      }
+
+      return {
+        status: 'search-lower-bound-changed',
+        attemptId: options.attemptId,
+        observation,
+        trigger: Object.freeze({
+          durableAnchor: anchor,
+          lowerBound,
+          observedLower,
+        }),
+      };
+    }
+
     // The field a reset would retain is no longer justified. No reset or
     // ordinary observation write is committable on this evidence.
     return { status: 'inconsistent-observations', observation };

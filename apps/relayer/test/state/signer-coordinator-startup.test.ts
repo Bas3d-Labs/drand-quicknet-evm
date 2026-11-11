@@ -3564,7 +3564,7 @@ describe('acknowledged durable search resets', () => {
 });
 
 describe('refused durable reset evidence', () => {
-  it.each(['lower', 'closing', 'nonce', 'conflicting-read'] as const)(
+  it.each(['closing', 'nonce', 'conflicting-read'] as const)(
     'does not save or log a reset after %s disagreement',
     async (failure) => {
       const snapshot = await queueSnapshot();
@@ -3598,8 +3598,7 @@ describe('refused durable reset evidence', () => {
           if (failure === 'conflicting-read' && cursorReads === 1) return block;
           return { ...block, hash: fork };
         }
-        if ((failure === 'lower' && request?.blockNumber === 100n) ||
-          (failure === 'closing' && selectedReads === 6)) {
+        if (failure === 'closing' && selectedReads === 6) {
           return { ...block, hash: fork };
         }
         return block;
@@ -3626,8 +3625,8 @@ describe('refused durable reset evidence', () => {
         head: { blockNumber: 130n, blockHash: HASH },
         maxBlockRange: 2n,
       });
-      expect(result.inclusions).toBeNull();
       expect(t.save).not.toHaveBeenCalled();
+      expect(result.inclusions).toBeNull();
       expect(coordinator.durableRecoveryRevision).toBe(revision);
       expect(coordinator.status.blockers).toContain('conflict-search-exhausted');
       expect(coordinator.status.recoveryComplete).toBe(false);
@@ -3635,7 +3634,7 @@ describe('refused durable reset evidence', () => {
       expect(t.lines.map((line) => JSON.parse(line).event)).not.toContain('signer_search_reset');
       if (failure === 'closing') {
         expect(result.inspection.status).toBe('anchor-changed');
-      } else if (failure !== 'lower') {
+      } else {
         expect(result.inspection.status).toBe('inconsistent-observations');
       }
     },

@@ -117,6 +117,12 @@ interface Values {
     | 'invalid-response'
     | 'hash-mismatch';
   searchResetReason: 'searched-through-changed' | 'exhaustion-anchor-changed';
+  invalidatedSearchFact: {
+    readonly expectedBlock: bigint;
+    readonly expectedBlockHash: Hash;
+    readonly observedBlock: bigint;
+    readonly observedBlockHash: Hash;
+  } | null;
   resolution: AttemptResolutionEvidence;
   blocker: SignerBlocker;
   blockers: readonly SignerBlocker[];
@@ -354,6 +360,29 @@ const TRANSACTION_EVENTS = {
       transactionHash: 'hash',
       nonce: 'uint',
       observation: 'broadcastObservation',
+    },
+  ],
+  searchLowerBoundReplaced: [
+    'warn',
+    'signer_search_lower_bound_replaced',
+    'Conflicting durable block observations; search lower bound replacement persisted',
+    {
+      signer: 'address',
+      attemptId: 'id',
+      nonce: 'uint',
+      oldLowerBlock: 'uint',
+      oldLowerBlockHash: 'hash',
+      oldLowerNonce: 'uint',
+      observedLowerBlock: 'uint',
+      observedLowerBlockHash: 'hash',
+      replacementBlock: 'uint',
+      replacementBlockHash: 'hash',
+      replacementNonce: 'uint',
+      durableBlock: 'uint',
+      durableBlockHash: 'hash',
+      durableNonce: 'uint',
+      probeCount: 'uint',
+      invalidatedFact: 'invalidatedSearchFact',
     },
   ],
   searchReset: [
@@ -1011,6 +1040,18 @@ function scalar(
     }
 
     return value;
+  }
+
+  if (kind === 'invalidatedSearchFact') {
+    if (value === null) {
+      return null;
+    }
+    return project({
+      expectedBlock: 'uint',
+      expectedBlockHash: 'hash',
+      observedBlock: 'uint',
+      observedBlockHash: 'hash',
+    }, value, errorSummary);
   }
 
   if (kind === 'resolution') {

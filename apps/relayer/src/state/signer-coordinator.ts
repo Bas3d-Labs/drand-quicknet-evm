@@ -934,9 +934,12 @@ export class SignerCoordinator {
 
       await this.persistence.save(plan.snapshot);
 
-      this.recoveryComplete = plan.completion.kind !== 'search-reset';
+      const terminalCorrection =
+        plan.completion.kind === 'search-reset' ||
+        plan.completion.kind === 'search-lower-bound-replacement';
+      this.recoveryComplete = !terminalCorrection;
       this.applyCommittedWrite(cycle);
-      if (plan.completion.kind === 'search-reset') {
+      if (terminalCorrection) {
         this.failInspectionBracket(owner);
       }
 
@@ -1676,6 +1679,38 @@ export class SignerCoordinator {
     if (pending.kind === 'search-reset') {
       this.invalidateRecoveryAuthorization();
       this.emit((log) => log.searchReset(pending.event), cycle);
+    }
+
+    if (pending.kind === 'search-lower-bound-replacement') {
+      this.invalidateRecoveryAuthorization();
+      const event = pending.event;
+      let invalidatedFact = null;
+      if (event.invalidatedFact !== null) {
+        invalidatedFact = {
+          expectedBlock: event.invalidatedFact.fact.anchor.blockNumber,
+          expectedBlockHash: event.invalidatedFact.fact.anchor.blockHash,
+          observedBlock: event.invalidatedFact.observedAnchor.blockNumber,
+          observedBlockHash: event.invalidatedFact.observedAnchor.blockHash,
+        };
+      }
+      this.emit((log) => log.searchLowerBoundReplaced({
+        signer: event.signer,
+        attemptId: event.attemptId,
+        nonce: event.nonce,
+        oldLowerBlock: event.oldLowerBound.anchor.blockNumber,
+        oldLowerBlockHash: event.oldLowerBound.anchor.blockHash,
+        oldLowerNonce: event.oldLowerBound.nonce,
+        observedLowerBlock: event.observedLower.blockNumber,
+        observedLowerBlockHash: event.observedLower.blockHash,
+        replacementBlock: event.replacement.anchor.blockNumber,
+        replacementBlockHash: event.replacement.anchor.blockHash,
+        replacementNonce: event.replacement.nonce,
+        durableBlock: event.durableObservation.anchor.blockNumber,
+        durableBlockHash: event.durableObservation.anchor.blockHash,
+        durableNonce: event.durableObservation.nonce,
+        probeCount: BigInt(event.probeCount),
+        invalidatedFact,
+      }), cycle);
     }
 
     this.pendingWrite = undefined;

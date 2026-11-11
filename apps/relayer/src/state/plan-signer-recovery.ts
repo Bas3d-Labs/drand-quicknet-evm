@@ -10,6 +10,10 @@ import type {
   SignerRecoveryInspection,
 } from '../chain/inspect-signer-recovery.js';
 
+import type {
+  LowerBoundReplacementEvidence,
+} from '../chain/repair-search-lower-bound.js';
+
 import {
   assertResolutionTransaction,
   snapshotResolutionEvidence,
@@ -29,6 +33,10 @@ import {
   validateJournalSnapshotStructure,
 } from './transaction-journal-validation.js';
 
+import {
+  validateLowerBoundReplacement,
+} from './validate-lower-bound-replacement.js';
+
 export interface CommittedAttemptResolution {
   readonly signer: JournalIdentity['signer'];
   readonly attemptId: string;
@@ -38,6 +46,20 @@ export interface CommittedAttemptResolution {
 }
 
 export type RecoveryWriteCompletion =
+  | {
+      readonly kind: 'search-lower-bound-replacement';
+      readonly event: {
+        readonly signer: JournalIdentity['signer'];
+        readonly attemptId: string;
+        readonly nonce: bigint;
+        readonly oldLowerBound: AnchoredNonceObservation;
+        readonly observedLower: LowerBoundReplacementEvidence['trigger']['observedLower'];
+        readonly replacement: AnchoredNonceObservation;
+        readonly durableObservation: AnchoredNonceObservation;
+        readonly probeCount: number;
+        readonly invalidatedFact: LowerBoundReplacementEvidence['invalidatedFact'];
+      };
+    }
   | {
       readonly kind: 'observation';
     }
@@ -100,12 +122,68 @@ export function planSignerRecovery(
   if (
     inspection.status === 'anchor-changed' ||
     inspection.status === 'anchor-behind-exhaustion' ||
+    inspection.status === 'search-lower-bound-replacement-unavailable' ||
     inspection.status === 'nonce-behind-journal' ||
     inspection.status === 'inconsistent-observations'
   ) {
     return {
       kind: 'unchanged',
       reason: 'inspection-not-committable',
+    };
+  }
+
+  if (inspection.status === 'search-lower-bound-replacement-required') {
+    const validated = validateLowerBoundReplacement(snapshot, inspection);
+    if (validated === null) {
+      return {
+        kind: 'unchanged',
+        reason: 'inspection-not-committable',
+      };
+    }
+
+    const oldest = snapshot.attempts[0]!;
+    const evidence = validated.replacement;
+    let lastObservation = validated.observation;
+    if (
+      unattributedActivity &&
+      snapshot.lastObservation.nonce > lastObservation.nonce
+    ) {
+      lastObservation = snapshot.lastObservation;
+    }
+
+    const next = validateJournalSnapshotStructure({
+      ...snapshot,
+      lastObservation,
+      attempts: [
+        {
+          ...oldest,
+          replacementSearch: {
+            lowerBound: evidence.replacement,
+            searchedThrough: null,
+            exhausted: null,
+          },
+        },
+        ...snapshot.attempts.slice(1),
+      ],
+    }, identity);
+
+    return {
+      kind: 'persist',
+      snapshot: next,
+      completion: Object.freeze({
+        kind: 'search-lower-bound-replacement',
+        event: Object.freeze({
+          signer: identity.signer,
+          attemptId: oldest.attemptId,
+          nonce: oldest.nonce,
+          oldLowerBound: evidence.trigger.lowerBound,
+          observedLower: evidence.trigger.observedLower,
+          replacement: evidence.replacement,
+          durableObservation: validated.observation,
+          probeCount: evidence.probes.length,
+          invalidatedFact: evidence.invalidatedFact,
+        }),
+      }),
     };
   }
 

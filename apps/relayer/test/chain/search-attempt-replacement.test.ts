@@ -772,9 +772,16 @@ describe('durable search boundary confirmation', () => {
     });
     if (failure === 'rpc') {
       await expect(t.run()).rejects.toThrow('Closing RPC failed');
+    } else if (failure === 'lower') {
+      expect(await t.run()).toMatchObject({
+        status: 'search-lower-bound-changed',
+        observations: [{ blockNumber: 100n, blockHash: FORK }],
+      });
+      expect(t.getBlock.mock.calls.map(([request]) => request.blockNumber))
+        .toEqual([105n, 100n, 105n]);
     } else {
       expect(await t.run()).toMatchObject({
-        status: failure === 'lower' ? 'boundary-changed' : 'anchor-changed',
+        status: 'anchor-changed',
         observations: [],
       });
     }
@@ -844,6 +851,76 @@ describe('latest search leaves exhaustion facts uninterpreted', () => {
         expect(t.getBlock.mock.calls.filter(([request]) => request.blockNumber === 104n))
           .toEqual([[{ blockNumber: 104n, includeTransactions: true }]]);
       }
+    },
+  );
+});
+
+describe('closed durable lower-bound mismatch trigger', () => {
+  it.each(['closed', 'changed', 'rpc'] as const)(
+    'requires a successful closing read: %s',
+    async (closing) => {
+      const fixture = setup();
+      fixture.options.confirmDurableSearch = true;
+      const read = fixture.getBlock.getMockImplementation()!;
+      const failure = new Error('Mismatch closing unavailable');
+      let selectedReads = 0;
+
+      fixture.getBlock.mockImplementation(async (request) => {
+        const block = await read(request);
+
+        if (request.blockNumber === 105n) {
+          selectedReads += 1;
+          if (selectedReads === 2 && closing === 'rpc') {
+            throw failure;
+          }
+          if (selectedReads === 2 && closing === 'changed') {
+            return { ...block, hash: FORK };
+          }
+        }
+        if (request.blockNumber === 100n) {
+          return { ...block, hash: FORK };
+        }
+
+        return block;
+      });
+
+      if (closing === 'rpc') {
+        await expect(fixture.run()).rejects.toBe(failure);
+      } else if (closing === 'changed') {
+        expect(await fixture.run()).toEqual({
+          status: 'anchor-changed',
+          observedAnchor: { blockNumber: 105n, blockHash: FORK },
+          observations: [],
+        });
+      } else {
+        const result = await fixture.run();
+        expect(result).toEqual({
+          status: 'search-lower-bound-changed',
+          trigger: {
+            durableAnchor: anchorAt(105n),
+            lowerBound: { anchor: anchorAt(100n), nonce: 4n },
+            observedLower: { blockNumber: 100n, blockHash: FORK },
+          },
+          observations: [{ blockNumber: 100n, blockHash: FORK }],
+        });
+
+        if (result.status !== 'search-lower-bound-changed') {
+          throw new Error('Expected a closed mismatch trigger.');
+        }
+
+        expect(Object.isFrozen(result.trigger)).toBe(true);
+        expect(Object.isFrozen(result.trigger.durableAnchor)).toBe(true);
+        expect(Object.isFrozen(result.trigger.lowerBound)).toBe(true);
+        expect(Object.isFrozen(result.trigger.lowerBound.anchor)).toBe(true);
+        expect(Object.isFrozen(result.trigger.observedLower)).toBe(true);
+      }
+
+      expect(fixture.getBlock.mock.calls).toEqual([
+        [{ blockNumber: 105n }],
+        [{ blockNumber: 100n }],
+        [{ blockNumber: 105n }],
+      ]);
+      expect(fixture.scanned()).toEqual([]);
     },
   );
 });
