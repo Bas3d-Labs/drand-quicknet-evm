@@ -179,3 +179,113 @@ describe('acknowledged search reset diagnostic', () => {
     expect(JSON.parse(lines[0]!)).not.toHaveProperty('signedTransaction');
   });
 });
+
+describe('acknowledged lower-bound replacement diagnostic', () => {
+  beforeEach(() => vi.mocked(writeSync).mockReset());
+
+  const hash = `0x${'aa'.repeat(32)}` as const;
+  const observed = `0x${'bb'.repeat(32)}` as const;
+  const base = {
+    signer: SIGNER as typeof SIGNER,
+    attemptId: '11111111-1111-4111-8111-111111111111',
+    nonce: 4n,
+    oldLowerBlock: 100n,
+    oldLowerBlockHash: hash,
+    oldLowerNonce: 4n,
+    observedLowerBlock: 100n,
+    observedLowerBlockHash: observed,
+    replacementBlock: 99n,
+    replacementBlockHash: hash,
+    replacementNonce: 3n,
+    durableBlock: 125n,
+    durableBlockHash: hash,
+    durableNonce: 6n,
+    probeCount: 2n,
+    invalidatedFact: null,
+  };
+
+  it.each([false, true])('projects only declared evidence, with invalidated fact: %s', (withFact) => {
+    const { log, lines } = capture();
+    let invalidatedFact = null;
+    if (withFact) {
+      invalidatedFact = {
+        expectedBlock: 120n,
+        expectedBlockHash: hash,
+        observedBlock: 120n,
+        observedBlockHash: observed,
+        ...{ signedTransaction: SECRET },
+      };
+    }
+    log.withContext({ cycle: 18 }).searchLowerBoundReplaced({
+      ...base,
+      invalidatedFact,
+      ...{ signedTransaction: SECRET },
+    });
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]!);
+    expect(record).toMatchObject({
+      event: 'signer_search_lower_bound_replaced',
+      level: 40,
+      cycle: 18,
+      nonce: '4',
+      oldLowerBlock: '100',
+      oldLowerBlockHash: hash,
+      oldLowerNonce: '4',
+      observedLowerBlock: '100',
+      observedLowerBlockHash: observed,
+      replacementBlock: '99',
+      replacementBlockHash: hash,
+      replacementNonce: '3',
+      durableBlock: '125',
+      durableBlockHash: hash,
+      durableNonce: '6',
+      probeCount: '2',
+    });
+    if (withFact) {
+      expect(record.invalidatedFact).toEqual({
+        expectedBlock: '120',
+        expectedBlockHash: hash,
+        observedBlock: '120',
+        observedBlockHash: observed,
+      });
+    } else {
+      expect(record.invalidatedFact).toBeNull();
+    }
+    expect(record).not.toHaveProperty('signedTransaction');
+    expect(lines.join('')).not.toContain(SECRET);
+    expect(writeSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: 'negative nonce', patch: { replacementNonce: -1n } },
+    { name: 'numeric count', patch: { probeCount: 2 } },
+    { name: 'malformed hash', patch: { oldLowerBlockHash: '0xaa' } },
+    { name: 'missing fact fields', patch: { invalidatedFact: {} } },
+    { name: 'malformed fact anchor', patch: { invalidatedFact: {
+      expectedBlock: 120n,
+      expectedBlockHash: hash,
+      observedBlock: 120n,
+      observedBlockHash: '0xbb',
+    } } },
+  ])('rejects $name without exposing the payload', ({ patch }) => {
+    const { log, lines } = capture();
+    log.searchLowerBoundReplaced({ ...base, ...patch } as never);
+    expect(lines).toEqual([]);
+    expect(writeSync).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an accessor in invalidation evidence without invoking it', () => {
+    const { log, lines } = capture();
+    const getter = vi.fn(() => 120n);
+    const invalidatedFact = {
+      expectedBlockHash: hash,
+      observedBlock: 120n,
+      observedBlockHash: observed,
+    };
+    Object.defineProperty(invalidatedFact, 'expectedBlock', { get: getter });
+    log.searchLowerBoundReplaced({ ...base, invalidatedFact } as never);
+    expect(getter).not.toHaveBeenCalled();
+    expect(lines).toEqual([]);
+    expect(writeSync).toHaveBeenCalledOnce();
+  });
+});

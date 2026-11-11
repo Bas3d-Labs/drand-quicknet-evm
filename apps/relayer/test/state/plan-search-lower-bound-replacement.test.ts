@@ -179,6 +179,38 @@ function setProbeWalk(inspection: Mutable<RequiredReplacement>, count: number): 
 
 describe('lower-bound replacement planning', () => {
   it.each([
+    { name: 'oldest fact at selected height', later: false, conflict: false },
+    { name: 'both facts contradicted at selected height', later: true, conflict: false },
+    { name: 'fact observation differs from opening', later: false, conflict: true },
+  ])('$name', async ({ later, conflict }) => {
+    const fixture = await setup();
+    const fact = { anchor: anchor(104n), nonce: 6n };
+    fixture.snapshot.attempts[0]!.replacementSearch!.exhausted = fact;
+    if (later) {
+      fixture.snapshot.attempts[1]!.replacementSearch!.exhausted = structuredClone(fact);
+    }
+    let observedAnchor = anchor(104n, true);
+    if (conflict) {
+      observedAnchor = { ...observedAnchor, blockHash: anchor(999n).blockHash };
+    }
+    fixture.inspection.replacement.invalidatedFact = { fact, observedAnchor };
+    fixture.inspection.observations.push(observedAnchor);
+    const before = structuredClone(fixture.snapshot);
+    const result = fixture.plan();
+    if (conflict) {
+      expect(result).toEqual({ kind: 'unchanged', reason: 'inspection-not-committable' });
+    } else {
+      expect(result.kind).toBe('persist');
+      if (result.kind !== 'persist') {
+        throw new Error('Expected replacement plan');
+      }
+      expect(result.snapshot.attempts[0]!.replacementSearch!.exhausted).toBeNull();
+      expect(result.snapshot.attempts[1]).toEqual(before.attempts[1]);
+    }
+    expect(fixture.snapshot).toEqual(before);
+  });
+
+  it.each([
     { fact: false, preserve: false },
     { fact: false, preserve: true },
     { fact: true, preserve: false },
