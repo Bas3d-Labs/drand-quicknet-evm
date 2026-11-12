@@ -119,6 +119,10 @@ function snapshot(
     nextNonce: BigInt(attempts.length),
     durableNextNonce: 0n,
     repairs: [],
+    ledger: {
+      outcomes: [],
+      obligations: [],
+    },
     attempts,
   }, IDENTITY);
 

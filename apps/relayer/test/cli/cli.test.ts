@@ -386,6 +386,10 @@ async function createSubmissionFailure(
     nextNonce: 4n,
     durableNextNonce: 4n,
     repairs: [],
+    ledger: {
+      outcomes: [],
+      obligations: [],
+    },
     attempts: [],
   };
 
@@ -1757,6 +1761,10 @@ const NONCE_PREVIEW: SyncNonceResult = {
     nextNonce: 8n,
     durableNextNonce: 8n,
     repairs: [NONCE_REPAIR],
+    ledger: {
+      outcomes: [],
+      obligations: [],
+    },
     attempts: [],
   },
 };

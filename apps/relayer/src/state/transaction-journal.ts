@@ -148,6 +148,12 @@ export type JournalAttempt = {
     }
 );
 
+/** Reserved for future recovery outcomes; only empty arrays are valid. */
+export interface JournalLedger {
+  readonly outcomes: readonly [];
+  readonly obligations: readonly [];
+}
+
 export interface TransactionJournalSnapshot {
   readonly version: 1;
   readonly identity: JournalIdentity;
@@ -175,6 +181,8 @@ export interface TransactionJournalSnapshot {
    * Wall-clock timestamps need not increase.
    */
   readonly repairs: readonly JournalNonceRepair[];
+
+  readonly ledger: JournalLedger;
 
   /** Retained attempts ordered by increasing nonce. */
   readonly attempts: readonly JournalAttempt[];

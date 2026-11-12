@@ -185,6 +185,10 @@ async function runtimeBoundsFixture(
     nextNonce: 4n + BigInt(attempts.length),
     durableNextNonce: 4n,
     repairs: [],
+    ledger: {
+      outcomes: [],
+      obligations: [],
+    },
     attempts,
   };
 }
@@ -385,6 +389,10 @@ describe('command signer runtime', () => {
       nextNonce: 4n,
       durableNextNonce: 4n,
       repairs: [],
+      ledger: {
+        outcomes: [],
+        obligations: [],
+      },
       attempts: [],
     };
 

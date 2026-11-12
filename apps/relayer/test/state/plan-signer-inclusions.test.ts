@@ -72,6 +72,10 @@ async function createSnapshot(): Promise<TransactionJournalSnapshot> {
     nextNonce: 5n,
     durableNextNonce: 4n,
     repairs: [],
+    ledger: {
+      outcomes: [],
+      obligations: [],
+    },
     attempts: [{
       attemptId: '11111111-1111-4111-8111-111111111111',
       workId: 'test-work:4',

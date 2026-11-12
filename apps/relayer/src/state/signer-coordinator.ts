@@ -1305,6 +1305,10 @@ export class SignerCoordinator {
       nextNonce: observation.nonce,
       durableNextNonce: observation.nonce,
       repairs: [],
+      ledger: {
+        outcomes: [],
+        obligations: [],
+      },
       attempts: [],
     });
 

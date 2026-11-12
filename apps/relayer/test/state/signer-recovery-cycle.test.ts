@@ -85,6 +85,10 @@ async function setup(options: {
       nextNonce: 4n,
       durableNextNonce: 4n,
       repairs: [],
+      ledger: {
+        outcomes: [],
+        obligations: [],
+      },
       attempts: [],
     },
   };
@@ -875,6 +879,10 @@ describe('signer recovery cycle', () => {
       nextNonce: 4n,
       durableNextNonce: 4n,
       repairs: [],
+      ledger: {
+        outcomes: [],
+        obligations: [],
+      },
       attempts: [],
     });
 

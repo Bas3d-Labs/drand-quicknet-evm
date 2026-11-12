@@ -100,6 +100,10 @@ describe('retained beacon import', () => {
         nextNonce: 4n,
         durableNextNonce: 4n,
         repairs: [],
+        ledger: {
+          outcomes: [],
+          obligations: [],
+        },
         attempts: [],
       });
 

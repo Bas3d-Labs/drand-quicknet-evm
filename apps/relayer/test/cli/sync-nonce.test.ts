@@ -107,6 +107,10 @@ function fixture(): TransactionJournalSnapshot {
       nextNonce: 4n,
       observation: observation(95n, 4n),
     }],
+    ledger: {
+      outcomes: [],
+      obligations: [],
+    },
     attempts: [],
   }, IDENTITY);
 }

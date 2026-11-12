@@ -45,6 +45,10 @@ function snapshot(): TransactionJournalSnapshot {
     nextNonce: 6n,
     durableNextNonce: 4n,
     repairs: [],
+    ledger: {
+      outcomes: [],
+      obligations: [],
+    },
     attempts: [4n, 5n].map((nonce) => ({
       attemptId:
         '00000000-0000-4000-8000-'
