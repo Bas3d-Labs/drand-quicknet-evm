@@ -76,6 +76,10 @@ async function fixture(): Promise<TransactionJournalSnapshot> {
     nextNonce: 5n,
     durableNextNonce: 4n,
     repairs: [],
+    ledger: {
+      outcomes: [],
+      obligations: [],
+    },
     attempts: [{
       ...broadcastAttempt({
         attemptId: '11111111-1111-4111-8111-111111111111',
@@ -119,6 +123,75 @@ async function expectRoundTrip(input: TransactionJournalSnapshot) {
 }
 
 describe('transaction journal serialization', () => {
+  const invalidLedgers = [
+    ['omitted ledger', undefined],
+    ['null ledger', null],
+    ['array ledger', []],
+    ['omitted outcomes', { obligations: [] }],
+    ['omitted obligations', { outcomes: [] }],
+    ['non-array outcomes', { outcomes: {}, obligations: [] }],
+    ['non-array obligations', { outcomes: [], obligations: {} }],
+    ['unknown ledger key', { outcomes: [], obligations: [], extra: true }],
+    ['outcome entry', { outcomes: [{}], obligations: [] }],
+    ['obligation entry', { outcomes: [], obligations: [{}] }],
+  ] as const;
+
+  it.each(invalidLedgers)(
+    'rejects %s when decoding',
+    async (_name, ledger) => {
+      const raw = await encodedFixture();
+
+      raw.ledger = ledger;
+
+      await expect(decodeJournalSnapshot(JSON.stringify(raw), IDENTITY))
+        .rejects.toThrow(FAILURE);
+    },
+  );
+
+  it.each(invalidLedgers)(
+    'rejects %s when encoding',
+    async (_name, ledger) => {
+      const input = {
+        ...await fixture(),
+        ledger,
+      };
+
+      if (ledger === undefined) {
+        Reflect.deleteProperty(input, 'ledger');
+      }
+
+      await expect(encodeJournalSnapshot(
+        input as unknown as TransactionJournalSnapshot,
+        IDENTITY,
+      )).rejects.toThrow(FAILURE);
+    },
+  );
+
+  it('encodes the empty ledger in canonical order and freezes its copy', async () => {
+    const input = await fixture();
+    const { contents, decoded } = await expectRoundTrip(input);
+    const raw = JSON.parse(contents);
+
+    expect(Object.keys(raw)).toEqual([
+      'version',
+      'identity',
+      'baseline',
+      'lastObservation',
+      'nextNonce',
+      'durableNextNonce',
+      'repairs',
+      'ledger',
+      'attempts',
+    ]);
+    expect(Object.keys(raw.ledger)).toEqual(['outcomes', 'obligations']);
+    expect(decoded.ledger).not.toBe(input.ledger);
+    expect(decoded.ledger.outcomes).not.toBe(input.ledger.outcomes);
+    expect(decoded.ledger.obligations).not.toBe(input.ledger.obligations);
+    expect(Object.isFrozen(decoded.ledger)).toBe(true);
+    expect(Object.isFrozen(decoded.ledger.outcomes)).toBe(true);
+    expect(Object.isFrozen(decoded.ledger.obligations)).toBe(true);
+  });
+
   it.each(['omitted', 'null'] as const)(
     'normalizes a %s exhaustion field in a version-1 encoding',
     async (kind) => {
@@ -231,6 +304,10 @@ describe('transaction journal serialization', () => {
       nextNonce: '5',
       durableNextNonce: '4',
       repairs: [],
+      ledger: {
+        outcomes: [],
+        obligations: [],
+      },
       attempts: [{
         attemptId: input.attempts[0]!.attemptId,
         workId: 'test-work:4',

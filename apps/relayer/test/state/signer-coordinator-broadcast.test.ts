@@ -65,6 +65,10 @@ async function setup() {
       nextNonce: 4n,
       durableNextNonce: 4n,
       repairs: [],
+      ledger: {
+        outcomes: [],
+        obligations: [],
+      },
       attempts: [],
     },
   };

@@ -89,6 +89,10 @@ async function setup(withFact = true) {
     nextNonce: 6n,
     durableNextNonce: 4n,
     repairs: [],
+    ledger: {
+      outcomes: [],
+      obligations: [],
+    },
     attempts,
   };
   const snapshot = structuredClone(original) as Mutable<TransactionJournalSnapshot>;

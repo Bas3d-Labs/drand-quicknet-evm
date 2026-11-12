@@ -52,6 +52,10 @@ function snapshot(): TransactionJournalSnapshot {
         nonce: 8n,
       },
     }],
+    ledger: {
+      outcomes: [],
+      obligations: [],
+    },
     attempts: [],
   };
 }

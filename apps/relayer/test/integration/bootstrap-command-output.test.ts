@@ -768,6 +768,10 @@ it.skipIf(process.platform !== 'linux').each(NONCE_SYNC_CASES)(
       durableNextNonce:
         outcome === 'already-synchronized' ? '8' : '4',
       repairs: [],
+      ledger: {
+        outcomes: [],
+        obligations: [],
+      },
       attempts: [],
     };
 
@@ -1257,6 +1261,10 @@ it.skipIf(process.platform !== 'linux').each(SUBMISSION_RECORDING_CASES)(
           nextNonce: 4n,
           durableNextNonce: 4n,
           repairs: [],
+          ledger: {
+            outcomes: [],
+            obligations: [],
+          },
           attempts: [],
         };
 

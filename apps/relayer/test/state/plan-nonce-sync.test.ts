@@ -46,6 +46,10 @@ function fixture(): PlanNonceSyncOptions {
       durableNextNonce: 4n,
       attempts: [],
       repairs: [],
+      ledger: {
+        outcomes: [],
+        obligations: [],
+      },
     },
     observation: observation(8n, 110n),
     latestNonce: 8n,

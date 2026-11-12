@@ -93,6 +93,7 @@ export async function decodeJournalSnapshot(
       nextNonce: decimal(root.nextNonce), 
       durableNextNonce: decimal(root.durableNextNonce),
       repairs: decodeRepairs(root.repairs),
+      ledger: root.ledger,
       attempts: decodeArray(root.attempts, decodeAttempt),
     };
 

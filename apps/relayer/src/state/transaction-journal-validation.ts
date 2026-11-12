@@ -37,6 +37,7 @@ import type {
   AnchoredNonceObservation,
   JournalAttempt,
   JournalIdentity,
+  JournalLedger,
   JournalInclusionObservation,
   JournalNonceRepair,
   JournalSignedTransaction,
@@ -85,6 +86,7 @@ export function validateJournalSnapshotStructure(
     latestRepair.nextNonce <= durableNextNonce
   );
 
+  const ledger = readLedger(field(input, 'ledger'));
   const attempts = readArray(field(input, 'attempts'), readAttempt);
 
   requireValid(
@@ -124,7 +126,24 @@ export function validateJournalSnapshotStructure(
     nextNonce,
     durableNextNonce,
     repairs,
+    ledger,
     attempts,
+  });
+}
+
+function readLedger(input: unknown): JournalLedger {
+  const outcomes = field(input, 'outcomes');
+  const obligations = field(input, 'obligations');
+
+  requireValid(Reflect.ownKeys(input as object).length === 2);
+  requireValid(Array.isArray(outcomes));
+  requireValid(Array.isArray(obligations));
+  requireValid(ownValue(outcomes, 'length') === 0);
+  requireValid(ownValue(obligations, 'length') === 0);
+
+  return Object.freeze({
+    outcomes: Object.freeze([] as const),
+    obligations: Object.freeze([] as const),
   });
 }
 

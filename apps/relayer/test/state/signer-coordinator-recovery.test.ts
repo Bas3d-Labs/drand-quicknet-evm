@@ -76,6 +76,10 @@ async function setup(
     nextNonce: empty ? 4n : 5n,
     durableNextNonce: 4n,
     repairs: [],
+    ledger: {
+      outcomes: [],
+      obligations: [],
+    },
     attempts: empty ? [] : [{
       attemptId: '11111111-1111-4111-8111-111111111111',
       workId: 'test-work:4',
@@ -945,6 +949,10 @@ describe('coordinator recovery', () => {
       nextNonce: 5n,
       durableNextNonce: 5n,
       repairs: [],
+      ledger: {
+        outcomes: [],
+        obligations: [],
+      },
       attempts: [],
     });
 

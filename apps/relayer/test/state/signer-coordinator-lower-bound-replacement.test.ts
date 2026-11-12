@@ -91,6 +91,10 @@ async function snapshot(survivorFact = false, preserve = false): Promise<Transac
     nextNonce: 6n,
     durableNextNonce: 4n,
     repairs: [],
+    ledger: {
+      outcomes: [],
+      obligations: [],
+    },
     attempts,
   };
 }

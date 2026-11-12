@@ -135,6 +135,10 @@ async function setup(options: {
       nextNonce: 4n + BigInt(count),
       durableNextNonce: 4n,
       repairs: [],
+      ledger: {
+        outcomes: [],
+        obligations: [],
+      },
       attempts,
     },
   };

@@ -106,6 +106,10 @@ function fixture() {
     nextNonce: 5n,
     durableNextNonce: 4n,
     repairs: [],
+    ledger: {
+      outcomes: [],
+      obligations: [],
+    },
     attempts: [attempt()],
   };
 }

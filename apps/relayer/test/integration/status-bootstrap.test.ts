@@ -122,6 +122,10 @@ describe.skipIf(process.platform !== 'linux')('status bootstrap', () => {
       nextNonce: '4',
       durableNextNonce: '4',
       repairs: [],
+      ledger: {
+        outcomes: [],
+        obligations: [],
+      },
       attempts: [],
     }) + '\n');
   }

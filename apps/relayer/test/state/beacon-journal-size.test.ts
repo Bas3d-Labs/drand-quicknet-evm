@@ -258,6 +258,10 @@ describe('beacon journal size', () => {
         nextNonce,
         durableNextNonce,
         repairs,
+        ledger: {
+          outcomes: [],
+          obligations: [],
+        },
         attempts,
       };
 

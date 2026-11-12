@@ -906,11 +906,17 @@ receipt's block against the simulation result.
 Successful imports report the submission method and, when applicable,
 the fallback reason.
 
-An import attempt does not resubmit after an uncertain wallet response
-or receipt timeout. Durable pending-transaction reconciliation across
-attempts, daemon cycles, and restarts is not implemented by this flow.
-Operators must reconcile uncertain transactions before retrying.
-Registry idempotence does not prevent nonce conflicts or wasted gas.
+The daemon and one-shot CLI imports use the durable signer journal to
+reconcile retained pending attempts before submitting new transactions.
+An uncertain submission response or receipt timeout does not by itself
+justify a new transaction: recovery checks the retained attempt across
+invocations, daemon cycles, and restarts before permitting further work.
+
+Automatic recovery does not clear every blocker. Exhausted searches that
+cannot be repaired or attributed, inconsistent chain observations, and
+unattributed signer activity can keep the signer blocked and require
+operator investigation. Registry idempotence does not prevent nonce
+conflicts or wasted gas and is not a substitute for signer recovery.
 
 See [`apps/relayer/README.md`](apps/relayer/README.md) for commands,
 network configuration, fallback rules, checkpointing, logging, and
