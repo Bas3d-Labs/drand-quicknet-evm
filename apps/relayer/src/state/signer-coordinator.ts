@@ -10,6 +10,12 @@ import type {
 } from 'viem';
 
 import {
+  supersedesNoMatch,
+  validateAttributionRequest,
+  type OperatorAttributionRequest,
+} from './operator-attribution.js';
+
+import {
   blockAnchorsMatch,
   checkBlockAnchor,
   type BlockAnchor,
@@ -111,12 +117,17 @@ export interface SignerCoordinatorOptions {
 }
 
 export interface RecoverSignerOptions {
+  readonly attribution?: OperatorAttributionRequest;
   readonly publicClient: PublicClient;
   readonly anchor: Readonly<BlockAnchor>;
   readonly maxBlockRange: bigint;
 }
 
 export type SignerRecoveryResult =
+  | {
+      readonly status: 'operator-attribution-committed';
+      readonly requestId: string;
+    }
   | SignerRecoveryInspection
   | Extract<
       SignerBootstrapDecision,
@@ -400,6 +411,9 @@ export class SignerCoordinator {
             blockHash: options.anchor.blockHash,
           }),
           maxBlockRange: options.maxBlockRange,
+          ...(options.attribution === undefined ? {} : {
+            attribution: structuredClone(options.attribution),
+          }),
         };
 
         return this.runInspectionOperation(
@@ -858,6 +872,10 @@ export class SignerCoordinator {
     this.busy = true;
 
     try {
+      if (options.attribution !== undefined) {
+        validateAttributionRequest(options.attribution);
+      }
+
       if (owner.bracket !== null) {
         const bracket = owner.bracket;
 
@@ -880,6 +898,10 @@ export class SignerCoordinator {
       }
 
       if (current.kind === 'missing') {
+        if (options.attribution !== undefined) {
+          throw new Error('Operator attribution requires a retained attempt.');
+        }
+
         return await this.bootstrapOwned(options, owner, cycle);
       }
       
@@ -888,6 +910,9 @@ export class SignerCoordinator {
         snapshot: current.snapshot,
         anchor: options.anchor,
         maxBlockRange: options.maxBlockRange,
+        ...(options.attribution === undefined ? {} : {
+          hint: options.attribution.hint,
+        }),
       });
 
       if (
@@ -904,6 +929,9 @@ export class SignerCoordinator {
         identity: this.identity,
         snapshot: current.snapshot,
         inspection: result,
+        ...(options.attribution === undefined ? {} : {
+          attribution: options.attribution,
+        }),
         unattributedActivity:
           this.blockers.has('unattributed-signer-activity'),
       });
@@ -927,6 +955,21 @@ export class SignerCoordinator {
 
       if (plan.kind === 'unchanged') {
         this.failInspectionBracket(owner);
+
+        if (result.status === 'operator-attribution-available') {
+          let reason: 'ledger-capacity-reached' | 'stale-evidence' = 'stale-evidence';
+
+          if (plan.reason === 'ledger-capacity-reached') {
+            reason = plan.reason;
+          }
+
+          return {
+            status: 'operator-hint-refused',
+            observation: result.observation,
+            reason,
+          };
+        }
+
         return result;
       }
 
@@ -935,6 +978,7 @@ export class SignerCoordinator {
       await this.persistence.save(plan.snapshot);
 
       const terminalCorrection =
+        plan.completion.kind === 'operator-attribution' ||
         plan.completion.kind === 'search-unconsumed-bound-rebase' ||
         plan.completion.kind === 'search-reset' ||
         plan.completion.kind === 'search-lower-bound-replacement';
@@ -942,6 +986,13 @@ export class SignerCoordinator {
       this.applyCommittedWrite(cycle);
       if (terminalCorrection) {
         this.failInspectionBracket(owner);
+      }
+
+      if (plan.completion.kind === 'operator-attribution') {
+        return {
+          status: 'operator-attribution-committed',
+          requestId: plan.completion.outcome.requestId,
+        };
       }
 
       const inspectedAttempt = current.snapshot.attempts[0];
@@ -1679,6 +1730,23 @@ export class SignerCoordinator {
         (log) => log.attemptResolved(pending.event),
         cycle,
       );
+    }
+
+    if (pending.kind === 'operator-attribution') {
+      this.invalidateRecoveryAuthorization();
+
+      const outcome = pending.outcome;
+
+      this.emit((log) => log.attemptOperatorAttributed({
+        signer: this.identity.signer,
+        requestId: outcome.requestId,
+        attemptId: outcome.attemptId,
+        transactionHash: outcome.replacement.transactionHash,
+        nonce: outcome.nonce,
+        durableBlock: outcome.durable.anchor.blockNumber,
+        durableBlockHash: outcome.durable.anchor.blockHash,
+        supersededNoMatch: supersedesNoMatch(outcome),
+      }), cycle);
     }
 
     if (pending.kind === 'search-reset') {

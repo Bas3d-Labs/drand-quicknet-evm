@@ -86,6 +86,7 @@ const relayerLogMocks = vi.hoisted(() => ({
   attemptResolved: vi.fn(),
   searchReset: vi.fn(),
   searchLowerBoundReplaced: vi.fn(),
+  attemptOperatorAttributed: vi.fn(),
   searchUnconsumedBoundRebased: vi.fn(),
   roundDeferred: vi.fn(),
   roundPending: vi.fn(),

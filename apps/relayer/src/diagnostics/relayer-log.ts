@@ -93,6 +93,7 @@ export type ConsumerHealth =
     };
 
 interface Values {
+  boolean: boolean;
   id: string;
   address: Address;
   hash: Hash;
@@ -360,6 +361,21 @@ const TRANSACTION_EVENTS = {
       transactionHash: 'hash',
       nonce: 'uint',
       observation: 'broadcastObservation',
+    },
+  ],
+  attemptOperatorAttributed: [
+    'warn',
+    'signer_attempt_operator_attributed',
+    'Operator-assisted replacement attribution persisted',
+    {
+      signer: 'address',
+      requestId: 'id',
+      attemptId: 'id',
+      transactionHash: 'hash',
+      nonce: 'uint',
+      durableBlock: 'uint',
+      durableBlockHash: 'hash',
+      supersededNoMatch: 'boolean',
     },
   ],
   searchUnconsumedBoundRebased: [
@@ -998,6 +1014,10 @@ function scalar(
     context.name = name;
 
     return context;
+  }
+
+  if (kind === 'boolean' && typeof value === 'boolean') {
+    return value;
   }
 
   if (kind === 'blocker') {

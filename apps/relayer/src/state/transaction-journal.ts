@@ -5,6 +5,10 @@ import type {
 } from 'viem';
 
 import type {
+  FinalityPolicy,
+} from '../chain/finality-policy.js';
+
+import type {
   BlockAnchor,
 } from '../chain/block-anchor.js';
 
@@ -148,9 +152,36 @@ export type JournalAttempt = {
     }
 );
 
-/** Reserved for future recovery outcomes; only empty arrays are valid. */
+export const MAX_OPERATOR_OUTCOMES = 32;
+export const MAX_OPERATOR_OUTCOME_BYTES = 8_192;
+
+export interface OperatorAttributedOutcome {
+  readonly kind: 'operator-attributed';
+  readonly requestId: string;
+  readonly snapshotDigest: Hash;
+  readonly proposalDigest: Hash;
+  readonly operator: string;
+  readonly at: string;
+  readonly attemptId: string;
+  readonly workId: string;
+  readonly nonce: bigint;
+  readonly candidateHashes: readonly Hash[];
+  readonly durable: AnchoredNonceObservation;
+  readonly finality: FinalityPolicy;
+  readonly lowerBound: AnchoredNonceObservation;
+  readonly replacement: {
+    readonly transactionHash: Hash;
+    readonly inclusion: Readonly<BlockAnchor>;
+  };
+  readonly priorSearch: {
+    readonly searchedThrough: Readonly<BlockAnchor> | null;
+    readonly exhausted: AnchoredNonceObservation | null;
+  };
+}
+
+/** Operator attribution history; obligations are not supported yet. */
 export interface JournalLedger {
-  readonly outcomes: readonly [];
+  readonly outcomes: readonly OperatorAttributedOutcome[];
   readonly obligations: readonly [];
 }
 

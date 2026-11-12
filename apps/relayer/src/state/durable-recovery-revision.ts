@@ -16,9 +16,10 @@ import type {
 /**
  * Projects already validated, committed journal content.
  *
- * Ledger is deliberately omitted while validation permits only empty arrays.
- * The first non-empty ledger slice must revisit this revision projection
- * before ledger state can affect recovery or authorization.
+ * Outcome history is deliberately omitted: recovery does not read it, and
+ * each append also removes an attempt and advances durableNextNonce below.
+ * There is no ledger-only write. Revisit this projection before obligations
+ * can affect recovery or admission.
  */
 export function durableRecoveryRevision(
   current: TransactionJournalRead,

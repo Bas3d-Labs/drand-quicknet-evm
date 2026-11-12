@@ -1,4 +1,8 @@
 import {
+  decodeLedger,
+} from './journal-ledger-validation.js';
+
+import {
   isDecimalInteger,
 } from '../shared/decimal.js';
 
@@ -93,7 +97,7 @@ export async function decodeJournalSnapshot(
       nextNonce: decimal(root.nextNonce), 
       durableNextNonce: decimal(root.durableNextNonce),
       repairs: decodeRepairs(root.repairs),
-      ledger: root.ledger,
+      ledger: decodeLedger(root.ledger),
       attempts: decodeArray(root.attempts, decodeAttempt),
     };
 
