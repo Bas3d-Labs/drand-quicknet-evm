@@ -179,6 +179,7 @@ describe('createRelayerLog', () => {
       'rpcUsage',
       'searchLowerBoundReplaced',
       'searchReset',
+      'searchUnconsumedBoundRebased',
       'signerBlocked',
       'signerBootstrapDeferred',
       'signerGateReleased',

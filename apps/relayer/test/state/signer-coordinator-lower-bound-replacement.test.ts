@@ -139,7 +139,7 @@ function client() {
   return { publicClient, getBlock, getTransactionCount, getTransactionReceipt, sendRawTransaction };
 }
 
-function context() {
+function context(eventName = 'signer_search_lower_bound_replaced') {
   const lines: string[] = [];
   const createErrorSummary = (secrets: readonly string[] = []) => ({
     scrubText: createScrubber({ privateKey: KEY, rpcUrls: [], secrets }),
@@ -151,7 +151,7 @@ function context() {
   });
   return {
     events: () => lines.map((line) => JSON.parse(line))
-      .filter((record) => record.event === 'signer_search_lower_bound_replaced'),
+      .filter((record) => record.event === eventName),
     create: (store: TransactionJournalStore) => SignerCoordinator.create({
       identity: IDENTITY,
       store,
@@ -396,40 +396,55 @@ describe('acknowledged lower-bound replacement', () => {
     expect(t.events()).toEqual([]);
   });
 
-  it('prevents continuation or latest work on the corrected inspection', async () => {
-    const input = await snapshot();
-    const save = vi.fn();
-    const t = context();
-    const coordinator = await t.create({ load: async () => ({ kind: 'present', snapshot: input }), save });
-    const rpc = client();
-    const owner = coordinator.beginInspection({
-      publicClient: rpc.publicClient,
-      head: HEAD,
-      durableAnchor: DURABLE,
-    });
-    try {
-      const result = await owner.recover(options(rpc.publicClient));
-      expect(result.status).toBe('search-lower-bound-replacement-required');
-      rpc.getBlock.mockClear();
-      rpc.getTransactionCount.mockClear();
-      rpc.getTransactionReceipt.mockClear();
-      await expect(owner.recover(options(rpc.publicClient))).rejects.toThrow();
-      await expect(owner.checkInclusions({ publicClient: rpc.publicClient, head: HEAD }))
-        .rejects.toThrow();
-      expect(() => owner.finish()).toThrow('has not completed successfully');
-      expect(rpc.getBlock).not.toHaveBeenCalled();
-      expect(rpc.getTransactionCount).not.toHaveBeenCalled();
-      expect(rpc.getTransactionReceipt).not.toHaveBeenCalled();
-      expect(save).toHaveBeenCalledOnce();
-      expect(coordinator.status.recoveryComplete).toBe(false);
-      expect(coordinator.canBroadcast).toBe(false);
-    } finally {
-      await owner.abandon();
-    }
-    coordinator.beginInspection().abandon();
-  });
+  it.each([false, true])(
+    'prevents continuation on a corrected inspection; unconsumed: %s',
+    async (unconsumed) => {
+      const input = await snapshot();
+      const save = vi.fn();
+      const t = context();
+      const coordinator = await t.create({
+        load: async () => ({ kind: 'present', snapshot: input }),
+        save,
+      });
+      const rpc = client();
 
-  it.each(['matching-fact', 'unconsumed', 'budget-exhausted'] as const)(
+      if (unconsumed) {
+        rpc.getTransactionCount.mockResolvedValue(4);
+      }
+
+      const owner = coordinator.beginInspection({
+        publicClient: rpc.publicClient,
+        head: HEAD,
+        durableAnchor: DURABLE,
+      });
+      try {
+        const result = await owner.recover(options(rpc.publicClient));
+        let status = 'search-lower-bound-replacement-required';
+        if (unconsumed) {
+          status = 'search-unconsumed-bound-rebase-required';
+        }
+        expect(result.status).toBe(status);
+        rpc.getBlock.mockClear();
+        rpc.getTransactionCount.mockClear();
+        rpc.getTransactionReceipt.mockClear();
+        await expect(owner.recover(options(rpc.publicClient))).rejects.toThrow();
+        await expect(owner.checkInclusions({ publicClient: rpc.publicClient, head: HEAD }))
+          .rejects.toThrow();
+        expect(() => owner.finish()).toThrow('has not completed successfully');
+        expect(rpc.getBlock).not.toHaveBeenCalled();
+        expect(rpc.getTransactionCount).not.toHaveBeenCalled();
+        expect(rpc.getTransactionReceipt).not.toHaveBeenCalled();
+        expect(save).toHaveBeenCalledOnce();
+        expect(coordinator.status.recoveryComplete).toBe(false);
+        expect(coordinator.canBroadcast).toBe(false);
+      } finally {
+        await owner.abandon();
+      }
+      coordinator.beginInspection().abandon();
+    },
+  );
+
+  it.each(['matching-fact', 'budget-exhausted'] as const)(
     'keeps the old bound and authorization closed after %s refusal',
     async (fault) => {
       const input = await snapshot();
@@ -447,8 +462,6 @@ describe('acknowledged lower-bound replacement', () => {
           }
           return block;
         });
-      } else if (fault === 'unconsumed') {
-        rpc.getTransactionCount.mockResolvedValue(4);
       } else {
         rpc.getTransactionCount.mockResolvedValue(6);
       }
@@ -506,4 +519,223 @@ describe('acknowledged lower-bound replacement', () => {
     expect(coordinator.canBroadcast).toBe(false);
     expect(t.events()).toEqual([]);
   });
+});
+
+describe('acknowledged unconsumed bound rebase', () => {
+  it.each([
+    {
+      preserve: false,
+      failFirst: false,
+      survivor: false,
+    },
+    {
+      preserve: true,
+      failFirst: false,
+      survivor: false,
+    },
+    {
+      preserve: false,
+      failFirst: true,
+      survivor: false,
+    },
+    {
+      preserve: true,
+      failFirst: true,
+      survivor: false,
+    },
+    {
+      preserve: false,
+      failFirst: false,
+      survivor: true,
+    },
+  ])(
+    'ends closed and survives reload: %j',
+    async ({ preserve, failFirst, survivor }) => {
+      const directory = await mkdtemp(join(tmpdir(), 'unconsumed-rebase-'));
+
+      try {
+        const input = await snapshot(survivor, preserve);
+        const filePath = join(directory, 'journal.json');
+        const store = await FileTransactionJournalStore.open({
+          filePath,
+          identity: IDENTITY,
+        });
+
+        await store.save(input);
+
+        const initialBytes = await readFile(filePath, 'utf8');
+        let release!: () => void;
+        let entered!: () => void;
+        const held = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const started = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        const save = vi.fn(async (next: TransactionJournalSnapshot) => {
+          if (save.mock.calls.length === 1) {
+            entered();
+
+            await held;
+
+            if (failFirst) {
+              throw new Error('B write failed');
+            }
+          }
+
+          await store.save(next);
+        });
+        const t = context('signer_search_unconsumed_bound_rebased');
+        const coordinator = await t.create({
+          load: () => store.load(),
+          save,
+        });
+        const rpc = client();
+
+        rpc.getTransactionCount.mockResolvedValue(4);
+
+        const latest = vi.spyOn(inclusionInspection, 'inspectSignerInclusions');
+        const { cycle, completed } = cycleFor(coordinator);
+        const running = cycle.run(options(rpc.publicClient), 21).then(
+          (result) => ({
+            result,
+            error: null,
+          }),
+          (error: unknown) => ({
+            result: null,
+            error,
+          }),
+        );
+
+        await started;
+
+        expect(t.events()).toEqual([]);
+        expect(coordinator.status.recoveryComplete).toBe(false);
+        expect(coordinator.canBroadcast).toBe(false);
+        expect(await readFile(filePath, 'utf8')).toBe(initialBytes);
+
+        release();
+
+        const outcome = await running;
+
+        if (failFirst) {
+          expect(outcome.error).toBeInstanceOf(Error);
+          expect(t.events()).toEqual([]);
+          expect(await readFile(filePath, 'utf8')).toBe(initialBytes);
+
+          await coordinator.retryPersistence(22);
+        } else {
+          expect(outcome.error).toBeNull();
+          expect(outcome.result).toMatchObject({
+            inspection: { status: 'search-unconsumed-bound-rebase-required' },
+            inclusions: null,
+            broadcast: null,
+          });
+        }
+
+        let lastObservation = {
+          anchor: DURABLE,
+          nonce: 4n,
+        };
+
+        if (preserve) {
+          lastObservation = input.lastObservation;
+        }
+
+        const expected = {
+          ...input,
+          lastObservation,
+          attempts: [
+            {
+              ...input.attempts[0]!,
+              replacementSearch: {
+                lowerBound: {
+                  anchor: DURABLE,
+                  nonce: 4n,
+                },
+                searchedThrough: null,
+                exhausted: null,
+              },
+            },
+            input.attempts[1]!,
+          ],
+        };
+
+        expect(await store.load()).toEqual({
+          kind: 'present',
+          snapshot: expected,
+        });
+        expect(coordinator.status.recoveryComplete).toBe(false);
+        expect(coordinator.status.inclusionChecksComplete).toBe(false);
+        expect(coordinator.status.open).toBe(false);
+        expect(coordinator.canBroadcast).toBe(false);
+        expect(coordinator.status.blockers.includes('conflict-search-exhausted')).toBe(survivor);
+        expect(coordinator.status.blockers.includes('unattributed-signer-activity')).toBe(preserve);
+        expect(latest).not.toHaveBeenCalled();
+        expect(completed).not.toHaveBeenCalled();
+        expect(rpc.sendRawTransaction).not.toHaveBeenCalled();
+        let eventCycle = 21;
+
+        if (failFirst) {
+          eventCycle = 22;
+        }
+
+        expect(t.events()).toEqual([expect.objectContaining({
+          level: 40,
+          cycle: eventCycle,
+          event: 'signer_search_unconsumed_bound_rebased',
+          signer: ACCOUNT.address,
+          attemptId: input.attempts[0]!.attemptId,
+          nonce: '4',
+          oldLowerBlock: '100',
+          oldLowerBlockHash: HASH,
+          oldLowerNonce: '4',
+          observedLowerBlockHash: FORK,
+          durableBlock: '125',
+          durableBlockHash: HASH,
+          durableNonce: '4',
+          invalidatedFact: {
+            expectedBlock: '120',
+            expectedBlockHash: HASH,
+            observedBlock: '120',
+            observedBlockHash: FORK,
+          },
+        })]);
+
+        const loaded = await t.create(await FileTransactionJournalStore.open({
+          filePath,
+          identity: IDENTITY,
+        }));
+
+        expect(loaded.status.blockers.includes('unattributed-signer-activity')).toBe(preserve);
+        expect(loaded.status.blockers.includes('conflict-search-exhausted')).toBe(survivor);
+        expect(loaded.status.recoveryComplete).toBe(false);
+        expect(loaded.canBroadcast).toBe(false);
+
+        if (!preserve) {
+          // Exercise a fresh durable pass without entering latest/broadcast work.
+          const writesBefore = save.mock.calls.length;
+
+          rpc.getBlock.mockClear();
+
+          const next = await coordinator.recover(options(rpc.publicClient));
+
+          expect(next).toMatchObject({ status: 'unresolved', search: null });
+          expect(save).toHaveBeenCalledTimes(writesBefore + 1);
+          expect(save.mock.calls.at(-1)![0].attempts).toEqual(expected.attempts);
+          expect(rpc.getBlock.mock.calls.some(
+            ([request]) => request?.blockNumber === 100n,
+          )).toBe(false);
+          expect(t.events()).toHaveLength(1);
+          expect(coordinator.status.blockers.includes('conflict-search-exhausted'))
+            .toBe(survivor);
+        }
+      } finally {
+        await rm(directory, {
+          recursive: true,
+          force: true,
+        });
+      }
+    },
+  );
 });

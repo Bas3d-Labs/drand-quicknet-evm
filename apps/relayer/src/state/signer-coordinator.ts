@@ -935,6 +935,7 @@ export class SignerCoordinator {
       await this.persistence.save(plan.snapshot);
 
       const terminalCorrection =
+        plan.completion.kind === 'search-unconsumed-bound-rebase' ||
         plan.completion.kind === 'search-reset' ||
         plan.completion.kind === 'search-lower-bound-replacement';
       this.recoveryComplete = !terminalCorrection;
@@ -1679,6 +1680,37 @@ export class SignerCoordinator {
     if (pending.kind === 'search-reset') {
       this.invalidateRecoveryAuthorization();
       this.emit((log) => log.searchReset(pending.event), cycle);
+    }
+
+    if (pending.kind === 'search-unconsumed-bound-rebase') {
+      this.invalidateRecoveryAuthorization();
+
+      const {
+        evidence,
+        observation,
+        signer,
+        attemptId,
+        nonce,
+      } = pending.event;
+
+      this.emit((log) => log.searchUnconsumedBoundRebased({
+        signer,
+        attemptId,
+        nonce,
+        oldLowerBlock: evidence.lowerBound.anchor.blockNumber,
+        oldLowerBlockHash: evidence.lowerBound.anchor.blockHash,
+        oldLowerNonce: evidence.lowerBound.nonce,
+        observedLowerBlockHash: evidence.observedLower.blockHash,
+        durableBlock: observation.anchor.blockNumber,
+        durableBlockHash: observation.anchor.blockHash,
+        durableNonce: observation.nonce,
+        invalidatedFact: {
+          expectedBlock: evidence.fact.anchor.blockNumber,
+          expectedBlockHash: evidence.fact.anchor.blockHash,
+          observedBlock: evidence.observedFact.blockNumber,
+          observedBlockHash: evidence.observedFact.blockHash,
+        },
+      }), cycle);
     }
 
     if (pending.kind === 'search-lower-bound-replacement') {

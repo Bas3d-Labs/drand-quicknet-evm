@@ -80,6 +80,20 @@ export interface InspectSignerRecoveryOptions {
 export type SignerRecoveryInspection =
   | LowerBoundRepairResult
   | {
+      status: 'search-unconsumed-bound-rebase-required';
+      attemptId: string;
+      observation: AnchoredNonceObservation;
+      readonly observations: readonly Readonly<BlockAnchor>[];
+      rebase: {
+        readonly opening: Readonly<BlockAnchor>;
+        readonly closing: Readonly<BlockAnchor>;
+        readonly lowerBound: AnchoredNonceObservation;
+        readonly observedLower: Readonly<BlockAnchor>;
+        readonly fact: AnchoredNonceObservation;
+        readonly observedFact: Readonly<BlockAnchor>;
+      };
+    }
+  | {
       status: 'anchor-behind-exhaustion';
       anchor: Readonly<BlockAnchor>;
       exhausted: AnchoredNonceObservation;
@@ -293,6 +307,8 @@ export async function inspectSignerRecovery(
       attemptId: confirmationTarget.attemptId,
       lowerBound: search.lowerBound,
       fact: search.exhausted!,
+      allowUnconsumedRebase:
+        !consumed && confirmationTarget.attemptId === attempt.attemptId,
       allowLowerBoundTrigger:
         consumed && confirmationTarget.attemptId === attempt.attemptId,
       observations,
@@ -424,6 +440,7 @@ async function confirmExhaustionInvalidation(options: {
   readonly lowerBound: AnchoredNonceObservation;
   readonly fact: AnchoredNonceObservation;
   readonly allowLowerBoundTrigger: boolean;
+  readonly allowUnconsumedRebase: boolean;
   readonly observations: readonly Readonly<BlockAnchor>[];
 }): Promise<SignerRecoveryInspection | ClosedLowerBoundTrigger> {
   const {
@@ -452,7 +469,9 @@ async function confirmExhaustionInvalidation(options: {
     { operation: 'signer-recovery' },
   ));
 
-  if (!blockAnchorsMatch(lowerBound.anchor, observedLower)) {
+  const lowerChanged = !blockAnchorsMatch(lowerBound.anchor, observedLower);
+
+  if (lowerChanged) {
     if (options.allowLowerBoundTrigger) {
       const closing = await checkBlockAnchor(
         publicClient,
@@ -476,9 +495,11 @@ async function confirmExhaustionInvalidation(options: {
       };
     }
 
-    // The field a reset would retain is no longer justified. No reset or
-    // ordinary observation write is committable on this evidence.
-    return { status: 'inconsistent-observations', observation };
+    // Only the oldest unconsumed attempt may continue to verify its fact
+    // and close this bracket. Non-oldest confirmation still refuses here.
+    if (!options.allowUnconsumedRebase) {
+      return { status: 'inconsistent-observations', observation };
+    }
   }
 
   let observedFact = opening;
@@ -505,6 +526,28 @@ async function confirmExhaustionInvalidation(options: {
     // The fact remains confirmed but the descendant nonce contradicts it.
     // Retain the blocker and refuse to persist the regressed observation.
     return { status: 'inconsistent-observations', observation };
+  }
+
+  if (lowerChanged) {
+    return {
+      status: 'search-unconsumed-bound-rebase-required',
+      attemptId: options.attemptId,
+      observation,
+      observations: Object.freeze([
+        ...options.observations,
+        observedLower,
+        observedFact,
+      ]),
+      // A null closing check verified this exact anchor.
+      rebase: Object.freeze({
+        opening,
+        closing: Object.freeze({ ...anchor }),
+        lowerBound,
+        observedLower,
+        fact,
+        observedFact,
+      }),
+    };
   }
 
   return {

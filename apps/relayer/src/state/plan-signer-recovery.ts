@@ -34,6 +34,11 @@ import {
 } from './transaction-journal-validation.js';
 
 import {
+  validateUnconsumedBoundRebase,
+  type RequiredUnconsumedRebase,
+} from './validate-unconsumed-bound-rebase.js';
+
+import {
   validateLowerBoundReplacement,
 } from './validate-lower-bound-replacement.js';
 
@@ -46,6 +51,16 @@ export interface CommittedAttemptResolution {
 }
 
 export type RecoveryWriteCompletion =
+  | {
+      readonly kind: 'search-unconsumed-bound-rebase';
+      readonly event: {
+        readonly signer: JournalIdentity['signer'];
+        readonly attemptId: string;
+        readonly nonce: bigint;
+        readonly observation: AnchoredNonceObservation;
+        readonly evidence: RequiredUnconsumedRebase['rebase'];
+      };
+    }
   | {
       readonly kind: 'search-lower-bound-replacement';
       readonly event: {
@@ -129,6 +144,54 @@ export function planSignerRecovery(
     return {
       kind: 'unchanged',
       reason: 'inspection-not-committable',
+    };
+  }
+
+  if (inspection.status === 'search-unconsumed-bound-rebase-required') {
+    const validated = validateUnconsumedBoundRebase(snapshot, inspection);
+
+    if (validated === null) {
+      return {
+        kind: 'unchanged',
+        reason: 'inspection-not-committable',
+      };
+    }
+
+    const oldest = snapshot.attempts[0]!;
+    let lastObservation = validated.observation;
+
+    if (
+      unattributedActivity &&
+      snapshot.lastObservation.nonce > lastObservation.nonce
+    ) {
+      lastObservation = snapshot.lastObservation;
+    }
+
+    const next = validateJournalSnapshotStructure({
+      ...snapshot,
+      lastObservation,
+      attempts: [
+        {
+          ...oldest,
+          replacementSearch: seedReplacementSearch(validated.observation),
+        },
+        ...snapshot.attempts.slice(1),
+      ],
+    }, identity);
+
+    return {
+      kind: 'persist',
+      snapshot: next,
+      completion: Object.freeze({
+        kind: 'search-unconsumed-bound-rebase',
+        event: Object.freeze({
+          signer: identity.signer,
+          attemptId: oldest.attemptId,
+          nonce: oldest.nonce,
+          observation: validated.observation,
+          evidence: validated.rebase,
+        }),
+      }),
     };
   }
 
@@ -314,11 +377,7 @@ export function planSignerRecovery(
       }
 
       if (lowerBound !== undefined) {
-        replacementSearch = {
-          lowerBound,
-          searchedThrough: null,
-          exhausted: null,
-        };
+        replacementSearch = seedReplacementSearch(lowerBound);
       }
     }
 
@@ -378,5 +437,13 @@ export function planSignerRecovery(
     kind: 'persist',
     snapshot: next,
     completion,
+  };
+}
+
+function seedReplacementSearch(lowerBound: AnchoredNonceObservation) {
+  return {
+    lowerBound,
+    searchedThrough: null,
+    exhausted: null,
   };
 }
