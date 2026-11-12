@@ -35,6 +35,10 @@ import {
   runSyncNonceCommand,
 } from './commands/sync-nonce-command.js';
 
+import {
+  runAttributeTransactionCommand,
+} from './commands/attribute-transaction-command.js';
+
 import type {
   CliOutputHandler,
 } from './output/cli-output.js';
@@ -48,6 +52,16 @@ export async function main(
   const command = parseCommandArguments(normalizedArgs);
 
   switch (command.command) {
+    case 'attribute-transaction':
+      if (command.mode === 'apply') {
+        assertServiceLockHeld();
+      }
+
+      return runWithShutdownSignal(
+        (signal) => runAttributeTransactionCommand(command, output, options, signal),
+        'interrupted',
+      );
+
     case 'import':
     case 'import-when-available':
       assertServiceLockHeld();

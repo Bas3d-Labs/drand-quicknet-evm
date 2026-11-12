@@ -3,10 +3,6 @@ import type {
 } from 'viem';
 
 import {
-  MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
-} from './journal-bounds.js';
-
-import {
   blockAnchorsMatch,
   type BlockAnchor,
 } from '../chain/block-anchor.js';
@@ -30,6 +26,10 @@ import {
 import {
   isUuidV4,
 } from '../shared/uuid.js';
+
+import {
+  MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+} from './journal-bounds.js';
 
 import {
   MAX_OPERATOR_OUTCOMES,

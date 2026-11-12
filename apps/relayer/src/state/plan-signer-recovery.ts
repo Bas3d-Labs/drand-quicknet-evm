@@ -3,17 +3,6 @@ import type {
 } from 'viem';
 
 import {
-  finishOperatorOutcome,
-  journalSnapshotDigest,
-  type OperatorAttributionRequest,
-} from './operator-attribution.js';
-
-import {
-  MAX_OPERATOR_OUTCOMES,
-  type OperatorAttributedOutcome,
-} from './transaction-journal.js';
-
-import {
   blockAnchorsMatch,
 } from '../chain/block-anchor.js';
 
@@ -33,6 +22,17 @@ import {
 import type {
   AttemptResolutionEvidence,
 } from '../diagnostics/transaction-evidence.js';
+
+import {
+  finishOperatorOutcome,
+  journalSnapshotDigest,
+  type OperatorAttributionRequest,
+} from './operator-attribution.js';
+
+import {
+  MAX_OPERATOR_OUTCOMES,
+  type OperatorAttributedOutcome,
+} from './transaction-journal.js';
 
 import type {
   AnchoredNonceObservation,

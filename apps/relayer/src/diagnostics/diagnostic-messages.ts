@@ -4,6 +4,7 @@ import type {
 } from './config-errors.js';
 
 export const USAGE_MESSAGES = {
+  INVALID_ATTRIBUTION_ARGUMENTS: 'Invalid attribute-transaction arguments. Use dry-run with attempt, transaction and operator, or --apply --ticket; select exactly one network.',
   UNKNOWN_COMMAND: 'Unknown command. Run relayer --help.',
   UNKNOWN_ARGUMENT: 'Unknown argument. Run relayer --help.',
   EXPECTED_ARGUMENT: 'Expected a command argument.',

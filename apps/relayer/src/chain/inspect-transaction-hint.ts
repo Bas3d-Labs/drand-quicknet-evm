@@ -36,34 +36,34 @@ export interface TransactionHint {
 
 export type TransactionHintInspection =
   | {
-    readonly status: 'operator-attribution-available';
-    readonly snapshotDigest: Hash;
-    readonly observation: AnchoredNonceObservation;
-    readonly observations: readonly Readonly<BlockAnchor>[];
-    readonly attemptId: string;
-    readonly transactionHash: Hash;
-    readonly inclusion: Readonly<BlockAnchor>;
-  }
+      readonly status: 'operator-attribution-available';
+      readonly snapshotDigest: Hash;
+      readonly observation: AnchoredNonceObservation;
+      readonly observations: readonly Readonly<BlockAnchor>[];
+      readonly attemptId: string;
+      readonly transactionHash: Hash;
+      readonly inclusion: Readonly<BlockAnchor>;
+    }
   | {
-    readonly status: 'operator-hint-refused';
-    readonly observation: AnchoredNonceObservation;
-    readonly reason:
-    | 'missing-lower-bound'
-    | 'wrong-attempt'
-    | 'inclusion-outside-bound'
-    | 'anchor-changed'
-    | 'inconsistent-observations'
-    | 'correction-required'
-    | 'invalid-parent'
-    | 'invalid-match'
-    | 'retained-candidate-unresolved'
-    | 'nonce-unconsumed'
-    | 'ledger-capacity-reached'
-    | 'locator-pending'
-    | 'locator-not-found'
-    | 'cursor-above-durable'
-    | 'stale-evidence';
-  };
+      readonly status: 'operator-hint-refused';
+      readonly observation: AnchoredNonceObservation;
+      readonly reason:
+        | 'missing-lower-bound'
+        | 'wrong-attempt'
+        | 'inclusion-outside-bound'
+        | 'anchor-changed'
+        | 'inconsistent-observations'
+        | 'correction-required'
+        | 'invalid-parent'
+        | 'invalid-match'
+        | 'retained-candidate-unresolved'
+        | 'nonce-unconsumed'
+        | 'ledger-capacity-reached'
+        | 'locator-pending'
+        | 'locator-not-found'
+        | 'cursor-above-durable'
+        | 'stale-evidence';
+    };
 
 /** Called only after ordinary receipt, nonce and all-attempt precedence checks. */
 export async function inspectTransactionHint(options: {

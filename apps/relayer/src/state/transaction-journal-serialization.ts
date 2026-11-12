@@ -1,10 +1,10 @@
 import {
-  decodeLedger,
-} from './journal-ledger-validation.js';
-
-import {
   isDecimalInteger,
 } from '../shared/decimal.js';
+
+import {
+  decodeLedger,
+} from './journal-ledger-validation.js';
 
 import {
   MAX_RETAINED_NONCE_REPAIRS,

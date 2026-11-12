@@ -127,13 +127,101 @@ pnpm --filter @based-labs/drand-quicknet-relayer start \
   --network-config "$PWD/network.json"
 ```
 
-`import`, `import-when-available`, `daemon`, and `sync-nonce` accept
+`import`, `import-when-available`, `daemon`, `sync-nonce`, and
+`attribute-transaction` accept
 either `--network` for a built-in preset or `--network-config` for a
 custom descriptor, never both. `status` instead requires `--chain-id`
 and `--signer`.
 
 The daemon requires the additional consumer/checkpoint environment
 variables described below.
+
+### `attribute-transaction`
+
+Attributes the oldest retained attempt to a transaction supplied by the
+operator. The hash is a locator: the relayer verifies the signer, nonce,
+canonical block membership and historical search anchors under a closed
+durable bracket. This records nonce consumption, not beacon fulfillment.
+
+The practical sequence is **stop daemon, dry-run, apply**:
+
+```bash
+pnpm --filter @based-labs/drand-quicknet-relayer start \
+  attribute-transaction \
+  --network-config "$PWD/network.json" \
+  --attempt-id <uuid> \
+  --tx-hash <hash> \
+  --operator <label>
+```
+
+Dry-run is the default; `--dry-run` makes it explicit. An optional
+`--block-number <decimal>` locates the transaction without a transaction
+lookup. Dry-run prints JSON containing `ticket` and `preview`. Save the
+`ticket` object alone to a file, then apply it:
+
+```bash
+pnpm --filter @based-labs/drand-quicknet-relayer start \
+  attribute-transaction \
+  --network-config "$PWD/network.json" \
+  --apply --ticket "$PWD/attribution-ticket.json"
+```
+
+Apply cannot be combined with dry-run, hint or operator flags. It requires
+the inherited service lock and freshly verifies the ticket's evidence.
+Both modes use finality from the selected network configuration. Apply
+keeps the ticket's original durable anchor, which must still be at or
+below the configuration's currently selected durable height.
+
+Dry-run makes no journal writes and may run while the daemon holds the
+lock. Such a preview is provisional: ordinary daemon saves can make its
+snapshot digest stale. Changed snapshots, configuration, anchors or
+proposals refuse without an attribution write. Missing historical data
+requires a provider able to serve the required headers and full block.
+
+Both modes resolve `QUICKNET_STATE_DIR` from the launching environment,
+defaulting to `./state`, before loading the env file. The env file cannot
+override that exported value. Dry-run resolves the path without creating it.
+Both attribution modes intentionally load the normal signing configuration:
+dry-run derives the signer address from the configured private key, but never
+invokes signing. It is not a keyless inspection command like `status`.
+
+Output contains bounded metadata, hashes and the proposed mutation, never
+an encoded journal or retained signed bytes. Diagnostics go to stderr.
+A retained candidate receipt returns `ordinary-resolution-available`
+without a ticket or write and exits 4 (`deferred`); resume ordinary recovery
+to record it. A
+ticketed apply cannot substitute that newly available ordinary resolution
+for the external attribution it previewed.
+
+`committed` means the coordinator acknowledged the ledger row. A failed
+save gets one retry of the exact pending snapshot; another failure is an
+error, not success. A repeat request returns `already-recorded` from the
+validated ledger without another attribution save or event. That result
+reports existing history; it does not acknowledge a new write. Reusing a
+request ID with changed ticket fields refuses. A different request for an
+already-attributed attempt instead returns `attempt-already-attributed` and
+exits 1. It includes the requested request ID and the original recorded outcome,
+even when the requested transaction differs; it does not claim the new ticket
+was applied. `committed`, an identical `already-recorded` retry, and a preview
+with a ticket exit 0.
+
+As with other writable commands, first opening the journal performs its
+existing durability rewrite and temporary-file cleanup. Attribution delays
+that opening until the fresh proposal matches the ticket. No latest pass,
+signing, broadcast or permit follows attribution in this command. Independent
+unattributed signer activity remains blocked.
+
+Cancellation before writable opening stops the operation without a save or
+persistence retry. Once writable opening starts, its durability work and any
+pending attribution save/retry finish with their actual outcome. A later
+shutdown signal cannot replace commitment or a persistence error with an
+interrupted result.
+
+History holds at most 32 operator outcomes. `ledger-capacity-reached` refuses
+new operator attributions; ordinary recovery remains available. There is no
+clearing operation in this version. Further attributions after reaching the
+limit require a reviewed archival upgrade. Never delete the journal to bypass
+this limit or another blocker.
 
 ### `sync-nonce`
 
@@ -615,6 +703,9 @@ Protected commands require Linux and util-linux `flock`:
 - `import-when-available`
 - `daemon`
 - `sync-nonce`
+- `attribute-transaction --apply`
+
+Attribution dry-run does not acquire ownership or create state files.
 
 `status` acquires ownership when inspecting the journal. Snapshot mode
 does not require ownership. Automatic source selection attempts ownership
@@ -629,8 +720,9 @@ exclusive, nonblocking lock on:
 The default state directory is `./state` when `QUICKNET_STATE_DIR` is
 unset. An explicitly empty value is invalid.
 
-For `import`, `import-when-available`, `daemon`, and `sync-nonce`, the
-launcher creates a missing directory and canonicalizes its path.
+For `import`, `import-when-available`, `daemon`, `sync-nonce`, and
+`attribute-transaction --apply`, the launcher creates a missing directory
+and canonicalizes its path.
 Check configured paths carefully: a typo can create a new state
 directory with no existing checkpoint.
 
@@ -755,10 +847,10 @@ Package managers and supervisors may additionally report wrapper errors.
 | Status | Meaning |
 | --- | --- |
 | `0` | Successful command completion or graceful daemon shutdown. |
-| `1` | Application failure, refused nonce repair, or explicit launcher validation failure. |
+| `1` | Application failure, refused nonce repair or attribution, or explicit launcher validation failure. |
 | `2` | CLI output failure; the operation may already have succeeded. |
 | `3` | One-shot import remains pending. A journaled transaction attempt remains unresolved. |
-| `4` | Import deferred because the signer is unavailable or the work is already retained, or nonce-sync inspection deferred. |
+| `4` | Import or nonce-sync inspection deferred, or attribution found an ordinary resolution and produced no ticket. |
 | `5` | One-shot command handled SIGINT/SIGTERM before producing a result. Retained journal state may still require recovery. |
 | `6` | A recognized signer-journal bounds failure occurred, including startup refusal for an over-bound journal. |
 | `9` | Node startup failure observed when a configured env file is missing. |
@@ -1363,8 +1455,12 @@ round_already_stored
 round_deferred
 round_imported
 rpc_usage
+signer_attempt_operator_attributed
 signer_bootstrap_deferred
 signer_nonce_synced
+signer_search_reset
+signer_search_lower_bound_replaced
+signer_search_unconsumed_bound_rebased
 status_publication_failed
 ```
 

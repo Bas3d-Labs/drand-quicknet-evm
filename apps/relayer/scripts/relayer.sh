@@ -28,6 +28,43 @@ for argument in "$@"; do
   esac
 done
 
+# Attribution preview is read-only and may inspect the atomic journal while the
+# daemon holds the service lock. Any --apply occurrence keeps the locked path;
+# Node validates all argument combinations before doing work.
+if [ "${1-}" = "attribute-transaction" ]; then
+  attribution_apply=false
+
+  for argument in "$@"; do
+    if [ "$argument" = "--apply" ]; then
+      attribution_apply=true
+    fi
+  done
+
+  if [ "$attribution_apply" = false ]; then
+    # Freeze the launch environment's directory before Node loads the env file,
+    # exactly as the protected path does. Resolve without creating anything.
+    attribution_state_dir=${QUICKNET_STATE_DIR-./state}
+
+    if [ -z "$attribution_state_dir" ]; then
+      printf '%s\n' 'The relayer state directory must not be empty.' >&2
+      exit 1
+    fi
+
+    if ! attribution_state_dir=$(readlink -m -- "$attribution_state_dir"); then
+      printf '%s\n' 'Unable to resolve the relayer state directory.' >&2
+      exit 1
+    fi
+
+    export QUICKNET_STATE_DIR="$attribution_state_dir"
+
+    if [ -n "${QUICKNET_ENV_FILE-}" ]; then
+      exec node "--env-file=$QUICKNET_ENV_FILE" "$app_dir/dist/bootstrap.js" "$@"
+    fi
+
+    exec node "$app_dir/dist/bootstrap.js" "$@"
+  fi
+fi
+
 # Status uses public command-line identity and the launching environment.
 # It deliberately does not load the signing application's env file.
 if [ "${1-}" = "status" ]; then

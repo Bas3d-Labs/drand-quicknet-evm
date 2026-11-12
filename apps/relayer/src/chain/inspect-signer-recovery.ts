@@ -2,12 +2,6 @@ import type {
   PublicClient,
 } from 'viem';
 
-import {
-  inspectTransactionHint,
-  type TransactionHint,
-  type TransactionHintInspection,
-} from './inspect-transaction-hint.js';
-
 import type {
   AttemptResolutionEvidence,
 } from '../diagnostics/transaction-evidence.js';
@@ -24,6 +18,12 @@ import type {
 import {
   validateJournalSnapshotStructure,
 } from '../state/transaction-journal-validation.js';
+
+import {
+  inspectTransactionHint,
+  type TransactionHint,
+  type TransactionHintInspection,
+} from './inspect-transaction-hint.js';
 
 import {
   blockAnchorsMatch,

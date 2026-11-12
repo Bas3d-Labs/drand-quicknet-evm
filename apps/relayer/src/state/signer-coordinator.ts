@@ -10,12 +10,6 @@ import type {
 } from 'viem';
 
 import {
-  supersedesNoMatch,
-  validateAttributionRequest,
-  type OperatorAttributionRequest,
-} from './operator-attribution.js';
-
-import {
   blockAnchorsMatch,
   checkBlockAnchor,
   type BlockAnchor,
@@ -64,6 +58,13 @@ import {
 import {
   isPositiveSafeInteger,
 } from '../shared/integer.js';
+
+import {
+  supersedesNoMatch,
+  validateAttributionRequest,
+  journalSnapshotDigest,
+  type OperatorAttributionRequest,
+} from './operator-attribution.js';
 
 import {
   durableRecoveryRevision as computeDurableRecoveryRevision,
@@ -118,12 +119,22 @@ export interface SignerCoordinatorOptions {
 
 export interface RecoverSignerOptions {
   readonly attribution?: OperatorAttributionRequest;
+  readonly attributionCommitment?: {
+    readonly snapshotDigest: Hash;
+    readonly proposalDigest: Hash;
+    readonly inclusion: Readonly<BlockAnchor>;
+    readonly durable: AnchoredNonceObservation;
+  };
   readonly publicClient: PublicClient;
   readonly anchor: Readonly<BlockAnchor>;
   readonly maxBlockRange: bigint;
 }
 
 export type SignerRecoveryResult =
+  | {
+      readonly status: 'operator-ticket-refused';
+      readonly reason: 'snapshot-changed' | 'proposal-changed';
+    }
   | {
       readonly status: 'operator-attribution-committed';
       readonly requestId: string;
@@ -414,6 +425,9 @@ export class SignerCoordinator {
           ...(options.attribution === undefined ? {} : {
             attribution: structuredClone(options.attribution),
           }),
+          ...(options.attributionCommitment === undefined ? {} : {
+            attributionCommitment: structuredClone(options.attributionCommitment),
+          }),
         };
 
         return this.runInspectionOperation(
@@ -537,6 +551,19 @@ export class SignerCoordinator {
    */
   get journalInitialized(): boolean {
     return this.persistence.current.kind === 'present';
+  }
+
+  /** Returns only acknowledged history, including after persistence retry. */
+  operatorOutcome(
+    requestId: string,
+  ) {
+    const current = this.persistence.current;
+
+    if (current.kind === 'missing') {
+      return undefined;
+    }
+
+    return current.snapshot.ledger.outcomes.find((row) => row.requestId === requestId);
   }
 
   /**
@@ -868,14 +895,27 @@ export class SignerCoordinator {
 
     const current = this.persistence.current;
 
+    if (options.attribution !== undefined) {
+      validateAttributionRequest(options.attribution);
+    }
+
+    const commitment = options.attributionCommitment;
+
+    if (commitment !== undefined && (
+      options.attribution === undefined ||
+      current.kind !== 'present' ||
+      journalSnapshotDigest(current.snapshot) !== commitment.snapshotDigest
+    )) {
+      return {
+        status: 'operator-ticket-refused',
+        reason: 'snapshot-changed',
+      };
+    }
+
     this.invalidateRecoveryAuthorization();
     this.busy = true;
 
     try {
-      if (options.attribution !== undefined) {
-        validateAttributionRequest(options.attribution);
-      }
-
       if (owner.bracket !== null) {
         const bracket = owner.bracket;
 
@@ -971,6 +1011,23 @@ export class SignerCoordinator {
         }
 
         return result;
+      }
+
+      // Ticketed apply may commit only the exact attribution previewed earlier.
+      // In particular, a newly available ordinary resolution is not that proposal.
+      if (commitment !== undefined && (
+        plan.completion.kind !== 'operator-attribution' ||
+        plan.completion.outcome.proposalDigest !== commitment.proposalDigest ||
+        !blockAnchorsMatch(plan.completion.outcome.replacement.inclusion, commitment.inclusion) ||
+        !blockAnchorsMatch(plan.completion.outcome.durable.anchor, commitment.durable.anchor) ||
+        plan.completion.outcome.durable.nonce !== commitment.durable.nonce
+      )) {
+        this.failInspectionBracket(owner);
+
+        return {
+          status: 'operator-ticket-refused',
+          reason: 'proposal-changed',
+        };
       }
 
       this.stageWrite(plan.completion);

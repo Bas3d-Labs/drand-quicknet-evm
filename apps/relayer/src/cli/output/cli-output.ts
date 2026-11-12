@@ -58,6 +58,14 @@ import type {
   SyncNonceResult,
 } from '../sync-nonce.js';
 
+import type {
+  AttributionResult,
+} from '../../state/attribute-transaction.js';
+
+import {
+  renderAttributionOutput,
+} from './attribution-output.js';
+
 import {
   projectDaemonSnapshotStatusOutput,
   renderDaemonSnapshotStatusOutput,
@@ -69,6 +77,10 @@ import {
 } from './journal-status-output.js';
 
 export type CliOutput =
+  | {
+      type: 'operator-attribution-result';
+      result: AttributionResult;
+    }
   | {
       type: 'help' | 'daemon-help'
     }
@@ -137,11 +149,17 @@ const HELP = [
   '  import-when-available   Wait for and import an exact Quicknet round.',
   '  daemon                  Watch consumers and relay requested rounds.',
   '  sync-nonce              Preview or apply a forward signer nonce repair.',
+  '  attribute-transaction   Dry-run or apply verified transaction attribution.',
   '  status                  Inspect journal or historical daemon status.',
   '',
   'Network selection:',
   '  --network <preset>       Use an official network preset.',
   '  --network-config <file>  Use a custom network configuration.',
+  '',
+  'Attribution (select a network):',
+  '  --dry-run --attempt-id <uuid> --tx-hash <hash> --operator <label>',
+  '    Optional: --block-number <decimal>. Dry-run is the default.',
+  '  --apply --ticket <file>  Apply the ticket extracted from dry-run JSON.',
   '',
   'Exactly one network selection option is required for import, ' +
     'import-when-available, and daemon.',
@@ -698,6 +716,10 @@ export function renderCliOutput(
 
   if (type === 'nonce-sync-result') {
     return renderNonceSyncOutput(output);
+  }
+
+  if (type === 'operator-attribution-result') {
+    return renderAttributionOutput(own(output, 'result') as AttributionResult);
   }
 
   if (type === 'relayer-status') {

@@ -320,7 +320,9 @@ describe('beacon journal size', () => {
           obligations: [] as const,
         },
       };
+
       const historyContents = await encodeJournalSnapshot(fullHistory, IDENTITY);
+
       const historyBytes = Buffer.byteLength(historyContents, 'utf8');
 
       expect(fullHistory.ledger.outcomes).toHaveLength(32);
