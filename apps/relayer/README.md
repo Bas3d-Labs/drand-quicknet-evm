@@ -742,8 +742,9 @@ the next process uses the retained signer journal to reconcile recorded
 attempts before authorizing further submissions. A released lock does
 not prove that the previous process's transaction was rejected.
 
-Unattributed signer activity or an exhausted replacement search keeps
-the signer blocked and requires investigation. Do not delete the journal
+Unattributed signer activity or an exhausted replacement search that
+cannot be repaired or attributed keeps the signer blocked and requires
+investigation. Do not delete the journal
 to bypass a blocker.
 
 ### Exit status and diagnostics

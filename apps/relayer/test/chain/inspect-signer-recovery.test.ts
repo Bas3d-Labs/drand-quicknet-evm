@@ -1054,7 +1054,7 @@ describe('nonce-independent exhaustion confirmation', () => {
   );
 
   it.each(['opening', 'lower', 'closing', 'closing-rpc'] as const)(
-    'refuses confirmation when %s fails',
+    'classifies the confirmation %s case',
     async (failure) => {
       const t = await setup();
       const selected = { blockNumber: 105n, blockHash: OTHER };
@@ -1098,12 +1098,14 @@ describe('nonce-independent exhaustion confirmation', () => {
       } else {
         const result = await t.run({ snapshot, anchor: selected });
         if (failure === 'lower') {
-          expect(result.status).toBe('inconsistent-observations');
+          expect(result.status).toBe('search-unconsumed-bound-rebase-required');
         } else {
           expect(result.status).toBe('anchor-changed');
         }
         expect(result).not.toHaveProperty('reset');
-        expect(result).not.toHaveProperty('observations');
+        if (failure !== 'lower') {
+          expect(result).not.toHaveProperty('observations');
+        }
       }
       expect(t.getBlock.mock.calls.every(([request]) => request.includeTransactions !== true))
         .toBe(true);
@@ -1384,42 +1386,26 @@ describe('durable lower-bound trigger routing', () => {
     );
   });
 
-  it.each(['unconsumed', 'non-oldest'] as const)(
-    'keeps the changed-lower early refusal for %s confirmation',
-    async (target) => {
+  it('keeps the changed-lower early refusal for non-oldest confirmation',
+    async () => {
       const fixture = await setup();
       fixture.missing();
       const selected = { blockNumber: 105n, blockHash: OTHER };
       const oldest = fixture.snapshot.attempts[0]!;
-      let attempts = [oldest];
-      let nonce = 4;
-      let nextNonce = 5n;
-
-      if (target === 'unconsumed') {
-        attempts = [{
-          ...oldest,
-          replacementSearch: {
-            lowerBound: fixture.snapshot.baseline,
-            searchedThrough: null,
-            exhausted: { anchor: anchorAt(105n), nonce: 5n },
-          },
-        }];
-      } else {
-        nonce = 6;
-        nextNonce = 6n;
-        attempts = [oldest, {
-          ...oldest,
-          attemptId: '22222222-2222-4222-8222-222222222222',
-          workId: 'test-work:5',
-          nonce: 5n,
-          signedTransactions: [await signedTransaction(5)],
-          replacementSearch: {
-            lowerBound: fixture.snapshot.baseline,
-            searchedThrough: null,
-            exhausted: { anchor: anchorAt(105n), nonce: 6n },
-          },
-        }];
-      }
+      const nonce = 6;
+      const nextNonce = 6n;
+      const attempts: TransactionJournalSnapshot['attempts'] = [oldest, {
+        ...oldest,
+        attemptId: '22222222-2222-4222-8222-222222222222',
+        workId: 'test-work:5',
+        nonce: 5n,
+        signedTransactions: [await signedTransaction(5)],
+        replacementSearch: {
+          lowerBound: fixture.snapshot.baseline,
+          searchedThrough: null,
+          exhausted: { anchor: anchorAt(105n), nonce: 6n },
+        },
+      }];
 
       const snapshot: TransactionJournalSnapshot = {
         ...fixture.snapshot,
@@ -1450,4 +1436,322 @@ describe('durable lower-bound trigger routing', () => {
       expect(snapshot).toEqual(before);
     },
   );
+});
+
+describe('unconsumed bound rebase evidence', () => {
+  async function rebaseFixture(factHeight = 103n) {
+    const t = await setup();
+
+    t.missing();
+
+    t.getTransactionCount.mockResolvedValue(4);
+
+    const snapshot: TransactionJournalSnapshot = {
+      ...t.snapshot,
+      attempts: [{
+        ...t.snapshot.attempts[0]!,
+        replacementSearch: {
+          lowerBound: t.snapshot.baseline,
+          searchedThrough: anchorAt(factHeight),
+          exhausted: {
+            anchor: anchorAt(factHeight),
+            nonce: 5n,
+          },
+        },
+      }],
+    };
+    const read = t.getBlock.getMockImplementation()!;
+
+    t.getBlock.mockImplementation(async (request) => {
+      const block = await read(request);
+
+      return {
+        ...block,
+        hash: OTHER,
+      };
+    });
+
+    return {
+      ...t,
+      snapshot,
+      run: () => t.run({
+        snapshot,
+        anchor: {
+          blockNumber: 105n,
+          blockHash: OTHER,
+        },
+      }),
+    };
+  }
+
+  it.each([103n, 105n])(
+    'closes one bracket with fact at %s',
+    async (height) => {
+      const t = await rebaseFixture(height);
+      const before = structuredClone(t.snapshot);
+      const result = await t.run();
+
+      expect(result).toMatchObject({
+        status: 'search-unconsumed-bound-rebase-required',
+        attemptId: t.snapshot.attempts[0]!.attemptId,
+        observation: {
+          anchor: {
+            blockNumber: 105n,
+            blockHash: OTHER,
+          },
+          nonce: 4n,
+        },
+        rebase: {
+          lowerBound: t.snapshot.baseline,
+          observedLower: {
+            blockNumber: 100n,
+            blockHash: OTHER,
+          },
+          fact: {
+            anchor: anchorAt(height),
+            nonce: 5n,
+          },
+          observedFact: {
+            blockNumber: height,
+            blockHash: OTHER,
+          },
+        },
+      });
+
+      const expected = [105n, 105n, 105n, 105n, 105n, 100n];
+
+      if (height !== 105n) {
+        expected.push(height);
+      }
+
+      expected.push(105n);
+
+      expect(t.getBlock.mock.calls.map(([request]) => request))
+        .toEqual(expected.map((blockNumber) => ({ blockNumber })));
+      expect(t.getTransactionCount).toHaveBeenCalledTimes(1);
+      expect(t.snapshot).toEqual(before);
+    },
+  );
+
+  it('keeps an unconsumed search without a fact on the ordinary path', async () => {
+    const t = await rebaseFixture();
+    const attempt = t.snapshot.attempts[0]!;
+
+    Object.assign(attempt, {
+      replacementSearch: {
+        ...attempt.replacementSearch!,
+        exhausted: null,
+      },
+    });
+
+    expect(await t.run()).toMatchObject({
+      status: 'unresolved',
+      search: null,
+    });
+    expect(t.getBlock.mock.calls.every(([r]) => r.blockNumber === 105n)).toBe(true);
+  });
+
+  it('refuses a still-canonical fact after closing the bracket', async () => {
+    const t = await rebaseFixture();
+    const read = t.getBlock.getMockImplementation()!;
+
+    t.getBlock.mockImplementation(async (request) => {
+      const block = await read(request);
+
+      if (request.blockNumber === 103n) {
+        return {
+          ...block,
+          hash: hashAt(103n),
+        };
+      }
+
+      return block;
+    });
+
+    expect(await t.run()).toMatchObject({ status: 'inconsistent-observations' });
+    expect(t.getBlock.mock.calls.at(-1)).toEqual([{ blockNumber: 105n }]);
+  });
+
+  it.each(['moved', 'rpc-failure'] as const)(
+    'rejects positive rebase evidence when closing is %s',
+    async (fault) => {
+      const t = await rebaseFixture();
+      const read = t.getBlock.getMockImplementation()!;
+      let factRead = false;
+
+      t.getBlock.mockImplementation(async (request) => {
+        const block = await read(request);
+
+        if (request.blockNumber === 103n) {
+          factRead = true;
+        }
+
+        if (factRead && request.blockNumber === 105n) {
+          if (fault === 'rpc-failure') {
+            throw new Error('positive rebase closing failed');
+          }
+
+          return {
+            ...block,
+            hash: hashAt(105n),
+          };
+        }
+
+        return block;
+      });
+
+      if (fault === 'rpc-failure') {
+        await expect(t.run()).rejects.toThrow('positive rebase closing failed');
+      } else {
+        const result = await t.run();
+
+        expect(result.status).toBe('anchor-changed');
+        expect(result).not.toHaveProperty('rebase');
+        expect(result).not.toHaveProperty('observations');
+      }
+
+      expect(t.getBlock.mock.calls.slice(-3)).toEqual([
+        [{ blockNumber: 100n }],
+        [{ blockNumber: 103n }],
+        [{ blockNumber: 105n }],
+      ]);
+    },
+  );
+
+  it('lets a moved closing anchor win over a matching fact', async () => {
+    const t = await rebaseFixture();
+    const read = t.getBlock.getMockImplementation()!;
+    let factRead = false;
+
+    t.getBlock.mockImplementation(async (request) => {
+      const block = await read(request);
+
+      if (request.blockNumber === 103n) {
+        factRead = true;
+
+        return {
+          ...block,
+          hash: hashAt(103n),
+        };
+      }
+
+      if (factRead && request.blockNumber === 105n) {
+        return {
+          ...block,
+          hash: hashAt(105n),
+        };
+      }
+
+      return block;
+    });
+
+    expect(await t.run()).toMatchObject({ status: 'anchor-changed' });
+  });
+
+  it.each([false, true])(
+    'accepts above-D evidence without mutating stored inclusion: %s',
+    async (stored) => {
+      const t = await rebaseFixture();
+
+      t.getTransactionReceipt.mockResolvedValue({
+        transactionHash: t.hash,
+        blockNumber: 106n,
+        blockHash: OTHER,
+        status: 'success',
+      });
+
+      if (stored) {
+        Object.assign(t.snapshot.attempts[0]!, {
+          phase: 'included',
+          inclusion: {
+            outcome: 'success',
+            transactionHash: t.hash,
+            inclusion: {
+              blockNumber: 106n,
+              blockHash: OTHER,
+            },
+            observedAt: {
+              blockNumber: 110n,
+              blockHash: OTHER,
+            },
+          },
+        });
+      }
+
+      const before = structuredClone(t.snapshot);
+
+      expect(await t.run()).toMatchObject({ status: 'search-unconsumed-bound-rebase-required' });
+      expect(t.snapshot).toEqual(before);
+    },
+  );
+
+  it('propagates an unavailable fact without publishing rebase evidence', async () => {
+    const t = await rebaseFixture();
+    const read = t.getBlock.getMockImplementation()!;
+
+    t.getBlock.mockImplementation(async (request) => {
+      if (request.blockNumber === 103n) {
+        throw new Error('historical header unavailable');
+      }
+
+      return read(request);
+    });
+
+    const before = structuredClone(t.snapshot);
+
+    await expect(t.run()).rejects.toThrow('historical header unavailable');
+
+    expect(t.snapshot).toEqual(before);
+  });
+
+  it('refuses a nonce behind the journal before confirming the bound', async () => {
+    const t = await rebaseFixture();
+
+    t.getTransactionCount.mockResolvedValue(3);
+
+    expect(await t.run()).toMatchObject({ status: 'nonce-behind-journal' });
+    expect(t.getBlock.mock.calls.some(([r]) => r.blockNumber === 100n)).toBe(false);
+  });
+
+  it('refuses a durable candidate receipt with an unconsumed nonce', async () => {
+    const t = await rebaseFixture();
+
+    t.getTransactionReceipt.mockResolvedValue({
+      transactionHash: t.hash,
+      blockNumber: 102n,
+      blockHash: OTHER,
+      status: 'success',
+    });
+
+    expect(await t.run()).toMatchObject({ status: 'inconsistent-observations' });
+    expect(t.getBlock.mock.calls.some(([r]) => r.blockNumber === 100n)).toBe(false);
+  });
+
+  it('keeps later-attempt fact precedence over eligible oldest B', async () => {
+    const t = await rebaseFixture();
+    const later = {
+      ...t.snapshot.attempts[0]!,
+      attemptId: '22222222-2222-4222-8222-222222222222',
+      workId: 'test-work:5',
+      nonce: 5n,
+      signedTransactions: [await signedTransaction(5)],
+      replacementSearch: {
+        lowerBound: t.snapshot.baseline,
+        searchedThrough: anchorAt(105n),
+        exhausted: {
+          anchor: anchorAt(105n),
+          nonce: 6n,
+        },
+      },
+    };
+
+    Object.assign(t.snapshot, {
+      nextNonce: 6n,
+      attempts: [...t.snapshot.attempts, later],
+    });
+
+    expect(await t.run()).toMatchObject({ status: 'inconsistent-observations' });
+    expect(t.getBlock.mock.calls.at(-1)).toEqual([{ blockNumber: 100n }]);
+    expect(t.getBlock.mock.calls.some(([r]) => r.blockNumber === 103n)).toBe(false);
+  });
 });
