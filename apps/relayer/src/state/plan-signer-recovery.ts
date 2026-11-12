@@ -23,6 +23,17 @@ import type {
   AttemptResolutionEvidence,
 } from '../diagnostics/transaction-evidence.js';
 
+import {
+  finishOperatorOutcome,
+  journalSnapshotDigest,
+  type OperatorAttributionRequest,
+} from './operator-attribution.js';
+
+import {
+  MAX_OPERATOR_OUTCOMES,
+  type OperatorAttributedOutcome,
+} from './transaction-journal.js';
+
 import type {
   AnchoredNonceObservation,
   JournalIdentity,
@@ -51,6 +62,10 @@ export interface CommittedAttemptResolution {
 }
 
 export type RecoveryWriteCompletion =
+  | {
+      readonly kind: 'operator-attribution';
+      readonly outcome: OperatorAttributedOutcome;
+    }
   | {
       readonly kind: 'search-unconsumed-bound-rebase';
       readonly event: {
@@ -106,6 +121,7 @@ export interface PlanSignerRecoveryOptions {
   readonly snapshot: TransactionJournalSnapshot;
   readonly inspection: SignerRecoveryInspection;
   readonly unattributedActivity: boolean;
+  readonly attribution?: OperatorAttributionRequest;
 }
 
 export type SignerRecoveryPlan =
@@ -113,7 +129,8 @@ export type SignerRecoveryPlan =
       readonly kind: 'unchanged';
       readonly reason:
         | 'inspection-not-committable'
-        | 'preserved-higher-observation';
+        | 'preserved-higher-observation'
+        | 'ledger-capacity-reached';
     }
   | {
       readonly kind: 'persist';
@@ -135,6 +152,7 @@ export function planSignerRecovery(
   } = options;
 
   if (
+    inspection.status === 'operator-hint-refused' ||
     inspection.status === 'anchor-changed' ||
     inspection.status === 'anchor-behind-exhaustion' ||
     inspection.status === 'search-lower-bound-replacement-unavailable' ||
@@ -144,6 +162,89 @@ export function planSignerRecovery(
     return {
       kind: 'unchanged',
       reason: 'inspection-not-committable',
+    };
+  }
+
+  if (inspection.status === 'operator-attribution-available') {
+    const oldest = snapshot.attempts[0];
+    const request = options.attribution;
+
+    if (
+      request === undefined ||
+      oldest === undefined ||
+      oldest.replacementSearch === null ||
+      inspection.attemptId !== oldest.attemptId ||
+      request.hint.attemptId !== oldest.attemptId ||
+      request.hint.transactionHash.toLowerCase() !== inspection.transactionHash ||
+      inspection.snapshotDigest !== journalSnapshotDigest(snapshot)
+    ) {
+      return { kind: 'unchanged', reason: 'inspection-not-committable' };
+    }
+
+    if (snapshot.ledger.outcomes.length >= MAX_OPERATOR_OUTCOMES) {
+      return {
+        kind: 'unchanged',
+        reason: 'ledger-capacity-reached',
+      };
+    }
+
+    const ordinary = planSignerRecovery({
+      identity,
+      snapshot,
+      unattributedActivity,
+      inspection: {
+        status: 'resolution-available',
+        observation: inspection.observation,
+        observations: inspection.observations,
+        evidence: {
+          outcome: 'replaced',
+          anchor: inspection.observation.anchor,
+          inclusion: inspection.inclusion,
+          replacementTransactionHash: inspection.transactionHash,
+          nonceAtAnchor: inspection.observation.nonce,
+        },
+      },
+    });
+
+    if (ordinary.kind !== 'persist') {
+      return ordinary;
+    }
+
+    const outcome = finishOperatorOutcome(snapshot, {
+      kind: 'operator-attributed',
+      requestId: request.requestId,
+      snapshotDigest: inspection.snapshotDigest,
+      operator: request.operator,
+      at: request.at,
+      attemptId: oldest.attemptId,
+      workId: oldest.workId,
+      nonce: oldest.nonce,
+      candidateHashes: oldest.signedTransactions.map(
+        (candidate) => candidate.transactionHash.toLowerCase() as Hash,
+      ),
+      durable: inspection.observation,
+      finality: request.finality,
+      lowerBound: oldest.replacementSearch.lowerBound,
+      replacement: {
+        transactionHash: inspection.transactionHash,
+        inclusion: inspection.inclusion,
+      },
+      priorSearch: {
+        searchedThrough: oldest.replacementSearch.searchedThrough,
+        exhausted: oldest.replacementSearch.exhausted,
+      },
+    });
+
+    return {
+      kind: 'persist',
+      snapshot: validateJournalSnapshotStructure({
+        ...ordinary.snapshot,
+        ledger: {
+          outcomes: [...snapshot.ledger.outcomes, outcome],
+          obligations: [],
+        },
+      }, identity),
+      completion: Object.freeze({ kind: 'operator-attribution', outcome }),
     };
   }
 

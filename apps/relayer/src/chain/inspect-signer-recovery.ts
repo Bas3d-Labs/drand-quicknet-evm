@@ -20,6 +20,12 @@ import {
 } from '../state/transaction-journal-validation.js';
 
 import {
+  inspectTransactionHint,
+  type TransactionHint,
+  type TransactionHintInspection,
+} from './inspect-transaction-hint.js';
+
+import {
   blockAnchorsMatch,
   checkBlockAnchor,
   getBlockAnchor,
@@ -75,9 +81,11 @@ export interface InspectSignerRecoveryOptions {
 
   readonly anchor: Readonly<BlockAnchor>;
   readonly maxBlockRange: bigint;
+  readonly hint?: TransactionHint;
 }
 
 export type SignerRecoveryInspection =
+  | TransactionHintInspection
   | LowerBoundRepairResult
   | {
       status: 'search-unconsumed-bound-rebase-required';
@@ -154,6 +162,12 @@ export async function inspectSignerRecovery(
     publicClient,
     maxBlockRange,
   } = options;
+
+  let hint: TransactionHint | undefined;
+
+  if (options.hint !== undefined) {
+    hint = structuredClone(options.hint);
+  }
 
   const snapshot = validateJournalSnapshotStructure(
     options.snapshot,
@@ -247,6 +261,14 @@ export async function inspectSignerRecovery(
     };
   }
 
+  if (hint !== undefined && hint.attemptId !== attempt?.attemptId) {
+    return {
+      status: 'operator-hint-refused',
+      observation,
+      reason: 'wrong-attempt',
+    };
+  }
+
   if (attempt === undefined || receipt === null) {
     return {
       status: 'no-attempt',
@@ -334,6 +356,16 @@ export async function inspectSignerRecovery(
       observation,
       evidence: receipt.evidence,
     };
+  }
+
+  if (hint !== undefined) {
+    return inspectTransactionHint({
+      publicClient,
+      snapshot,
+      observation,
+      observations,
+      hint,
+    });
   }
 
   if (!consumed) {

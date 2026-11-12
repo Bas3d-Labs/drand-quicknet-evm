@@ -132,7 +132,7 @@ describe('transaction journal serialization', () => {
     ['non-array outcomes', { outcomes: {}, obligations: [] }],
     ['non-array obligations', { outcomes: [], obligations: {} }],
     ['unknown ledger key', { outcomes: [], obligations: [], extra: true }],
-    ['outcome entry', { outcomes: [{}], obligations: [] }],
+    ['malformed outcome entry', { outcomes: [{}], obligations: [] }],
     ['obligation entry', { outcomes: [], obligations: [{}] }],
   ] as const;
 

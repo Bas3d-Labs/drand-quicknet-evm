@@ -20,6 +20,11 @@ import {
   type StatusCommandArguments,
 } from './parse-status-arguments.js';
 
+import {
+  parseAttributionArguments,
+  type AttributionCommandArguments,
+} from './parse-attribution-arguments.js';
+
 export interface ImportCommandArguments {
   command: 'import';
   source: NetworkSource;
@@ -52,6 +57,7 @@ export interface SyncNonceCommandArguments {
 }
 
 type CommandArguments =
+  | AttributionCommandArguments
   | ImportCommandArguments
   | ImportWhenAvailableCommandArguments
   | DaemonCommandArguments
@@ -83,6 +89,9 @@ export function parseCommandArguments(
   const commandArgs = args.slice(1);
 
   switch (command) {
+    case 'attribute-transaction':
+      return parseAttributionArguments(commandArgs);
+
     case 'import':
       return parseImportArguments(commandArgs);
 

@@ -3,6 +3,10 @@ import {
 } from '../shared/decimal.js';
 
 import {
+  decodeLedger,
+} from './journal-ledger-validation.js';
+
+import {
   MAX_RETAINED_NONCE_REPAIRS,
 } from './transaction-journal.js';
 
@@ -93,7 +97,7 @@ export async function decodeJournalSnapshot(
       nextNonce: decimal(root.nextNonce), 
       durableNextNonce: decimal(root.durableNextNonce),
       repairs: decodeRepairs(root.repairs),
-      ledger: root.ledger,
+      ledger: decodeLedger(root.ledger),
       attempts: decodeArray(root.attempts, decodeAttempt),
     };
 

@@ -60,6 +60,13 @@ import {
 } from '../shared/integer.js';
 
 import {
+  supersedesNoMatch,
+  validateAttributionRequest,
+  journalSnapshotDigest,
+  type OperatorAttributionRequest,
+} from './operator-attribution.js';
+
+import {
   durableRecoveryRevision as computeDurableRecoveryRevision,
 } from './durable-recovery-revision.js';
 
@@ -111,12 +118,27 @@ export interface SignerCoordinatorOptions {
 }
 
 export interface RecoverSignerOptions {
+  readonly attribution?: OperatorAttributionRequest;
+  readonly attributionCommitment?: {
+    readonly snapshotDigest: Hash;
+    readonly proposalDigest: Hash;
+    readonly inclusion: Readonly<BlockAnchor>;
+    readonly durable: AnchoredNonceObservation;
+  };
   readonly publicClient: PublicClient;
   readonly anchor: Readonly<BlockAnchor>;
   readonly maxBlockRange: bigint;
 }
 
 export type SignerRecoveryResult =
+  | {
+      readonly status: 'operator-ticket-refused';
+      readonly reason: 'snapshot-changed' | 'proposal-changed';
+    }
+  | {
+      readonly status: 'operator-attribution-committed';
+      readonly requestId: string;
+    }
   | SignerRecoveryInspection
   | Extract<
       SignerBootstrapDecision,
@@ -400,6 +422,12 @@ export class SignerCoordinator {
             blockHash: options.anchor.blockHash,
           }),
           maxBlockRange: options.maxBlockRange,
+          ...(options.attribution === undefined ? {} : {
+            attribution: structuredClone(options.attribution),
+          }),
+          ...(options.attributionCommitment === undefined ? {} : {
+            attributionCommitment: structuredClone(options.attributionCommitment),
+          }),
         };
 
         return this.runInspectionOperation(
@@ -523,6 +551,19 @@ export class SignerCoordinator {
    */
   get journalInitialized(): boolean {
     return this.persistence.current.kind === 'present';
+  }
+
+  /** Returns only acknowledged history, including after persistence retry. */
+  operatorOutcome(
+    requestId: string,
+  ) {
+    const current = this.persistence.current;
+
+    if (current.kind === 'missing') {
+      return undefined;
+    }
+
+    return current.snapshot.ledger.outcomes.find((row) => row.requestId === requestId);
   }
 
   /**
@@ -854,6 +895,23 @@ export class SignerCoordinator {
 
     const current = this.persistence.current;
 
+    if (options.attribution !== undefined) {
+      validateAttributionRequest(options.attribution);
+    }
+
+    const commitment = options.attributionCommitment;
+
+    if (commitment !== undefined && (
+      options.attribution === undefined ||
+      current.kind !== 'present' ||
+      journalSnapshotDigest(current.snapshot) !== commitment.snapshotDigest
+    )) {
+      return {
+        status: 'operator-ticket-refused',
+        reason: 'snapshot-changed',
+      };
+    }
+
     this.invalidateRecoveryAuthorization();
     this.busy = true;
 
@@ -880,6 +938,10 @@ export class SignerCoordinator {
       }
 
       if (current.kind === 'missing') {
+        if (options.attribution !== undefined) {
+          throw new Error('Operator attribution requires a retained attempt.');
+        }
+
         return await this.bootstrapOwned(options, owner, cycle);
       }
       
@@ -888,6 +950,9 @@ export class SignerCoordinator {
         snapshot: current.snapshot,
         anchor: options.anchor,
         maxBlockRange: options.maxBlockRange,
+        ...(options.attribution === undefined ? {} : {
+          hint: options.attribution.hint,
+        }),
       });
 
       if (
@@ -904,6 +969,9 @@ export class SignerCoordinator {
         identity: this.identity,
         snapshot: current.snapshot,
         inspection: result,
+        ...(options.attribution === undefined ? {} : {
+          attribution: options.attribution,
+        }),
         unattributedActivity:
           this.blockers.has('unattributed-signer-activity'),
       });
@@ -927,7 +995,39 @@ export class SignerCoordinator {
 
       if (plan.kind === 'unchanged') {
         this.failInspectionBracket(owner);
+
+        if (result.status === 'operator-attribution-available') {
+          let reason: 'ledger-capacity-reached' | 'stale-evidence' = 'stale-evidence';
+
+          if (plan.reason === 'ledger-capacity-reached') {
+            reason = plan.reason;
+          }
+
+          return {
+            status: 'operator-hint-refused',
+            observation: result.observation,
+            reason,
+          };
+        }
+
         return result;
+      }
+
+      // Ticketed apply may commit only the exact attribution previewed earlier.
+      // In particular, a newly available ordinary resolution is not that proposal.
+      if (commitment !== undefined && (
+        plan.completion.kind !== 'operator-attribution' ||
+        plan.completion.outcome.proposalDigest !== commitment.proposalDigest ||
+        !blockAnchorsMatch(plan.completion.outcome.replacement.inclusion, commitment.inclusion) ||
+        !blockAnchorsMatch(plan.completion.outcome.durable.anchor, commitment.durable.anchor) ||
+        plan.completion.outcome.durable.nonce !== commitment.durable.nonce
+      )) {
+        this.failInspectionBracket(owner);
+
+        return {
+          status: 'operator-ticket-refused',
+          reason: 'proposal-changed',
+        };
       }
 
       this.stageWrite(plan.completion);
@@ -935,6 +1035,7 @@ export class SignerCoordinator {
       await this.persistence.save(plan.snapshot);
 
       const terminalCorrection =
+        plan.completion.kind === 'operator-attribution' ||
         plan.completion.kind === 'search-unconsumed-bound-rebase' ||
         plan.completion.kind === 'search-reset' ||
         plan.completion.kind === 'search-lower-bound-replacement';
@@ -942,6 +1043,13 @@ export class SignerCoordinator {
       this.applyCommittedWrite(cycle);
       if (terminalCorrection) {
         this.failInspectionBracket(owner);
+      }
+
+      if (plan.completion.kind === 'operator-attribution') {
+        return {
+          status: 'operator-attribution-committed',
+          requestId: plan.completion.outcome.requestId,
+        };
       }
 
       const inspectedAttempt = current.snapshot.attempts[0];
@@ -1679,6 +1787,23 @@ export class SignerCoordinator {
         (log) => log.attemptResolved(pending.event),
         cycle,
       );
+    }
+
+    if (pending.kind === 'operator-attribution') {
+      this.invalidateRecoveryAuthorization();
+
+      const outcome = pending.outcome;
+
+      this.emit((log) => log.attemptOperatorAttributed({
+        signer: this.identity.signer,
+        requestId: outcome.requestId,
+        attemptId: outcome.attemptId,
+        transactionHash: outcome.replacement.transactionHash,
+        nonce: outcome.nonce,
+        durableBlock: outcome.durable.anchor.blockNumber,
+        durableBlockHash: outcome.durable.anchor.blockHash,
+        supersededNoMatch: supersedesNoMatch(outcome),
+      }), cycle);
     }
 
     if (pending.kind === 'search-reset') {
