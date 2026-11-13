@@ -33,6 +33,11 @@ import {
 } from '../../src/state/file-transaction-journal-store.js';
 
 import {
+  contradictsExhaustionNonce,
+  supersedesNoMatch,
+} from '../../src/state/operator-attribution.js';
+
+import {
   journalJson,
 } from '../../src/state/journal-ledger-validation.js';
 
@@ -139,11 +144,8 @@ describe('operator attribution command service', () => {
     });
   }
 
-  beforeEach(async () => {
-    vi.resetAllMocks();
-    snapshot = await fixture();
-    rpc = client();
-    lines = [];
+  function configureClient(height = 101n) {
+    rpc = client(height);
 
     const originalBlock = rpc.getBlock.getMockImplementation()!;
 
@@ -161,6 +163,13 @@ describe('operator attribution command service', () => {
       getChainId: vi.fn().mockResolvedValue(IDENTITY.chainId),
       getBlockNumber: vi.fn().mockResolvedValue(106n),
     });
+  }
+
+  beforeEach(async () => {
+    vi.resetAllMocks();
+    snapshot = await fixture();
+    lines = [];
+    configureClient();
 
     save.mockImplementation(async (next) => {
       snapshot = next;
@@ -194,6 +203,7 @@ describe('operator attribution command service', () => {
       previousDurableNextNonce: 4n,
       durableNextNonce: 5n,
       supersededNoMatch: true,
+      contradictsExhaustionNonce: true,
       blockers: ['recovery-incomplete'],
     });
 
@@ -203,6 +213,151 @@ describe('operator attribution command service', () => {
     expect(output).not.toContain('signedTransaction');
     expect(output).not.toContain(before.attempts[0]!.signedTransactions[0].signedTransaction);
     expect(lines).toEqual([]);
+    expect(rpc.sendRawTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: 'clean external',
+      fact: null,
+      cursor: null,
+      height: 103n,
+      noMatch: false,
+      nonce: false,
+    },
+    {
+      name: 'cursor below inclusion, no fact',
+      fact: null,
+      cursor: 100n,
+      height: 103n,
+      noMatch: false,
+      nonce: false,
+    },
+    {
+      name: 'at fact boundary',
+      fact: 100n,
+      cursor: 102n,
+      height: 100n,
+      noMatch: true,
+      nonce: false,
+    },
+    {
+      name: 'below fact',
+      fact: 100n,
+      cursor: 102n,
+      height: 99n,
+      noMatch: true,
+      nonce: false,
+    },
+    {
+      name: 'both contradictions',
+      fact: 100n,
+      cursor: 102n,
+      height: 101n,
+      noMatch: true,
+      nonce: true,
+    },
+    {
+      name: 'nonce contradiction only',
+      fact: 100n,
+      cursor: 102n,
+      height: 103n,
+      noMatch: false,
+      nonce: true,
+    },
+    {
+      name: 'fact without cursor',
+      fact: 100n,
+      cursor: null,
+      height: 99n,
+      noMatch: true,
+      nonce: false,
+    },
+    {
+      name: 'fact beyond cursor',
+      fact: 102n,
+      cursor: 99n,
+      height: 101n,
+      noMatch: true,
+      nonce: false,
+    },
+  ])('derives and reports both flags for $name', async (row) => {
+    snapshot = await fixture(row.fact, row.cursor);
+    configureClient(row.height);
+
+    const before = structuredClone(snapshot);
+
+    const result = await attributeTransaction({
+      ...options(),
+      mode: 'dry-run',
+      request: request(row.height),
+    });
+
+    if (result.status !== 'preview') {
+      throw new Error('Missing preview.');
+    }
+
+    const flags = {
+      supersededNoMatch: row.noMatch,
+      contradictsExhaustionNonce: row.nonce,
+    };
+
+    const outcome = result.preview.outcome;
+
+    expect(supersedesNoMatch(outcome)).toBe(row.noMatch);
+    expect(contradictsExhaustionNonce(outcome)).toBe(row.nonce);
+    expect(result.preview).toMatchObject(flags);
+    expect(JSON.parse(renderAttributionOutput(result)).preview).toMatchObject(flags);
+    expect(snapshot).toEqual(before);
+    expect(save).not.toHaveBeenCalled();
+    expect(lines).toEqual([]);
+
+    // Output recomputes flags instead of trusting supplied preview booleans.
+    expect(JSON.parse(renderAttributionOutput({
+      ...result,
+      preview: {
+        ...result.preview,
+        supersededNoMatch: !row.noMatch,
+        contradictsExhaustionNonce: !row.nonce,
+      },
+    })).preview).toMatchObject(flags);
+
+    const committed = await apply(result.ticket);
+
+    expect(committed.status).toBe('committed');
+    expect(JSON.parse(renderAttributionOutput(committed))).toMatchObject(flags);
+    expect(snapshot.ledger.outcomes).toEqual([outcome]);
+
+    const events = lines.map((line) => JSON.parse(line))
+      .filter((event) => event.event === 'signer_attempt_operator_attributed');
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ level: 40, ...flags });
+    expect(save).toHaveBeenCalledTimes(1);
+
+    const repeated = await apply(result.ticket);
+
+    expect(repeated.status).toBe('already-recorded');
+    expect(JSON.parse(renderAttributionOutput(repeated))).toMatchObject(flags);
+
+    const other = await apply({
+      ...result.ticket,
+      requestId: '33333333-3333-4333-8333-333333333333',
+    });
+
+    expect(other.status).toBe('attempt-already-attributed');
+    expect(JSON.parse(renderAttributionOutput(other))).toMatchObject(flags);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(lines.filter((line) => line.includes('signer_attempt_operator_attributed'))).toHaveLength(1);
+
+    for (const field of ['supersededNoMatch', 'contradictsExhaustionNonce']) {
+      expect(outcome).not.toHaveProperty(field);
+      expect(result.ticket).not.toHaveProperty(field);
+    }
+
+    expect(journalJson(snapshot)).not.toContain('contradictsExhaustionNonce');
+    expect(journalJson(snapshot)).not.toContain('supersededNoMatch');
+    expect(lines.join('')).not.toContain(before.attempts[0]!.signedTransactions[0].signedTransaction);
     expect(rpc.sendRawTransaction).not.toHaveBeenCalled();
   });
 

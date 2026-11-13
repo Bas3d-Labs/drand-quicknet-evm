@@ -376,6 +376,7 @@ const TRANSACTION_EVENTS = {
       durableBlock: 'uint',
       durableBlockHash: 'hash',
       supersededNoMatch: 'boolean',
+      contradictsExhaustionNonce: 'boolean',
     },
   ],
   searchUnconsumedBoundRebased: [

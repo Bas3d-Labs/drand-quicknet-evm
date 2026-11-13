@@ -56,6 +56,7 @@ import {
 
 import {
   journalSnapshotDigest,
+  contradictsExhaustionNonce,
   supersedesNoMatch,
   validateAttributionRequest,
   type OperatorAttributionRequest,
@@ -146,6 +147,7 @@ export type AttributionResult =
         readonly lastObservation: AnchoredNonceObservation;
         readonly outcome: OperatorAttributedOutcome;
         readonly supersededNoMatch: boolean;
+        readonly contradictsExhaustionNonce: boolean;
         readonly blockers: readonly SignerBlocker[];
       };
     }
@@ -406,6 +408,7 @@ export async function attributeTransaction(
         lastObservation: plan.snapshot.lastObservation,
         outcome,
         supersededNoMatch: supersedesNoMatch(outcome),
+        contradictsExhaustionNonce: contradictsExhaustionNonce(outcome),
         blockers: gate.blockers,
       },
     };

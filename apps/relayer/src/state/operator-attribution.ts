@@ -102,7 +102,19 @@ export function supersedesNoMatch(
 
   const cursor = outcome.priorSearch.searchedThrough;
 
-  return cursor !== null && height <= cursor.blockNumber;
+  const fact = outcome.priorSearch.exhausted;
+
+  return (cursor !== null && height <= cursor.blockNumber) ||
+    (fact !== null && height <= fact.anchor.blockNumber);
+}
+
+export function contradictsExhaustionNonce(
+  outcome: OperatorAttributedOutcome,
+): boolean {
+  const fact = outcome.priorSearch.exhausted;
+
+  return fact !== null &&
+    outcome.replacement.inclusion.blockNumber > fact.anchor.blockNumber;
 }
 
 export function validateAttributionRequest(

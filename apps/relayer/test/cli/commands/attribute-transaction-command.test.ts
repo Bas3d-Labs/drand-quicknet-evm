@@ -172,6 +172,7 @@ describe('attribution command configuration and routing', () => {
             lastObservation: outcome.durable,
             outcome,
             supersededNoMatch: false,
+            contradictsExhaustionNonce: false,
             blockers: ['recovery-incomplete'],
           },
         };

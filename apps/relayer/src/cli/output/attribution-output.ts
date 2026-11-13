@@ -20,6 +20,7 @@ import {
 } from '../../state/journal-ledger-validation.js';
 
 import {
+  contradictsExhaustionNonce,
   supersedesNoMatch,
 } from '../../state/operator-attribution.js';
 
@@ -82,10 +83,14 @@ export function renderAttributionOutput(
       throw new TypeError('Invalid operator attribution output.');
     }
 
+    const outcome = readOperatorOutcome(result.outcome);
+
     return journalJson({
       status: result.status,
       requestedRequestId: result.requestedRequestId,
-      outcome: readOperatorOutcome(result.outcome),
+      outcome,
+      supersededNoMatch: supersedesNoMatch(outcome),
+      contradictsExhaustionNonce: contradictsExhaustionNonce(outcome),
     });
   }
 
@@ -117,9 +122,13 @@ export function renderAttributionOutput(
   }
 
   if (result.status === 'committed' || result.status === 'already-recorded') {
+    const outcome = readOperatorOutcome(result.outcome);
+
     return journalJson({
       status: result.status,
-      outcome: readOperatorOutcome(result.outcome),
+      outcome,
+      supersededNoMatch: supersedesNoMatch(outcome),
+      contradictsExhaustionNonce: contradictsExhaustionNonce(outcome),
     });
   }
 
@@ -162,6 +171,7 @@ export function renderAttributionOutput(
       },
       outcome,
       supersededNoMatch: supersedesNoMatch(outcome),
+      contradictsExhaustionNonce: contradictsExhaustionNonce(outcome),
       blockers: Array.from(result.preview.blockers),
     },
   });
