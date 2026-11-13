@@ -60,6 +60,7 @@ import {
 } from '../shared/integer.js';
 
 import {
+  contradictsExhaustionNonce,
   supersedesNoMatch,
   validateAttributionRequest,
   journalSnapshotDigest,
@@ -1803,6 +1804,7 @@ export class SignerCoordinator {
         durableBlock: outcome.durable.anchor.blockNumber,
         durableBlockHash: outcome.durable.anchor.blockHash,
         supersededNoMatch: supersedesNoMatch(outcome),
+        contradictsExhaustionNonce: contradictsExhaustionNonce(outcome),
       }), cycle);
     }
 

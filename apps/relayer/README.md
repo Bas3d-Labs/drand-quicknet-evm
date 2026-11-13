@@ -187,6 +187,25 @@ invokes signing. It is not a keyless inspection command like `status`.
 
 Output contains bounded metadata, hashes and the proposed mutation, never
 an encoded journal or retained signed bytes. Diagnostics go to stderr.
+Every printed operator-attributed outcome includes two independent derived
+booleans: the preview carries them beside its outcome, and `committed`,
+`already-recorded` and `attempt-already-attributed` carry them beside theirs.
+The post-acknowledgement diagnostic includes both as well.
+
+- `supersededNoMatch` is true when the transaction's inclusion is at or below
+  either the prior search cursor or the prior exhaustion fact. The fact records
+  a completed search even when no cursor is stored.
+- `contradictsExhaustionNonce` is true when a prior exhaustion fact exists and
+  inclusion is strictly above that fact's height. Inclusion at the fact's height
+  is consistent with consumption at or before that block and leaves this false.
+
+Both may be true: for fact 100, cursor 102 and inclusion 101, the fresh full block
+contradicts both prior observations. Attribution accepts the verified transaction
+under the existing bracket rules without deciding which earlier observation was
+wrong. The flags are derived from the validated outcome, never stored in the
+journal or ticket and never included in either digest. Dry-run exposes them before
+the existing explicit apply step; no additional confirmation flag is required.
+
 A retained candidate receipt returns `ordinary-resolution-available`
 without a ticket or write and exits 4 (`deferred`); resume ordinary recovery
 to record it. A

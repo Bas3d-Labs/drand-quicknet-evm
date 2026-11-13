@@ -267,6 +267,7 @@ describe('operator attribution persistence', () => {
     expect(events[0]).toMatchObject({
       level: 40,
       supersededNoMatch: true,
+      contradictsExhaustionNonce: true,
     });
     expect(lines.join('')).not.toContain(
       initial.attempts[0]!.signedTransactions[0].signedTransaction,
@@ -277,6 +278,7 @@ describe('operator attribution persistence', () => {
   it.each([
     'unknown-key',
     'derived-flag',
+    'nonce-contradiction-flag',
     'candidate-replacement',
     'duplicate-request',
     'duplicate-attempt',
@@ -306,6 +308,10 @@ describe('operator attribution persistence', () => {
 
       if (fault === 'derived-flag') {
         row.supersededNoMatch = true;
+      }
+
+      if (fault === 'nonce-contradiction-flag') {
+        row.contradictsExhaustionNonce = true;
       }
 
       if (fault === 'candidate-replacement') {
