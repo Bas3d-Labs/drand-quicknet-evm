@@ -345,7 +345,7 @@ describe('operator attribution command service', () => {
       requestId: '33333333-3333-4333-8333-333333333333',
     });
 
-    expect(other.status).toBe('attempt-already-attributed');
+    expect(other.status).toBe('attempt-already-accounted');
     expect(JSON.parse(renderAttributionOutput(other))).toMatchObject(flags);
     expect(save).toHaveBeenCalledTimes(1);
     expect(lines.filter((line) => line.includes('signer_attempt_operator_attributed'))).toHaveLength(1);
@@ -547,12 +547,12 @@ describe('operator attribution command service', () => {
     });
 
     expect(resultForOtherRequest).toEqual({
-      status: 'attempt-already-attributed',
+      status: 'attempt-already-accounted',
       requestedRequestId: '33333333-3333-4333-8333-333333333333',
       outcome: result.preview.outcome,
     });
     expect(JSON.parse(renderAttributionOutput(resultForOtherRequest))).toMatchObject({
-      status: 'attempt-already-attributed',
+      status: 'attempt-already-accounted',
       requestedRequestId: '33333333-3333-4333-8333-333333333333',
       outcome: {
         requestId: result.ticket.requestId,

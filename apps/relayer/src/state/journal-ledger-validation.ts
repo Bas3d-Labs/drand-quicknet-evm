@@ -37,6 +37,8 @@ import {
   type AnchoredNonceObservation,
   type JournalLedger,
   type OperatorAttributedOutcome,
+  type OperatorAcceptedOutcome,
+  type OperatorOutcome,
 } from './transaction-journal.js';
 
 const OUTCOME_KEYS = [
@@ -82,7 +84,7 @@ export function readLedger(
   valid(Array.isArray(value.obligations));
   valid(value.obligations.length === 0);
 
-  const outcomes = Array.from(value.outcomes, readOperatorOutcome);
+  const outcomes = Array.from(value.outcomes, readJournalOutcome);
 
   const requests = new Set<string>();
 
@@ -117,9 +119,37 @@ export function readLedger(
 export function readOperatorOutcome(
   input: unknown,
 ): OperatorAttributedOutcome {
-  const value = fields(input, OUTCOME_KEYS);
+  const result = readJournalOutcome(input);
 
-  valid(value.kind === 'operator-attributed');
+  valid(result.kind === 'operator-attributed');
+
+  return result as OperatorAttributedOutcome;
+}
+
+export function readAcceptedOutcome(
+  input: unknown,
+): OperatorAcceptedOutcome {
+  const result = readJournalOutcome(input);
+
+  valid(result.kind === 'operator-accepted-unattributed');
+
+  return result as OperatorAcceptedOutcome;
+}
+
+export function readJournalOutcome(
+  input: unknown,
+): OperatorOutcome {
+  const kind = fields(input).kind;
+
+  valid(kind === 'operator-attributed' || kind === 'operator-accepted-unattributed');
+
+  let keys: readonly string[] = OUTCOME_KEYS;
+
+  if (kind === 'operator-accepted-unattributed') {
+    keys = OUTCOME_KEYS.filter((key) => key !== 'replacement');
+  }
+
+  const value = fields(input, keys);
 
   const metadata = readAttributionMetadata({
     requestId: value.requestId,
@@ -139,11 +169,16 @@ export function readOperatorOutcome(
 
   const lowerBound = observation(value.lowerBound);
 
-  const replacement = fields(value.replacement, ['transactionHash', 'inclusion']);
+  let replacement: OperatorAttributedOutcome['replacement'] | undefined;
 
-  const inclusion = anchor(replacement.inclusion);
+  if (kind === 'operator-attributed') {
+    const raw = fields(value.replacement, ['transactionHash', 'inclusion']);
 
-  const transactionHash = hash(replacement.transactionHash);
+    replacement = Object.freeze({
+      transactionHash: hash(raw.transactionHash),
+      inclusion: anchor(raw.inclusion),
+    });
+  }
 
   valid(Array.isArray(value.candidateHashes));
   valid(value.candidateHashes.length >= 1);
@@ -152,13 +187,17 @@ export function readOperatorOutcome(
   const candidateHashes = Array.from(value.candidateHashes, hash);
 
   valid(new Set(candidateHashes).size === candidateHashes.length);
-  valid(!candidateHashes.includes(transactionHash));
+
+  if (replacement !== undefined) {
+    valid(!candidateHashes.includes(replacement.transactionHash));
+    valid(lowerBound.anchor.blockNumber < replacement.inclusion.blockNumber);
+    valid(replacement.inclusion.blockNumber <= durable.anchor.blockNumber);
+  }
 
   valid(durable.nonce > nonce);
   valid(lowerBound.nonce <= nonce);
 
-  valid(lowerBound.anchor.blockNumber < inclusion.blockNumber);
-  valid(inclusion.blockNumber <= durable.anchor.blockNumber);
+  valid(lowerBound.anchor.blockNumber < durable.anchor.blockNumber);
 
   const finality = metadata.finality;
 
@@ -189,7 +228,11 @@ export function readOperatorOutcome(
     }
   }
 
-  const anchors = [lowerBound.anchor, inclusion, durable.anchor];
+  const anchors = [lowerBound.anchor, durable.anchor];
+
+  if (replacement !== undefined) {
+    anchors.push(replacement.inclusion);
+  }
 
   if (searchedThrough !== null) {
     anchors.push(searchedThrough);
@@ -209,8 +252,8 @@ export function readOperatorOutcome(
     seen.set(current.blockNumber, current);
   }
 
-  const result: OperatorAttributedOutcome = Object.freeze({
-    kind: 'operator-attributed',
+  const result = Object.freeze({
+    kind,
     requestId: metadata.requestId,
     snapshotDigest: hash(value.snapshotDigest),
     proposalDigest: hash(value.proposalDigest),
@@ -223,10 +266,7 @@ export function readOperatorOutcome(
     durable,
     finality,
     lowerBound,
-    replacement: Object.freeze({
-      transactionHash,
-      inclusion,
-    }),
+    ...(replacement === undefined ? {} : { replacement }),
     priorSearch: Object.freeze({
       searchedThrough,
       exhausted,
@@ -235,7 +275,7 @@ export function readOperatorOutcome(
 
   valid(Buffer.byteLength(journalJson(result), 'utf8') <= MAX_OPERATOR_OUTCOME_BYTES);
 
-  return result;
+  return result as OperatorOutcome;
 }
 
 /** Decode numeric fields without dropping unknown keys before validation. */
@@ -256,9 +296,26 @@ export function decodeLedger(
 function decodeOutcome(
   item: unknown,
 ) {
-  const row = fields(item, OUTCOME_KEYS);
+  const kind = fields(item).kind;
 
-  const replacement = fields(row.replacement, ['transactionHash', 'inclusion']);
+  let keys: readonly string[] = OUTCOME_KEYS;
+
+  if (kind === 'operator-accepted-unattributed') {
+    keys = OUTCOME_KEYS.filter((key) => key !== 'replacement');
+  }
+
+  const row = fields(item, keys);
+
+  let replacement;
+
+  if (kind === 'operator-attributed') {
+    const raw = fields(row.replacement, ['transactionHash', 'inclusion']);
+
+    replacement = {
+      ...raw,
+      inclusion: decodeAnchor(raw.inclusion),
+    };
+  }
 
   const prior = fields(row.priorSearch, ['searchedThrough', 'exhausted']);
 
@@ -291,10 +348,7 @@ function decodeOutcome(
     durable: decodeObservation(row.durable),
     finality,
     lowerBound: decodeObservation(row.lowerBound),
-    replacement: {
-      ...replacement,
-      inclusion: decodeAnchor(replacement.inclusion),
-    },
+    ...(replacement === undefined ? {} : { replacement }),
     priorSearch: {
       searchedThrough,
       exhausted,

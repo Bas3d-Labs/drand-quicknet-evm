@@ -39,6 +39,10 @@ import {
 } from '../../shared/uuid.js';
 
 import type {
+  AcceptanceResult,
+} from '../../state/accept-unattributed.js';
+
+import type {
   JournalIdentity,
 } from '../../state/transaction-journal.js';
 
@@ -63,6 +67,10 @@ import type {
 } from '../../state/attribute-transaction.js';
 
 import {
+  renderAcceptanceOutput,
+} from './acceptance-output.js';
+
+import {
   renderAttributionOutput,
 } from './attribution-output.js';
 
@@ -77,6 +85,10 @@ import {
 } from './journal-status-output.js';
 
 export type CliOutput =
+  | {
+      type: 'operator-acceptance-result';
+      result: AcceptanceResult;
+    }
   | {
       type: 'operator-attribution-result';
       result: AttributionResult;
@@ -150,6 +162,7 @@ const HELP = [
   '  daemon                  Watch consumers and relay requested rounds.',
   '  sync-nonce              Preview or apply a forward signer nonce repair.',
   '  attribute-transaction   Dry-run or apply verified transaction attribution.',
+  '  accept-unattributed     Explicitly accept complete no-match nonce consumption.',
   '  status                  Inspect journal or historical daemon status.',
   '',
   'Network selection:',
@@ -160,6 +173,11 @@ const HELP = [
   '  --dry-run --attempt-id <uuid> --tx-hash <hash> --operator <label>',
   '    Optional: --block-number <decimal>. Dry-run is the default.',
   '  --apply --ticket <file>  Apply the ticket extracted from dry-run JSON.',
+  '',
+  'Acceptance (select a network):',
+  '  --dry-run --attempt-id <uuid> --operator <label>',
+  '  --apply --ticket <file>  Apply the ticket extracted from dry-run JSON.',
+  '  Search budget: QUICKNET_MAX_BLOCK_RANGE (default 2000).',
   '',
   'Exactly one network selection option is required for import, ' +
     'import-when-available, and daemon.',
@@ -716,6 +734,10 @@ export function renderCliOutput(
 
   if (type === 'nonce-sync-result') {
     return renderNonceSyncOutput(output);
+  }
+
+  if (type === 'operator-acceptance-result') {
+    return renderAcceptanceOutput(own(output, 'result') as AcceptanceResult);
   }
 
   if (type === 'operator-attribution-result') {

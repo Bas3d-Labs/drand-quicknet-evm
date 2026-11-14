@@ -28,10 +28,10 @@ for argument in "$@"; do
   esac
 done
 
-# Attribution preview is read-only and may inspect the atomic journal while the
+# Operator preview is read-only and may inspect the atomic journal while the
 # daemon holds the service lock. Any --apply occurrence keeps the locked path;
 # Node validates all argument combinations before doing work.
-if [ "${1-}" = "attribute-transaction" ]; then
+if [ "${1-}" = "attribute-transaction" ] || [ "${1-}" = "accept-unattributed" ]; then
   attribution_apply=false
 
   for argument in "$@"; do

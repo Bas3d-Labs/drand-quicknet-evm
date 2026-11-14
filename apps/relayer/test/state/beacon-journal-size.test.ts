@@ -40,6 +40,7 @@ import {
 
 import {
   MAX_RETAINED_NONCE_REPAIRS,
+  type OperatorAcceptedOutcome,
   type JournalAttempt,
   type JournalNonceRepair,
   type JournalSignedTransaction,
@@ -332,6 +333,26 @@ describe('beacon journal size', () => {
         .toEqual(fullHistory);
 
       console.info({ fullHistoryJournalBytes: historyBytes });
+
+      const acceptedHistory = {
+        ...fullHistory,
+        ledger: {
+          outcomes: fullHistory.ledger.outcomes.map((row): OperatorAcceptedOutcome => {
+            const { replacement: _replacement, ...common } = row;
+
+            return { ...common, kind: 'operator-accepted-unattributed' };
+          }),
+          obligations: [] as const,
+        },
+      };
+
+      const acceptedContents = await encodeJournalSnapshot(acceptedHistory, IDENTITY);
+
+      const acceptedBytes = Buffer.byteLength(acceptedContents, 'utf8');
+
+      expect(acceptedBytes).toBeLessThanOrEqual(MAX_JOURNAL_BYTES);
+      expect(await decodeJournalSnapshot(acceptedContents, IDENTITY)).toEqual(acceptedHistory);
+      console.info({ acceptedHistoryJournalBytes: acceptedBytes });
     },
     30_000,
   );

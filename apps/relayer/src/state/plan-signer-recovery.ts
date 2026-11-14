@@ -32,6 +32,7 @@ import {
 import {
   MAX_OPERATOR_OUTCOMES,
   type OperatorAttributedOutcome,
+  type OperatorAcceptedOutcome,
 } from './transaction-journal.js';
 
 import type {
@@ -53,6 +54,12 @@ import {
   validateLowerBoundReplacement,
 } from './validate-lower-bound-replacement.js';
 
+import {
+  finishAcceptedOutcome,
+  validateAcceptanceRequest,
+  type OperatorAcceptanceRequest,
+} from './operator-acceptance.js';
+
 export interface CommittedAttemptResolution {
   readonly signer: JournalIdentity['signer'];
   readonly attemptId: string;
@@ -62,6 +69,10 @@ export interface CommittedAttemptResolution {
 }
 
 export type RecoveryWriteCompletion =
+  | {
+      readonly kind: 'operator-acceptance';
+      readonly outcome: OperatorAcceptedOutcome;
+    }
   | {
       readonly kind: 'operator-attribution';
       readonly outcome: OperatorAttributedOutcome;
@@ -122,6 +133,7 @@ export interface PlanSignerRecoveryOptions {
   readonly inspection: SignerRecoveryInspection;
   readonly unattributedActivity: boolean;
   readonly attribution?: OperatorAttributionRequest;
+  readonly acceptance?: OperatorAcceptanceRequest;
 }
 
 export type SignerRecoveryPlan =
@@ -152,6 +164,7 @@ export function planSignerRecovery(
   } = options;
 
   if (
+    inspection.status === 'operator-acceptance-refused' ||
     inspection.status === 'operator-hint-refused' ||
     inspection.status === 'anchor-changed' ||
     inspection.status === 'anchor-behind-exhaustion' ||
@@ -162,6 +175,122 @@ export function planSignerRecovery(
     return {
       kind: 'unchanged',
       reason: 'inspection-not-committable',
+    };
+  }
+
+  if (inspection.status === 'operator-acceptance-available') {
+    const oldest = snapshot.attempts[0];
+
+    const request = options.acceptance;
+
+    const search = oldest?.replacementSearch;
+
+    if (
+      request === undefined ||
+      oldest === undefined ||
+      search === undefined ||
+      search === null ||
+      options.attribution !== undefined ||
+      request.attemptId !== oldest.attemptId ||
+      inspection.attemptId !== oldest.attemptId ||
+      inspection.snapshotDigest !== journalSnapshotDigest(snapshot) ||
+      inspection.observation.nonce <= oldest.nonce ||
+      !blockAnchorsMatch(inspection.searchedThrough, inspection.observation.anchor)
+    ) {
+      return {
+        kind: 'unchanged',
+        reason: 'inspection-not-committable',
+      };
+    }
+
+    validateAcceptanceRequest(request);
+
+    if (snapshot.ledger.outcomes.length >= MAX_OPERATOR_OUTCOMES) {
+      return {
+        kind: 'unchanged',
+        reason: 'ledger-capacity-reached',
+      };
+    }
+
+    const seen = new Map<bigint, typeof inspection.searchedThrough>();
+
+    for (const header of [...inspection.observations, inspection.observation.anchor]) {
+      const previous = seen.get(header.blockNumber);
+
+      if (
+        header.blockNumber > inspection.observation.anchor.blockNumber ||
+        (previous !== undefined && !blockAnchorsMatch(previous, header))
+      ) {
+        return {
+          kind: 'unchanged',
+          reason: 'inspection-not-committable',
+        };
+      }
+
+      seen.set(header.blockNumber, header);
+    }
+
+    const premises = [search.lowerBound.anchor];
+
+    if (search.searchedThrough !== null) {
+      premises.push(search.searchedThrough);
+    }
+
+    if (search.exhausted !== null) {
+      premises.push(search.exhausted.anchor);
+    }
+
+    for (const premise of premises) {
+      const observed = seen.get(premise.blockNumber);
+
+      if (observed === undefined || !blockAnchorsMatch(premise, observed)) {
+        return {
+          kind: 'unchanged',
+          reason: 'inspection-not-committable',
+        };
+      }
+    }
+
+    let lastObservation = inspection.observation;
+
+    if (unattributedActivity && snapshot.lastObservation.nonce > lastObservation.nonce) {
+      lastObservation = snapshot.lastObservation;
+    }
+
+    const outcome = finishAcceptedOutcome(snapshot, {
+      kind: 'operator-accepted-unattributed',
+      requestId: request.requestId,
+      snapshotDigest: inspection.snapshotDigest,
+      operator: request.operator,
+      at: request.at,
+      attemptId: oldest.attemptId,
+      workId: oldest.workId,
+      nonce: oldest.nonce,
+      candidateHashes: oldest.signedTransactions.map(
+        (candidate) => candidate.transactionHash.toLowerCase() as Hash,
+      ),
+      durable: inspection.observation,
+      finality: request.finality,
+      lowerBound: search.lowerBound,
+      priorSearch: {
+        searchedThrough: search.searchedThrough,
+        exhausted: search.exhausted,
+      },
+    });
+
+    return {
+      kind: 'persist',
+      snapshot: validateJournalSnapshotStructure({
+        ...snapshot,
+        lastObservation,
+        durableNextNonce: oldest.nonce + 1n,
+        attempts: snapshot.attempts.slice(1),
+        ledger: {
+          outcomes: [...snapshot.ledger.outcomes, outcome],
+          obligations: [],
+        },
+      }, identity),
+      completion: Object.freeze({ kind: 'operator-acceptance', outcome }),
     };
   }
 

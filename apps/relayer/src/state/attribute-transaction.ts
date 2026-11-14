@@ -85,6 +85,7 @@ import type {
   AnchoredNonceObservation,
   JournalIdentity,
   OperatorAttributedOutcome,
+  OperatorOutcome,
 } from './transaction-journal.js';
 
 import {
@@ -156,9 +157,9 @@ export type AttributionResult =
       readonly outcome: OperatorAttributedOutcome;
     }
   | {
-      readonly status: 'attempt-already-attributed';
+      readonly status: 'attempt-already-accounted';
       readonly requestedRequestId: string;
-      readonly outcome: OperatorAttributedOutcome;
+      readonly outcome: OperatorOutcome;
     }
   | {
       readonly status: 'refused';
@@ -271,7 +272,11 @@ export async function attributeTransaction(
   const existingAttempt = snapshot.ledger.outcomes.find((row) => row.attemptId === request.hint.attemptId);
 
   if (existingRequest !== undefined) {
-    if (ticket === undefined || !ticketMatchesOutcome(ticket, snapshot.identity, existingRequest)) {
+    if (
+      existingRequest.kind !== 'operator-attributed' ||
+      ticket === undefined ||
+      !ticketMatchesOutcome(ticket, snapshot.identity, existingRequest)
+    ) {
       return refused('request-conflict');
     }
 
@@ -285,7 +290,7 @@ export async function attributeTransaction(
 
   if (existingAttempt !== undefined) {
     return {
-      status: 'attempt-already-attributed',
+      status: 'attempt-already-accounted',
       requestedRequestId: request.requestId,
       outcome: existingAttempt,
     };
@@ -490,6 +495,10 @@ export async function attributeTransaction(
         return refused(result.reason);
       }
 
+      if (result.status === 'operator-acceptance-committed') {
+        throw new Error('Unexpected operator acceptance commitment during attribution.');
+      }
+
       return refused(result.status);
     }
   } catch (error) {
@@ -509,7 +518,11 @@ export async function attributeTransaction(
 
   const committed = coordinator.operatorOutcome(ticket.requestId);
 
-  if (committed === undefined || !ticketMatchesOutcome(ticket, snapshot.identity, committed)) {
+  if (
+    committed === undefined ||
+    committed.kind !== 'operator-attributed' ||
+    !ticketMatchesOutcome(ticket, snapshot.identity, committed)
+  ) {
     throw new Error('Operator attribution acknowledgement was not confirmed.');
   }
 

@@ -225,6 +225,10 @@ describe('operator attribution review regressions', () => {
 
     const outcome = plan.snapshot.ledger.outcomes[0]!;
 
+    if (outcome.kind !== 'operator-attributed') {
+      throw new Error('Expected attributed outcome.');
+    }
+
     for (const value of [
       outcome.durable.anchor,
       outcome.lowerBound.anchor,

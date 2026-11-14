@@ -17,6 +17,7 @@ import {
 import {
   journalJson,
   readOperatorOutcome,
+  readJournalOutcome,
 } from '../../state/journal-ledger-validation.js';
 
 import {
@@ -78,12 +79,20 @@ const REFUSALS = new Set([
 export function renderAttributionOutput(
   result: AttributionResult,
 ): string {
-  if (result.status === 'attempt-already-attributed') {
+  if (result.status === 'attempt-already-accounted') {
     if (!isUuidV4(result.requestedRequestId)) {
       throw new TypeError('Invalid operator attribution output.');
     }
 
-    const outcome = readOperatorOutcome(result.outcome);
+    const outcome = readJournalOutcome(result.outcome);
+
+    if (outcome.kind === 'operator-accepted-unattributed') {
+      return journalJson({
+        status: result.status,
+        requestedRequestId: result.requestedRequestId,
+        outcome,
+      });
+    }
 
     return journalJson({
       status: result.status,
@@ -110,8 +119,9 @@ export function renderAttributionOutput(
       return journalJson({
         status: result.status,
         reason: result.reason,
-        message: 'Operator-attribution history is full. No clearing operation is available ' +
-          'in this version; further operator attributions require a reviewed archival upgrade.',
+        message: 'Operator recovery history is full. ' +
+          'No clearing operation is available in this version; ' +
+          'further attributions or acceptances require a reviewed archival upgrade.',
       });
     }
 

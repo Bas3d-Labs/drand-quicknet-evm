@@ -1,4 +1,5 @@
 import type {
+  Hash,
   PublicClient,
 } from 'viem';
 
@@ -9,6 +10,18 @@ import type {
 import {
   isFixedHex,
 } from '../shared/hex.js';
+
+import {
+  isUuidV4,
+} from '../shared/uuid.js';
+
+import {
+  journalSnapshotDigest,
+} from '../state/operator-attribution.js';
+
+import {
+  MAX_OPERATOR_OUTCOMES,
+} from '../state/transaction-journal.js';
 
 import type {
   AnchoredNonceObservation,
@@ -82,9 +95,39 @@ export interface InspectSignerRecoveryOptions {
   readonly anchor: Readonly<BlockAnchor>;
   readonly maxBlockRange: bigint;
   readonly hint?: TransactionHint;
+  readonly acceptanceAttemptId?: string;
 }
 
+export type AcceptanceRefusalReason =
+  | 'wrong-attempt'
+  | 'nonce-unconsumed'
+  | 'missing-lower-bound'
+  | 'ledger-capacity-reached'
+  | 'search-incomplete'
+  | 'retained-candidate-unresolved'
+  | 'stale-evidence'
+  | 'correction-required';
+
 export type SignerRecoveryInspection =
+  | {
+      status: 'operator-acceptance-available';
+      attemptId: string;
+      snapshotDigest: Hash;
+      observation: AnchoredNonceObservation;
+      observations: readonly Readonly<BlockAnchor>[];
+      searchedThrough: Readonly<BlockAnchor>;
+    }
+  | {
+      status: 'operator-acceptance-refused';
+      observation: AnchoredNonceObservation;
+      reason: AcceptanceRefusalReason;
+      gap?: {
+        boundary: Readonly<BlockAnchor>;
+        durable: Readonly<BlockAnchor>;
+        blocks: bigint;
+        budget: bigint;
+      };
+    }
   | TransactionHintInspection
   | LowerBoundRepairResult
   | {
@@ -162,6 +205,14 @@ export async function inspectSignerRecovery(
     publicClient,
     maxBlockRange,
   } = options;
+
+  const acceptanceAttemptId = options.acceptanceAttemptId;
+
+  if (acceptanceAttemptId !== undefined && (
+    !isUuidV4(acceptanceAttemptId) || options.hint !== undefined
+  )) {
+    throw new TypeError('Invalid signer acceptance input.');
+  }
 
   let hint: TransactionHint | undefined;
 
@@ -269,6 +320,14 @@ export async function inspectSignerRecovery(
     };
   }
 
+  if (acceptanceAttemptId !== undefined && acceptanceAttemptId !== attempt?.attemptId) {
+    return {
+      status: 'operator-acceptance-refused',
+      observation,
+      reason: 'wrong-attempt',
+    };
+  }
+
   if (attempt === undefined || receipt === null) {
     return {
       status: 'no-attempt',
@@ -358,6 +417,34 @@ export async function inspectSignerRecovery(
     };
   }
 
+  if (acceptanceAttemptId !== undefined) {
+    let reason: AcceptanceRefusalReason | undefined;
+
+    if (!consumed) {
+      reason = 'nonce-unconsumed';
+    } else if (attempt.replacementSearch === null) {
+      reason = 'missing-lower-bound';
+    } else if (
+      attempt.replacementSearch.exhausted !== null &&
+      attempt.replacementSearch.exhausted.nonce > observation.nonce
+    ) {
+      return {
+        status: 'inconsistent-observations',
+        observation,
+      };
+    } else if (snapshot.ledger.outcomes.length >= MAX_OPERATOR_OUTCOMES) {
+      reason = 'ledger-capacity-reached';
+    }
+
+    if (reason !== undefined) {
+      return {
+        status: 'operator-acceptance-refused',
+        observation,
+        reason,
+      };
+    }
+  }
+
   if (hint !== undefined) {
     return inspectTransactionHint({
       publicClient,
@@ -376,6 +463,19 @@ export async function inspectSignerRecovery(
       receipt,
       search: null,
     };
+  }
+
+  if (acceptanceAttemptId !== undefined && attempt.replacementSearch !== null) {
+    const fact = attempt.replacementSearch.exhausted;
+
+    if (fact !== null && blockAnchorsMatch(fact.anchor, anchor)) {
+      return confirmAcceptanceExhaustion({
+        publicClient,
+        snapshot,
+        observation,
+        observations,
+      });
+    }
   }
 
   const replacementSearch = resolveReplacementSearch(
@@ -439,6 +539,45 @@ export async function inspectSignerRecovery(
       observation,
       evidence: search.evidence,
     };
+  }
+
+  if (acceptanceAttemptId !== undefined) {
+    if (search.status === 'not-found') {
+      if (search.remainingBlocks === 0n) {
+        return {
+          status: 'operator-acceptance-available',
+          attemptId: attempt.attemptId,
+          snapshotDigest: journalSnapshotDigest(snapshot),
+          observation,
+          observations: Object.freeze(observations),
+          searchedThrough: search.searchedThrough,
+        };
+      }
+
+      const saved = attempt.replacementSearch!;
+
+      const boundary = saved.searchedThrough ?? saved.lowerBound.anchor;
+
+      return {
+        status: 'operator-acceptance-refused',
+        observation,
+        reason: 'search-incomplete',
+        gap: {
+          boundary,
+          durable: anchor,
+          blocks: anchor.blockNumber - boundary.blockNumber,
+          budget: maxBlockRange,
+        },
+      };
+    }
+
+    if (search.status === 'recorded-transaction-found') {
+      return {
+        status: 'operator-acceptance-refused',
+        observation,
+        reason: 'retained-candidate-unresolved',
+      };
+    }
   }
 
   // Finding our hash does not establish success or revert. The next 
@@ -597,5 +736,113 @@ async function confirmExhaustionInvalidation(options: {
       observed: observedFact,
       lowerBound,
     }),
+  };
+}
+
+/** Revalidate the saved no-match fact at D without rescanning its range. */
+async function confirmAcceptanceExhaustion(options: {
+  readonly publicClient: PublicClient;
+  readonly snapshot: TransactionJournalSnapshot;
+  readonly observation: AnchoredNonceObservation;
+  readonly observations: readonly Readonly<BlockAnchor>[];
+}): Promise<SignerRecoveryInspection> {
+  const { publicClient, snapshot, observation } = options;
+
+  const attempt = snapshot.attempts[0]!;
+
+  const search = attempt.replacementSearch!;
+
+  const durable = observation.anchor;
+
+  const cursor = search.searchedThrough;
+
+  if (
+    search.lowerBound.anchor.blockNumber >= durable.blockNumber ||
+    (cursor !== null && cursor.blockNumber > durable.blockNumber)
+  ) {
+    return {
+      status: 'operator-acceptance-refused',
+      observation,
+      reason: 'correction-required',
+    };
+  }
+
+  const scope = { operation: 'signer-recovery' } as const;
+
+  const opening = await getBlockAnchor(
+    publicClient,
+    durable.blockNumber,
+    durable.blockHash,
+    scope,
+  );
+
+  if (!blockAnchorsMatch(opening, durable)) {
+    return {
+      status: 'anchor-changed',
+      observedAnchor: opening,
+    };
+  }
+
+  const lower = search.lowerBound.anchor;
+
+  const observedLower = await getBlockAnchor(
+    publicClient,
+    lower.blockNumber,
+    lower.blockHash,
+    scope,
+  );
+
+  const observations = [...options.observations, opening, observedLower];
+
+  let changed = !blockAnchorsMatch(observedLower, lower);
+
+  if (cursor !== null) {
+    let observed = opening;
+
+    if (cursor.blockNumber !== durable.blockNumber) {
+      observed = await getBlockAnchor(
+        publicClient,
+        cursor.blockNumber,
+        cursor.blockHash,
+        scope,
+      );
+
+      observations.push(observed);
+    }
+
+    changed ||= !blockAnchorsMatch(cursor, observed);
+  }
+
+  const closing = await getBlockAnchor(
+    publicClient,
+    durable.blockNumber,
+    durable.blockHash,
+    scope,
+  );
+
+  if (!blockAnchorsMatch(closing, durable)) {
+    return {
+      status: 'anchor-changed',
+      observedAnchor: closing,
+    };
+  }
+
+  if (changed) {
+    return {
+      status: 'operator-acceptance-refused',
+      observation,
+      reason: 'correction-required',
+    };
+  }
+
+  observations.push(closing);
+
+  return {
+    status: 'operator-acceptance-available',
+    attemptId: attempt.attemptId,
+    snapshotDigest: journalSnapshotDigest(snapshot),
+    observation,
+    observations: Object.freeze(observations),
+    searchedThrough: durable,
   };
 }
