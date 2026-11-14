@@ -2,25 +2,13 @@ import type {
   Hash,
 } from 'viem';
 
-import type {
-  BlockAnchor,
-} from '../chain/block-anchor.js';
-
 import {
   FinalityPolicy,
 } from '../chain/finality-policy.js';
 
 import {
-  isDecimalInteger,
-} from '../shared/decimal.js';
-
-import {
   isFixedHex,
 } from '../shared/hex.js';
-
-import {
-  MAX_UINT256,
-} from '../shared/uint.js';
 
 import {
   isUuidV4,
@@ -34,6 +22,14 @@ import {
   journalJson,
   readAttributionMetadata,
 } from './journal-ledger-validation.js';
+
+import {
+  anchor,
+  decimal,
+  fields,
+  hash,
+  requireValid,
+} from './operator-ticket-fields.js';
 
 import type {
   AnchoredNonceObservation,
@@ -152,59 +148,4 @@ export function ticketMatchesOutcome(
   outcome: OperatorAcceptedOutcome,
 ): boolean {
   return journalJson(ticket) === journalJson(ticketForOutcome(identity, outcome));
-}
-
-function fields(
-  input: unknown,
-  keys: readonly string[],
-): Record<string, unknown> {
-  requireValid(typeof input === 'object' && input !== null && !Array.isArray(input));
-  requireValid(Object.keys(input).length === keys.length);
-
-  for (const key of keys) {
-    requireValid(Object.hasOwn(input, key));
-  }
-
-  return input as Record<string, unknown>;
-}
-
-function decimal(
-  input: unknown,
-): bigint {
-  requireValid(typeof input === 'string' && input.length <= 78);
-  requireValid(isDecimalInteger(input));
-
-  const result = BigInt(input);
-
-  requireValid(result >= 0n && result <= MAX_UINT256 && result.toString() === input);
-
-  return result;
-}
-
-function hash(
-  input: unknown,
-): Hash {
-  requireValid(isFixedHex(input, 32));
-  requireValid(input === input.toLowerCase());
-
-  return input;
-}
-
-function anchor(
-  input: unknown,
-): Readonly<BlockAnchor> {
-  const value = fields(input, ['blockNumber', 'blockHash']);
-
-  return Object.freeze({
-    blockNumber: decimal(value.blockNumber),
-    blockHash: hash(value.blockHash),
-  });
-}
-
-function requireValid(
-  value: unknown,
-): asserts value {
-  if (!value) {
-    throw new TypeError('Invalid operator acceptance ticket.');
-  }
 }
