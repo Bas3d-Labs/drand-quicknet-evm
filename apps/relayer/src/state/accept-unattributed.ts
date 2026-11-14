@@ -46,6 +46,11 @@ import {
 } from './file-transaction-journal-store.js';
 
 import {
+  guardedOperatorApply,
+  operatorOwnershipVerifier,
+} from './guarded-operator-apply.js';
+
+import {
   DEFAULT_JOURNAL_BOUNDS,
 } from './journal-bounds.js';
 
@@ -73,12 +78,7 @@ import {
 
 import {
   assertServiceLockHeld,
-  ServiceLockNotHeldError,
 } from './service-lock.js';
-
-import {
-  SignerCoordinator,
-} from './signer-coordinator.js';
 
 import {
   evaluateSignerGate,
@@ -247,20 +247,7 @@ export async function acceptUnattributed(
 
   env.QUICKNET_STATE_DIR = stateDirectory;
 
-  function verifyOwnership(): void {
-    const current = assertServiceLockHeld({
-      env,
-    });
-
-    if (
-      ownership === undefined ||
-      current.stateDirectory !== ownership.stateDirectory ||
-      current.dev !== ownership.dev ||
-      current.ino !== ownership.ino
-    ) {
-      throw new ServiceLockNotHeldError('descriptor');
-    }
-  }
+  const verifyOwnership = operatorOwnershipVerifier(env, ownership);
 
   const storeOptions = {
     filePath: join(stateDirectory, journalFilename(identity)),
@@ -447,115 +434,63 @@ export async function acceptUnattributed(
     };
   }
 
-  // Opening a file store can rewrite storage. Defer it until the coordinator
-  // has verified the fresh proposal against the ticket, immediately before save.
-  let writable: FileTransactionJournalStore | undefined;
+  const { coordinator, result } = await guardedOperatorApply<AcceptanceResult>({
+    coordinator: {
+      identity,
+      maxRetainedAttempts: DEFAULT_JOURNAL_BOUNDS.maxRetainedAttempts,
+      log: options.log,
+      createErrorSummary: options.createErrorSummary,
+    },
+    initial,
+    storeOptions,
+    snapshotDigest: ticket.snapshotDigest,
+    journalChangedMessage: 'Operator acceptance journal changed.',
+    verifyOwnership,
+    signal,
+    async recover(coordinator) {
+      const result = await coordinator.recover({
+        publicClient,
+        anchor,
+        maxBlockRange: options.maxBlockRange,
+        acceptance: request,
+        acceptanceCommitment: {
+          snapshotDigest: ticket.snapshotDigest,
+          proposalDigest: ticket.proposalDigest,
+          durable: ticket.durable,
+        },
+      });
 
-  let openingStarted = false;
-
-  let preWriteFailure: { readonly error: unknown } | undefined;
-
-  const coordinator = await SignerCoordinator.create({
-    identity,
-    maxRetainedAttempts: DEFAULT_JOURNAL_BOUNDS.maxRetainedAttempts,
-    log: options.log,
-    createErrorSummary: options.createErrorSummary,
-    store: {
-      load: async () => initial,
-      async save(next) {
-        verifyOwnership();
-
-        if (writable === undefined) {
-          try {
-            if (!openingStarted) {
-              signal?.throwIfAborted();
-            }
-
-            const current = await FileTransactionJournalStore.read(storeOptions);
-
-            if (
-              current.kind !== 'present' ||
-              journalSnapshotDigest(current.snapshot) !== ticket.snapshotDigest
-            ) {
-              throw new Error('Operator acceptance journal changed.');
-            }
-
-            verifyOwnership();
-
-            if (!openingStarted) {
-              signal?.throwIfAborted();
-            }
-          } catch (error) {
-            // Preserve a failed pre-opening condition rather than retrying it
-            // as a save failure. Cancellation is checked only before opening starts.
-            preWriteFailure = {
-              error,
+      if (result.status !== 'operator-acceptance-committed') {
+        if (
+          result.status === 'operator-ticket-refused' ||
+          result.status === 'operator-acceptance-refused'
+        ) {
+          if (
+            result.status === 'operator-acceptance-refused' &&
+            result.reason === 'search-incomplete' &&
+            result.gap !== undefined
+          ) {
+            return {
+              status: 'deferred',
+              reason: 'search-incomplete',
+              gap: result.gap,
             };
-            throw error;
           }
 
-          openingStarted = true;
-          writable = await FileTransactionJournalStore.open(storeOptions);
+          return refused(result.reason);
         }
 
-        verifyOwnership();
-        await writable.save(next);
-      },
+        if (result.status === 'operator-attribution-committed') {
+          throw new Error('Unexpected operator attribution commitment during acceptance.');
+        }
+
+        return refused(result.status);
+      }
     },
   });
 
-  try {
-    const result = await coordinator.recover({
-      publicClient,
-      anchor,
-      maxBlockRange: options.maxBlockRange,
-      acceptance: request,
-      acceptanceCommitment: {
-        snapshotDigest: ticket.snapshotDigest,
-        proposalDigest: ticket.proposalDigest,
-        durable: ticket.durable,
-      },
-    });
-
-    if (result.status !== 'operator-acceptance-committed') {
-      if (
-        result.status === 'operator-ticket-refused' ||
-        result.status === 'operator-acceptance-refused'
-      ) {
-        if (
-          result.status === 'operator-acceptance-refused' &&
-          result.reason === 'search-incomplete' &&
-          result.gap !== undefined
-        ) {
-          return {
-            status: 'deferred',
-            reason: 'search-incomplete',
-            gap: result.gap,
-          };
-        }
-
-        return refused(result.reason);
-      }
-
-      if (result.status === 'operator-attribution-committed') {
-        throw new Error('Unexpected operator attribution commitment during acceptance.');
-      }
-
-      return refused(result.status);
-    }
-  } catch (error) {
-    if (preWriteFailure !== undefined) {
-      throw preWriteFailure.error;
-    }
-
-    if (coordinator.status.persistenceState !== 'failed') {
-      throw error;
-    }
-
-    // Retry only the coordinator's retained exact write, never re-plan on failure.
-    // Once persistence starts, cancellation cannot replace its actual outcome.
-    verifyOwnership();
-    await coordinator.retryPersistence();
+  if (result !== undefined) {
+    return result;
   }
 
   const committed = coordinator.operatorOutcome(ticket.requestId);
