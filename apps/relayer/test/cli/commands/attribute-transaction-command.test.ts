@@ -152,7 +152,7 @@ describe('attribution command configuration and routing', () => {
     ['preview', 'success'],
     ['committed', 'success'],
     ['already-recorded', 'success'],
-    ['attempt-already-attributed', 'failure'],
+    ['attempt-already-accounted', 'failure'],
     ['ordinary-resolution-available', 'deferred'],
     ['refused', 'failure'],
   ] as const)('maps %s to %s after reporting its distinct disposition', async (status, expected) => {
@@ -177,7 +177,7 @@ describe('attribution command configuration and routing', () => {
           },
         };
         break;
-      case 'attempt-already-attributed':
+      case 'attempt-already-accounted':
         result = {
           status,
           requestedRequestId: request().requestId,

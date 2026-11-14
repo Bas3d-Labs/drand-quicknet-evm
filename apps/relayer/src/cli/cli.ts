@@ -36,6 +36,10 @@ import {
 } from './commands/sync-nonce-command.js';
 
 import {
+  runAcceptUnattributedCommand,
+} from './commands/accept-unattributed-command.js';
+
+import {
   runAttributeTransactionCommand,
 } from './commands/attribute-transaction-command.js';
 
@@ -52,6 +56,16 @@ export async function main(
   const command = parseCommandArguments(normalizedArgs);
 
   switch (command.command) {
+    case 'accept-unattributed':
+      if (command.mode === 'apply') {
+        assertServiceLockHeld();
+      }
+
+      return runWithShutdownSignal(
+        (signal) => runAcceptUnattributedCommand(command, output, options, signal),
+        'interrupted',
+      );
+
     case 'attribute-transaction':
       if (command.mode === 'apply') {
         assertServiceLockHeld();

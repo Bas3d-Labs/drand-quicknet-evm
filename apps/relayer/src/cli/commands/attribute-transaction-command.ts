@@ -114,7 +114,7 @@ export async function runAttributeTransactionCommand(
     result,
   });
 
-  if (result.status === 'refused' || result.status === 'attempt-already-attributed') {
+  if (result.status === 'refused' || result.status === 'attempt-already-accounted') {
     return 'failure';
   }
 

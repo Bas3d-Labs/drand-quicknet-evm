@@ -305,6 +305,10 @@ it.skipIf(process.platform !== 'linux').each(COMMAND_OUTPUT_CASES)(
       [
         'daemon-config',
         setup + `
+          export function parseMaxBlockRange() {
+            throw new Error('Unexpected acceptance configuration load.');
+          }
+
           export async function loadDaemonConfig() {
             return config;
           }

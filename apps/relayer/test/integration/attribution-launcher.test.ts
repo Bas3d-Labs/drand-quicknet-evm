@@ -35,7 +35,10 @@ import {
 
 const LAUNCHER = fileURLToPath(new URL('../../scripts/relayer.sh', import.meta.url));
 
-describe.skipIf(process.platform !== 'linux')('attribution launcher ownership', () => {
+describe.skipIf(process.platform !== 'linux').each([
+  'attribute-transaction',
+  'accept-unattributed',
+])('%s launcher ownership', (command) => {
   let root: string;
 
   let launcher: string;
@@ -135,7 +138,7 @@ describe.skipIf(process.platform !== 'linux')('attribution launcher ownership', 
     expect(readFileSync(path, 'utf8')).toBe('persistent-lock');
   });
 
-  it.each(['unset', 'relative'])('uses the same directory with an env file when launch state is %s', (setting) => {
+  it.each(['unset', 'relative'])('keeps state-directory parity when launch state is %s', (setting) => {
     const envFile = join(root, 'relayer.env');
 
     const other = join(root, 'env-file-state');

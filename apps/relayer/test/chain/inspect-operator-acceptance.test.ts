@@ -346,5 +346,4 @@ describe('acceptance refusal and search dispatch', () => {
       '104:false',
     ]);
   });
-
 });

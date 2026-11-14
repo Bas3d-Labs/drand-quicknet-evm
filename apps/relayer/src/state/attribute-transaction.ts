@@ -157,7 +157,7 @@ export type AttributionResult =
       readonly outcome: OperatorAttributedOutcome;
     }
   | {
-      readonly status: 'attempt-already-attributed';
+      readonly status: 'attempt-already-accounted';
       readonly requestedRequestId: string;
       readonly outcome: OperatorOutcome;
     }
@@ -290,7 +290,7 @@ export async function attributeTransaction(
 
   if (existingAttempt !== undefined) {
     return {
-      status: 'attempt-already-attributed',
+      status: 'attempt-already-accounted',
       requestedRequestId: request.requestId,
       outcome: existingAttempt,
     };

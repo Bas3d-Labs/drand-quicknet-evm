@@ -16,6 +16,11 @@ import {
 } from '../shared/uint.js';
 
 import {
+  parseAcceptanceArguments,
+  type AcceptanceCommandArguments,
+} from './parse-acceptance-arguments.js';
+
+import {
   parseStatusArguments,
   type StatusCommandArguments,
 } from './parse-status-arguments.js';
@@ -57,6 +62,7 @@ export interface SyncNonceCommandArguments {
 }
 
 type CommandArguments =
+  | AcceptanceCommandArguments
   | AttributionCommandArguments
   | ImportCommandArguments
   | ImportWhenAvailableCommandArguments
@@ -89,6 +95,9 @@ export function parseCommandArguments(
   const commandArgs = args.slice(1);
 
   switch (command) {
+    case 'accept-unattributed':
+      return parseAcceptanceArguments(commandArgs);
+
     case 'attribute-transaction':
       return parseAttributionArguments(commandArgs);
 

@@ -24,6 +24,10 @@ import {
 } from '../../src/diagnostics/text-scrubber.js';
 
 import {
+  journalSnapshotDigest,
+} from '../../src/state/operator-attribution.js';
+
+import {
   planSignerRecovery,
 } from '../../src/state/plan-signer-recovery.js';
 
@@ -790,7 +794,7 @@ describe('operator acceptance evidence and persistence', () => {
       replacementSearch: {
         ...original.attempts[0]!.replacementSearch!,
         exhausted: {
-          anchor: anchor(100n),
+          anchor: anchor(101n),
           nonce: 6n,
         },
       },
@@ -869,5 +873,50 @@ describe('operator acceptance evidence and persistence', () => {
     })).rejects.toThrow('Operator acceptance requires a retained attempt.');
     expect(rpc.calls).toEqual([]);
     expect(save).not.toHaveBeenCalled();
+  });
+
+  it('refuses a full ledger in the planner even with matching snapshot evidence', async () => {
+    const snapshot = await fixture(null, null);
+
+    Object.assign(snapshot, {
+      baseline: {
+        anchor: anchor(0n),
+        nonce: 0n,
+      },
+      durableNextNonce: 32n,
+      nextNonce: 33n,
+      ledger: {
+        outcomes: Array.from(
+          { length: 32 },
+          (_, index) => maximumOutcome(index, BigInt(index)),
+        ),
+        obligations: [],
+      },
+      attempts: [{
+        ...snapshot.attempts[0]!,
+        nonce: 32n,
+      }],
+    });
+
+    expect(planSignerRecovery({
+      identity: IDENTITY,
+      snapshot,
+      acceptance: acceptance(),
+      unattributedActivity: false,
+      inspection: {
+        status: 'operator-acceptance-available',
+        attemptId: ATTEMPT_ID,
+        snapshotDigest: journalSnapshotDigest(snapshot),
+        observation: {
+          anchor: DURABLE,
+          nonce: 33n,
+        },
+        observations: [anchor(98n), DURABLE],
+        searchedThrough: DURABLE,
+      },
+    })).toEqual({
+      kind: 'unchanged',
+      reason: 'ledger-capacity-reached',
+    });
   });
 });

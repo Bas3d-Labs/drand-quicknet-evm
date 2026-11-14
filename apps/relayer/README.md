@@ -127,8 +127,8 @@ pnpm --filter @based-labs/drand-quicknet-relayer start \
   --network-config "$PWD/network.json"
 ```
 
-`import`, `import-when-available`, `daemon`, `sync-nonce`, and
-`attribute-transaction` accept
+`import`, `import-when-available`, `daemon`, `sync-nonce`,
+`attribute-transaction`, and `accept-unattributed` accept
 either `--network` for a built-in preset or `--network-config` for a
 custom descriptor, never both. `status` instead requires `--chain-id`
 and `--signer`.
@@ -189,7 +189,7 @@ Output contains bounded metadata, hashes and the proposed mutation, never
 an encoded journal or retained signed bytes. Diagnostics go to stderr.
 Every printed operator-attributed outcome includes two independent derived
 booleans: the preview carries them beside its outcome, and `committed`,
-`already-recorded` and `attempt-already-attributed` carry them beside theirs.
+`already-recorded` and `attempt-already-accounted` carry them beside theirs.
 The post-acknowledgement diagnostic includes both as well.
 
 - `supersededNoMatch` is true when the transaction's inclusion is at or below
@@ -218,7 +218,7 @@ error, not success. A repeat request returns `already-recorded` from the
 validated ledger without another attribution save or event. That result
 reports existing history; it does not acknowledge a new write. Reusing a
 request ID with changed ticket fields refuses. A different request for an
-already-attributed attempt instead returns `attempt-already-attributed` and
+already-accounted attempt (attributed or accepted) instead returns `attempt-already-accounted` and
 exits 1. It includes the requested request ID and the original recorded outcome,
 even when the requested transaction differs; it does not claim the new ticket
 was applied. `committed`, an identical `already-recorded` retry, and a preview
@@ -237,10 +237,104 @@ shutdown signal cannot replace commitment or a persistence error with an
 interrupted result.
 
 History holds at most 32 operator outcomes. `ledger-capacity-reached` refuses
-new operator attributions; ordinary recovery remains available. There is no
-clearing operation in this version. Further attributions after reaching the
+new operator attributions and acceptances; ordinary recovery remains available. There is no
+clearing operation in this version. Further operator outcomes after reaching the
 limit require a reviewed archival upgrade. Never delete the journal to bypass
 this limit or another blocker.
+
+### `accept-unattributed`
+
+Explicitly accepts consumed signer nonce evidence when a complete linked search
+through the durable anchor found no matching transaction. These observations
+cannot all describe a coherent chain. Acceptance records the operator's decision
+to proceed despite inconsistent provider history; it does not establish which
+observation was wrong or prove that the work was fulfilled. **Try a second RPC
+provider first**: it may reveal a receipt or replacement that ordinary recovery
+or `attribute-transaction` can verify.
+
+Stop the daemon, preview, then apply the returned ticket:
+
+```bash
+pnpm --filter @based-labs/drand-quicknet-relayer start \
+  accept-unattributed \
+  --network-config "$PWD/network.json" \
+  --attempt-id <uuid> \
+  --operator <label> \
+  --dry-run
+```
+
+Dry-run is also the default. The command generates the request ID and timestamp.
+Save the JSON `ticket` object alone, then run:
+
+```bash
+pnpm --filter @based-labs/drand-quicknet-relayer start \
+  accept-unattributed \
+  --network-config "$PWD/network.json" \
+  --apply --ticket "$PWD/acceptance-ticket.json"
+```
+
+Only the oldest retained attempt is eligible. Receipts and ordinary replacement
+resolution take precedence. A missing lower bound, unconsumed nonce, changed
+premise or incomplete search cannot produce an acceptance ticket. Dry-run uses a
+fresh durable anchor D selected by the configured finality policy. A canonical
+stored exhaustion fact exactly at D can be reused only when its nonce also
+matches; otherwise the existing linked search must finish through D.
+
+`QUICKNET_MAX_BLOCK_RANGE` sets the search budget (default `2000`). The remaining
+gap from the verified search boundary to fresh D must fit in one invocation.
+When it does not, the command returns `deferred` with reason `search-incomplete`,
+the boundary, D, gap and budget, and exits 4. Dry-run never saves search progress.
+On a fast chain with a small budget, repeated previews may therefore never catch
+up; choose a sufficient budget or let ordinary recovery advance the search.
+The fresh-D requirement is not relaxed.
+
+Apply uses the ticket's D, still at or below the current configured durable
+height, rather than moving its proposal to a newer anchor. It repeats inspection
+and planning under the service lock and compares the whole snapshot and proposal
+digests before opening the writable journal. A newly available ordinary
+resolution or lower-bound repair returns `proposal-changed` with no write or
+success event; resume ordinary recovery separately. Each command rejects the
+other command's ticket.
+
+One acknowledged save removes only the oldest attempt, advances
+`durableNextNonce` to that attempt's nonce plus one, and appends an acceptance
+outcome. It leaves `nextNonce` unchanged and ends recovery without a latest pass,
+permit, signing or broadcast. Independently latched unattributed activity stays
+blocked; the preview's `unattributedActivityRemains` and warning make this
+explicit. The shared history limit is 32 outcomes across attribution and
+acceptance, with no clearing operation in this version.
+
+For daemon-managed consumer requests, the on-chain request and durable checkpoint
+remain the source of owed work. An unfulfilled round is scanned and imported
+again after removal; the checkpoint advances only once it is stored at the
+durable block. **Accepted work may be submitted again**, which is safe only for
+work that is idempotent on-chain, as beacon round storage is. One-shot imports
+have no daemon re-drive guarantee; their caller must retry. No local obligation
+is created, and future work adapters need their own discovery and idempotency
+contract.
+
+Both modes use the same state-directory and signing-configuration rules as
+attribution. Dry-run does not acquire the lock, create the state directory or
+write files. It derives the signer from signing configuration but never signs.
+While the daemon runs, its saves can invalidate a preview's snapshot digest.
+Neither output nor logs include an encoded journal or retained signed bytes.
+
+`preview`, `committed` and an identical `already-recorded` retry exit 0. A preview
+contains a ticket; `committed` is confirmed from the acknowledged ledger row,
+including after a persistence retry. `already-recorded` reports an existing
+matching acceptance, with no new save or event. Reusing a request ID with changed
+fields or another outcome kind refuses. A different request for an attempt
+already attributed **or** accepted returns `attempt-already-accounted`, includes
+the original recorded outcome, and exits 1. This same disposition is returned by
+`attribute-transaction`; it never means the new ticket was applied. Ordinary
+resolution without a ticket and an incomplete search exit 4; refusals exit 1,
+and apply lock contention exits 75.
+
+Cancellation and retry follow attribution's rules: a failed pre-opening guard
+makes no write and is not retried as a save failure. Once writable opening starts,
+the operation finishes with its actual persistence outcome, even after a late
+signal. A failed save retries the exact pending snapshot once; a second failure
+is an error and emits no success event.
 
 ### `sync-nonce`
 
@@ -723,8 +817,9 @@ Protected commands require Linux and util-linux `flock`:
 - `daemon`
 - `sync-nonce`
 - `attribute-transaction --apply`
+- `accept-unattributed --apply`
 
-Attribution dry-run does not acquire ownership or create state files.
+Attribution and acceptance dry-runs do not acquire ownership or create state files.
 
 `status` acquires ownership when inspecting the journal. Snapshot mode
 does not require ownership. Automatic source selection attempts ownership
@@ -740,7 +835,8 @@ The default state directory is `./state` when `QUICKNET_STATE_DIR` is
 unset. An explicitly empty value is invalid.
 
 For `import`, `import-when-available`, `daemon`, `sync-nonce`, and
-`attribute-transaction --apply`, the launcher creates a missing directory
+`attribute-transaction --apply`, and `accept-unattributed --apply`, the launcher
+creates a missing directory
 and canonicalizes its path.
 Check configured paths carefully: a typo can create a new state
 directory with no existing checkpoint.

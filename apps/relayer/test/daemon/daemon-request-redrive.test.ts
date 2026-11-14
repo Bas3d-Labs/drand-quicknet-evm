@@ -20,13 +20,14 @@ import {
 
 import type {
   PublicClient,
+  WalletClient,
 } from 'viem';
 
 import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
-// Keep the scan, checkpoint, importer lookup and coordinator real. The leaf
+// Keep the scan, checkpoint, submitter, manager and coordinator real. The leaf
 // importer stands in for fetching, simulating and submitting a beacon.
 vi.mock('../../src/rounds/import-round-when-available.js', () => ({
   importQuicknetRoundWhenAvailable: vi.fn(),
@@ -67,6 +68,10 @@ import {
 import {
   SignerCoordinator,
 } from '../../src/state/signer-coordinator.js';
+
+import {
+  TransactionManager,
+} from '../../src/state/transaction-manager.js';
 
 import type {
   TransactionJournalSnapshot,
@@ -125,32 +130,45 @@ describe('durable request re-drive after ordinary attempt removal', () => {
 
         let stored: TransactionJournalSnapshot = {
           ...initial,
-          attempts: initial.attempts.map((attempt) => ({ ...attempt, workId })),
+          attempts: initial.attempts.map((attempt) => ({
+            ...attempt,
+            workId,
+          })),
         };
 
         const createErrorSummary = () => ({
-          scrubText: createScrubber({ rpcUrls: [], secrets: [] }),
+          scrubText: createScrubber({
+            rpcUrls: [],
+            secrets: [],
+          }),
         });
 
-        const coordinator = await SignerCoordinator.create({
+        const coordinatorOptions = {
           identity: IDENTITY,
           maxRetainedAttempts: 16,
           createErrorSummary,
           log: createRelayerLog({
             chainId: IDENTITY.chainId,
             errorSummary: createErrorSummary(),
-            destination: { write: () => {} },
+            destination: {
+              write: () => {},
+            },
           }),
           store: {
-            load: async () => ({ kind: 'present', snapshot: stored }),
-            save: async (next) => {
+            load: async () => ({
+              kind: 'present' as const,
+              snapshot: stored,
+            }),
+            save: async (next: TransactionJournalSnapshot) => {
               stored = await decodeJournalSnapshot(
                 await encodeJournalSnapshot(next, IDENTITY),
                 IDENTITY,
               );
             },
           },
-        });
+        };
+
+        const coordinator = await SignerCoordinator.create(coordinatorOptions);
 
         const readContract = vi.fn<PublicClient['readContract']>()
           .mockResolvedValue(false);
@@ -158,7 +176,9 @@ describe('durable request re-drive after ordinary attempt removal', () => {
         const getLogs = vi.fn<PublicClient['getLogs']>()
           .mockResolvedValue([{
             address: CONSUMER,
-            args: { round: ROUND },
+            args: {
+              round: ROUND,
+            },
             blockNumber: REQUEST_BLOCK,
             transactionHash: anchor(3n).blockHash,
             logIndex: 0,
@@ -172,23 +192,39 @@ describe('durable request re-drive after ordinary attempt removal', () => {
           readContract,
         } as unknown as PublicClient;
 
-        const submitter = createBeaconSubmitter({
-          publicClient,
-          readChainHeads: async () => ({ latestBlock: 104n, durableBlock: 104n }),
-          manager: {
-            get status() {
-              return {
-                ...coordinator.status,
-                chainId: IDENTITY.chainId,
-                journalInitialized: true,
-                busy: false,
-                attempts: coordinator.attempts,
-              };
-            },
-            reconcile: vi.fn(),
-            submit: vi.fn(),
-          },
+        const readChainHeads = async () => ({
+          latestBlock: 104n,
+          durableBlock: 104n,
         });
+
+        const prepareTransactionRequest = vi.fn(() => {
+          throw new Error('Unexpected signing preparation.');
+        });
+
+        async function loadSubmitter() {
+          const manager = await TransactionManager.create({
+            ...coordinatorOptions,
+            publicClient,
+            walletClient: {
+              prepareTransactionRequest,
+            } as unknown as WalletClient,
+            account: ACCOUNT,
+            readChainHeads,
+            maxBlockRange: 1n,
+            retry: {
+              initialDelayMs: 1_000,
+              maxDelayMs: 10_000,
+            },
+          });
+
+          return createBeaconSubmitter({
+            publicClient,
+            readChainHeads,
+            manager,
+          });
+        }
+
+        let submitter = await loadSubmitter();
 
         expect(submitter.findRetainedWork(workId)).toMatchObject({
           attemptId: initial.attempts[0]!.attemptId,
@@ -245,6 +281,10 @@ describe('durable request re-drive after ordinary attempt removal', () => {
 
         expect(removal.status).toBe('operator-attribution-committed');
         expect(coordinator.attempts).toEqual([]);
+
+        // Resume the daemon with a fresh real manager over the acknowledged journal.
+        submitter = await loadSubmitter();
+
         expect(submitter.findRetainedWork(workId)).toBeNull();
         expect(stored.attempts).toEqual([]);
         expect(stored.ledger.outcomes).toHaveLength(1);
@@ -294,6 +334,7 @@ describe('durable request re-drive after ordinary attempt removal', () => {
         expect((await run()).durableNextBlock).toBe(105n);
         expect(leaf).toHaveBeenCalledTimes(2);
         expect(getLogs).toHaveBeenCalledTimes(3);
+        expect(prepareTransactionRequest).not.toHaveBeenCalled();
 
         for (const [scan] of getLogs.mock.calls) {
           expect(scan).toMatchObject({

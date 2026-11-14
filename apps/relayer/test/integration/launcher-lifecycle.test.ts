@@ -158,6 +158,10 @@ function writePreload(
   replace('config/daemon-config.js', `
     import { join } from 'node:path';
 
+    export function parseMaxBlockRange() {
+      throw new Error('Unexpected acceptance configuration load.');
+    }
+
     export async function loadDaemonConfig() {
       return {
         network: 'robinhood-testnet',

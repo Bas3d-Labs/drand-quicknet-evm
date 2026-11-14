@@ -126,6 +126,11 @@ export interface SignerCoordinatorOptions {
 export interface RecoverSignerOptions {
   readonly attribution?: OperatorAttributionRequest;
   readonly acceptance?: OperatorAcceptanceRequest;
+  readonly acceptanceCommitment?: {
+    readonly snapshotDigest: Hash;
+    readonly proposalDigest: Hash;
+    readonly durable: AnchoredNonceObservation;
+  };
   readonly attributionCommitment?: {
     readonly snapshotDigest: Hash;
     readonly proposalDigest: Hash;
@@ -434,6 +439,9 @@ export class SignerCoordinator {
           }),
           ...(options.attribution === undefined ? {} : {
             attribution: structuredClone(options.attribution),
+          }),
+          ...(options.acceptanceCommitment === undefined ? {} : {
+            acceptanceCommitment: structuredClone(options.acceptanceCommitment),
           }),
           ...(options.attributionCommitment === undefined ? {} : {
             attributionCommitment: structuredClone(options.attributionCommitment),
@@ -917,6 +925,25 @@ export class SignerCoordinator {
       }
     }
 
+    const acceptanceCommitment = options.acceptanceCommitment;
+
+    if (acceptanceCommitment !== undefined) {
+      if (options.attribution !== undefined || options.attributionCommitment !== undefined) {
+        throw new TypeError('Conflicting operator recovery requests.');
+      }
+
+      if (
+        options.acceptance === undefined ||
+        current.kind !== 'present' ||
+        journalSnapshotDigest(current.snapshot) !== acceptanceCommitment.snapshotDigest
+      ) {
+        return {
+          status: 'operator-ticket-refused',
+          reason: 'snapshot-changed',
+        };
+      }
+    }
+
     const commitment = options.attributionCommitment;
 
     if (commitment !== undefined && (
@@ -1063,6 +1090,24 @@ export class SignerCoordinator {
         !blockAnchorsMatch(plan.completion.outcome.replacement.inclusion, commitment.inclusion) ||
         !blockAnchorsMatch(plan.completion.outcome.durable.anchor, commitment.durable.anchor) ||
         plan.completion.outcome.durable.nonce !== commitment.durable.nonce
+      )) {
+        this.failInspectionBracket(owner);
+
+        return {
+          status: 'operator-ticket-refused',
+          reason: 'proposal-changed',
+        };
+      }
+
+      // Ticketed acceptance must not substitute an ordinary resolution or repair.
+      if (acceptanceCommitment !== undefined && (
+        plan.completion.kind !== 'operator-acceptance' ||
+        plan.completion.outcome.proposalDigest !== acceptanceCommitment.proposalDigest ||
+        !blockAnchorsMatch(
+          plan.completion.outcome.durable.anchor,
+          acceptanceCommitment.durable.anchor,
+        ) ||
+        plan.completion.outcome.durable.nonce !== acceptanceCommitment.durable.nonce
       )) {
         this.failInspectionBracket(owner);
 
