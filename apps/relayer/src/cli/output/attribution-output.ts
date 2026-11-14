@@ -17,6 +17,7 @@ import {
 import {
   journalJson,
   readOperatorOutcome,
+  readJournalOutcome,
 } from '../../state/journal-ledger-validation.js';
 
 import {
@@ -83,7 +84,15 @@ export function renderAttributionOutput(
       throw new TypeError('Invalid operator attribution output.');
     }
 
-    const outcome = readOperatorOutcome(result.outcome);
+    const outcome = readJournalOutcome(result.outcome);
+
+    if (outcome.kind === 'operator-accepted-unattributed') {
+      return journalJson({
+        status: result.status,
+        requestedRequestId: result.requestedRequestId,
+        outcome,
+      });
+    }
 
     return journalJson({
       status: result.status,

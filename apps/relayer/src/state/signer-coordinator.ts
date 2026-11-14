@@ -109,6 +109,11 @@ import type {
   TransactionJournalStore,
 } from './transaction-journal.js';
 
+import {
+  validateAcceptanceRequest,
+  type OperatorAcceptanceRequest,
+} from './operator-acceptance.js';
+
 export interface SignerCoordinatorOptions {
   readonly identity: JournalIdentity;
   readonly store: TransactionJournalStore;
@@ -120,6 +125,7 @@ export interface SignerCoordinatorOptions {
 
 export interface RecoverSignerOptions {
   readonly attribution?: OperatorAttributionRequest;
+  readonly acceptance?: OperatorAcceptanceRequest;
   readonly attributionCommitment?: {
     readonly snapshotDigest: Hash;
     readonly proposalDigest: Hash;
@@ -137,7 +143,7 @@ export type SignerRecoveryResult =
       readonly reason: 'snapshot-changed' | 'proposal-changed';
     }
   | {
-      readonly status: 'operator-attribution-committed';
+      readonly status: 'operator-attribution-committed' | 'operator-acceptance-committed';
       readonly requestId: string;
     }
   | SignerRecoveryInspection
@@ -423,6 +429,9 @@ export class SignerCoordinator {
             blockHash: options.anchor.blockHash,
           }),
           maxBlockRange: options.maxBlockRange,
+          ...(options.acceptance === undefined ? {} : {
+            acceptance: structuredClone(options.acceptance),
+          }),
           ...(options.attribution === undefined ? {} : {
             attribution: structuredClone(options.attribution),
           }),
@@ -900,6 +909,14 @@ export class SignerCoordinator {
       validateAttributionRequest(options.attribution);
     }
 
+    if (options.acceptance !== undefined) {
+      validateAcceptanceRequest(options.acceptance);
+
+      if (options.attribution !== undefined || options.attributionCommitment !== undefined) {
+        throw new TypeError('Conflicting operator recovery requests.');
+      }
+    }
+
     const commitment = options.attributionCommitment;
 
     if (commitment !== undefined && (
@@ -939,6 +956,10 @@ export class SignerCoordinator {
       }
 
       if (current.kind === 'missing') {
+        if (options.acceptance !== undefined) {
+          throw new Error('Operator acceptance requires a retained attempt.');
+        }
+
         if (options.attribution !== undefined) {
           throw new Error('Operator attribution requires a retained attempt.');
         }
@@ -951,6 +972,9 @@ export class SignerCoordinator {
         snapshot: current.snapshot,
         anchor: options.anchor,
         maxBlockRange: options.maxBlockRange,
+        ...(options.acceptance === undefined ? {} : {
+          acceptanceAttemptId: options.acceptance.attemptId,
+        }),
         ...(options.attribution === undefined ? {} : {
           hint: options.attribution.hint,
         }),
@@ -970,6 +994,9 @@ export class SignerCoordinator {
         identity: this.identity,
         snapshot: current.snapshot,
         inspection: result,
+        ...(options.acceptance === undefined ? {} : {
+          acceptance: options.acceptance,
+        }),
         ...(options.attribution === undefined ? {} : {
           attribution: options.attribution,
         }),
@@ -996,6 +1023,20 @@ export class SignerCoordinator {
 
       if (plan.kind === 'unchanged') {
         this.failInspectionBracket(owner);
+
+        if (result.status === 'operator-acceptance-available') {
+          let reason: 'ledger-capacity-reached' | 'stale-evidence' = 'stale-evidence';
+
+          if (plan.reason === 'ledger-capacity-reached') {
+            reason = plan.reason;
+          }
+
+          return {
+            status: 'operator-acceptance-refused',
+            observation: result.observation,
+            reason,
+          };
+        }
 
         if (result.status === 'operator-attribution-available') {
           let reason: 'ledger-capacity-reached' | 'stale-evidence' = 'stale-evidence';
@@ -1036,6 +1077,7 @@ export class SignerCoordinator {
       await this.persistence.save(plan.snapshot);
 
       const terminalCorrection =
+        plan.completion.kind === 'operator-acceptance' ||
         plan.completion.kind === 'operator-attribution' ||
         plan.completion.kind === 'search-unconsumed-bound-rebase' ||
         plan.completion.kind === 'search-reset' ||
@@ -1044,6 +1086,13 @@ export class SignerCoordinator {
       this.applyCommittedWrite(cycle);
       if (terminalCorrection) {
         this.failInspectionBracket(owner);
+      }
+
+      if (plan.completion.kind === 'operator-acceptance') {
+        return {
+          status: 'operator-acceptance-committed',
+          requestId: plan.completion.outcome.requestId,
+        };
       }
 
       if (plan.completion.kind === 'operator-attribution') {
@@ -1788,6 +1837,21 @@ export class SignerCoordinator {
         (log) => log.attemptResolved(pending.event),
         cycle,
       );
+    }
+
+    if (pending.kind === 'operator-acceptance') {
+      this.invalidateRecoveryAuthorization();
+
+      const outcome = pending.outcome;
+
+      this.emit((log) => log.attemptOperatorAccepted({
+        signer: this.identity.signer,
+        requestId: outcome.requestId,
+        attemptId: outcome.attemptId,
+        nonce: outcome.nonce,
+        durableBlock: outcome.durable.anchor.blockNumber,
+        durableBlockHash: outcome.durable.anchor.blockHash,
+      }), cycle);
     }
 
     if (pending.kind === 'operator-attribution') {

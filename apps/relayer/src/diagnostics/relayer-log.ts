@@ -363,6 +363,19 @@ const TRANSACTION_EVENTS = {
       observation: 'broadcastObservation',
     },
   ],
+  attemptOperatorAccepted: [
+    'warn',
+    'signer_attempt_operator_accepted_unattributed',
+    'Inconsistent provider history accepted; nonce accounted for without attribution',
+    {
+      signer: 'address',
+      requestId: 'id',
+      attemptId: 'id',
+      nonce: 'uint',
+      durableBlock: 'uint',
+      durableBlockHash: 'hash',
+    },
+  ],
   attemptOperatorAttributed: [
     'warn',
     'signer_attempt_operator_attributed',

@@ -162,6 +162,7 @@ describe('createRelayerLog', () => {
     expect(Object.keys(log).sort()).toEqual([
       'attemptBroadcastAccepted',
       'attemptBroadcastNotAcknowledged',
+      'attemptOperatorAccepted',
       'attemptOperatorAttributed',
       'attemptResolved',
       'checkpointAdvanced',

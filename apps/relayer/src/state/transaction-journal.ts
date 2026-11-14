@@ -179,9 +179,18 @@ export interface OperatorAttributedOutcome {
   };
 }
 
-/** Operator attribution history; obligations are not supported yet. */
+export type OperatorAcceptedOutcome = Omit<
+  OperatorAttributedOutcome,
+  'kind' | 'replacement'
+> & {
+  readonly kind: 'operator-accepted-unattributed';
+};
+
+export type OperatorOutcome = OperatorAttributedOutcome | OperatorAcceptedOutcome;
+
+/** Operator disposition history; obligations are not supported. */
 export interface JournalLedger {
-  readonly outcomes: readonly OperatorAttributedOutcome[];
+  readonly outcomes: readonly OperatorOutcome[];
   readonly obligations: readonly [];
 }
 
