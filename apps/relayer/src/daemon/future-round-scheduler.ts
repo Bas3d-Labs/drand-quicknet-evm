@@ -1,0 +1,299 @@
+import type {
+  Address,
+} from 'viem';
+
+import type {
+  QuicknetRandomnessRequest,
+} from '../consumers/request-events.js';
+
+import type {
+  WaitingRequestScheduling,
+} from '../consumers/request-processor.js';
+
+import {
+  isOperationCancelled,
+} from '../execution/is-operation-cancelled.js';
+
+import {
+  createBeaconWorkId,
+} from '../rounds/beacon-work-identity.js';
+
+import type {
+  RoundImporter,
+} from '../rounds/create-round-importer.js';
+
+import type {
+  ImportQuicknetRoundResult,
+} from '../rounds/import-round.js';
+
+import {
+  waitingRound,
+} from '../rounds/round-release.js';
+
+export const MAX_WAITING_ROUNDS = 1_024;
+export const MAX_SCHEDULED_DISPATCHES = 16;
+
+export interface WaitingEntry {
+  readonly workId: string;
+  readonly registry: Address;
+  readonly request: QuicknetRandomnessRequest;
+  readonly releaseTime: bigint;
+  readonly enteredAt: number;
+  readonly source: 'durable' | 'soft';
+}
+
+interface QueuedEntry extends WaitingEntry {
+  lastFailure: bigint;
+}
+
+export type WaitTransition =
+  | {
+      kind: 'started';
+      entry: WaitingEntry;
+    }
+  | {
+      kind: 'evicted';
+      entry: WaitingEntry;
+    }
+  | {
+      kind: 'released';
+      entry: WaitingEntry;
+      disposition: ImportQuicknetRoundResult['status'];
+    };
+
+export type ScheduledOutcome =
+  | {
+      entry: WaitingEntry;
+      status: 'returned';
+      result: ImportQuicknetRoundResult;
+    }
+  | {
+      entry: WaitingEntry;
+      status: 'failed';
+      error: unknown;
+    };
+
+export interface ScheduledPass {
+  attempted: number;
+  handedOff: number;
+  failed: boolean;
+  outcomes: ScheduledOutcome[];
+}
+
+interface SchedulerOptions {
+  chainId: number;
+  registry: Address;
+  now?: () => number;
+  onTransition?: ((event: WaitTransition) => void) | undefined;
+}
+
+/** Ephemeral acceleration only. Checkpoints remain the discovery guarantee. */
+export class FutureRoundScheduler implements WaitingRequestScheduling {
+  private readonly entries = new Map<string, QueuedEntry>();
+  private readonly now: () => number;
+  private failureSequence = 0n;
+  private rejected = 0n;
+
+  constructor(private readonly options: SchedulerOptions) {
+    this.now = options.now ?? Date.now;
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  get rejectedOffers(): bigint {
+    return this.rejected;
+  }
+
+  classify(round: bigint) {
+    return waitingRound(round, this.now);
+  }
+
+  offer(
+    request: QuicknetRandomnessRequest,
+    releaseTime: bigint,
+    source: 'durable' | 'soft' = 'soft',
+  ): void {
+    const workId = createBeaconWorkId({
+      chainId: this.options.chainId,
+      registry: this.options.registry,
+      round: request.round,
+    });
+
+    if (this.entries.has(workId)) {
+      return;
+    }
+
+    const entry: QueuedEntry = {
+      workId,
+      registry: this.options.registry,
+      request: { ...request },
+      releaseTime,
+      enteredAt: this.now(),
+      source,
+      lastFailure: 0n,
+    };
+
+    if (this.entries.size === MAX_WAITING_ROUNDS) {
+      const furthest = [...this.entries.values()].sort(releaseOrder).at(-1)!;
+
+      if (releaseOrder(entry, furthest) >= 0) {
+        this.rejected += 1n;
+        return;
+      }
+
+      this.entries.delete(furthest.workId);
+
+      this.report({
+        kind: 'evicted',
+        entry: furthest,
+      });
+    }
+
+    this.entries.set(workId, entry);
+
+    this.report({
+      kind: 'started',
+      entry,
+    });
+  }
+
+  async dispatch(
+    importRound: RoundImporter,
+    signal?: AbortSignal,
+  ): Promise<ScheduledPass> {
+    const pass: ScheduledPass = {
+      attempted: 0,
+      handedOff: 0,
+      failed: false,
+      outcomes: [],
+    };
+
+    const now = BigInt(this.now());
+
+    // Never-failed entries first; rotate failures by their last failed turn.
+    // Eviction remains release-ordered, independently of retry ordering.
+    const due = [...this.entries.values()]
+      .filter((entry) => entry.releaseTime * 1000n <= now)
+      .sort((a, b) => {
+        if (a.lastFailure < b.lastFailure) {
+          return -1;
+        }
+
+        if (a.lastFailure > b.lastFailure) {
+          return 1;
+        }
+
+        return releaseOrder(a, b);
+      })
+      .slice(0, MAX_SCHEDULED_DISPATCHES);
+
+    for (const entry of due) {
+      signal?.throwIfAborted();
+
+      // Recheck after previous dispatches: wall time can move backwards.
+      if (this.classify(entry.request.round) !== undefined) {
+        continue;
+      }
+
+      pass.attempted += 1;
+
+      try {
+        const result = await importRound(entry.request.round);
+
+        if (result.status === 'waiting') {
+          continue;
+        }
+
+        this.entries.delete(entry.workId);
+
+        pass.handedOff += 1;
+
+        pass.outcomes.push({
+          entry,
+          status: 'returned',
+          result,
+        });
+
+        this.report({
+          kind: 'released',
+          entry,
+          disposition: result.status,
+        });
+      } catch (error) {
+        if (isOperationCancelled(error, signal)) {
+          throw error;
+        }
+
+        this.failureSequence += 1n;
+        entry.lastFailure = this.failureSequence;
+        pass.failed = true;
+        
+        pass.outcomes.push({
+          entry,
+          status: 'failed',
+          error,
+        });
+        // One thrown dispatch ends this pass. Its entry stays queued.
+        break;
+      }
+    }
+
+    return pass;
+  }
+
+  sleepMilliseconds(pollIntervalMs: number, pass?: ScheduledPass): number {
+    // No pass means recovery failed. An all-failed pass must not spin.
+    if (pass === undefined || (pass.failed && pass.handedOff === 0)) {
+      return pollIntervalMs;
+    }
+
+    const now = BigInt(this.now());
+
+    let delay = BigInt(pollIntervalMs);
+
+    for (const entry of this.entries.values()) {
+      const remaining = entry.releaseTime * 1000n - now;
+
+      if (remaining <= 0n) {
+        if (pass.handedOff > 0) {
+          return 0;
+        }
+      } else if (remaining < delay) {
+        delay = remaining;
+      }
+    }
+
+    // The result is bounded by the validated poll interval, never by a lead.
+    return Number(delay);
+  }
+
+  private report(event: WaitTransition): void {
+    try {
+      this.options.onTransition?.(event);
+    } catch {
+      // Scheduling never depends on delivery of diagnostics.
+    }
+  }
+}
+
+function releaseOrder(a: WaitingEntry, b: WaitingEntry): number {
+  if (a.releaseTime < b.releaseTime) {
+    return -1;
+  }
+
+  if (a.releaseTime > b.releaseTime) {
+    return 1;
+  }
+
+  if (a.workId < b.workId) {
+    return -1;
+  }
+
+  if (a.workId > b.workId) {
+    return 1;
+  }
+
+  return 0;
+}

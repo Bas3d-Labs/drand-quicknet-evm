@@ -17,12 +17,17 @@ import type {
 
 import {
   importQuicknetRoundWhenAvailable,
+  importQuicknetRoundIfAvailable,
   type ImportQuicknetRoundWhenAvailableOptions,
 } from './import-round-when-available.js';
 
 import {
   terminalRoundReason,
 } from './terminal-round-reason.js';
+
+import type {
+  WaitingRoundResult,
+} from './round-release.js';
 
 export type CreateRoundImporterOptions = Readonly<Pick<
   ImportQuicknetRoundWhenAvailableOptions,
@@ -31,7 +36,10 @@ export type CreateRoundImporterOptions = Readonly<Pick<
   | 'deployment'
   | 'receiptTimeoutMs'
   | 'fetchTimeoutMs'
->>;
+>> & {
+  deferFutureRounds?: boolean;
+  now?: () => number;
+};
 
 export type BindRoundImporterOptions = Readonly<Pick<
   ImportQuicknetRoundWhenAvailableOptions,
@@ -42,7 +50,7 @@ export type BindRoundImporterOptions = Readonly<Pick<
 
 export type RoundImporter = (
   round: bigint,
-) => Promise<ImportQuicknetRoundResult>;
+) => Promise<ImportQuicknetRoundResult | WaitingRoundResult>;
 
 export type RoundImporterBinder = (
   options:BindRoundImporterOptions,
@@ -84,7 +92,7 @@ export function createRoundImporter(
 
     return async function importRound(
       round: bigint,
-    ): Promise<ImportQuicknetRoundResult> {
+    ): Promise<ImportQuicknetRoundResult | WaitingRoundResult> {
       if (round < 0n || terminalRoundReason(round) !== undefined) {
         throw new RangeError('Quicknet round must be greater than zero.');
       }
@@ -132,6 +140,10 @@ export function createRoundImporter(
 
       if (signal !== undefined) {
         importOptions.signal = signal;
+      }
+
+      if (options.deferFutureRounds === true) {
+        return importQuicknetRoundIfAvailable(importOptions, options.now);
       }
 
       return importQuicknetRoundWhenAvailable(importOptions);

@@ -58,6 +58,10 @@ import type {
   CheckpointStore,
 } from '../state/checkpoint.js';
 
+import type {
+  WaitingRequestScheduling,
+} from '../consumers/request-processor.js';
+
 export interface SoftScanCursor {
   nextBlock: bigint;
 }
@@ -81,6 +85,7 @@ export interface RunDaemonIterationOptions {
   maxBlockRange: bigint;
   finality: FinalityPolicy;
   softCursor?: SoftScanCursor;
+  waiting?: WaitingRequestScheduling | undefined;
   readChainHeads?: () => Promise<ChainHeads>;
   onOperation?: (operation: OperationContext) => void;
   onCompleted?: (
@@ -203,6 +208,10 @@ export async function runDaemonIteration(
       durableBlock: heads.durableBlock,
       maxBlockRange: options.maxBlockRange,
 
+      ...(options.waiting === undefined
+        ? {}
+        : { waiting: options.waiting, waitingSource: 'durable' }),
+
       importRound: options.bindRoundImporter({
         submitter: options.submitter,
 
@@ -296,6 +305,7 @@ export async function runDaemonIteration(
             result: outcome.result,
           });
           break;
+        case 'waiting':
         case 'unfulfillable':
         case 'failed':
         case 'pending':
@@ -370,6 +380,10 @@ export async function runDaemonIteration(
 
     const processingOptions: ProcessQuicknetRequestsOptions = {
       requests: softResult.requests,
+
+      ...(options.waiting === undefined
+        ? {}
+        : { waiting: options.waiting, waitingSource: 'soft' }),
 
       importRound: options.bindRoundImporter({
         submitter: options.submitter,

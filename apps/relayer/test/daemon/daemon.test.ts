@@ -1,4 +1,8 @@
 import {
+  roundScheduledTime,
+} from '@based-labs/drand-quicknet';
+
+import {
   beforeEach,
   describe,
   expect,
@@ -23,7 +27,7 @@ import type {
 } from '../../src/rounds/create-beacon-submitter.js';
 
 import {
-  importQuicknetRoundWhenAvailable,
+  importQuicknetRoundIfAvailable,
 } from '../../src/rounds/import-round-when-available.js';
 
 vi.mock(
@@ -36,7 +40,7 @@ vi.mock(
 vi.mock(
   '../../src/rounds/import-round-when-available.js',
   () => ({
-    importQuicknetRoundWhenAvailable: vi.fn(),
+    importQuicknetRoundIfAvailable: vi.fn(),
   }),
 );
 
@@ -182,7 +186,7 @@ let submitter: BeaconSubmitter;
 
 beforeEach(() => {
   vi.mocked(runDaemonCycle).mockReset();
-  vi.mocked(importQuicknetRoundWhenAvailable).mockReset();
+  vi.mocked(importQuicknetRoundIfAvailable).mockReset();
 
   submitter = {
     findRetainedWork: vi.fn<BeaconSubmitter['findRetainedWork']>()
@@ -300,6 +304,7 @@ describe('runDaemon', () => {
     ).toHaveBeenCalledWith({
       publicClient: PUBLIC_CLIENT,
       bindRoundImporter: expect.any(Function),
+      waiting: expect.any(Object),
       submitter: {
         findRetainedWork: expect.any(Function),
         recover: expect.any(Function),
@@ -1075,7 +1080,7 @@ describe('daemon cycle correlation', () => {
     const importController = new AbortController();
     const onProgress = vi.fn();
 
-    vi.mocked(importQuicknetRoundWhenAvailable)
+    vi.mocked(importQuicknetRoundIfAvailable)
       .mockImplementation(async (options) => {
         expect(options.publicClient).toBe(PUBLIC_CLIENT);
         expect(options.account).toBe(ACCOUNT);
@@ -1122,7 +1127,7 @@ describe('daemon cycle correlation', () => {
     await firstImport(102n);
 
     expect(
-      vi.mocked(importQuicknetRoundWhenAvailable)
+      vi.mocked(importQuicknetRoundIfAvailable)
         .mock.calls.map(([options]) => options.round),
     ).toEqual([100n, 101n, 102n]);
 
@@ -1142,4 +1147,60 @@ describe('daemon cycle correlation', () => {
       expect(call[0]).toBe(request);
     }
   });
+
+  it('wakes at release and reuses the queue in the next cycle', async () => {
+    const controller = new AbortController();
+
+    const release = Number(roundScheduledTime(100n) * 1000n);
+
+    let now = release - 200;
+
+    let cycles = 0;
+
+    const imported = vi.fn(async (round: bigint) => ({
+      status: 'already-stored' as const,
+      round,
+      randomness: REGISTRY_RUNTIME_CODEHASH,
+    }));
+
+    vi.mocked(runDaemonCycle).mockImplementation(async (options) => {
+      cycles += 1;
+
+      if (cycles === 1) {
+        options.waiting!.offer({
+          consumer: CONSUMER_A,
+          round: 100n,
+          blockNumber: 1000n,
+          transactionHash: REGISTRY_RUNTIME_CODEHASH,
+          logIndex: 0,
+        }, roundScheduledTime(100n));
+      }
+
+      const scheduled = await options.waiting!.dispatch(imported);
+
+      return {
+        ...caughtUpCycle(),
+        scheduled,
+      };
+    });
+
+    const sleep = vi.fn(async (milliseconds: number) => {
+      now += milliseconds;
+    });
+
+    await runDaemon(daemonOptions({
+      now: () => now,
+      signal: controller.signal,
+      sleep,
+      onCycle: () => {
+        if (cycles === 2) {
+          controller.abort();
+        }
+      },
+    }));
+
+    expect(sleep).toHaveBeenCalledExactlyOnceWith(200, controller.signal);
+    expect(imported).toHaveBeenCalledExactlyOnceWith(100n);
+  });
+
 });

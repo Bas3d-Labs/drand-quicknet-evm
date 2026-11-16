@@ -17,8 +17,9 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
-import type {
-  CompressedSignature,
+import {
+  roundScheduledTime,
+  type CompressedSignature,
 } from '@based-labs/drand-quicknet';
 
 import {
@@ -45,7 +46,8 @@ vi.mock('@based-labs/drand-quicknet-registry', () => ({
   createRegistryReader: mocks.createRegistryReader,
 }));
 
-vi.mock('@based-labs/drand-quicknet', () => ({
+vi.mock('@based-labs/drand-quicknet', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@based-labs/drand-quicknet')>(),
   fetchBeacon: mocks.fetchBeacon,
 }));
 
@@ -512,16 +514,14 @@ describe('round import diagnostic context', () => {
   );
 
   it.each(['durable', 'soft'] as const)(
-    'propagates shutdown from the %s round wait without submitting',
+    'finishes the %s cycle and cancels its polling sleep with future work queued',
     async (scanType) => {
       const fixtureState = fixture();
       const controller = new AbortController();
       const reason = new Error('Shutdown requested.');
       const onCycle = vi.fn();
       const sleep = vi.fn(async () => {
-        throw new Error(
-          'Unexpected polling sleep: shutdown should occur during the round wait.',
-        );
+        controller.abort(reason);
       });
 
       let requestBlock = 1000n;
@@ -548,11 +548,6 @@ describe('round import diagnostic context', () => {
 
       fixtureState.getLogs.mockResolvedValueOnce([event]);
 
-      mocks.waitForQuicknetRound.mockImplementationOnce(async () => {
-        controller.abort(reason);
-        throw reason;
-      });
-
       await expect(runDaemon({
         ...fixtureState.options,
         pollIntervalMs: 1_000,
@@ -563,24 +558,21 @@ describe('round import diagnostic context', () => {
         }),
         onCycle,
         sleep,
-      })).rejects.toBe(reason);
+        now: () => Number(roundScheduledTime(ROUND) * 1000n) - 1000,
+      })).resolves.toBeUndefined();
 
-      expect(mocks.waitForQuicknetRound)
-        .toHaveBeenCalledExactlyOnceWith({
-          round: ROUND,
-          signal: controller.signal,
-        });
+      expect(mocks.waitForQuicknetRound).not.toHaveBeenCalled();
 
       expect(mocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
       expect(mocks.simulateBeaconSubmission).not.toHaveBeenCalled();
       expect(fixtureState.submitTransaction).not.toHaveBeenCalled();
       expect(fixtureState.waitForTransactionReceipt).not.toHaveBeenCalled();
-      expect(onCycle).not.toHaveBeenCalled();
-      expect(sleep).not.toHaveBeenCalled();
+      expect(onCycle).toHaveBeenCalledOnce();
+      expect(sleep).toHaveBeenCalledExactlyOnceWith(1000, controller.signal);
 
       if (scanType === 'durable') {
         expect(fixtureState.save).not.toHaveBeenCalled();
-        expect(fixtureState.getLogs).toHaveBeenCalledOnce();
+        expect(fixtureState.getLogs).toHaveBeenCalledTimes(2);
       }
     },
   );

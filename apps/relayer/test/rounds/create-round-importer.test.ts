@@ -1,4 +1,12 @@
 import {
+  FutureRoundScheduler,
+} from '../../src/daemon/future-round-scheduler.js';
+
+import {
+  roundScheduledTime,
+} from '@based-labs/drand-quicknet';
+
+import {
   beforeEach,
   describe,
   expect,
@@ -105,6 +113,42 @@ describe('createRoundImporter', () => {
       recover: vi.fn<BeaconSubmitter['recover']>(),
       submit: vi.fn<BeaconSubmitter['submit']>(),
     };
+  });
+
+  it('finds retained work on scheduled retry after a leaf throws after persistence', async () => {
+    const queue = new FutureRoundScheduler({
+      chainId: DEPLOYMENT.chainId,
+      registry: DEPLOYMENT.address,
+    });
+
+    queue.offer({
+      consumer: DEPLOYMENT.address,
+      round: ROUND,
+      blockNumber: 99n,
+      transactionHash: `0x${'aa'.repeat(32)}`,
+      logIndex: 0,
+    }, roundScheduledTime(ROUND));
+
+    vi.mocked(importQuicknetRoundWhenAvailable).mockImplementationOnce(async () => {
+      // The leaf stands in for persistence followed by an exception.
+      vi.mocked(submitter.findRetainedWork).mockReturnValue(retainedWork('signed'));
+      throw new Error('post-persistence failure');
+    });
+
+    const run = createRoundImporter(STABLE_OPTIONS)({ submitter });
+
+    await queue.dispatch(run);
+
+    expect(queue.size).toBe(1);
+
+    const retried = await queue.dispatch(run);
+
+    expect(retried.outcomes[0]).toMatchObject({
+      status: 'returned',
+      result: { status: 'deferred', reason: 'already-retained' },
+    });
+    expect(importQuicknetRoundWhenAvailable).toHaveBeenCalledTimes(1);
+    expect(queue.size).toBe(0);
   });
 
   it.each([0, 1.5])(

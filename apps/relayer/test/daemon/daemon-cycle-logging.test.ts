@@ -144,6 +144,9 @@ const loggerMocks = {
   checkpointAdvanced:
     vi.fn<RelayerLog['checkpointAdvanced']>(),
   requestUnfulfillable: vi.fn(),
+    roundWaitStarted: vi.fn(),
+    roundWaitReleased: vi.fn(),
+    roundWaitEvicted: vi.fn(),
   roundImported: vi.fn<RelayerLog['roundImported']>(),
   roundAlreadyStored:
     vi.fn<RelayerLog['roundAlreadyStored']>(),

@@ -58,6 +58,11 @@ import type {
   SoftScanCursor,
 } from './daemon-iteration.js';
 
+import {
+  FutureRoundScheduler,
+  type WaitTransition,
+} from './future-round-scheduler.js';
+
 const DURABLE_HEAD_POLL_INTERVAL_MS = 30_000;
 
 interface DaemonCycleContext {
@@ -65,6 +70,8 @@ interface DaemonCycleContext {
 }
 
 export interface RunDaemonOptions {
+  now?: () => number;
+  onWaitTransition?: ((event: WaitTransition) => void) | undefined;
   publicClient: PublicClient;
   account: Account;
   submitter: BeaconSubmitter;
@@ -98,7 +105,16 @@ export async function runDaemon(
     throw new Error('pollIntervalMs must be a positive safe integer.');
   }
 
+  const waiting = new FutureRoundScheduler({
+    chainId: options.deployment.chainId,
+    registry: options.deployment.address,
+    onTransition: options.onWaitTransition,
+    ...(options.now === undefined ? {} : { now: options.now }),
+  });
+
   const bindRoundImporter = createRoundImporter({
+    deferFutureRounds: true,
+    ...(options.now === undefined ? {} : { now: options.now }),
     publicClient: options.publicClient,
     account: options.account,
     deployment: options.deployment,
@@ -149,6 +165,7 @@ export async function runDaemon(
     });
 
     const cycleOptions: RunDaemonCycleOptions = {
+      waiting,
       publicClient: options.publicClient,
       bindRoundImporter,
       submitter,
@@ -178,7 +195,7 @@ export async function runDaemon(
     }
 
     await sleep(
-      options.pollIntervalMs,
+      waiting.sleepMilliseconds(options.pollIntervalMs, result.scheduled),
       options.signal,
     );
   }

@@ -63,6 +63,11 @@ import {
   type SoftScanCursor,
 } from './daemon-iteration.js';
 
+import type {
+  FutureRoundScheduler,
+  ScheduledPass,
+} from './future-round-scheduler.js';
+
 export interface RunDaemonCycleOptions {
   publicClient: PublicClient;
   submitter: BeaconSubmitter;
@@ -74,6 +79,7 @@ export interface RunDaemonCycleOptions {
   maxBlockRange: bigint;
   finality: FinalityPolicy;
   softCursors: Map<Address, SoftScanCursor>;
+  waiting?: FutureRoundScheduler | undefined;
   readChainHeads?: () => Promise<ChainHeads>;
   onUnfulfillable?: ((
     scanType: 'durable' | 'soft',
@@ -110,6 +116,8 @@ type DaemonConsumerCycleResult =
     };
 
 export interface RunDaemonCycleResult {
+  scheduled?: ScheduledPass;
+  waitingRejectedOffers?: bigint;
   consumers: readonly DaemonConsumerCycleResult[];
 }
 
@@ -134,6 +142,17 @@ export async function runDaemonCycle(
         error,
       })),
     };
+  }
+
+  let scheduled: ScheduledPass | undefined;
+
+  if (options.waiting !== undefined) {
+    const importRound = options.bindRoundImporter({
+      submitter: options.submitter,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+
+    scheduled = await options.waiting.dispatch(importRound, options.signal);
   }
 
   const consumers: DaemonConsumerCycleResult[] = [];
@@ -187,6 +206,12 @@ export async function runDaemonCycle(
           ? {}
           : {
               softCursor,
+            }),
+
+        ...(options.waiting === undefined
+          ? {}
+          : {
+              waiting: options.waiting
             }),
           
         ...(options.readChainHeads !== undefined
@@ -256,5 +281,9 @@ export async function runDaemonCycle(
 
   return {
     consumers,
+    ...(scheduled === undefined ? {} : { scheduled }),
+    ...(options.waiting === undefined
+      ? {}
+      : { waitingRejectedOffers: options.waiting.rejectedOffers }),
   };
 }
