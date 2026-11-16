@@ -7,6 +7,14 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+import type {
+  TerminalRoundReason,
+} from '../rounds/terminal-round-reason.js';
+
+import type {
+  QuicknetRandomnessRequest,
+} from '../consumers/request-events.js';
+
 import {
   getChainHeads,
   type ChainHeads,
@@ -86,6 +94,11 @@ export interface RunDaemonIterationOptions {
   onReconciliation?: (
     result: DurableRequestResult,
   ) => void;
+  onUnfulfillable?: ((
+    scanType: 'durable' | 'soft',
+    request: QuicknetRandomnessRequest,
+    reason: TerminalRoundReason,
+  ) => void) | undefined;
   signal?: AbortSignal;
 }
 
@@ -218,6 +231,10 @@ export async function runDaemonIteration(
       onIncomplete(outcome) {
         reportIncomplete('durable', outcome);
       },
+
+      onUnfulfillable(request, reason) {
+        options.onUnfulfillable?.('durable', request, reason);
+      },
     };
 
     if (options.signal !== undefined) {
@@ -272,11 +289,20 @@ export async function runDaemonIteration(
     const rounds: ProcessedQuicknetRound[] = [];
 
     for (const outcome of reconciliation.imports) {
-      if (outcome.status === 'completed') {
-        rounds.push({
-          round: outcome.round,
-          result: outcome.result,
-        });
+      switch (outcome.status) {
+        case 'completed':
+          rounds.push({
+            round: outcome.round,
+            result: outcome.result,
+          });
+          break;
+        case 'unfulfillable':
+        case 'failed':
+        case 'pending':
+        case 'deferred':
+          break;
+        default:
+          outcome satisfies never;
       }
     }
 
@@ -369,6 +395,10 @@ export async function runDaemonIteration(
 
       onIncomplete(outcome) {
         reportIncomplete('soft', outcome);
+      },
+
+      onUnfulfillable(request, reason) {
+        options.onUnfulfillable?.('soft', request, reason);
       },
     };
 

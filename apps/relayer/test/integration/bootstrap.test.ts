@@ -382,6 +382,22 @@ describe('bootstrap process boundary', () => {
     });
   });
 
+  it('preserves the direct round-zero import message and exit code', () => {
+    const result = launch({
+      realCli: true,
+      args: ['import', '--network', 'robinhood-testnet', '--round', '0'],
+    });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(diagnostic(result.stderr)).toMatchObject({
+      event: 'cli_failed',
+      kind: 'usage',
+      code: 'ZERO_ROUND',
+      message: 'Round must be greater than zero',
+    });
+  });
+
   it.skipIf(process.platform !== 'linux')(
     'renders missing configuration as an ordinary CLI failure',
     () => {

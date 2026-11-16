@@ -272,6 +272,7 @@ export async function runDaemonCommand(
         : {}),
 
       readChainHeads,
+      onUnfulfillable: daemonLogger.onUnfulfillable,
       
       async onCycle(result, context) {
         statusPublisher.onCycleCompleted(context.cycle);

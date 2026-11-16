@@ -15,6 +15,7 @@ export interface CheckpointStore {
   /// Persists the next block that should be scanned for `consumer`.
   ///
   /// Callers must only advance this value after all requests in the
-  /// preceding scanned range have been processed successfully.
+  /// preceding scanned range are durably fulfilled or deterministically
+  /// unfulfillable, with the canonical scan checks satisfied.
   save(consumer: Address, nextBlock: bigint): Promise<void>;
 }

@@ -676,6 +676,7 @@ describe('runDaemonIteration', () => {
       importRound: expect.any(Function),
       onCompleted: expect.any(Function),
       onIncomplete: expect.any(Function),
+      onUnfulfillable: expect.any(Function),
     });
 
     const call = vi.mocked(reconcileDurableRequests).mock.calls[0];
@@ -1226,6 +1227,7 @@ describe('runDaemonIteration', () => {
       importRound: expect.any(Function),
       onCompleted: expect.any(Function),
       onIncomplete: expect.any(Function),
+      onUnfulfillable: expect.any(Function),
     });
 
     const call = vi.mocked(processQuicknetRequests).mock.calls[0];

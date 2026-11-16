@@ -3,6 +3,14 @@ import type {
 } from 'viem';
 
 import type {
+  TerminalRoundReason,
+} from '../rounds/terminal-round-reason.js';
+
+import type {
+  QuicknetRandomnessRequest,
+} from '../consumers/request-events.js';
+
+import type {
   RunDaemonCycleResult,
 } from './daemon-cycle.js';
 
@@ -24,6 +32,7 @@ import type {
 } from '../consumers/durable-requests.js';
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
+const MAX_REPORTED_UNFULFILLABLE_REQUESTS = 1_024;
 
 type DaemonScanType =
   | 'durable'
@@ -36,6 +45,12 @@ export interface CreateDaemonLoggerOptions {
 }
 
 export interface DaemonLogger {
+  onUnfulfillable(
+    scanType: DaemonScanType,
+    request: QuicknetRandomnessRequest,
+    reason: TerminalRoundReason,
+  ): void;
+
   onCycle(
     result: RunDaemonCycleResult,
     cycleLogger?: RelayerLog,
@@ -54,7 +69,45 @@ export function createDaemonLogger(
   const now = options.now ?? Date.now;
   let lastHeartbeatAt = now();
 
+  // One logger per daemon run. FIFO eviction bounds memory, not log delivery.
+  const reported = new Set<string>();
+
   return {
+    onUnfulfillable(scanType, request, reason): void {
+      // Chain identity is bound to this logger for the lifetime of the run.
+      const identity = [
+        request.consumer.toLowerCase(),
+        request.transactionHash.toLowerCase(),
+        request.logIndex,
+      ].join(':');
+
+      if (reported.has(identity)) {
+        return;
+      }
+
+      if (reported.size === MAX_REPORTED_UNFULFILLABLE_REQUESTS) {
+        reported.delete(reported.values().next().value!);
+      }
+
+      // Suppress repeats even if this emission attempt throws.
+      // Eviction or restart permits another attempt; delivery is best-effort.
+      reported.add(identity);
+
+      try {
+        options.logger.requestUnfulfillable({
+          consumer: request.consumer.toLowerCase() as Address,
+          transactionHash: request.transactionHash.toLowerCase() as `0x${string}`,
+          logIndex: BigInt(request.logIndex),
+          blockNumber: request.blockNumber,
+          round: request.round,
+          reason,
+          scanType,
+        });
+      } catch {
+        // Emission is best-effort; no flush or delivery acknowledgement.
+      }
+    },
+
     onCycle(
       result: RunDaemonCycleResult,
       cycleLogger: RelayerLog = options.logger,

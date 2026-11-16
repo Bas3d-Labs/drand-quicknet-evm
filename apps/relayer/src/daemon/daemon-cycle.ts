@@ -16,6 +16,14 @@ import type {
 } from '../chain/finality-policy.js';
 
 import type {
+  TerminalRoundReason,
+} from '../rounds/terminal-round-reason.js';
+
+import type {
+  QuicknetRandomnessRequest,
+} from '../consumers/request-events.js';
+
+import type {
   IncompleteQuicknetRoundOutcome,
   ProcessedQuicknetRound,
 } from '../consumers/request-processor.js';
@@ -67,6 +75,11 @@ export interface RunDaemonCycleOptions {
   finality: FinalityPolicy;
   softCursors: Map<Address, SoftScanCursor>;
   readChainHeads?: () => Promise<ChainHeads>;
+  onUnfulfillable?: ((
+    scanType: 'durable' | 'soft',
+    request: QuicknetRandomnessRequest,
+    reason: TerminalRoundReason,
+  ) => void) | undefined;
   signal?: AbortSignal;
 }
 
@@ -151,6 +164,8 @@ export async function runDaemonCycle(
         startBlock: options.startBlock,
         maxBlockRange: options.maxBlockRange,
         finality: options.finality,
+
+        onUnfulfillable: options.onUnfulfillable,
 
         onOperation(current) {
           operation = current;

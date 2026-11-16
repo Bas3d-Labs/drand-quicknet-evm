@@ -3,6 +3,14 @@ import {
 } from '../execution/is-operation-cancelled.js';
 
 import type {
+  TerminalRoundReason,
+} from '../rounds/terminal-round-reason.js';
+
+import {
+  terminalRoundReason,
+} from '../rounds/terminal-round-reason.js';
+
+import type {
   RoundImporter,
 } from '../rounds/create-round-importer.js';
 
@@ -28,6 +36,10 @@ export interface ProcessQuicknetRequestsOptions {
   onIncomplete?:
     | ((outcome: IncompleteQuicknetRoundOutcome) => void)
     | undefined;
+  onUnfulfillable?: ((
+    request: QuicknetRandomnessRequest,
+    reason: TerminalRoundReason,
+  ) => void) | undefined;
   signal?: AbortSignal;
 }
 
@@ -44,6 +56,10 @@ export type QuicknetRoundOutcome = {
   round: bigint;
   firstRequestBlock: bigint;
 } & (
+  | {
+      status: 'unfulfillable';
+      reason: TerminalRoundReason;
+    }
   | {
       status: 'completed';
       result: CompletedImportResult;
@@ -92,6 +108,16 @@ export async function processQuicknetRequestsWithOutcomes(
   const firstBlocks = new Map<bigint, bigint>();
 
   for (const request of options.requests) {
+    const reason = terminalRoundReason(request.round);
+
+    if (reason !== undefined) {
+      try {
+        options.onUnfulfillable?.(request, reason);
+      } catch {
+        // Best-effort reporting never changes terminal classification.
+      }
+    }
+
     const previous = firstBlocks.get(request.round);
 
     if (
@@ -120,6 +146,19 @@ export async function processQuicknetRequestsWithOutcomes(
   let signerUnavailable: TransactionAdmissionReason | undefined;
 
   for (const [round, firstRequestBlock] of firstBlocks) {
+    const reason = terminalRoundReason(round);
+
+    if (reason !== undefined) {
+      outcomes.push({
+        round,
+        firstRequestBlock,
+        status: 'unfulfillable',
+        reason,
+      });
+
+      continue;
+    }
+
     if (failed) {
       outcomes.push({
         round,
@@ -220,15 +259,21 @@ export async function processQuicknetRequests(
   const rounds: ProcessedQuicknetRound[] = [];
 
   for (const outcome of outcomes) {
-    if (outcome.status === 'failed') {
-      throw outcome.error;
-    }
-
-    if (outcome.status === 'completed') {
-      rounds.push({
-        round: outcome.round,
-        result: outcome.result,
-      });
+    switch (outcome.status) {
+      case 'failed':
+        throw outcome.error;
+      case 'completed':
+        rounds.push({
+          round: outcome.round,
+          result: outcome.result,
+        });
+        break;
+      case 'unfulfillable':
+      case 'pending':
+      case 'deferred':
+        break;
+      default:
+        outcome satisfies never;
     }
   }
 
