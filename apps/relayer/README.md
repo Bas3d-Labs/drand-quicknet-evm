@@ -2097,18 +2097,29 @@ after a scheduled exception. Cancellation propagates without becoming a retry.
 An exception does not establish whether an attempt was created: every retry
 re-enters the normal importer's stored and retained-work checks.
 
-A returned imported, already-stored, pending or deferred result removes the entry.
-A clean deferral with no attempt therefore falls back to scan rediscovery; general
-deferred-work retry is not part of this change. A backward clock step can return
-an entry to waiting, without removing it. There is no result cache shared by the
-scheduled pass and scans. Repeated importer calls are allowed; a second retained
-attempt for the same work is not.
+A returned imported, already-stored, pending or per-work already-retained result
+removes the entry. A signer-unavailable result keeps it queued and stops the pass:
+all such admission blockers apply to the signer, not just that round. Durable and
+soft scans offer signer-unavailable work to this same collection, including later
+requests skipped under the scan's cached blocker. Released rounds use their exact
+past release time and outrank future rounds under the existing eviction policy.
+Duplicate offers do not reset entry age or failure ordering.
 
-A productive pass hands off at least one entry with a non-waiting returned result.
+This retries queued work from memory after the gate reopens, even after the soft
+cursor has advanced. Earlier-import-failed work is not offered: the original
+failure prevents soft cursor advancement, so the range is rescanned. A backward
+clock step can return an entry to waiting without removing it. There is no result
+cache shared by the scheduled pass and scans. Repeated importer calls are allowed;
+a second retained attempt for the same work is not. Durable scanning can still
+call the importer for queued work in its range, adding pre-admission RPC cost.
+The scheduler does not skip dispatch using a cached gate observation.
+
+A productive pass removes and hands off at least one entry.
 If eligible work remains after a productive pass, the next cycle need not sleep.
-Otherwise sleep ends at the earlier of the poll interval and the next future
-release. Failed recovery and a pass with only thrown dispatches use the normal
-poll sleep. Release arithmetic uses bigint; a distant round cannot create an
+A pass stopped by signer unavailability always takes the normal poll sleep,
+even if an earlier entry was productive. Otherwise sleep ends at the earlier of
+the poll interval and the next future release. Failed recovery and a pass with
+only thrown dispatches use the normal poll sleep. Release arithmetic uses bigint; a distant round cannot create an
 oversized timer. Recovery and imports remain sequential.
 
 Only the scheduled wait is removed. After release, beacon fetching and its retries
@@ -2119,10 +2130,12 @@ other RPC work and the subsequent consumer scans are outside that calculation.
 `import-when-available` remains a one-shot command that waits inline for its exact
 round. No alternative round is substituted.
 
-Waiting work does not advance the durable checkpoint unless the anchored registry
-read shows it stored. Soft discovery may advance its cursor. On restart, the
+Queued waiting or deferred work does not advance the durable checkpoint unless
+the anchored registry read shows it stored. Soft discovery may advance its cursor. On restart, the
 collection is empty and scanning starts from the durable checkpoint, so unresolved
 requests can be rediscovered. No queue state, journal field or ledger row is added.
+Longer residence also extends the window in which a reorged-out soft request
+can still cause an import, consistent with existing optimistic processing.
 There is no lead cap. Overflow is not loss, but it can be a long delay: if a
 far-future request pins the checkpoint, an evicted request beyond the first scan
 range is not rediscovered until that pin clears. The delay is bounded only by the
@@ -2132,8 +2145,17 @@ pinning request's lead, not by the poll interval.
 `released` handoff and includes its disposition; eviction emits the same event at
 info level with reason `evicted`. Events identify the work and the representative
 request, release time, entry time and discovery scan type. Retries keep the same
-wait episode open. Duplicate offers do not emit another entry event. Rejected
-farther offers increment `waitingRejectedOffers` in the periodic heartbeat instead
+wait episode open. The first scheduled signer-unavailable dispatch emits
+`round_deferred`; subsequent blocked dispatches in that queue episode are
+suppressed. Eventual handoff uses the existing wait-end and result events.
+Eviction, restart or later rediscovery permits a new episode and report.
+During a prolonged signer-wide outage, released entries can fill the 1,024-slot
+collection. Newer offers are then rejected and counted in the heartbeat; durable
+scanning remains the fallback. Scheduled refusals are logged only once per entry,
+so watch the gate status and rejected-offer counter for ongoing pressure.
+
+Scan deferral logging is unchanged. Duplicate offers do not emit another entry
+event. Rejected farther offers increment `waitingRejectedOffers` in the periodic heartbeat instead
 of emitting a line per offer. Diagnostics are best-effort and never control queue
 membership. Restarts, eviction and rediscovery can produce new episodes.
 

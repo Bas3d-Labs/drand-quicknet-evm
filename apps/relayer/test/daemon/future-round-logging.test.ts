@@ -89,40 +89,83 @@ function setup() {
 }
 
 describe('future-round diagnostics', () => {
-  it('emits one debug entry and one debug exit with a clean-deferral disposition', async () => {
+  it('logs the first blocked dispatch and eventual handoff, not blocked repeats', async () => {
     const f = setup();
 
     f.offer(100n);
+
+    for (let cycle = 0; cycle < 4; cycle += 1) {
+      f.offer(100n);
+
+      const scheduled = await f.queue.dispatch(async (round) => ({
+        status: 'deferred',
+        reason: 'signer-unavailable',
+        blocker: 'retention-capacity-reached',
+        round,
+      }));
+
+      f.daemon.onCycle({
+        consumers: [],
+        scheduled,
+      });
+    }
+
+    expect(f.records().find((r) => r.event === 'round_wait_started')).toMatchObject({
+      level: 20,
+      chainId: 46630,
+      registry: REGISTRY,
+      consumer: CONSUMER,
+      transactionHash: HASH,
+      blockNumber: '10',
+      logIndex: '0',
+      round: '100',
+      releaseTime: roundScheduledTime(100n).toString(),
+      scanType: 'durable',
+    });
+    expect(f.records().find((r) => r.event === 'round_deferred')).toMatchObject({
+      level: 30,
+      scanType: 'scheduled',
+      reason: 'signer-unavailable',
+      blocker: 'retention-capacity-reached',
+    });
+    expect(f.records().filter((r) => r.event === 'round_deferred')).toHaveLength(1);
+    expect(f.records().filter((r) => r.event === 'round_wait_started')).toHaveLength(1);
+    expect(f.records().filter((r) => r.event === 'round_wait_ended')).toHaveLength(0);
+
+    const scheduled = await f.queue.dispatch(async (round) => ({
+      status: 'imported',
+      round,
+      randomness: HASH,
+      transactionHash: HASH,
+      submission: 'witness',
+    }));
+
+    f.daemon.onCycle({
+      consumers: [],
+      scheduled,
+    });
+
+    expect(f.records().filter((r) => r.event === 'round_wait_ended')).toHaveLength(1);
+    expect(f.records().at(-1)).toMatchObject({
+      event: 'round_imported',
+      scanType: 'scheduled',
+    });
+
     f.offer(100n);
 
-    await f.queue.dispatch(async (round) => ({
+    const blocked = await f.queue.dispatch(async (round) => ({
       status: 'deferred',
       reason: 'signer-unavailable',
       blocker: 'recovery-incomplete',
       round,
     }));
 
-    expect(f.records()).toMatchObject([
-      {
-        event: 'round_wait_started',
-        level: 20,
-        chainId: 46630,
-        registry: REGISTRY,
-        consumer: CONSUMER,
-        transactionHash: HASH,
-        blockNumber: '10',
-        logIndex: '0',
-        round: '100',
-        releaseTime: roundScheduledTime(100n).toString(),
-        scanType: 'durable',
-      },
-      {
-        event: 'round_wait_ended',
-        level: 20,
-        reason: 'released',
-        disposition: 'deferred',
-      },
-    ]);
+    f.daemon.onCycle({
+      consumers: [],
+      scheduled: blocked,
+    });
+
+    expect(f.records().filter((r) => r.event === 'round_deferred')).toHaveLength(2);
   });
 
   it('emits info on eviction and only a periodic counter for rejected offers', () => {

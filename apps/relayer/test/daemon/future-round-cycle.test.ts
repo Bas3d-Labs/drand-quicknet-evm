@@ -213,6 +213,117 @@ describe('future-round scans and cycle wiring', () => {
     expect(f.save).not.toHaveBeenCalled();
   });
 
+  it('retries clean soft deferral from memory before durable rediscovery', async () => {
+    const f = fixture([98n, 99n]);
+
+    f.setDurable(9n);
+
+    const waiting = scheduling().makeQueue();
+
+    f.importRound.mockResolvedValueOnce({
+      status: 'deferred',
+      reason: 'signer-unavailable',
+      blocker: 'retention-capacity-reached',
+      round: 98n,
+    });
+
+    const discovered = await runDaemonIteration({
+      ...f.options,
+      waiting,
+      onIncomplete: () => {
+        throw new Error('observer failed');
+      },
+    });
+
+    expect(discovered.softCursor.nextBlock).toBe(11n);
+    expect(waiting.size).toBe(2);
+    expect(f.importRound).toHaveBeenCalledTimes(1);
+
+    const recover = vi.fn();
+
+    const result = await runDaemonCycle({
+      ...f.options,
+      waiting,
+      submitter: {
+        recover,
+      } as unknown as BeaconSubmitter,
+      consumers: [{
+        address: CONSUMER,
+        registry: REGISTRY,
+      }] as const,
+      softCursors: new Map([[CONSUMER, discovered.softCursor]]),
+    });
+
+    expect(result.scheduled?.handedOff).toBe(2);
+    expect(f.importRound.mock.calls.map(([round]) => round)).toEqual([98n, 98n, 99n]);
+    expect(recover.mock.invocationCallOrder[0]!)
+      .toBeLessThan(f.importRound.mock.invocationCallOrder[1]!);
+    expect(f.getLogs).toHaveBeenCalledTimes(1);
+    expect(f.save).not.toHaveBeenCalled();
+    expect(waiting.size).toBe(0);
+  });
+
+  it('offers durable clean deferrals without advancing the checkpoint', async () => {
+    const f = fixture([98n, 99n]);
+
+    const waiting = scheduling().makeQueue();
+
+    f.importRound.mockResolvedValue({
+      status: 'deferred',
+      reason: 'signer-unavailable',
+      blocker: 'retention-capacity-reached',
+      round: 98n,
+    });
+
+    const result = await runDaemonIteration({
+      ...f.options,
+      waiting,
+    });
+
+    expect(result.durableNextBlock).toBe(10n);
+    expect(f.save).not.toHaveBeenCalled();
+    expect(waiting.size).toBe(2);
+    expect(f.importRound).toHaveBeenCalledTimes(1);
+  });
+
+  it('rescans earlier-import-failed work without queuing it or advancing the cursor', async () => {
+    const f = fixture([98n, 99n]);
+
+    f.setDurable(9n);
+
+    const waiting = scheduling().makeQueue();
+
+    const softCursors = new Map([[CONSUMER, {
+      nextBlock: 10n,
+    }] as const]);
+
+    const options = {
+      ...f.options,
+      waiting,
+      softCursors,
+      submitter: {
+        recover: vi.fn(),
+      } as unknown as BeaconSubmitter,
+      consumers: [{
+        address: CONSUMER,
+        registry: REGISTRY,
+      }] as const,
+    };
+
+    f.importRound.mockRejectedValueOnce(new Error('fetch failed'));
+
+    const failed = await runDaemonCycle(options);
+
+    expect(failed.consumers[0]?.status).toBe('failed');
+    expect(softCursors.get(CONSUMER)?.nextBlock).toBe(10n);
+    expect(waiting.size).toBe(0);
+
+    await runDaemonCycle(options);
+
+    expect(f.importRound.mock.calls.map(([round]) => round)).toEqual([98n, 98n, 99n]);
+    expect(softCursors.get(CONSUMER)?.nextBlock).toBe(11n);
+  });
+
   it('recovers, dispatches due work, then scans even after the dispatch throws', async () => {
     const f = fixture([99n]);
 
@@ -392,7 +503,7 @@ describe('future-round scans and cycle wiring', () => {
     expect(outcomes.map((outcome) => outcome.status))
       .toEqual(['deferred', 'waiting', 'deferred']);
     expect(run).toHaveBeenCalledExactlyOnceWith(98n);
-    expect(waiting.size).toBe(1);
+    expect(waiting.size).toBe(3);
   });
 
 });

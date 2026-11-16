@@ -1,4 +1,8 @@
 import {
+  roundScheduledTime,
+} from '@based-labs/drand-quicknet';
+
+import {
   isOperationCancelled
 } from '../execution/is-operation-cancelled.js';
 
@@ -152,6 +156,14 @@ export async function processQuicknetRequestsWithOutcomes(
   function recordIncomplete(
     outcome: IncompleteQuicknetRoundOutcome,
   ): void {
+    if (outcome.status === 'deferred' && outcome.reason === 'signer-unavailable') {
+      options.waiting?.offer(
+        representatives.get(outcome.round)!,
+        roundScheduledTime(outcome.round),
+        options.waitingSource,
+      );
+    }
+
     outcomes.push(outcome);
 
     try {
@@ -227,7 +239,7 @@ export async function processQuicknetRequestsWithOutcomes(
           result.releaseTime,
           options.waitingSource,
         );
-        
+
         outcomes.push({
           ...result,
           firstRequestBlock,
