@@ -201,6 +201,7 @@ export async function reconcileDurableRequests(
     switch (outcome.status) {
       case 'unfulfillable':
         continue;
+      case 'waiting':
       case 'completed':
       case 'pending':
       case 'failed':

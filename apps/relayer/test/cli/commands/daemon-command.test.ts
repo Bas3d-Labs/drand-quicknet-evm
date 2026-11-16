@@ -66,6 +66,7 @@ const checkpointStoreMocks = vi.hoisted(() => ({
 
 const daemonLoggerMocks = vi.hoisted(() => ({
   onUnfulfillable: vi.fn(),
+  onWaitTransition: vi.fn(),
   onCycle: vi.fn(),
 }));
 
@@ -74,6 +75,9 @@ const relayerLogMocks = vi.hoisted(() => ({
   durableHeadRegressed: vi.fn(),
   checkpointAdvanced: vi.fn(),
   requestUnfulfillable: vi.fn(),
+    roundWaitStarted: vi.fn(),
+    roundWaitReleased: vi.fn(),
+    roundWaitEvicted: vi.fn(),
   roundImported: vi.fn(),
   roundAlreadyStored: vi.fn(),
   heartbeat: vi.fn(),
@@ -671,6 +675,7 @@ describe('runDaemonCommand', () => {
       receiptTimeoutMs: 45_000,
       onCycle: expect.any(Function),
       onUnfulfillable: expect.any(Function),
+      onWaitTransition: expect.any(Function),
     });
 
     const daemonOptions = vi.mocked(runDaemon).mock.calls[0]![0];

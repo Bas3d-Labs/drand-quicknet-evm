@@ -27,9 +27,24 @@ import type {
   QuicknetRandomnessRequest,
 } from './request-events.js';
 
+import type {
+  WaitingRoundResult,
+} from '../rounds/round-release.js';
+
+export interface WaitingRequestScheduling {
+  classify(round: bigint): WaitingRoundResult | undefined;
+  offer(
+    request: QuicknetRandomnessRequest,
+    releaseTime: bigint,
+    source?: 'durable' | 'soft',
+  ): void;
+}
+
 export interface ProcessQuicknetRequestsOptions {
   importRound: RoundImporter;
   requests: readonly QuicknetRandomnessRequest[];
+  waiting?: WaitingRequestScheduling | undefined;
+  waitingSource?: 'durable' | 'soft';
   onCompleted?:
     | ((result: ProcessedQuicknetRound) => void)
     | undefined;
@@ -56,6 +71,7 @@ export type QuicknetRoundOutcome = {
   round: bigint;
   firstRequestBlock: bigint;
 } & (
+  | WaitingRoundResult
   | {
       status: 'unfulfillable';
       reason: TerminalRoundReason;
@@ -107,6 +123,8 @@ export async function processQuicknetRequestsWithOutcomes(
 
   const firstBlocks = new Map<bigint, bigint>();
 
+  const representatives = new Map<bigint, QuicknetRandomnessRequest>();
+
   for (const request of options.requests) {
     const reason = terminalRoundReason(request.round);
 
@@ -125,6 +143,7 @@ export async function processQuicknetRequestsWithOutcomes(
       request.blockNumber < previous
     ) {
       firstBlocks.set(request.round, request.blockNumber);
+      representatives.set(request.round, request);
     }
   }
 
@@ -159,6 +178,23 @@ export async function processQuicknetRequestsWithOutcomes(
       continue;
     }
 
+    const waiting = options.waiting?.classify(round);
+
+    if (waiting !== undefined) {
+      options.waiting!.offer(
+        representatives.get(round)!,
+        waiting.releaseTime,
+        options.waitingSource,
+      );
+
+      outcomes.push({
+        ...waiting,
+        firstRequestBlock,
+      });
+
+      continue;
+    }
+
     if (failed) {
       outcomes.push({
         round,
@@ -184,6 +220,21 @@ export async function processQuicknetRequestsWithOutcomes(
 
     try {
       const result = await options.importRound(round);
+
+      if (result.status === 'waiting') {
+        options.waiting?.offer(
+          representatives.get(round)!,
+          result.releaseTime,
+          options.waitingSource,
+        );
+        
+        outcomes.push({
+          ...result,
+          firstRequestBlock,
+        });
+
+        continue;
+      }
 
       if (result.status === 'pending') {
         recordIncomplete({
@@ -268,6 +319,7 @@ export async function processQuicknetRequests(
           result: outcome.result,
         });
         break;
+      case 'waiting':
       case 'unfulfillable':
       case 'pending':
       case 'deferred':

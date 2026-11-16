@@ -31,12 +31,18 @@ import type {
   DurableRequestResult
 } from '../consumers/durable-requests.js';
 
+import type {
+  WaitTransition,
+} from './future-round-scheduler.js';
+
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
+
 const MAX_REPORTED_UNFULFILLABLE_REQUESTS = 1_024;
 
 type DaemonScanType =
   | 'durable'
-  | 'soft';
+  | 'soft'
+  | 'scheduled';
 
 export interface CreateDaemonLoggerOptions {
   logger: RelayerLog;
@@ -55,6 +61,8 @@ export interface DaemonLogger {
     result: RunDaemonCycleResult,
     cycleLogger?: RelayerLog,
   ): void;
+
+  onWaitTransition(event: WaitTransition): void;
 }
 
 export function createDaemonLogger(
@@ -73,6 +81,47 @@ export function createDaemonLogger(
   const reported = new Set<string>();
 
   return {
+    onWaitTransition(event): void {
+      const { entry } = event;
+
+      const fields = {
+        consumer: entry.request.consumer,
+        registry: entry.registry,
+        workId: entry.workId,
+        round: entry.request.round,
+        transactionHash: entry.request.transactionHash,
+        logIndex: BigInt(entry.request.logIndex),
+        blockNumber: entry.request.blockNumber,
+        releaseTime: entry.releaseTime,
+        scanType: entry.source,
+        enteredAt: new Date(entry.enteredAt).toISOString(),
+      };
+
+      switch (event.kind) {
+        case 'started':
+          options.logger.roundWaitStarted(fields);
+          break;
+
+        case 'released':
+          options.logger.roundWaitReleased({
+            ...fields,
+            reason: 'released',
+            disposition: event.disposition,
+          });
+          break;
+
+        case 'evicted':
+          options.logger.roundWaitEvicted({
+            ...fields,
+            reason: 'evicted',
+          });
+          break;
+
+        default:
+          event satisfies never;
+      }
+    },
+
     onUnfulfillable(scanType, request, reason): void {
       // Chain identity is bound to this logger for the lifetime of the run.
       const identity = [
@@ -132,6 +181,54 @@ function logCycle(
   logger: RelayerLog,
   result: RunDaemonCycleResult,
 ): void {
+  for (const outcome of result.scheduled?.outcomes ?? []) {
+    const consumer = outcome.entry.request.consumer;
+
+    if (outcome.status === 'failed') {
+      logger.consumerFailed({
+        consumer,
+        error: outcome.error,
+        operation: {
+          name: 'scheduled-import',
+          round: outcome.entry.request.round,
+        },
+      });
+      
+      continue;
+    }
+
+    const imported = outcome.result;
+
+    if (imported.status === 'imported' || imported.status === 'already-stored') {
+      logRound(logger, consumer, 'scheduled', {
+        round: outcome.entry.request.round,
+        result: imported,
+      });
+    } else if (imported.status === 'pending') {
+      logger.roundPending({
+        consumer,
+        scanType: 'scheduled',
+        round: imported.round,
+        attemptId: imported.attemptId,
+        transactionHash: imported.transactionHash,
+        reason: imported.reason,
+      });
+    } else {
+      logger.roundDeferred({
+        consumer,
+        scanType: 'scheduled',
+        round: imported.round,
+        ...(imported.reason === 'already-retained'
+          ? {
+              reason: imported.reason,
+              attemptId: imported.attemptId,
+              workId: imported.workId,
+            }
+          : { reason: imported.reason, blocker: imported.blocker }),
+      });
+    }
+  }
+
   for (const consumer of result.consumers) {
     for (const { scanType, outcome } of consumer.incomplete ?? []) {
       if (outcome.status === 'pending') {
@@ -364,6 +461,9 @@ function logHeartbeat(
 
   logger.heartbeat({
     consumers,
+    ...(result.waitingRejectedOffers === undefined
+      ? {}
+      : { waitingRejectedOffers: result.waitingRejectedOffers }),
   });
 }
 

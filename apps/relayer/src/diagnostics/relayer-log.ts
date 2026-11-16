@@ -59,7 +59,7 @@ import type {
 } from './transaction-evidence.js';
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
-type ScanType = 'durable' | 'soft';
+type ScanType = 'durable' | 'soft' | 'scheduled';
 
 interface RelayerLogContext {
   readonly cycle?: number;
@@ -104,6 +104,10 @@ interface Values {
   consumers: readonly ConsumerHealth[];
   deferralReason: 'signer-unavailable' | 'already-retained';
   unfulfillableReason: 'round-zero';
+  waitReleasedReason: 'released';
+  waitEvictedReason: 'evicted';
+  waitDisposition: 'imported' | 'already-stored' | 'pending' | 'deferred';
+  optionalUint: bigint | undefined;
   workId: string;
   submission: 'witness' | 'compressed';
   fallbackReason:
@@ -232,6 +236,60 @@ const EVENTS = {
       fallbackReason: 'fallbackReason',
     },
   ],
+  roundWaitStarted: [
+    'debug',
+    'round_wait_started',
+    'Quicknet round entered waiting collection',
+    {
+      consumer: 'address',
+      registry: 'address',
+      workId: 'workId',
+      round: 'uint',
+      transactionHash: 'hash',
+      logIndex: 'uint',
+      blockNumber: 'uint',
+      releaseTime: 'uint',
+      enteredAt: 'timestamp',
+      scanType: 'scanType',
+    },
+  ],
+  roundWaitReleased: [
+    'debug',
+    'round_wait_ended',
+    'Quicknet waiting round handed to importer',
+    {
+      consumer: 'address',
+      registry: 'address',
+      workId: 'workId',
+      round: 'uint',
+      transactionHash: 'hash',
+      logIndex: 'uint',
+      blockNumber: 'uint',
+      releaseTime: 'uint',
+      enteredAt: 'timestamp',
+      scanType: 'scanType',
+      reason: 'waitReleasedReason',
+      disposition: 'waitDisposition',
+    },
+  ],
+  roundWaitEvicted: [
+    'info',
+    'round_wait_ended',
+    'Quicknet waiting round evicted',
+    {
+      consumer: 'address',
+      registry: 'address',
+      workId: 'workId',
+      round: 'uint',
+      transactionHash: 'hash',
+      logIndex: 'uint',
+      blockNumber: 'uint',
+      releaseTime: 'uint',
+      enteredAt: 'timestamp',
+      scanType: 'scanType',
+      reason: 'waitEvictedReason',
+    },
+  ],
   requestUnfulfillable: [
     'info',
     'request_unfulfillable',
@@ -276,6 +334,7 @@ const EVENTS = {
     'Relayer daemon heartbeat',
     {
       consumers: 'consumers',
+      waitingRejectedOffers: 'optionalUint',
     },
   ],
   rpcUsage: [
@@ -485,7 +544,7 @@ type EventDefinition =
 
 type EventName = EventDefinition[1] | 'invalid_log_level';
 
-type OptionalKind = 'operation';
+type OptionalKind = 'operation' | 'optionalUint';
 
 type Context<S extends Schema> = {
   [K in keyof S as S[K] extends OptionalKind ? never : K]: Values[S[K]];
@@ -1012,6 +1071,12 @@ function scalar(
         return context;
       }
 
+      case 'scheduled-import':
+        schema = {
+          round: 'uint',
+        };
+        break;
+
       case 'scan-requests':
         schema = {
           scanType: 'scanType',
@@ -1152,7 +1217,7 @@ function scalar(
 
   if (
     kind === 'scanType' &&
-    (value === 'durable' || value === 'soft')
+    (value === 'durable' || value === 'soft' || value === 'scheduled')
   ) {
     return value;
   }
@@ -1197,6 +1262,36 @@ function scalar(
     (
       value === 'broadcast-not-acknowledged' ||
       value === 'receipt-timeout'
+    )
+  ) {
+    return value;
+  }
+
+  if (kind === 'optionalUint') {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    if (typeof value === 'bigint' && value >= 0n && value <= MAX_UINT256) {
+      return value.toString();
+    }
+  }
+
+  if (kind === 'waitReleasedReason' && value === 'released') {
+    return value;
+  }
+
+  if (kind === 'waitEvictedReason' && value === 'evicted') {
+    return value;
+  }
+
+  if (
+    kind === 'waitDisposition' &&
+    (
+      value === 'imported' ||
+      value === 'already-stored' ||
+      value === 'pending' ||
+      value === 'deferred'
     )
   ) {
     return value;

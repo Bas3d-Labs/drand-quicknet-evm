@@ -255,6 +255,8 @@ function writePreload(
     export async function importQuicknetRoundWhenAvailable() {
       throw new Error('Unexpected round import.');
     }
+
+    export const importQuicknetRoundIfAvailable = importQuicknetRoundWhenAvailable;
   `);
 
   replace('daemon/daemon-startup.js', `
@@ -579,6 +581,10 @@ function writePreload(
     // Reuse the existing pending-work fixture and its lock assertions.
     // Its cycle-* marker names also represent an active one-shot import.
     replace(modulePath, `
+      export async function importQuicknetRoundIfAvailable() {
+        throw new Error('Unexpected daemon import in one-shot fixture.');
+      }
+
       import {
         runDaemonCycle,
       } from ${JSON.stringify(

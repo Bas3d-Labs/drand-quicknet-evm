@@ -14,6 +14,7 @@ import type {
 } from 'viem';
 
 import {
+  roundScheduledTime,
   type CompressedSignature,
   type QuicknetBeacon,
 } from '@based-labs/drand-quicknet';
@@ -65,6 +66,7 @@ vi.mock(
 
 import {
   importQuicknetRoundWhenAvailable,
+  importQuicknetRoundIfAvailable,
 } from '../../src/rounds/import-round-when-available.js';
 
 const CHAIN_ID = 12345;
@@ -177,6 +179,71 @@ describe('importQuicknetRoundWhenAvailable', () => {
       recover: vi.fn<BeaconSubmitter['recover']>(),
       submit: vi.fn<BeaconSubmitter['submit']>(),
     };
+  });
+
+  it('leaves the one-shot wait inline for a future round', async () => {
+    const future = (1n << 64n) - 1n;
+
+    await importRound({ round: future });
+
+    expect(waitMocks.waitForQuicknetRound).toHaveBeenCalledExactlyOnceWith({
+      round: future,
+    });
+  });
+
+  it('returns waiting without sleeping or fetching when the daemon clock moves back', async () => {
+    const release = Number(roundScheduledTime(ROUND) * 1000n);
+
+    let now = release;
+
+    isStored.mockImplementationOnce(async () => {
+      now = release - 1;
+      return false;
+    });
+
+    const result = await importQuicknetRoundIfAvailable({
+      publicClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+    }, () => now);
+
+    expect(result).toEqual({
+      status: 'waiting',
+      reason: 'round-not-released',
+      round: ROUND,
+      releaseTime: roundScheduledTime(ROUND),
+    });
+    expect(waitMocks.waitForQuicknetRound).not.toHaveBeenCalled();
+    expect(fetchMocks.fetchQuicknetBeaconWithRetry).not.toHaveBeenCalled();
+    expect(importMocks.importQuicknetRound).not.toHaveBeenCalled();
+  });
+
+  it('fetches at equality without a scheduled wait and preserves retry options', async () => {
+    const controller = new AbortController();
+
+    await importQuicknetRoundIfAvailable({
+      publicClient,
+      account,
+      submitter,
+      deployment: DEPLOYMENT,
+      round: ROUND,
+      maxFetchAttempts: 8,
+      fetchRetryDelayMs: 250,
+      fetchTimeoutMs: 5000,
+      signal: controller.signal,
+    }, () => Number(roundScheduledTime(ROUND) * 1000n));
+
+    expect(waitMocks.waitForQuicknetRound).not.toHaveBeenCalled();
+    expect(fetchMocks.fetchQuicknetBeaconWithRetry).toHaveBeenCalledExactlyOnceWith({
+      round: ROUND,
+      maxAttempts: 8,
+      retryDelayMs: 250,
+      timeoutMs: 5000,
+      signal: controller.signal,
+    });
+    expect(importMocks.importQuicknetRound).toHaveBeenCalledTimes(1);
   });
 
   function importRound(

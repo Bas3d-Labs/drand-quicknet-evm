@@ -41,6 +41,11 @@ import {
   waitForQuicknetRound
 } from './wait-for-round.js';
 
+import {
+  waitingRound,
+  type WaitingRoundResult,
+} from './round-release.js';
+
 export interface ImportQuicknetRoundWhenAvailableOptions {
   publicClient: PublicClient;
   account: Account;
@@ -60,6 +65,28 @@ export interface ImportQuicknetRoundWhenAvailableOptions {
 export async function importQuicknetRoundWhenAvailable(
   options: ImportQuicknetRoundWhenAvailableOptions
 ): Promise<ImportQuicknetRoundResult> {
+  const result = await runImport(options, true, Date.now);
+
+  if (result.status === 'waiting') {
+    throw new Error('Unexpected waiting result from inline import.');
+  }
+
+  return result;
+}
+
+/** Daemon-only entry: recheck release immediately before fetching, never sleep. */
+export async function importQuicknetRoundIfAvailable(
+  options: ImportQuicknetRoundWhenAvailableOptions,
+  now: () => number = Date.now,
+): Promise<ImportQuicknetRoundResult | WaitingRoundResult> {
+  return runImport(options, false, now);
+}
+
+async function runImport(
+  options: ImportQuicknetRoundWhenAvailableOptions,
+  waitInline: boolean,
+  now: () => number,
+): Promise<ImportQuicknetRoundResult | WaitingRoundResult> {
   const {
     publicClient,
     account,
@@ -119,13 +146,17 @@ export async function importQuicknetRoundWhenAvailable(
     phase: 'wait-for-beacon',
   });
 
-  if (options.signal === undefined) {
-    await waitForQuicknetRound({ round });
-  } else {
+  if (waitInline) {
     await waitForQuicknetRound({
       round,
-      signal: options.signal,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
+  } else {
+    const waiting = waitingRound(round, now);
+
+    if (waiting !== undefined) {
+      return waiting;
+    }
   }
 
   options.signal?.throwIfAborted();

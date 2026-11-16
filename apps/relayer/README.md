@@ -1569,6 +1569,8 @@ logging_failed
 round_already_stored
 round_deferred
 round_imported
+round_wait_started
+round_wait_ended
 rpc_usage
 signer_attempt_operator_attributed
 signer_bootstrap_deferred
@@ -2065,8 +2067,78 @@ best-effort, attempted before checkpoint persistence, with no delivery or flush
 acknowledgement. The canonical request and deterministic predicate are the
 authoritative evidence; a missing log line does not change classification.
 
-This does not fix future-round waiting. A valid far-future request still holds
-the durable checkpoint until fulfilled, and may wait inline under the current
-scheduler. A pinned checkpoint rescans only its first `maxBlockRange` blocks
+A valid far-future request still holds the durable checkpoint until fulfilled.
+The daemon schedules its release without waiting inline, as described below.
+A pinned checkpoint rescans only its first `maxBlockRange` blocks
 per cycle, not the entire gap to the durable head. Request density within that
 bounded range can still increase cycle cost.
+
+
+### Future-round scheduling
+
+The daemon classifies a positive, unreleased round as `waiting` with reason
+`round-not-released`. This is distinct from `pending`, which describes a
+submission whose broadcast or receipt is not yet acknowledged. Round zero is
+classified first. Waiting classification precedes the earlier-import-failed
+and signer-unavailable shortcuts, so future requests remain discoverable even
+when another request cannot be imported.
+
+Each daemon run owns an in-memory collection of at most 1,024 work identities
+(chain, registry and exact round). It keeps the earliest releases and evicts the
+furthest release first, using work identity to break ties. Consumers share this
+collection; it provides no reservation or fairness between consumers. A consumer
+requesting many nearer rounds can displace another consumer's later work.
+
+A cycle performs recovery, dispatches at most sixteen due entries, then scans
+consumers. A scheduled exception stops that pass immediately and leaves both the
+failed entry and untried entries queued. Never-failed entries precede retries;
+entries that have all failed rotate by oldest failure. Consumer scans still run
+after a scheduled exception. Cancellation propagates without becoming a retry.
+An exception does not establish whether an attempt was created: every retry
+re-enters the normal importer's stored and retained-work checks.
+
+A returned imported, already-stored, pending or deferred result removes the entry.
+A clean deferral with no attempt therefore falls back to scan rediscovery; general
+deferred-work retry is not part of this change. A backward clock step can return
+an entry to waiting, without removing it. There is no result cache shared by the
+scheduled pass and scans. Repeated importer calls are allowed; a second retained
+attempt for the same work is not.
+
+A productive pass hands off at least one entry with a non-waiting returned result.
+If eligible work remains after a productive pass, the next cycle need not sleep.
+Otherwise sleep ends at the earlier of the poll interval and the next future
+release. Failed recovery and a pass with only thrown dispatches use the normal
+poll sleep. Release arithmetic uses bigint; a distant round cannot create an
+oversized timer. Recovery and imports remain sequential.
+
+Only the scheduled wait is removed. After release, beacon fetching and its retries
+remain inline. With the default eight attempts, three endpoints, five-second
+endpoint timeout and seven 250 ms retry delays, the nominal fetch budget is
+121.75 seconds. This is not a hard whole-cycle deadline: runtime scheduling,
+other RPC work and the subsequent consumer scans are outside that calculation.
+`import-when-available` remains a one-shot command that waits inline for its exact
+round. No alternative round is substituted.
+
+Waiting work does not advance the durable checkpoint unless the anchored registry
+read shows it stored. Soft discovery may advance its cursor. On restart, the
+collection is empty and scanning starts from the durable checkpoint, so unresolved
+requests can be rediscovered. No queue state, journal field or ledger row is added.
+There is no lead cap. Overflow is not loss, but it can be a long delay: if a
+far-future request pins the checkpoint, an evicted request beyond the first scan
+range is not rediscovered until that pin clears. The delay is bounded only by the
+pinning request's lead, not by the poll interval.
+
+`round_wait_started` is debug-level. `round_wait_ended` is debug-level for a
+`released` handoff and includes its disposition; eviction emits the same event at
+info level with reason `evicted`. Events identify the work and the representative
+request, release time, entry time and discovery scan type. Retries keep the same
+wait episode open. Duplicate offers do not emit another entry event. Rejected
+farther offers increment `waitingRejectedOffers` in the periodic heartbeat instead
+of emitting a line per offer. Diagnostics are best-effort and never control queue
+membership. Restarts, eviction and rediscovery can produce new episodes.
+
+The twenty-request live future-round comparison is required after implementation
+review: chain-derived eligible-to-storage median at most four seconds and p95 at
+most six seconds, against the earlier three-second median. Unit tests and builds
+do not establish that latency result; any failed live comparison must be retained
+and disclosed.

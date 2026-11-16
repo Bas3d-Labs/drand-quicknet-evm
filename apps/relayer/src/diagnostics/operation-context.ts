@@ -39,6 +39,10 @@ export type OperationContext =
         | 'persist-journal';
     }
   | {
+      name: 'scheduled-import';
+      round: bigint;
+    }
+  | {
       name: 'scan-requests';
       scanType: 'durable' | 'soft';
       fromBlock: bigint;
