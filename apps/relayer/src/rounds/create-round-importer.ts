@@ -20,6 +20,10 @@ import {
   type ImportQuicknetRoundWhenAvailableOptions,
 } from './import-round-when-available.js';
 
+import {
+  terminalRoundReason,
+} from './terminal-round-reason.js';
+
 export type CreateRoundImporterOptions = Readonly<Pick<
   ImportQuicknetRoundWhenAvailableOptions,
   | 'publicClient'
@@ -81,7 +85,7 @@ export function createRoundImporter(
     return async function importRound(
       round: bigint,
     ): Promise<ImportQuicknetRoundResult> {
-      if (round <= 0n) {
+      if (round < 0n || terminalRoundReason(round) !== undefined) {
         throw new RangeError('Quicknet round must be greater than zero.');
       }
 

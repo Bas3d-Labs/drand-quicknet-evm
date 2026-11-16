@@ -2042,3 +2042,31 @@ Consumer protocols must independently guarantee that:
 
 The relayer should remain a narrow infrastructure component whose expected
 failure mode is delayed settlement rather than biased randomness.
+
+### Deterministically unfulfillable requests
+
+Round zero is the only terminal request kind. The daemon classifies it as
+`unfulfillable` with reason `round-zero`, without fetching a beacon or creating
+an attempt. Other requests continue normally. Soft classification does not move
+the durable checkpoint: only the durable scan, through the selected durable
+head and with its canonical checks satisfied, may pass a terminal request.
+Any other unresolved request still holds that checkpoint, including valid work
+in the same block. Direct `import --round 0` retains its existing CLI error and
+exit code.
+
+The info-level `request_unfulfillable` event identifies the request by chain ID,
+consumer, transaction hash and log index, and includes block number, round,
+reason and scan type. A FIFO cache suppresses the most recent 1,024 reported
+identities for each daemon run, across soft and durable scans. Eviction or
+restart permits another emission attempt. An identity is cached before emission,
+so a throwing log destination also suppresses repeats until eviction or restart.
+This cache is not persisted. Emission is
+best-effort, attempted before checkpoint persistence, with no delivery or flush
+acknowledgement. The canonical request and deterministic predicate are the
+authoritative evidence; a missing log line does not change classification.
+
+This does not fix future-round waiting. A valid far-future request still holds
+the durable checkpoint until fulfilled, and may wait inline under the current
+scheduler. A pinned checkpoint rescans only its first `maxBlockRange` blocks
+per cycle, not the entire gap to the durable head. Request density within that
+bounded range can still increase cycle cost.

@@ -103,6 +103,7 @@ interface Values {
   error: unknown;
   consumers: readonly ConsumerHealth[];
   deferralReason: 'signer-unavailable' | 'already-retained';
+  unfulfillableReason: 'round-zero';
   workId: string;
   submission: 'witness' | 'compressed';
   fallbackReason:
@@ -229,6 +230,20 @@ const EVENTS = {
       transactionHash: 'hash',
       submission: 'submission',
       fallbackReason: 'fallbackReason',
+    },
+  ],
+  requestUnfulfillable: [
+    'info',
+    'request_unfulfillable',
+    'Quicknet request is deterministically unfulfillable',
+    {
+      consumer: 'address',
+      transactionHash: 'hash',
+      logIndex: 'uint',
+      blockNumber: 'uint',
+      round: 'uint',
+      reason: 'unfulfillableReason',
+      scanType: 'scanType',
     },
   ],
   roundDeferred: [
@@ -1184,6 +1199,10 @@ function scalar(
       value === 'receipt-timeout'
     )
   ) {
+    return value;
+  }
+
+  if (kind === 'unfulfillableReason' && value === 'round-zero') {
     return value;
   }
 

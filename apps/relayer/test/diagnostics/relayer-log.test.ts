@@ -174,6 +174,7 @@ describe('createRelayerLog', () => {
       'durableHeadRegressed',
       'heartbeat',
       'loggingFailed',
+      'requestUnfulfillable',
       'roundAlreadyStored',
       'roundDeferred',
       'roundImported',

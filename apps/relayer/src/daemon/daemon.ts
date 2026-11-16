@@ -9,6 +9,14 @@ import type {
 } from '@based-labs/drand-quicknet-registry';
 
 import type {
+  TerminalRoundReason,
+} from '../rounds/terminal-round-reason.js';
+
+import type {
+  QuicknetRandomnessRequest,
+} from '../consumers/request-events.js';
+
+import type {
   ChainHeads,
 } from '../chain/chain-heads.js';
 
@@ -69,6 +77,11 @@ export interface RunDaemonOptions {
   pollIntervalMs: number;
   receiptTimeoutMs?: number;
   fetchTimeoutMs?: number;
+  onUnfulfillable?: ((
+    scanType: 'durable' | 'soft',
+    request: QuicknetRandomnessRequest,
+    reason: TerminalRoundReason,
+  ) => void) | undefined;
   signal?: AbortSignal;
   readChainHeads?: () => Promise<ChainHeads>;
   sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
@@ -147,6 +160,7 @@ export async function runDaemon(
       finality: options.finality,
       softCursors,
       readChainHeads,
+      onUnfulfillable: options.onUnfulfillable,
     };
 
     if (options.signal !== undefined) {

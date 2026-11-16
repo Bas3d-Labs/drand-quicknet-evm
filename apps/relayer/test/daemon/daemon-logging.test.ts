@@ -70,6 +70,7 @@ const loggerMocks = {
   consumerFailed: vi.fn<RelayerLog['consumerFailed']>(),
   durableHeadRegressed: vi.fn<RelayerLog['durableHeadRegressed']>(),
   checkpointAdvanced: vi.fn<RelayerLog['checkpointAdvanced']>(),
+  requestUnfulfillable: vi.fn(),
   roundImported: vi.fn<RelayerLog['roundImported']>(),
   roundAlreadyStored: vi.fn<RelayerLog['roundAlreadyStored']>(),
   roundDeferred: vi.fn<RelayerLog['roundDeferred']>(),

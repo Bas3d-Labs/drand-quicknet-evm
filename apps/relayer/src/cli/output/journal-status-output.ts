@@ -203,7 +203,7 @@ export function projectJournalStatusOutput(
 }
 
 /**
- * Rends the validated public journal projection.
+ * Renders the validated public journal projection.
  */
 export function renderJournalStatusOutput(
   input: unknown,
@@ -236,9 +236,6 @@ export function renderJournalStatusOutput(
     ),
     'Retained attempts: ' + projection.attempts.length,
   );
-
-  const attempts = array(own(input, 'attempts'));
-  lines.push('Retained attempts: ' + attempts.length);
   
   for (const attempt of projection.attempts) {
     lines.push(

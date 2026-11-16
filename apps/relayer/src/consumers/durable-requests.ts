@@ -195,9 +195,21 @@ export async function reconcileDurableRequests(
     deployment: options.deployment,
   });
 
-  // Check every round, including failed or deferred imports. Another
-  // relayer may have fulfilled it durably.
+  // Check every nonterminal round, including failed or deferred imports.
+  // Another relayer may have fulfilled it durably.
   for (const outcome of imports) {
+    switch (outcome.status) {
+      case 'unfulfillable':
+        continue;
+      case 'completed':
+      case 'pending':
+      case 'failed':
+      case 'deferred':
+        break;
+      default:
+        outcome satisfies never;
+    }
+
     const state = await readFulfillment(
       registry,
       outcome.round,
