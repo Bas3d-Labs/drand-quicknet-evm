@@ -26,6 +26,10 @@ import type {
   RunDaemonCycleResult,
 } from '../../src/daemon/daemon-cycle.js';
 
+import {
+  recoveryReport,
+} from '../helpers/recovery-report.js';
+
 import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
@@ -131,7 +135,8 @@ describe('daemon chain-head polling', () => {
     const submitter: BeaconSubmitter = {
       findRetainedWork: vi.fn<BeaconSubmitter['findRetainedWork']>()
         .mockReturnValue(null),
-      recover: vi.fn<BeaconSubmitter['recover']>(),
+      recover: vi.fn<BeaconSubmitter['recover']>()
+        .mockResolvedValue(recoveryReport()),
       submit: vi.fn<BeaconSubmitter['submit']>(),
     };
 

@@ -2089,8 +2089,20 @@ furthest release first, using work identity to break ties. Consumers share this
 collection; it provides no reservation or fairness between consumers. A consumer
 requesting many nearer rounds can displace another consumer's later work.
 
-A cycle performs recovery, dispatches at most sixteen due entries, then scans
-consumers. A scheduled exception stops that pass immediately and leaves both the
+A cycle performs recovery, dispatches at most sixteen due entries when the
+recovery report shows an open gate, then scans consumers. If that cycle's recovery
+report shows a closed gate, scheduled dispatch is skipped, queued entries remain,
+and the cycle uses the normal poll sleep. This avoids scheduled deployment reads,
+beacon fetching and simulation while blocked. Consumer scans still run and can
+discover and defer additional work. The report is never reused across cycles;
+recovery that reopens the gate permits dispatch in that same cycle. An open report
+is not signing authority: the importer and submitter retain their normal checks.
+Submission itself can reconcile newer chain heads and reopen the gate, so skipping
+the scheduled pass removes that second opportunity within the cycle and can delay
+queued dispatch until the next cycle's recovery, after the remaining scan work and
+normal poll sleep; this is not a fixed wall-clock bound.
+
+A scheduled exception stops that pass immediately and leaves both the
 failed entry and untried entries queued. Never-failed entries precede retries;
 entries that have all failed rotate by oldest failure. Consumer scans still run
 after a scheduled exception. Cancellation propagates without becoming a retry.
@@ -2112,7 +2124,7 @@ clock step can return an entry to waiting without removing it. There is no resul
 cache shared by the scheduled pass and scans. Repeated importer calls are allowed;
 a second retained attempt for the same work is not. Durable scanning can still
 call the importer for queued work in its range, adding pre-admission RPC cost.
-The scheduler does not skip dispatch using a cached gate observation.
+The closed-gate skip applies only to scheduled dispatch, not consumer scans.
 
 A productive pass removes and hands off at least one entry.
 If eligible work remains after a productive pass, the next cycle need not sleep.
@@ -2145,14 +2157,16 @@ pinning request's lead, not by the poll interval.
 `released` handoff and includes its disposition; eviction emits the same event at
 info level with reason `evicted`. Events identify the work and the representative
 request, release time, entry time and discovery scan type. Retries keep the same
-wait episode open. The first scheduled signer-unavailable dispatch emits
+wait episode open. A skipped pass emits no scheduled refusal or wait-end event.
+If dispatch runs, the first scheduled signer-unavailable result emits
 `round_deferred`; subsequent blocked dispatches in that queue episode are
 suppressed. Eventual handoff uses the existing wait-end and result events.
 Eviction, restart or later rediscovery permits a new episode and report.
 During a prolonged signer-wide outage, released entries can fill the 1,024-slot
 collection. Newer offers are then rejected and counted in the heartbeat; durable
-scanning remains the fallback. Scheduled refusals are logged only once per entry,
-so watch the gate status and rejected-offer counter for ongoing pressure.
+scanning remains the fallback. Closed-gate passes produce no scheduled refusal,
+and actual scheduled refusals are logged only once per entry, so watch the gate
+status and rejected-offer counter for ongoing pressure.
 
 Scan deferral logging is unchanged. Duplicate offers do not emit another entry
 event. Rejected farther offers increment `waitingRejectedOffers` in the periodic heartbeat instead

@@ -26,6 +26,10 @@ import {
   runDaemon,
 } from '../../src/daemon/daemon.js';
 
+import {
+  recoveryReport,
+} from '../helpers/recovery-report.js';
+
 import type {
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
@@ -146,7 +150,8 @@ function fixture() {
   const submitter: BeaconSubmitter = {
     findRetainedWork: vi.fn<BeaconSubmitter['findRetainedWork']>()
       .mockReturnValue(null),
-    recover: vi.fn<BeaconSubmitter['recover']>(),
+    recover: vi.fn<BeaconSubmitter['recover']>()
+      .mockResolvedValue(recoveryReport(null, 4663)),
     submit: submitTransaction,
   };
 
