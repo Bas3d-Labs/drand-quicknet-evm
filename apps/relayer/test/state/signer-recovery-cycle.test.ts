@@ -290,7 +290,7 @@ async function setupTwoAttempts() {
 
   await t.coordinator.checkInclusions({
     publicClient: t.recovery.publicClient,
-    head: ANCHOR,
+    head: { blockNumber: 101n, blockHash: HASH },
   });
 
   const second = await t.coordinator.prepareAttempt({
@@ -3384,6 +3384,7 @@ describe('signer recovery cycle', () => {
         });
 
         headNonce += 1;
+        originalHead.blockNumber += 1n;
 
         // Broadcasting invalidates durable recovery and inclusion checking.
         // Complete both passes before admitting the next attempt.
@@ -3717,7 +3718,7 @@ describe('signer recovery cycle', () => {
     });
 
     const head = {
-      blockNumber: 130n,
+      blockNumber: 114n,
       blockHash: HASH,
     };
 
@@ -3770,6 +3771,7 @@ describe('signer recovery cycle', () => {
 
       hashes.push(prepared.transactionHash);
       latestNonce += 1;
+      head.blockNumber += 1n;
 
       await t.cycle.run({
         ...t.recovery,

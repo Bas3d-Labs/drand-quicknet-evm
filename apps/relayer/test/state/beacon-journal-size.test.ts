@@ -232,7 +232,7 @@ describe('beacon journal size', () => {
           replacementSearch: {
             lowerBound: {
               anchor: anchor(MAX_UINT256 - 3n),
-              nonce,
+              nonce: durableNextNonce,
             },
             searchedThrough: anchor(MAX_UINT256 - 2n),
             exhausted: {

@@ -34,6 +34,10 @@ import {
 } from '../shared/uuid.js';
 
 import {
+  findStoredFactNonceConflict,
+} from './stored-fact-nonce-conflict.js';
+
+import {
   MAX_RETAINED_NONCE_REPAIRS,
 } from './transaction-journal.js';
 
@@ -128,6 +132,8 @@ export function validateJournalSnapshotStructure(
       transactionHashes.add(hash);
     }
   }
+
+  requireValid(findStoredFactNonceConflict(attempts) === null);
 
   return Object.freeze({
     version: 1,

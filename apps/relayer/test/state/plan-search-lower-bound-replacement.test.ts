@@ -26,6 +26,10 @@ import type {
   TransactionJournalSnapshot,
 } from '../../src/state/transaction-journal.js';
 
+import {
+  validateJournalSnapshotStructure,
+} from '../../src/state/transaction-journal-validation.js';
+
 type RequiredReplacement = Extract<
   LowerBoundRepairResult,
   { status: 'search-lower-bound-replacement-required' }
@@ -61,7 +65,7 @@ async function setup(withFact = true) {
     });
     let exhausted = null;
     if (withFact || nonce === 5) {
-      exhausted = { anchor: anchor(100n), nonce: BigInt(nonce + 1) };
+      exhausted = { anchor: anchor(BigInt(96 + nonce)), nonce: BigInt(nonce + 1) };
     }
     attempts.push({
       attemptId: `11111111-1111-4111-8111-11111111111${nonce}`,
@@ -76,7 +80,7 @@ async function setup(withFact = true) {
       }],
       replacementSearch: {
         lowerBound: { anchor: anchor(98n), nonce: 4n },
-        searchedThrough: anchor(100n),
+        searchedThrough: anchor(BigInt(96 + nonce)),
         exhausted,
       },
     });
@@ -498,5 +502,39 @@ describe('lower-bound replacement planning', () => {
     expect(fixture.plan(true)).toEqual({ kind: 'unchanged', reason: 'inspection-not-committable' });
     expect(snapshot).toEqual(before);
     expect(inspection).toEqual(evidenceBefore);
+  });
+});
+
+
+describe('stored fact guard on lower-bound replacement', () => {
+  it('refuses a new lower bound that contradicts a remaining attempt', async () => {
+    const t = await setup();
+    const search = t.snapshot.attempts[1]!.replacementSearch!;
+
+    search.lowerBound = { anchor: anchor(97n), nonce: 4n };
+
+    validateJournalSnapshotStructure(t.snapshot, IDENTITY);
+
+    const before = structuredClone(t.snapshot);
+    const result = t.plan();
+
+    expect(result).toMatchObject({
+      kind: 'inconsistent-observations',
+      detail: {
+        reason: 'stored-fact-nonce-conflict',
+        anchor: anchor(97n),
+        first: {
+          kind: 'lowerBound',
+          nonce: 3n,
+          source: 'candidate',
+        },
+        second: {
+          kind: 'lowerBound',
+          nonce: 4n,
+          source: 'retained',
+        },
+      },
+    });
+    expect(t.snapshot).toEqual(before);
   });
 });

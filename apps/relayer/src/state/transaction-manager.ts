@@ -285,6 +285,11 @@ export class TransactionManager {
     return Object.freeze({
       state: this.captureStatus(false),
       recoveryStatus: result.inspection.status,
+      ...(result.inspection.status === 'inconsistent-observations' &&
+        'detail' in result.inspection &&
+        result.inspection.detail !== undefined
+        ? { recoveryDetail: result.inspection.detail }
+        : {}),
       inclusionStatus,
       broadcast,
       retryDelayMs: result.retryDelayMs,

@@ -30,6 +30,11 @@ import {
 } from './operator-attribution.js';
 
 import {
+  findStoredFactNonceConflict,
+  type StoredFactNonceConflict,
+} from './stored-fact-nonce-conflict.js';
+
+import {
   MAX_OPERATOR_OUTCOMES,
   type OperatorAttributedOutcome,
   type OperatorAcceptedOutcome,
@@ -138,6 +143,10 @@ export interface PlanSignerRecoveryOptions {
 
 export type SignerRecoveryPlan =
   | {
+      readonly kind: 'inconsistent-observations';
+      readonly detail: StoredFactNonceConflict;
+    }
+  | {
       readonly kind: 'unchanged';
       readonly reason:
         | 'inspection-not-committable'
@@ -154,6 +163,34 @@ export type SignerRecoveryPlan =
  * Plans a journal transition from an existing recovery inspection.
  */
 export function planSignerRecovery(
+  options: PlanSignerRecoveryOptions,
+): SignerRecoveryPlan {
+  const plan = planRecoveryCandidate(options);
+
+  if (plan.kind !== 'persist') {
+    return plan;
+  }
+
+  // Candidate assembly must not validate or persist before this guard.
+  const detail = findStoredFactNonceConflict(
+    plan.snapshot.attempts,
+    options.snapshot.attempts,
+  );
+
+  if (detail !== null) {
+    return {
+      kind: 'inconsistent-observations',
+      detail,
+    };
+  }
+
+  return {
+    ...plan,
+    snapshot: validateJournalSnapshotStructure(plan.snapshot, options.identity),
+  };
+}
+
+function planRecoveryCandidate(
   options: PlanSignerRecoveryOptions,
 ): SignerRecoveryPlan {
   const {
@@ -280,7 +317,7 @@ export function planSignerRecovery(
 
     return {
       kind: 'persist',
-      snapshot: validateJournalSnapshotStructure({
+      snapshot: {
         ...snapshot,
         lastObservation,
         durableNextNonce: oldest.nonce + 1n,
@@ -289,7 +326,7 @@ export function planSignerRecovery(
           outcomes: [...snapshot.ledger.outcomes, outcome],
           obligations: [],
         },
-      }, identity),
+      },
       completion: Object.freeze({ kind: 'operator-acceptance', outcome }),
     };
   }
@@ -366,13 +403,13 @@ export function planSignerRecovery(
 
     return {
       kind: 'persist',
-      snapshot: validateJournalSnapshotStructure({
+      snapshot: {
         ...ordinary.snapshot,
         ledger: {
           outcomes: [...snapshot.ledger.outcomes, outcome],
           obligations: [],
         },
-      }, identity),
+      },
       completion: Object.freeze({ kind: 'operator-attribution', outcome }),
     };
   }
@@ -397,7 +434,7 @@ export function planSignerRecovery(
       lastObservation = snapshot.lastObservation;
     }
 
-    const next = validateJournalSnapshotStructure({
+    const next: TransactionJournalSnapshot = {
       ...snapshot,
       lastObservation,
       attempts: [
@@ -407,7 +444,7 @@ export function planSignerRecovery(
         },
         ...snapshot.attempts.slice(1),
       ],
-    }, identity);
+    };
 
     return {
       kind: 'persist',
@@ -444,7 +481,7 @@ export function planSignerRecovery(
       lastObservation = snapshot.lastObservation;
     }
 
-    const next = validateJournalSnapshotStructure({
+    const next: TransactionJournalSnapshot = {
       ...snapshot,
       lastObservation,
       attempts: [
@@ -458,7 +495,7 @@ export function planSignerRecovery(
         },
         ...snapshot.attempts.slice(1),
       ],
-    }, identity);
+    };
 
     return {
       kind: 'persist',
@@ -656,12 +693,12 @@ export function planSignerRecovery(
     ];
   }
 
-  const next = validateJournalSnapshotStructure({
+  const next: TransactionJournalSnapshot = {
     ...snapshot,
     lastObservation,
     durableNextNonce,
     attempts,
-  }, identity);
+  };
 
   return {
     kind: 'persist',

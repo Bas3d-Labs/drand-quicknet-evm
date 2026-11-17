@@ -87,6 +87,10 @@ import {
 } from './signer-gate.js';
 
 import type {
+  StoredFactNonceConflict,
+} from './stored-fact-nonce-conflict.js';
+
+import type {
   AnchoredNonceObservation,
   JournalIdentity,
   OperatorAcceptedOutcome,
@@ -177,6 +181,7 @@ export type AcceptanceResult =
   | {
       readonly status: 'refused';
       readonly reason: AcceptanceRefusalReason;
+      readonly detail?: StoredFactNonceConflict;
     };
 
 /** Dry-run never opens a writable store. Apply owns the inherited service lock. */
@@ -372,7 +377,12 @@ export async function acceptUnattributed(
         return refused(inspection.reason);
       }
 
-      return refused(inspection.status);
+      return refused(
+        inspection.status,
+        inspection.status === 'inconsistent-observations' && 'detail' in inspection
+          ? inspection.detail
+          : undefined,
+      );
     }
 
     const plan = planSignerRecovery({
@@ -382,6 +392,10 @@ export async function acceptUnattributed(
       acceptance: request,
       unattributedActivity: snapshot.lastObservation.nonce > snapshot.nextNonce,
     });
+
+    if (plan.kind === 'inconsistent-observations') {
+      return refused('inconsistent-observations', plan.detail);
+    }
 
     if (plan.kind !== 'persist' || plan.completion.kind !== 'operator-acceptance') {
       return refused('proposal-unavailable');
@@ -484,7 +498,12 @@ export async function acceptUnattributed(
           throw new Error('Unexpected operator attribution commitment during acceptance.');
         }
 
-        return refused(result.status);
+        return refused(
+          result.status,
+          result.status === 'inconsistent-observations' && 'detail' in result
+            ? result.detail
+            : undefined,
+        );
       }
     },
   });
@@ -511,9 +530,11 @@ export async function acceptUnattributed(
 
 function refused(
   reason: AcceptanceRefusalReason,
+  detail?: StoredFactNonceConflict,
 ): AcceptanceResult {
   return {
     status: 'refused',
     reason,
+    ...(detail === undefined ? {} : { detail }),
   };
 }

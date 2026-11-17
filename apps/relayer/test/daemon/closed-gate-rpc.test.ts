@@ -50,7 +50,12 @@ import {
 } from '../../src/rounds/create-round-importer.js';
 
 import {
+  StoredFactNonceConflictError,
+} from '../../src/state/stored-fact-nonce-conflict.js';
+
+import {
   TransactionManager,
+  submissionRecording,
 } from '../../src/state/transaction-manager.js';
 
 import type {
@@ -87,10 +92,12 @@ function anchor(blockNumber: bigint) {
   };
 }
 
-async function fixture() {
+async function fixture(options: { preparationConflict?: boolean } = {}) {
   const attempts: JournalAttempt[] = [];
 
-  for (let nonce = 0; nonce < 16; nonce += 1) {
+  const retainedCount = options.preparationConflict ? 1 : 16;
+
+  for (let nonce = 0; nonce < retainedCount; nonce += 1) {
     const signedTransaction = await ACCOUNT.signTransaction({
       type: 'eip1559',
       chainId: CHAIN_ID,
@@ -115,7 +122,14 @@ async function fixture() {
         signedTransaction,
         transactionHash,
       }],
-      replacementSearch: null,
+      replacementSearch: options.preparationConflict ? {
+        lowerBound: {
+          anchor: anchor(130n),
+          nonce: 0n,
+        },
+        searchedThrough: null,
+        exhausted: null,
+      } : null,
       inclusion: {
         outcome: 'success',
         transactionHash,
@@ -137,9 +151,9 @@ async function fixture() {
     },
     lastObservation: {
       anchor: anchor(130n),
-      nonce: 16n,
+      nonce: BigInt(retainedCount),
     },
-    nextNonce: 16n,
+    nextNonce: BigInt(retainedCount),
     durableNextNonce: 0n,
     repairs: [],
     ledger: {
@@ -180,7 +194,7 @@ async function fixture() {
         }
 
         if (method === 'eth_getTransactionCount') {
-          return values?.[1] === toHex(100n) ? '0x0' : '0x10';
+          return values?.[1] === toHex(100n) ? '0x0' : toHex(retainedCount);
         }
 
         if (method === 'eth_getTransactionReceipt') {
@@ -265,6 +279,13 @@ async function fixture() {
 
   const signTransaction = vi.fn(ACCOUNT.signTransaction);
 
+  const prepareTransactionRequest = vi.fn(async () => ({
+    type: 'eip1559' as const,
+    gas: 100_000n,
+    maxFeePerGas: 2n,
+    maxPriorityFeePerGas: 1n,
+  }));
+
   const manager = await TransactionManager.create({
     identity: snapshot.identity,
     store: {
@@ -278,7 +299,9 @@ async function fixture() {
     },
     maxRetainedAttempts: 16,
     publicClient: client,
-    walletClient: {} as WalletClient,
+    walletClient: {
+      prepareTransactionRequest,
+    } as unknown as WalletClient,
     account: {
       ...ACCOUNT,
       signTransaction,
@@ -344,7 +367,7 @@ async function fixture() {
     logIndex: 0,
   }, roundScheduledTime(ROUND));
 
-  const options = {
+  const cycleOptions = {
     publicClient: client,
     submitter,
     bindRoundImporter,
@@ -366,10 +389,12 @@ async function fixture() {
   methods.length = 0;
 
   return {
-    options,
+    options: cycleOptions,
     methods,
     manager,
     signTransaction,
+    prepareTransactionRequest,
+    snapshot: () => snapshot,
   };
 }
 
@@ -442,5 +467,68 @@ describe('closed-gate scheduled RPC cost', () => {
 
     expect(before.methods).toHaveLength(102);
     expect(after.methods).toHaveLength(48);
+  });
+});
+
+
+describe('scheduled preparation conflict retry', () => {
+  it('keeps unrecorded work queued and retries through submit on the next cycle', async () => {
+    mocks.fetchBeacon.mockReset().mockResolvedValue({
+      round: ROUND,
+      signature: `0x${'ff'.repeat(48)}`,
+    });
+
+    const t = await fixture({ preparationConflict: true });
+
+    const retained = structuredClone(t.snapshot().attempts);
+
+    let queuedWorkId: string | undefined;
+
+    for (const cycle of [1, 2]) {
+      // Recovery and inclusion checks reopen the gate. Preparation then finds
+      // that copying lastObservation would contradict the retained lower bound.
+      const result = await runDaemonCycle(t.options);
+
+      expect(result.scheduled).toMatchObject({
+        attempted: 1,
+        handedOff: 0,
+        failed: true,
+      });
+
+      const outcome = result.scheduled?.outcomes[0];
+
+      if (outcome?.status !== 'failed') {
+        throw new Error('Expected the scheduled submission failure.');
+      }
+
+      if (queuedWorkId === undefined) {
+        queuedWorkId = outcome.entry.workId;
+      }
+
+      expect(outcome.entry.workId).toBe(queuedWorkId);
+      expect(outcome.error).toMatchObject({
+        name: 'TransactionSubmissionError',
+        message: 'Transaction submission did not complete.',
+        cause: expect.any(StoredFactNonceConflictError),
+      });
+      expect(submissionRecording(outcome.error)).toEqual({ status: 'none' });
+      expect(t.options.submitter.findRetainedWork(queuedWorkId)).toBeNull();
+      expect(t.snapshot().attempts).toEqual(retained);
+      expect(t.snapshot().nextNonce).toBe(1n);
+      expect(t.options.waiting.size).toBe(1);
+      expect(t.options.waiting.sleepMilliseconds(1000, result.scheduled)).toBe(1000);
+      expect(t.manager.status).toMatchObject({
+        open: false,
+        recoveryComplete: false,
+        persistenceState: 'idle',
+      });
+      expect(t.manager.status.blockers).toContain('recovery-incomplete');
+      expect(t.manager.status.blockers).not.toContain('persistence-failure');
+      expect(t.prepareTransactionRequest).toHaveBeenCalledTimes(cycle);
+      expect(mocks.fetchBeacon).toHaveBeenCalledTimes(cycle);
+      expect(t.signTransaction).not.toHaveBeenCalled();
+      expect(t.methods).not.toContain('eth_sendRawTransaction');
+      expect(t.options.checkpointStore.save).not.toHaveBeenCalled();
+    }
   });
 });

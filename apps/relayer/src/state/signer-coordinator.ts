@@ -97,6 +97,12 @@ import {
   SignerGateDiagnostics,
 } from './signer-gate-diagnostics.js';
 
+import {
+  findStoredFactNonceConflict,
+  StoredFactNonceConflictError,
+  type StoredFactNonceConflict,
+} from './stored-fact-nonce-conflict.js';
+
 import type {
   SubmissionRecording,
 } from './transaction-manager-types.js';
@@ -317,6 +323,8 @@ interface InspectionOwner {
  * recovery and signer availability follow the same journal state.
  */
 export class SignerCoordinator {
+  private lastStoredFactConflict: string | undefined;
+
   private recoveryComplete = false;
   private inclusionChecksComplete = false;
   private reconciliationObservationActive = false;
@@ -648,6 +656,39 @@ export class SignerCoordinator {
     return this.committedDurableRecoveryRevision;
   }
 
+  private reportStoredFactConflict(
+    detail: StoredFactNonceConflict,
+    cycle?: number,
+  ): void {
+    const fields = {
+      signer: this.identity.signer,
+      firstAttemptId: detail.first.attemptId,
+      secondAttemptId: detail.second.attemptId,
+      blockNumber: detail.anchor.blockNumber,
+      blockHash: detail.anchor.blockHash,
+      firstNonce: detail.first.nonce,
+      secondNonce: detail.second.nonce,
+      firstExhausted: detail.first.kind === 'exhausted',
+      secondExhausted: detail.second.kind === 'exhausted',
+      firstCandidate: detail.first.source === 'candidate',
+      secondCandidate: detail.second.source === 'candidate',
+    };
+
+    const key = JSON.stringify(fields, (_key, value: unknown) =>
+      typeof value === 'bigint' ? value.toString() : value,
+    );
+
+    const log = this.log.withContext(cycle === undefined ? {} : { cycle });
+
+    if (key === this.lastStoredFactConflict) {
+      log.storedFactNonceConflictRepeated(fields);
+    } else {
+      log.storedFactNonceConflict(fields);
+    }
+
+    this.lastStoredFactConflict = key;
+  }
+
   /**
    * Signs and durably appends the next allocated transaction. Retained
    * attempts remain available for recovery and diagnostics.
@@ -689,6 +730,27 @@ export class SignerCoordinator {
       });
     }
 
+    const attemptId = randomUUID();
+
+    const detail = findStoredFactNonceConflict([
+      ...current.snapshot.attempts,
+      {
+        attemptId,
+        replacementSearch: {
+          lowerBound: current.snapshot.lastObservation,
+          searchedThrough: null,
+          exhausted: null,
+        },
+      },
+    ], current.snapshot.attempts);
+
+    if (detail !== null) {
+      this.invalidateRecoveryAuthorization();
+      this.reportStoredFactConflict(detail, cycle);
+      this.refresh(cycle, 'prepare-attempt');
+      throw new StoredFactNonceConflictError(detail);
+    }
+
     const previousAttemptLog = this.attemptLog;
     const previousBlockedSince = this.gateDiagnostics.blockedSince;
     const previousInclusionChecksComplete = this.inclusionChecksComplete;
@@ -697,7 +759,6 @@ export class SignerCoordinator {
     this.busy = true;
 
     try {
-      const attemptId = randomUUID();
       const createdAt = this.timestamp();
 
       const signed = await signPreparedTransaction({
@@ -1031,6 +1092,25 @@ export class SignerCoordinator {
           this.blockers.has('unattributed-signer-activity'),
       });
 
+      if (plan.kind === 'inconsistent-observations') {
+        this.recoveryComplete = false;
+        this.failInspectionBracket(owner);
+
+        const detail = plan.detail;
+
+        this.reportStoredFactConflict(detail, cycle);
+
+        if (!('observation' in result)) {
+          throw new Error('A conflicting recovery plan requires an observation.');
+        }
+
+        return {
+          status: 'inconsistent-observations',
+          observation: result.observation,
+          detail,
+        };
+      }
+
       // Admit only after nonce validation and planning. A preservation-only
       // skip still carries valid evidence, even though recovery stays incomplete.
       if (
@@ -1116,6 +1196,8 @@ export class SignerCoordinator {
           reason: 'proposal-changed',
         };
       }
+
+      this.lastStoredFactConflict = undefined;
 
       this.stageWrite(plan.completion);
 
