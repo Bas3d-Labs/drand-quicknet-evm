@@ -68,6 +68,10 @@ import {
   maximumOutcome,
 } from '../helpers/operator-outcome-fixture.js';
 
+import {
+  searchFactFixture,
+} from '../helpers/search-fact-fixture.js';
+
 async function coordinatorFor(
   snapshot: TransactionJournalSnapshot,
 ) {
@@ -681,3 +685,44 @@ it.each(['below-baseline', 'descending', 'ascending'])('validates history %s in 
     .rejects.toThrow('Invalid transaction journal encoding.');
 },
 );
+
+
+describe('attribution removal-only facts', () => {
+  it('keeps the remaining attempt facts byte-for-byte', async () => {
+    const original = await fixture();
+    const later = {
+      ...(await searchFactFixture()).attempts[1]!,
+      replacementSearch: {
+        lowerBound: original.attempts[0]!.replacementSearch!.lowerBound,
+        searchedThrough: null,
+        exhausted: null,
+      },
+    };
+
+    const snapshot = await decodeJournalSnapshot(await encodeJournalSnapshot({
+      ...original,
+      nextNonce: 6n,
+      attempts: [original.attempts[0]!, later],
+    }, IDENTITY), IDENTITY);
+
+    const before = structuredClone(snapshot);
+    const inspection = await inspect(snapshot, client());
+    const plan = planSignerRecovery({
+      identity: IDENTITY,
+      snapshot,
+      inspection,
+      attribution: request(),
+      unattributedActivity: false,
+    });
+
+    expect(plan.kind).toBe('persist');
+
+    if (plan.kind !== 'persist') {
+      throw new Error('Expected an attribution plan.');
+    }
+
+    expect(plan.completion.kind).toBe('operator-attribution');
+    expect(plan.snapshot.attempts).toEqual([later]);
+    expect(snapshot).toEqual(before);
+  });
+});

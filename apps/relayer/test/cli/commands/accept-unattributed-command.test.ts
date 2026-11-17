@@ -45,6 +45,10 @@ import {
   maximumAcceptedOutcome,
 } from '../../helpers/operator-acceptance-fixture.js';
 
+import {
+  FACT_CONFLICT,
+} from '../../helpers/search-fact-fixture.js';
+
 vi.mock('../../../src/chain/clients.js', () => ({
   createRelayerClients: vi.fn(),
 }));
@@ -219,7 +223,8 @@ describe('acceptance command configuration and routing', () => {
       case 'refused':
         result = {
           status,
-          reason: 'journal-missing',
+          reason: 'inconsistent-observations',
+          detail: FACT_CONFLICT,
         };
         break;
       default:

@@ -22,6 +22,10 @@ import {
 } from './signer-gate.js';
 
 import type {
+  StoredFactNonceConflict,
+} from './stored-fact-nonce-conflict.js';
+
+import type {
   JournalAttempt,
 } from './transaction-journal.js';
 
@@ -138,6 +142,7 @@ export type TransactionInclusionStatus =
 export interface TransactionReconciliationReport {
   readonly state: TransactionManagerStatus;
   readonly recoveryStatus: TransactionRecoveryStatus;
+  readonly recoveryDetail?: StoredFactNonceConflict;
   readonly inclusionStatus: TransactionInclusionStatus | null;
   readonly broadcast: TransactionBroadcastOutcome | null;
   readonly retryDelayMs: number | null;

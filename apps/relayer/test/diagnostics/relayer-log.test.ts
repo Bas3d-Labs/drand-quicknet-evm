@@ -191,6 +191,8 @@ describe('createRelayerLog', () => {
       'signerGateReleased',
       'signerNonceSynced',
       'statusPublicationFailed',
+      'storedFactNonceConflict',
+      'storedFactNonceConflictRepeated',
       'withContext',
       'withErrorSummary',
     ]);

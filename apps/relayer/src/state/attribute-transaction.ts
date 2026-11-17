@@ -82,6 +82,10 @@ import {
 } from './signer-gate.js';
 
 import type {
+  StoredFactNonceConflict,
+} from './stored-fact-nonce-conflict.js';
+
+import type {
   AnchoredNonceObservation,
   JournalIdentity,
   OperatorAttributedOutcome,
@@ -164,6 +168,7 @@ export type AttributionResult =
   | {
       readonly status: 'refused';
       readonly reason: AttributionRefusalReason;
+      readonly detail?: StoredFactNonceConflict;
     };
 
 /** Dry-run never opens a writable store. Apply owns the inherited service lock. */
@@ -254,9 +259,13 @@ export async function attributeTransaction(
     return refused('configuration-mismatch');
   }
 
-  const existingRequest = snapshot.ledger.outcomes.find((row) => row.requestId === request.requestId);
+  const existingRequest = snapshot.ledger.outcomes.find(
+    (row) => row.requestId === request.requestId,
+  );
 
-  const existingAttempt = snapshot.ledger.outcomes.find((row) => row.attemptId === request.hint.attemptId);
+  const existingAttempt = snapshot.ledger.outcomes.find(
+    (row) => row.attemptId === request.hint.attemptId,
+  );
 
   if (existingRequest !== undefined) {
     if (
@@ -343,7 +352,12 @@ export async function attributeTransaction(
         return refused(inspection.reason);
       }
 
-      return refused(inspection.status);
+      return refused(
+        inspection.status,
+        inspection.status === 'inconsistent-observations' && 'detail' in inspection
+          ? inspection.detail
+          : undefined,
+      );
     }
 
     const plan = planSignerRecovery({
@@ -353,6 +367,10 @@ export async function attributeTransaction(
       attribution: request,
       unattributedActivity: snapshot.lastObservation.nonce > snapshot.nextNonce,
     });
+
+    if (plan.kind === 'inconsistent-observations') {
+      return refused('inconsistent-observations', plan.detail);
+    }
 
     if (plan.kind !== 'persist' || plan.completion.kind !== 'operator-attribution') {
       return refused('proposal-unavailable');
@@ -445,7 +463,12 @@ export async function attributeTransaction(
           throw new Error('Unexpected operator acceptance commitment during attribution.');
         }
 
-        return refused(result.status);
+        return refused(
+          result.status,
+          result.status === 'inconsistent-observations' && 'detail' in result
+            ? result.detail
+            : undefined,
+        );
       }
     },
   });
@@ -472,9 +495,11 @@ export async function attributeTransaction(
 
 function refused(
   reason: AttributionRefusalReason,
+  detail?: StoredFactNonceConflict,
 ): AttributionResult {
   return {
     status: 'refused',
     reason,
+    ...(detail === undefined ? {} : { detail }),
   };
 }

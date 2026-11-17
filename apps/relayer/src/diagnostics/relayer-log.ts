@@ -366,6 +366,43 @@ const EVENTS = {
 } as const satisfies Record<string, Definition>;
 
 const TRANSACTION_EVENTS = {
+  storedFactNonceConflict: [
+    'warn',
+    'stored_fact_nonce_conflict',
+    'Stored search nonce fact disputed; operation refused before persistence',
+    {
+      signer: 'address',
+      firstAttemptId: 'id',
+      secondAttemptId: 'id',
+      blockNumber: 'uint',
+      blockHash: 'hash',
+      firstNonce: 'uint',
+      secondNonce: 'uint',
+      firstExhausted: 'boolean',
+      secondExhausted: 'boolean',
+      firstCandidate: 'boolean',
+      secondCandidate: 'boolean',
+    },
+  ],
+  storedFactNonceConflictRepeated: [
+    'debug',
+    'stored_fact_nonce_conflict',
+    'Stored search nonce fact disputed; operation refused before persistence',
+    {
+      signer: 'address',
+      firstAttemptId: 'id',
+      secondAttemptId: 'id',
+      blockNumber: 'uint',
+      blockHash: 'hash',
+      firstNonce: 'uint',
+      secondNonce: 'uint',
+      firstExhausted: 'boolean',
+      secondExhausted: 'boolean',
+      firstCandidate: 'boolean',
+      secondCandidate: 'boolean',
+    },
+  ],
+
   signerBootstrapDeferred: [
     'info',
     'signer_bootstrap_deferred',

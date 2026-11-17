@@ -19,6 +19,10 @@ import {
   journalSnapshotDigest,
 } from '../state/operator-attribution.js';
 
+import type {
+  StoredFactNonceConflict,
+} from '../state/stored-fact-nonce-conflict.js';
+
 import {
   MAX_OPERATOR_OUTCOMES,
 } from '../state/transaction-journal.js';
@@ -167,6 +171,7 @@ export type SignerRecoveryInspection =
   | {
       status: 'inconsistent-observations';
       observation: AnchoredNonceObservation;
+      readonly detail?: StoredFactNonceConflict;
     }
   | {
       status: 'no-attempt';

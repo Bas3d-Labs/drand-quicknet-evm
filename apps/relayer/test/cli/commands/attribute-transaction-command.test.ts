@@ -44,6 +44,10 @@ import {
   maximumOutcome,
 } from '../../helpers/operator-outcome-fixture.js';
 
+import {
+  FACT_CONFLICT,
+} from '../../helpers/search-fact-fixture.js';
+
 vi.mock('../../../src/chain/clients.js', () => ({
   createRelayerClients: vi.fn(),
 }));
@@ -198,7 +202,8 @@ describe('attribution command configuration and routing', () => {
       case 'refused':
         result = {
           status,
-          reason: 'journal-missing',
+          reason: 'inconsistent-observations',
+          detail: FACT_CONFLICT,
         };
         break;
       default:

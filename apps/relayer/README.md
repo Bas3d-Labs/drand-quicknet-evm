@@ -2186,3 +2186,45 @@ valid anchored nonce observation. Both loading and encoding reject omission;
 there is no defaulting or automatic migration. Existing encoder-produced journals
 already include this field, and valid journal bytes are unchanged. Preserve an
 invalid existing journal for investigation; never delete it to force startup.
+
+### Conflicting stored search facts
+
+Active replacement-search lower bounds and exhaustion facts describe the signer's
+nonce at a block anchor. Across retained attempts, facts at the same block number
+and hash must agree on that nonce. Hash comparison ignores letter case. This rule
+is checked on load and encode; valid journal bytes and the v1 version are unchanged.
+It does not compare transaction nonces or historical ledger entries.
+
+Recovery checks the proposed remaining facts before validation or persistence.
+A conflicting candidate returns `inconsistent-observations` with a
+`stored-fact-nonce-conflict` detail naming both attempt IDs, fact kinds, anchor,
+nonces and candidate/retained provenance. Neither value is labelled correct.
+The first occurrence is logged as `stored_fact_nonce_conflict` at warning level;
+identical repeats are debug, and a changed pair is a new warning. The detail is
+also exposed in the reconciliation report and operator command refusal output.
+Refused acceptance or attribution commands return failure.
+
+A refusal makes recovery incomplete and denies signing and broadcasting. It adds
+no save and does not latch `persistence-failure`; earlier acknowledged saves remain
+committed. The whole inspection bracket stops, including later unrelated attempts.
+A later consistent observation can resume recovery. A bad stored fact can instead
+cause indefinite refusal: same-hash disagreement is not automatically repaired.
+The signer is closed even below capacity, and unresolved attempts can stop freeing
+slots. The existing inspector may also refuse an exhaustion disagreement before
+planning, using its existing generic `inconsistent-observations` result.
+
+Preparation is another fact producer: it seeds a lower bound from the latest
+stored observation. A conflict there is checked before signing, closes recovery
+authorization and raises `StoredFactNonceConflictError` with the same detail,
+without saving or allocating a nonce. The encoder remains a backstop.
+The candidate attempt ID in this preparation diagnostic is generated but never
+saved, so it will not appear in the journal.
+
+Both an invalid-on-load journal and a valid-but-persistently-disputed journal
+require manual investigation and repair. Stop all processes using that signer,
+preserve the original journal and logs, independently verify the disputed chain
+facts and every retained signed attempt, and have the proposed repair reviewed
+before replacing the file. Operator commands also validate the journal and cannot
+repair an invalid file. Never delete the journal or blindly restore an older backup:
+a backup can omit later signed attempts and permit unsafe nonce reuse. This release
+does not provide an automatic repair command or choose which disputed nonce is true.

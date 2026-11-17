@@ -3,6 +3,10 @@ import {
 } from '../../diagnostics/resolution-validation.js';
 
 import {
+  projectStoredFactConflict,
+} from '../../diagnostics/stored-fact-conflict-output.js';
+
+import {
   isFixedHex,
 } from '../../shared/hex.js';
 
@@ -113,6 +117,18 @@ export function renderAttributionOutput(
   if (result.status === 'refused') {
     if (!REFUSALS.has(result.reason)) {
       throw new TypeError('Invalid operator attribution output.');
+    }
+
+    if (result.detail !== undefined) {
+      if (result.reason !== 'inconsistent-observations') {
+        throw new TypeError('Conflict detail requires inconsistent observations.');
+      }
+
+      return journalJson({
+        status: result.status,
+        reason: result.reason,
+        detail: projectStoredFactConflict(result.detail),
+      });
     }
 
     if (result.reason === 'ledger-capacity-reached') {

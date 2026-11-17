@@ -33,6 +33,10 @@ import {
   SignerCoordinator,
 } from '../../src/state/signer-coordinator.js';
 
+import {
+  StoredFactNonceConflictError,
+} from '../../src/state/stored-fact-nonce-conflict.js';
+
 import type {
   TransactionJournalRead,
   TransactionJournalSnapshot,
@@ -848,6 +852,7 @@ describe('durable attempt preparation', () => {
         101n + BigInt(index),
       );
       headNonce = 5 + index;
+      head.blockNumber += 1n;
 
       await t.coordinator.checkInclusions({
         publicClient,
@@ -1305,5 +1310,50 @@ describe('durable attempt preparation', () => {
       expect(output).not.toContain(retainedBytes);
       expect(output).toContain(uncommittedBytes);
     });
+  });
+});
+
+describe('preparation search-fact guard', () => {
+  it('refuses a contradictory last observation before signing or saving', async () => {
+    const t = await setup();
+    const first = await t.prepare('fact-conflict:first');
+
+    if (first.status !== 'prepared') {
+      throw new Error('Expected the first attempt.');
+    }
+
+    const publicClient = {
+      getBlock: async () => ({ number: 100n, hash: HASH }),
+      getTransactionReceipt: async () => ({
+        transactionHash: first.transactionHash,
+        blockNumber: 100n,
+        blockHash: HASH,
+        status: 'success',
+      }),
+      getTransactionCount: async () => 5,
+    } as unknown as PublicClient;
+
+    await t.coordinator.checkInclusions({
+      publicClient,
+      head: OBSERVATION.anchor,
+    });
+
+    expect(t.coordinator.status.open).toBe(true);
+
+    const before = structuredClone(await t.load());
+    const saves = t.save.mock.calls.length;
+    const signatures = t.signTransaction.mock.calls.length;
+
+    await expect(t.prepare('fact-conflict:second'))
+      .rejects.toBeInstanceOf(StoredFactNonceConflictError);
+
+    expect(t.save).toHaveBeenCalledTimes(saves);
+    expect(t.signTransaction).toHaveBeenCalledTimes(signatures);
+    expect(await t.load()).toEqual(before);
+    expect(t.coordinator.status.open).toBe(false);
+    expect(t.coordinator.canBroadcast).toBe(false);
+    expect(t.coordinator.status.persistenceState).toBe('idle');
+    expect(t.coordinator.status.blockers).toContain('recovery-incomplete');
+    expect(t.coordinator.status.blockers).not.toContain('persistence-failure');
   });
 });

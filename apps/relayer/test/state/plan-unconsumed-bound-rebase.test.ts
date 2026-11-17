@@ -20,9 +20,17 @@ import type {
   TransactionJournalSnapshot,
 } from '../../src/state/transaction-journal.js';
 
+import {
+  validateJournalSnapshotStructure,
+} from '../../src/state/transaction-journal-validation.js';
+
 import type {
   RequiredUnconsumedRebase,
 } from '../../src/state/validate-unconsumed-bound-rebase.js';
+
+import {
+  searchFactFixture,
+} from '../helpers/search-fact-fixture.js';
 
 const account = privateKeyToAccount(`0x${'11'.repeat(32)}`);
 const oldHash = `0x${'aa'.repeat(32)}` as const;
@@ -355,4 +363,53 @@ describe('unconsumed bound rebase planner', () => {
       });
     },
   );
+});
+
+
+describe('stored fact guard on unconsumed rebase', () => {
+  it('checks the rebased fact against the remaining attempt before validation', async () => {
+    const t = await fixture();
+    const other = (await searchFactFixture()).attempts[1]!;
+    const snapshot = {
+      ...t.snapshot,
+      nextNonce: 6n,
+      attempts: [
+        ...t.snapshot.attempts,
+        {
+          ...other,
+          replacementSearch: {
+            lowerBound: { anchor: anchor(104n), nonce: 5n },
+            searchedThrough: null,
+            exhausted: null,
+          },
+        },
+      ],
+    };
+
+    validateJournalSnapshotStructure(snapshot, snapshot.identity);
+
+    const before = structuredClone(snapshot);
+    const result = planSignerRecovery({
+      identity: snapshot.identity,
+      snapshot,
+      inspection: t.inspection,
+      unattributedActivity: false,
+    });
+
+    expect(result).toMatchObject({
+      kind: 'inconsistent-observations',
+      detail: {
+        anchor: anchor(104n),
+        first: {
+          nonce: 4n,
+          source: 'candidate',
+        },
+        second: {
+          nonce: 5n,
+          source: 'retained',
+        },
+      },
+    });
+    expect(snapshot).toEqual(before);
+  });
 });
