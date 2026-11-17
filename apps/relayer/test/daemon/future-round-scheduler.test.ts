@@ -24,6 +24,10 @@ import {
   waitingRound,
 } from '../../src/rounds/round-release.js';
 
+import {
+  BLOCKER_PRECEDENCE,
+} from '../../src/state/signer-gate.js';
+
 const CONSUMER = `0x${'11'.repeat(20)}` as const;
 
 const REGISTRY = `0x${'22'.repeat(20)}` as const;
@@ -175,27 +179,106 @@ describe('future-round scheduler', () => {
     expect(run.mock.calls.map(([round]) => round)).toEqual([98n, 99n, 98n, 99n]);
   });
 
-  it('removes a clean deferral without turning it into scheduled retry', async () => {
+  it.each(BLOCKER_PRECEDENCE)(
+    'retains signer-wide %s, stops, and retries without reopening the episode',
+    async (blocker) => {
+      const f = clock();
+
+      f.offer(99n);
+      f.offer(100n);
+
+      const run = importer().mockResolvedValue({
+        status: 'deferred',
+        reason: 'signer-unavailable',
+        blocker,
+        round: 99n,
+      });
+
+      const first = await f.queue.dispatch(run);
+
+      f.offer(99n);
+
+      const second = await f.queue.dispatch(run);
+
+      expect(run.mock.calls.map(([round]) => round)).toEqual([99n, 99n]);
+      expect(f.queue.size).toBe(2);
+      expect(first).toMatchObject({
+        blocked: true,
+        handedOff: 0,
+      });
+      expect(first.outcomes[0]).toMatchObject({
+        reportDeferred: true,
+      });
+      expect(second.outcomes[0]).toMatchObject({
+        reportDeferred: false,
+      });
+      expect(f.queue.sleepMilliseconds(1000, second)).toBe(1000);
+      expect(f.events.filter((event) => event.kind === 'released')).toHaveLength(0);
+
+      run.mockImplementation(async (round) => ({
+        status: 'already-stored',
+        round,
+        randomness: HASH,
+      }));
+
+      await f.queue.dispatch(run);
+
+      expect(f.queue.size).toBe(0);
+      expect(f.events.filter((event) => event.kind === 'started')).toHaveLength(2);
+    },
+  );
+
+  it('sleeps normally after a productive handoff followed by signer blockage', async () => {
     const f = clock();
 
+    f.offer(98n);
+    f.offer(99n);
     f.offer(100n);
 
-    const run = importer().mockResolvedValue({
+    const run = importer()
+      .mockResolvedValueOnce({
+        status: 'already-stored',
+        round: 98n,
+        randomness: HASH,
+      })
+      .mockResolvedValueOnce({
+        status: 'deferred',
+        reason: 'signer-unavailable',
+        blocker: 'persistence-failure',
+        round: 99n,
+      });
+
+    const pass = await f.queue.dispatch(run);
+
+    expect(pass).toMatchObject({
+      handedOff: 1,
+      attempted: 2,
+      blocked: true,
+    });
+    expect(f.queue.sleepMilliseconds(1000, pass)).toBe(1000);
+    expect(f.queue.size).toBe(2);
+  });
+
+  it('removes per-work already-retained and continues to the next entry', async () => {
+    const f = clock();
+
+    f.offer(99n);
+    f.offer(100n);
+
+    const run = importer().mockResolvedValueOnce({
       status: 'deferred',
-      reason: 'signer-unavailable',
-      blocker: 'recovery-incomplete',
-      round: 100n,
+      reason: 'already-retained',
+      round: 99n,
+      attemptId: 'attempt',
+      workId: 'work',
     });
 
-    await f.queue.dispatch(run);
-    await f.queue.dispatch(run);
+    const pass = await f.queue.dispatch(run);
 
-    expect(run).toHaveBeenCalledTimes(1);
+    expect(pass.handedOff).toBe(2);
+    expect(pass.blocked).not.toBe(true);
+    expect(run.mock.calls.map(([round]) => round)).toEqual([99n, 100n]);
     expect(f.queue.size).toBe(0);
-    expect(f.events.at(-1)).toMatchObject({
-      kind: 'released',
-      disposition: 'deferred',
-    });
   });
 
   it('propagates cancellation without recording a failed dispatch or exit', async () => {

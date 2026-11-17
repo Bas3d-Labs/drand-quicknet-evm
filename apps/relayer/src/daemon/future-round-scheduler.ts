@@ -44,6 +44,7 @@ export interface WaitingEntry {
 
 interface QueuedEntry extends WaitingEntry {
   lastFailure: bigint;
+  blockedReported: boolean;
 }
 
 export type WaitTransition =
@@ -66,6 +67,7 @@ export type ScheduledOutcome =
       entry: WaitingEntry;
       status: 'returned';
       result: ImportQuicknetRoundResult;
+      reportDeferred?: boolean;
     }
   | {
       entry: WaitingEntry;
@@ -77,6 +79,7 @@ export interface ScheduledPass {
   attempted: number;
   handedOff: number;
   failed: boolean;
+  blocked?: boolean;
   outcomes: ScheduledOutcome[];
 }
 
@@ -133,6 +136,7 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
       enteredAt: this.now(),
       source,
       lastFailure: 0n,
+      blockedReported: false,
     };
 
     if (this.entries.size === MAX_WAITING_ROUNDS) {
@@ -206,6 +210,23 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
           continue;
         }
 
+        if (result.status === 'deferred' && result.reason === 'signer-unavailable') {
+          // All admission blockers are signer-wide; per-work already-retained is not.
+          pass.blocked = true;
+
+          pass.outcomes.push({
+            entry,
+            status: 'returned',
+            result,
+            reportDeferred: !entry.blockedReported,
+          });
+
+          // Best-effort reporting is attempted only once per queue episode.
+          entry.blockedReported = true;
+
+          break;
+        }
+
         this.entries.delete(entry.workId);
 
         pass.handedOff += 1;
@@ -229,13 +250,13 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
         this.failureSequence += 1n;
         entry.lastFailure = this.failureSequence;
         pass.failed = true;
-        
+
+        // One thrown dispatch ends this pass. Its entry stays queued.
         pass.outcomes.push({
           entry,
           status: 'failed',
           error,
         });
-        // One thrown dispatch ends this pass. Its entry stays queued.
         break;
       }
     }
@@ -244,8 +265,12 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
   }
 
   sleepMilliseconds(pollIntervalMs: number, pass?: ScheduledPass): number {
-    // No pass means recovery failed. An all-failed pass must not spin.
-    if (pass === undefined || (pass.failed && pass.handedOff === 0)) {
+    // Failed recovery, signer blockage and all-failed passes must not spin.
+    if (
+      pass === undefined ||
+      pass.blocked === true ||
+      (pass.failed && pass.handedOff === 0)
+    ) {
       return pollIntervalMs;
     }
 

@@ -193,7 +193,11 @@ function logCycle(
           round: outcome.entry.request.round,
         },
       });
-      
+
+      continue;
+    }
+
+    if (outcome.reportDeferred === false) {
       continue;
     }
 

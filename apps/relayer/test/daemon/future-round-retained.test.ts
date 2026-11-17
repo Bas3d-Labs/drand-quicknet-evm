@@ -181,6 +181,15 @@ describe('scheduled retry through production retained-work lookup', () => {
 
     now += 1000;
 
+    // An exception carries no proof that the journal has no attempt. Retry must
+    // still enter the production retained-work lookup, including after reload.
+    const uncertain = await queue.dispatch(async () => {
+      throw new Error('Prior import outcome unknown');
+    });
+
+    expect(uncertain.failed).toBe(true);
+    expect(queue.size).toBe(1);
+
     const scheduled = await queue.dispatch(run);
 
     expect(scheduled.outcomes[0]).toMatchObject({
