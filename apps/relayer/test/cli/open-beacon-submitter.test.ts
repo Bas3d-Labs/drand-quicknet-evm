@@ -100,6 +100,8 @@ function fixture() {
   const state: SignerRuntime['status'] = {
     chainId: CONFIG.chain.id,
     journalInitialized: false,
+    operatorHistory: null,
+    storedFactDispute: null,
     busy: false,
     open: false,
     primaryReason: 'recovery-incomplete',
@@ -395,6 +397,11 @@ describe('openBeaconSubmitter', () => {
       get: (): SignerRuntime['status'] => ({
         ...initialStatus,
         journalInitialized: true,
+        operatorHistory: {
+          count: 0,
+          limit: 32,
+        },
+        storedFactDispute: null,
         open,
         primaryReason: null,
         blockers: [],

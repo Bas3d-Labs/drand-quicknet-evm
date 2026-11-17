@@ -159,6 +159,9 @@ describe('readJournalStatus', () => {
     expect(await readJournalStatus(options())).toEqual({
       source: 'journal',
       journal: 'missing',
+      operatorHistory: null,
+      storedFactDispute: null,
+      queue: null,
       gate: 'unknown',
     });
 
@@ -181,6 +184,12 @@ describe('readJournalStatus', () => {
     expect(await readJournalStatus(options())).toMatchObject({
       source: 'journal',
       journal: 'present',
+      operatorHistory: {
+        count: 0,
+        limit: 32,
+      },
+      storedFactDispute: null,
+      queue: null,
       gate: 'unknown',
       identity: IDENTITY,
       nextNonce: '4',

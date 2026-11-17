@@ -1355,5 +1355,61 @@ describe('preparation search-fact guard', () => {
     expect(t.coordinator.status.persistenceState).toBe('idle');
     expect(t.coordinator.status.blockers).toContain('recovery-incomplete');
     expect(t.coordinator.status.blockers).not.toContain('persistence-failure');
+
+    const dispute = t.coordinator.status.storedFactDispute;
+
+    expect(dispute?.origin).toBe('preparation');
+    expect((await t.create()).status.storedFactDispute).toBeNull();
+
+    const nextAnchor = {
+      blockNumber: 101n,
+      blockHash: `0x${'cd'.repeat(32)}` as const,
+    };
+
+    const laterClient = {
+      ...publicClient,
+      getBlock: async ({ blockNumber }: { blockNumber: bigint }) => ({
+        number: blockNumber,
+        hash: blockNumber === 100n ? HASH : nextAnchor.blockHash,
+      }),
+    } as unknown as PublicClient;
+
+    await t.coordinator.recover({
+      publicClient: laterClient,
+      anchor: nextAnchor,
+      maxBlockRange: 2n,
+    });
+    await t.coordinator.checkInclusions({
+      publicClient: laterClient,
+      head: nextAnchor,
+    });
+
+    expect(t.coordinator.status.open).toBe(true);
+    expect(t.coordinator.status.storedFactDispute).toEqual(dispute);
+
+    t.signTransaction.mockRejectedValueOnce(new Error('signing failed'));
+
+    await expect(t.prepare('fact-conflict:failed'))
+      .rejects.toThrow('Could not sign the prepared relayer transaction.');
+
+    expect(t.coordinator.status.storedFactDispute).toEqual(dispute);
+
+    expect((await t.prepare('fact-conflict:later')).status).toBe('prepared');
+    expect(t.coordinator.status.storedFactDispute).toBeNull();
+  });
+});
+
+
+describe('acknowledged history availability', () => {
+  it('distinguishes a missing journal from an initialized empty history', async () => {
+    const missing = await setup({ missing: true });
+
+    const present = await setup();
+
+    expect(missing.coordinator.status.operatorHistory).toBeNull();
+    expect(present.coordinator.status.operatorHistory).toEqual({
+      count: 0,
+      limit: 32,
+    });
   });
 });

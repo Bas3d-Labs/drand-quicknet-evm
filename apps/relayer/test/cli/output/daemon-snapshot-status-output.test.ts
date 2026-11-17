@@ -38,6 +38,12 @@ function status() {
       runId: RUN_ID,
       observedAt: AT,
       journalInitialized: true,
+      operatorHistory: {
+        count: 0,
+        limit: 32,
+      },
+      storedFactDispute: null,
+      queue: null,
       lastObservedGate: {
         open: false,
         primaryReason: 'unresolved-attempt',

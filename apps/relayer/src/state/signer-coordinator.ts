@@ -98,6 +98,11 @@ import {
 } from './signer-gate-diagnostics.js';
 
 import {
+  observeStoredFactDispute,
+  type StoredFactDisputeObservation,
+} from './status-observations.js';
+
+import {
   findStoredFactNonceConflict,
   StoredFactNonceConflictError,
   type StoredFactNonceConflict,
@@ -107,12 +112,13 @@ import type {
   SubmissionRecording,
 } from './transaction-manager-types.js';
 
-import type {
-  AnchoredNonceObservation,
-  JournalAttempt,
-  JournalIdentity,
-  TransactionJournalRead,
-  TransactionJournalStore,
+import {
+  MAX_OPERATOR_OUTCOMES,
+  type AnchoredNonceObservation,
+  type JournalAttempt,
+  type JournalIdentity,
+  type TransactionJournalRead,
+  type TransactionJournalStore,
 } from './transaction-journal.js';
 
 import {
@@ -324,6 +330,8 @@ interface InspectionOwner {
  */
 export class SignerCoordinator {
   private lastStoredFactConflict: string | undefined;
+
+  private storedFactDispute: StoredFactDisputeObservation | null = null;
 
   private recoveryComplete = false;
   private inclusionChecksComplete = false;
@@ -579,6 +587,20 @@ export class SignerCoordinator {
     return this.persistence.current.kind === 'present';
   }
 
+  /** Counts acknowledged operator history only, never a staged candidate. */
+  get operatorHistory() {
+    const current = this.persistence.current;
+
+    if (current.kind === 'missing') {
+      return null;
+    }
+
+    return Object.freeze({
+      count: current.snapshot.ledger.outcomes.length,
+      limit: MAX_OPERATOR_OUTCOMES,
+    });
+  }
+
   /** Returns only acknowledged history, including after persistence retry. */
   operatorOutcome(
     requestId: string,
@@ -637,6 +659,8 @@ export class SignerCoordinator {
 
     return Object.freeze({
       ...gate,
+      operatorHistory: this.operatorHistory,
+      storedFactDispute: this.storedFactDispute,
       open: 
         gate.open &&
         !this.busy &&
@@ -658,8 +682,11 @@ export class SignerCoordinator {
 
   private reportStoredFactConflict(
     detail: StoredFactNonceConflict,
+    origin: StoredFactDisputeObservation['origin'],
     cycle?: number,
   ): void {
+    this.storedFactDispute = observeStoredFactDispute(detail, origin, this.timestamp());
+
     const fields = {
       signer: this.identity.signer,
       firstAttemptId: detail.first.attemptId,
@@ -746,7 +773,7 @@ export class SignerCoordinator {
 
     if (detail !== null) {
       this.invalidateRecoveryAuthorization();
-      this.reportStoredFactConflict(detail, cycle);
+      this.reportStoredFactConflict(detail, 'preparation', cycle);
       this.refresh(cycle, 'prepare-attempt');
       throw new StoredFactNonceConflictError(detail);
     }
@@ -790,6 +817,11 @@ export class SignerCoordinator {
 
       this.applyCommittedWrite(cycle);
       this.broadcastPermit = attemptId;
+
+      // Diagnostic only: a retained lookup or failed preparation does not clear it.
+      if (this.storedFactDispute?.origin === 'preparation') {
+        this.storedFactDispute = null;
+      }
 
       return Object.freeze({
         status: 'prepared',
@@ -1098,7 +1130,7 @@ export class SignerCoordinator {
 
         const detail = plan.detail;
 
-        this.reportStoredFactConflict(detail, cycle);
+        this.reportStoredFactConflict(detail, 'recovery', cycle);
 
         if (!('observation' in result)) {
           throw new Error('A conflicting recovery plan requires an observation.');
@@ -1851,6 +1883,16 @@ export class SignerCoordinator {
       throw new Error(
         'Signer inspection bracket has not completed successfully.',
       );
+    }
+
+    // Diagnostic only; preparation disputes require a later successful preparation.
+    if (
+      owner.bracket !== null &&
+      this.recoveryComplete &&
+      this.inclusionChecksComplete &&
+      this.storedFactDispute?.origin === 'recovery'
+    ) {
+      this.storedFactDispute = null;
     }
 
     if (owner.bracket !== null) {

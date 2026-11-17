@@ -14,6 +14,16 @@ import {
   isUuidV4,
 } from '../../shared/uuid.js';
 
+import {
+  readOperatorHistory,
+  readStatusDecimal,
+  type OperatorHistoryObservation,
+} from '../../state/status-observations.js';
+
+import {
+  renderOperatorHistory,
+} from './status-observations-output.js';
+
 const INVALID = 'Invalid journal status output.';
 
 interface ObservationProjection {
@@ -39,7 +49,11 @@ interface RepairProjection {
   observation: ObservationProjection;
 }
 
-type JournalStatusProjection =
+type JournalStatusProjection = {
+  operatorHistory: OperatorHistoryObservation | null;
+  queue: null;
+  storedFactDispute: null;
+} & (
   | {
       source: 'journal';
       gate: 'unknown';
@@ -59,7 +73,8 @@ type JournalStatusProjection =
       lastObservation: ObservationProjection;
       attempts: AttemptProjection[];
       repairs: RepairProjection[];
-    };
+    }
+);
 
 /**
  * Copies and validates only declared public journal fields.
@@ -74,17 +89,34 @@ export function projectJournalStatusOutput(
     throw new TypeError(INVALID);
   }
 
+  const operatorHistory = readOperatorHistory(own(input, 'operatorHistory'));
+
+  if (own(input, 'queue') !== null || own(input, 'storedFactDispute') !== null) {
+    throw new TypeError(INVALID);
+  }
+
+  const observations = {
+    operatorHistory,
+    queue: null,
+    storedFactDispute: null,
+  };
+
   const journal = own(input, 'journal');
 
   if (journal === 'missing') {
+    if (operatorHistory !== null) {
+      throw new TypeError(INVALID);
+    }
+
     return {
+      ...observations,
       source: 'journal',
       gate: 'unknown',
       journal: 'missing',
     };
   }
 
-  if (journal !== 'present') {
+  if (journal !== 'present' || operatorHistory === null) {
     throw new TypeError(INVALID);
   }
 
@@ -192,6 +224,7 @@ export function projectJournalStatusOutput(
     source: 'journal',
     gate: 'unknown',
     journal: 'present',
+    ...observations,
     identity: { chainId, signer },
     nextNonce,
     durableNextNonce,
@@ -213,6 +246,9 @@ export function renderJournalStatusOutput(
   const lines = [
     'Status source: journal',
     'Current signing authorization: unknown',
+    ...renderOperatorHistory(projection.operatorHistory),
+    'Queued work: unavailable from journal source',
+    'Last observed stored-fact dispute: unavailable from journal source',
   ];
 
   if (projection.journal === 'missing') {
@@ -326,16 +362,11 @@ function array(input: unknown): readonly unknown[] {
 }
 
 function decimal(input: unknown): string {
-  if (
-    typeof input !== 'string' ||
-    input.length > 78 ||
-    !/^(0|[1-9][0-9]*)$/.test(input) ||
-    BigInt(input) > MAX_UINT256
-  ) {
+  try {
+    return readStatusDecimal(input, MAX_UINT256);
+  } catch {
     throw new TypeError(INVALID);
   }
-
-  return input;
 }
 
 function hex(

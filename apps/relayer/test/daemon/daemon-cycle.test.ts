@@ -1155,6 +1155,11 @@ describe('runDaemonCycle', () => {
         state: {
           chainId: CHAIN_ID,
           journalInitialized: true,
+          operatorHistory: {
+            count: 0,
+            limit: 32,
+          },
+          storedFactDispute: null,
           busy: false,
           open: true,
           primaryReason: null,

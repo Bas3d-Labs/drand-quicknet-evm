@@ -65,6 +65,12 @@ function snapshot(): DaemonStatusSnapshot {
     runId: '11111111-1111-4111-8111-111111111111',
     observedAt: '2026-10-12T12:00:00.000Z',
     journalInitialized: true,
+    operatorHistory: {
+      count: 0,
+      limit: 32,
+    },
+    storedFactDispute: null,
+    queue: null,
     attemptSummary: {
       retainedCount: 0,
       includedCount: 0,
@@ -168,6 +174,11 @@ describe('daemon status file storage', () => {
       ...first,
       observedAt: '2026-10-12T12:01:00.000Z',
       journalInitialized: true,
+      operatorHistory: {
+        count: 0,
+        limit: 32,
+      },
+      storedFactDispute: null,
       attemptSummary: {
         retainedCount: 0,
         includedCount: 0,

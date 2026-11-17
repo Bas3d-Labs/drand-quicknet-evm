@@ -50,6 +50,12 @@ const SNAPSHOT = readDaemonStatusSnapshot({
   runId: '11111111-1111-4111-8111-111111111111',
   observedAt: AT,
   journalInitialized: true,
+  operatorHistory: {
+    count: 0,
+    limit: 32,
+  },
+  storedFactDispute: null,
+  queue: null,
   attemptSummary: {
     retainedCount: 0,
     includedCount: 0,
@@ -83,6 +89,9 @@ const CASES: {
     result: {
       source: 'journal',
       journal: 'missing',
+      operatorHistory: null,
+      storedFactDispute: null,
+      queue: null,
       gate: 'unknown',
     },
     context: {
@@ -96,6 +105,12 @@ const CASES: {
     result: {
       source: 'journal',
       journal: 'present',
+      operatorHistory: {
+        count: 0,
+        limit: 32,
+      },
+      storedFactDispute: null,
+      queue: null,
       gate: 'unknown',
       identity: IDENTITY,
       baseline: OBSERVATION,
@@ -203,6 +218,12 @@ describe('relayer status CLI output', () => {
     {
       source: 'journal',
       journal: 'present',
+      operatorHistory: {
+        count: 0,
+        limit: 32,
+      },
+      storedFactDispute: null,
+      queue: null,
       gate: 'unknown',
     },
     {

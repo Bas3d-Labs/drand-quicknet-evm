@@ -208,6 +208,11 @@ describe('operator attribution persistence', () => {
     });
 
     const save = vi.fn(async (next: TransactionJournalSnapshot) => {
+      expect(coordinator.status.operatorHistory).toEqual({
+        count: 0,
+        limit: 32,
+      });
+
       if (retry && save.mock.calls.length === 1) {
         throw new Error('uncertain save');
       }
@@ -247,6 +252,8 @@ describe('operator attribution persistence', () => {
       await expect(pending).rejects.toThrow('Journal persistence did not complete.');
       expect(stored.ledger.outcomes).toEqual([]);
       expect(lines.join('')).not.toContain('signer_attempt_operator_attributed');
+      expect(coordinator.status.operatorHistory?.count).toBe(0);
+
       await coordinator.retryPersistence(22);
     } else {
       expect((await pending).status).toBe('operator-attribution-committed');
@@ -255,6 +262,10 @@ describe('operator attribution persistence', () => {
     expect(stored.attempts).toEqual([]);
     expect(stored.ledger.outcomes).toHaveLength(1);
     expect(stored.lastObservation.nonce).toBe(9n);
+    expect(coordinator.status.operatorHistory).toEqual({
+      count: 1,
+      limit: 32,
+    });
     expect(coordinator.status.recoveryComplete).toBe(false);
     expect(coordinator.status.blockers).toContain('unattributed-signer-activity');
     expect((await create()).status.blockers).toContain('unattributed-signer-activity');

@@ -2228,3 +2228,44 @@ before replacing the file. Operator commands also validate the journal and canno
 repair an invalid file. Never delete the journal or blindly restore an older backup:
 a backup can omit later signed attempts and permit unsafe nonce reuse. This release
 does not provide an automatic repair command or choose which disputed nonce is true.
+
+### Operator history, queue pressure and stored-fact disputes in status
+
+Status keeps three populations separate: acknowledged operator acceptance and
+attribution outcomes (up to 32), queued distinct work (up to 1,024), and retained
+signer attempts. Ordinary resolutions are not operator-history rows. Queue work
+includes both future rounds and released retries and can overlap retained attempts;
+do not add those counts together.
+
+Daemon snapshots include queue occupancy, entries due at the snapshot's capture
+clock, and rejected offers accumulated during that daemon run. Due work is not
+necessarily blocked by capacity. Rejected offers are not unique requests, exclude
+evictions, and reset on restart along with the in-memory queue. A full queue can
+still accept earlier work by evicting its furthest-release entry. Durable scans
+remain the fallback. Journal-only status cannot observe this queue.
+
+The last observed stored-fact dispute includes both attempts, fact kinds,
+provenance, anchor and nonce values, without declaring either value correct. It is
+an in-memory diagnostic, separate from repeated-log suppression. Routine saves,
+partial inspections and failed retries do not clear it. A recovery-origin dispute
+clears after a complete successful inspection with recovery and inclusion checks
+complete. A preparation-origin dispute clears only after a later new preparation
+succeeds; an already-retained lookup is not such a success. It can linger when no
+new work arrives. Its timestamp describes the last refusal, not a fresh chain
+observation. A preparation candidate ID can be absent from the journal.
+
+A restart begins with no recorded dispute; null does not prove stored facts are
+undisputed. Journal-only status reports this runtime observation as unavailable.
+Operator history survives restart in the acknowledged journal. Status never
+establishes signing authorization, even when a snapshot is fresh or a diagnostic
+has cleared. Existing manual-repair guidance still applies to persistent disputes.
+
+Daemon snapshot version 1 now requires `operatorHistory`, `queue` and
+`storedFactDispute`, each a complete observation or explicit null. A snapshot from
+a previous build is intentionally invalid until the upgraded daemon publishes
+successfully. No automatic migration or source fallback occurs. Queue data is null
+before the scheduler reader attaches. Publication captures runtime and queue state
+at one instant before writing; a failed publication leaves the previous file and
+its original timestamp. The 16 KiB cap and 2 KiB conservative margin are unchanged.
+Rejected offers are encoded exactly through uint64 maximum; overflow fails only
+diagnostic publication and never resets or saturates the scheduler counter.

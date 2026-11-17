@@ -804,6 +804,11 @@ describe('transaction manager submission', () => {
         open: true,
         busy: false,
         journalInitialized: true,
+        operatorHistory: {
+          count: 0,
+          limit: 32,
+        },
+        storedFactDispute: null,
         primaryReason: null,
         blockers: [],
         recoveryComplete: true,

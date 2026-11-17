@@ -16,6 +16,18 @@ import {
   type SnapshotAge,
 } from '../../state/daemon-status-snapshot.js';
 
+import {
+  readOperatorHistory,
+  readQueueObservation,
+  readStoredFactDispute,
+} from '../../state/status-observations.js';
+
+import {
+  renderOperatorHistory,
+  renderQueue,
+  renderStoredFactDispute,
+} from './status-observations-output.js';
+
 const INVALID = 'Invalid daemon snapshot status output.';
 
 type DaemonSnapshotStatusProjection =
@@ -84,6 +96,9 @@ export function projectDaemonSnapshotStatusOutput(
       'journalInitialized',
     ]),
     identity,
+    operatorHistory: readOperatorHistory(own(raw, 'operatorHistory')),
+    queue: readQueueObservation(own(raw, 'queue')),
+    storedFactDispute: readStoredFactDispute(own(raw, 'storedFactDispute')),
     lastObservedGate: {
       ...fields(own(raw, 'lastObservedGate'), [
         'open',
@@ -192,6 +207,12 @@ export function renderDaemonSnapshotStatusOutput(
       'The gate was closed without a reported blocker. Its cause is unknown.',
     );
   }
+
+  lines.push(
+    ...renderOperatorHistory(observation.operatorHistory),
+    ...renderQueue(observation.queue),
+    ...renderStoredFactDispute(observation.storedFactDispute),
+  );
 
   const summary = observation.attemptSummary;
 

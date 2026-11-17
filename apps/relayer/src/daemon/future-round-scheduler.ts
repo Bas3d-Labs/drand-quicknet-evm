@@ -109,6 +109,30 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
     return this.rejected;
   }
 
+  /** Captured without dispatch or mutation, using the publication's one clock read. */
+  observe(captureTimeMs: number) {
+    if (!Number.isSafeInteger(captureTimeMs)) {
+      throw new TypeError('Invalid scheduler observation time.');
+    }
+
+    const seconds = BigInt(Math.floor(captureTimeMs / 1000));
+
+    let dueCount = 0;
+
+    for (const entry of this.entries.values()) {
+      if (entry.releaseTime <= seconds) {
+        dueCount += 1;
+      }
+    }
+
+    return Object.freeze({
+      queuedCount: this.entries.size,
+      dueCount,
+      limit: MAX_WAITING_ROUNDS,
+      rejectedOffers: this.rejected.toString(),
+    });
+  }
+
   classify(round: bigint) {
     return waitingRound(round, this.now);
   }

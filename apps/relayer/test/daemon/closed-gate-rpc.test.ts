@@ -34,6 +34,10 @@ import {
 } from '../../src/daemon/daemon-cycle.js';
 
 import {
+  createDaemonStatusPublisher,
+} from '../../src/daemon/daemon-status-publisher.js';
+
+import {
   FutureRoundScheduler,
 } from '../../src/daemon/future-round-scheduler.js';
 
@@ -48,6 +52,14 @@ import {
 import {
   createRoundImporter,
 } from '../../src/rounds/create-round-importer.js';
+
+import type {
+  writeDaemonStatusFile,
+} from '../../src/state/file-daemon-status-store.js';
+
+import {
+  readSignerRuntimeObservation,
+} from '../../src/state/read-signer-runtime-observation.js';
 
 import {
   StoredFactNonceConflictError,
@@ -482,12 +494,45 @@ describe('scheduled preparation conflict retry', () => {
 
     const retained = structuredClone(t.snapshot().attempts);
 
+    const write = vi.fn<typeof writeDaemonStatusFile>().mockResolvedValue(undefined);
+
+    const onFailure = vi.fn();
+
+    const publisher = createDaemonStatusPublisher({
+      identity: t.snapshot().identity,
+      runId: '11111111-1111-4111-8111-111111111111',
+      write,
+      onFailure,
+    });
+
+    publisher.onInitialized(() => readSignerRuntimeObservation(t.manager));
+    publisher.onSchedulerInitialized((at) => t.options.waiting.observe(at));
+
     let queuedWorkId: string | undefined;
 
     for (const cycle of [1, 2]) {
       // Recovery and inclusion checks reopen the gate. Preparation then finds
       // that copying lastObservation would contradict the retained lower bound.
+      if (cycle === 2) {
+        const previous = t.manager.status.storedFactDispute;
+
+        await t.options.submitter.recover();
+        await publisher.publish();
+
+        expect(t.manager.status.open).toBe(true);
+        expect(t.manager.status.storedFactDispute).toEqual(previous);
+        expect(write.mock.calls.at(-1)?.[0].snapshot.storedFactDispute).toEqual(previous);
+      }
+
       const result = await runDaemonCycle(t.options);
+
+      await publisher.publish();
+
+      expect(onFailure).not.toHaveBeenCalled();
+      expect(write.mock.calls.at(-1)?.[0].snapshot.storedFactDispute).toMatchObject({
+        origin: 'preparation',
+        detail: { reason: 'stored-fact-nonce-conflict' },
+      });
 
       expect(result.scheduled).toMatchObject({
         attempted: 1,

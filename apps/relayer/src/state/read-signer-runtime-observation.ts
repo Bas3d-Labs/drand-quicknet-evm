@@ -1,3 +1,10 @@
+import {
+  readOperatorHistory,
+  readStoredFactDispute,
+  type OperatorHistoryObservation,
+  type StoredFactDisputeObservation,
+} from './status-observations.js';
+
 import type {
   TransactionManager,
 } from './transaction-manager.js';
@@ -12,6 +19,8 @@ export type SignerRuntimeObservationSource =
 
 export interface SignerRuntimeObservation {
   readonly journalInitialized: boolean;
+  readonly operatorHistory: OperatorHistoryObservation | null;
+  readonly storedFactDispute: StoredFactDisputeObservation | null;
   readonly status: Pick<
     TransactionManagerStatus,
     | 'open'
@@ -36,6 +45,8 @@ export function readSignerRuntimeObservation(
 
   return Object.freeze({
     journalInitialized: current.journalInitialized,
+    operatorHistory: readOperatorHistory(current.operatorHistory),
+    storedFactDispute: readStoredFactDispute(current.storedFactDispute),
     status: Object.freeze({
       open: current.open,
       primaryReason: current.primaryReason,

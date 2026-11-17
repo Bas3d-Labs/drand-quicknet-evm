@@ -71,6 +71,9 @@ interface DaemonCycleContext {
 
 export interface RunDaemonOptions {
   now?: () => number;
+  onSchedulerInitialized?: (
+    read: (at: number) => ReturnType<FutureRoundScheduler['observe']>,
+  ) => void;
   onWaitTransition?: ((event: WaitTransition) => void) | undefined;
   publicClient: PublicClient;
   account: Account;
@@ -111,6 +114,8 @@ export async function runDaemon(
     onTransition: options.onWaitTransition,
     ...(options.now === undefined ? {} : { now: options.now }),
   });
+
+  options.onSchedulerInitialized?.((at) => waiting.observe(at));
 
   const bindRoundImporter = createRoundImporter({
     deferFutureRounds: true,

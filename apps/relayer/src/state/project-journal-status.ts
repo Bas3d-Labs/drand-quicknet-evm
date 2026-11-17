@@ -1,3 +1,7 @@
+import {
+  MAX_OPERATOR_OUTCOMES,
+} from './transaction-journal.js';
+
 import type {
   AnchoredNonceObservation,
   TransactionJournalRead,
@@ -11,6 +15,9 @@ export function projectJournalStatus(read: TransactionJournalRead) {
     return {
       source: 'journal' as const,
       journal: 'missing' as const,
+      operatorHistory: null,
+      queue: null,
+      storedFactDispute: null,
       gate: 'unknown' as const,
     };
   }
@@ -20,6 +27,12 @@ export function projectJournalStatus(read: TransactionJournalRead) {
   return {
     source: 'journal' as const,
     journal: 'present' as const,
+    operatorHistory: {
+      count: snapshot.ledger.outcomes.length,
+      limit: MAX_OPERATOR_OUTCOMES,
+    },
+    queue: null,
+    storedFactDispute: null,
     gate: 'unknown' as const,
     identity: {
       chainId: snapshot.identity.chainId,

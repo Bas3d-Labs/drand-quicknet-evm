@@ -34,6 +34,12 @@ function snapshot() {
     runId: RUN_ID,
     observedAt: AT,
     journalInitialized: true,
+    operatorHistory: {
+      count: 0,
+      limit: 32,
+    },
+    storedFactDispute: null,
+    queue: null,
     attemptSummary: {
       retainedCount: 0,
       includedCount: 0,
