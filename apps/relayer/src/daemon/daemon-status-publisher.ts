@@ -24,6 +24,10 @@ import type {
 } from '../state/read-signer-runtime-observation.js';
 
 import type {
+  QueueObservation,
+} from '../state/status-observations.js';
+
+import type {
   JournalIdentity,
 } from '../state/transaction-journal.js';
 
@@ -42,6 +46,8 @@ export interface DaemonStatusPublisherOptions {
 }
 
 export interface DaemonStatusPublisher {
+  onSchedulerInitialized(read: (at: number) => QueueObservation): void;
+
   onInitialized(
     readObservation: () => SignerRuntimeObservation,
   ): void;
@@ -73,6 +79,8 @@ export function createDaemonStatusPublisher(
   const write = options.write ?? writeDaemonStatusFile;
   const readRpcUsage = options.readRpcUsage;
   const onFailure = options.onFailure;
+
+  let readQueue: ((at: number) => QueueObservation) | undefined;
 
   let readObservation: (() => SignerRuntimeObservation) | undefined;
   let lastCompletedCycle: DaemonStatusCompletedCycle | null = null;
@@ -152,13 +160,19 @@ export function createDaemonStatusPublisher(
         return;
       }
 
+      const observedAt = timestamp();
+
       const runtime = readObservation();
+
+      let queue: QueueObservation | null = null;
+
+      if (readQueue !== undefined) {
+        queue = readQueue(Date.parse(observedAt));
+      }
 
       if (!runtime.journalInitialized) {
         return;
       }
-
-      const observedAt = timestamp();
 
       let rpcFields: Pick<DaemonStatusSnapshot, 'rpcUsage'> = {};
 
@@ -198,6 +212,9 @@ export function createDaemonStatusPublisher(
         runId,
         observedAt,
         journalInitialized: runtime.journalInitialized,
+        operatorHistory: runtime.operatorHistory,
+        storedFactDispute: runtime.storedFactDispute,
+        queue,
         lastCompletedCycle,
         lastRetryObservation,
         lastObservedGate: runtime.status,
@@ -224,6 +241,9 @@ export function createDaemonStatusPublisher(
   }
 
   return Object.freeze({
+    onSchedulerInitialized(read: (at: number) => QueueObservation) {
+      readQueue = read;
+    },
     onInitialized,
     onRecoveryCompleted,
     onCycleCompleted,

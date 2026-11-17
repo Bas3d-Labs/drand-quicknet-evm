@@ -209,6 +209,8 @@ export class TransactionManager {
     return Object.freeze({
       chainId: this.coordinator.chainId,
       journalInitialized: this.coordinator.journalInitialized,
+      operatorHistory: signer.operatorHistory,
+      storedFactDispute: signer.storedFactDispute,
       busy,
       open: signer.open && !busy,
       primaryReason: signer.primaryReason,

@@ -151,10 +151,10 @@ async function setup(options: { leading?: boolean; exhausted?: boolean } = {}) {
     setNonce: (nonce: number) => {
       freshNonce = nonce;
     },
-    run: (number: number) => cycle.run({
+    run: (number: number, durable = 120n) => cycle.run({
       publicClient,
-      anchor: factAnchor(120n),
-      head: factAnchor(130n),
+      anchor: factAnchor(durable),
+      head: factAnchor(durable + 10n),
       maxBlockRange: 50n,
     }, number),
   };
@@ -189,6 +189,10 @@ describe('stored fact runtime refusal', () => {
         },
       });
       expect(result.inclusions).toBeNull();
+      expect(t.coordinator.status.storedFactDispute).toMatchObject({
+        origin: 'recovery',
+        detail: { reason: 'stored-fact-nonce-conflict' },
+      });
       expect(t.save).not.toHaveBeenCalled();
       expect(t.visible()).toEqual(before);
       expect(t.coordinator.status.persistenceState).toBe('idle');
@@ -222,6 +226,14 @@ describe('stored fact runtime refusal', () => {
     const t = await setup();
 
     await t.run(1);
+    const dispute = t.coordinator.status.storedFactDispute;
+
+    const abandoned = t.coordinator.beginInspection();
+
+    await abandoned.abandon();
+
+    expect(t.coordinator.status.storedFactDispute).toEqual(dispute);
+
     t.setNonce(7);
     await t.run(2);
 
@@ -238,6 +250,22 @@ describe('stored fact runtime refusal', () => {
     expect(t.save).toHaveBeenCalled();
     expect(t.visible().attempts[0]!.replacementSearch?.exhausted?.nonce).toBe(5n);
     expect(t.coordinator.status.blockers).not.toContain('persistence-failure');
+    // A consistent observation still leaves incomplete inclusion checks here.
+    expect(t.coordinator.status.storedFactDispute?.origin).toBe('recovery');
+
+    t.setNonce(6);
+    t.receipts.mockImplementation(async ({ hash }) => ({
+      transactionHash: hash,
+      blockNumber: 125n,
+      blockHash: factAnchor(125n).blockHash,
+      status: 'success',
+    }));
+
+    await t.run(4, 130n);
+
+    expect(t.coordinator.status.recoveryComplete).toBe(true);
+    expect(t.coordinator.status.inclusionChecksComplete).toBe(true);
+    expect(t.coordinator.status.storedFactDispute).toBeNull();
   });
 
   it.each([false, true])(
@@ -319,6 +347,7 @@ describe('stored fact refusal boundaries', () => {
       expect(repeated.inspection.status).toBe('inconsistent-observations');
       expect(t.save).toHaveBeenCalledTimes(1);
       expect(t.visible().attempts).toEqual(before.attempts.slice(1));
+      expect(t.coordinator.status.storedFactDispute?.origin).toBe('recovery');
     }
 
     const conflicts = t.lines.map((line) => JSON.parse(line))

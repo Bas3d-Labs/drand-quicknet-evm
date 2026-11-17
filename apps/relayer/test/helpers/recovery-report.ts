@@ -14,6 +14,11 @@ export function recoveryReport(
     state: {
       chainId,
       journalInitialized: true,
+      operatorHistory: {
+        count: 0,
+        limit: 32,
+      },
+      storedFactDispute: null,
       busy: false,
       open: blocker === null,
       primaryReason: blocker,

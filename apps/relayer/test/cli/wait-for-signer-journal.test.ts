@@ -25,6 +25,11 @@ function managerStatus(
     return {
       chainId: 4663,
       journalInitialized: true,
+      operatorHistory: {
+        count: 0,
+        limit: 32,
+      },
+      storedFactDispute: null,
       busy: false,
       open: true,
       primaryReason: null,
@@ -40,6 +45,8 @@ function managerStatus(
   return {
     chainId: 4663,
     journalInitialized: false,
+    operatorHistory: null,
+    storedFactDispute: null,
     busy: false,
     open: false,
     primaryReason: 'recovery-incomplete',

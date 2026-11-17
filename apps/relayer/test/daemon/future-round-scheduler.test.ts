@@ -429,3 +429,61 @@ describe('future-round scheduler', () => {
   });
 
 });
+
+describe('scheduler status capture', () => {
+  it('counts due entries at the supplied instant without mutation or clock rereads', () => {
+    const f = clock();
+
+    const at = Number(roundScheduledTime(100n) * 1000n);
+
+    f.offer(99n);
+    f.offer(100n);
+    f.offer(101n);
+    f.offer(100n);
+
+    const events = [...f.events];
+
+    f.setNow(at + 60_000);
+
+    expect(f.queue.observe(at - 1)).toEqual({
+      queuedCount: 3,
+      dueCount: 1,
+      limit: MAX_WAITING_ROUNDS,
+      rejectedOffers: '0',
+    });
+    expect(f.queue.observe(at).dueCount).toBe(2);
+    expect(f.queue.observe(at + 3000).dueCount).toBe(3);
+    expect(f.events).toEqual(events);
+    expect(f.queue.size).toBe(3);
+    expect(clock().queue.observe(at).queuedCount).toBe(0);
+  });
+
+  it('distinguishes rejection and eviction from occupancy', async () => {
+    const f = clock();
+
+    const at = Number(roundScheduledTime(2000n) * 1000n);
+
+    for (let round = 2n; round <= BigInt(MAX_WAITING_ROUNDS) + 1n; round += 1n) {
+      f.offer(round);
+    }
+
+    f.offer(2000n);
+    f.offer(1n);
+
+    expect(f.queue.observe(at)).toEqual({
+      queuedCount: MAX_WAITING_ROUNDS,
+      dueCount: MAX_WAITING_ROUNDS,
+      limit: MAX_WAITING_ROUNDS,
+      rejectedOffers: '1',
+    });
+    expect(f.events.filter((event) => event.kind === 'evicted')).toHaveLength(1);
+
+    f.setNow(at);
+
+    await f.queue.dispatch(importer());
+
+    expect(f.queue.observe(at).queuedCount).toBe(MAX_WAITING_ROUNDS - 16);
+    expect(f.queue.observe(at).rejectedOffers).toBe('1');
+    expect(clock().queue.observe(at).rejectedOffers).toBe('0');
+  });
+});

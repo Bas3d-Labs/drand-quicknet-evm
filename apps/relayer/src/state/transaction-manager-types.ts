@@ -22,6 +22,11 @@ import {
 } from './signer-gate.js';
 
 import type {
+  OperatorHistoryObservation,
+  StoredFactDisputeObservation,
+} from './status-observations.js';
+
+import type {
   StoredFactNonceConflict,
 } from './stored-fact-nonce-conflict.js';
 
@@ -121,6 +126,8 @@ export interface TransactionAttemptSummary
 export interface TransactionManagerStatus {
   readonly chainId: number;
   readonly journalInitialized: boolean;
+  readonly operatorHistory: OperatorHistoryObservation | null;
+  readonly storedFactDispute: StoredFactDisputeObservation | null;
   readonly busy: boolean;
   readonly open: boolean;
   readonly primaryReason: TransactionAdmissionReason | null;

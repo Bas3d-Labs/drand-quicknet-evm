@@ -202,6 +202,9 @@ describe('status command execution', () => {
         ? {
             source: 'journal' as const,
             journal: 'missing' as const,
+            operatorHistory: null,
+            storedFactDispute: null,
+            queue: null,
             gate: 'unknown' as const,
           }
         : {
@@ -261,6 +264,9 @@ describe('status command execution', () => {
     vi.mocked(readRelayerStatus).mockResolvedValueOnce({
       source: 'journal',
       journal: 'missing',
+      operatorHistory: null,
+      storedFactDispute: null,
+      queue: null,
       gate: 'unknown',
     });
 

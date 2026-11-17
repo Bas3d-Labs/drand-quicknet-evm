@@ -31,6 +31,12 @@ function status() {
   return {
     source: 'journal',
     journal: 'present',
+    operatorHistory: {
+      count: 0,
+      limit: 32,
+    },
+    storedFactDispute: null,
+    queue: null,
     gate: 'unknown',
     identity: {
       chainId: 4663,
@@ -63,10 +69,16 @@ describe('renderJournalStatusOutput', () => {
     expect(renderJournalStatusOutput({
       source: 'journal',
       journal: 'missing',
+      operatorHistory: null,
+      storedFactDispute: null,
+      queue: null,
       gate: 'unknown',
     })).toBe([
       'Status source: journal',
       'Current signing authorization: unknown',
+      'Operator history: unavailable',
+      'Queued work: unavailable from journal source',
+      'Last observed stored-fact dispute: unavailable from journal source',
       'Journal: missing',
       'A missing journal does not establish signer readiness.',
     ].join('\n'));

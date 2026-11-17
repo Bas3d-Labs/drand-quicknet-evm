@@ -483,6 +483,8 @@ function writePreload(
           status: {
             chainId: 46630,
             journalInitialized: false,
+            operatorHistory: null,
+            storedFactDispute: null,
             busy: false,
             open: false,
             primaryReason: 'recovery-incomplete',

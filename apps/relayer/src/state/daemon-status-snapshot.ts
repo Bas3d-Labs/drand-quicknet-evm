@@ -55,6 +55,16 @@ import {
   type SignerBlocker,
 } from './signer-gate.js';
 
+import {
+  readOperatorHistory,
+  readQueueObservation,
+  readStoredFactDispute,
+  statusField,
+  type OperatorHistoryObservation,
+  type QueueObservation,
+  type StoredFactDisputeObservation,
+} from './status-observations.js';
+
 import type {
   JournalAttempt,
   JournalIdentity,
@@ -99,6 +109,9 @@ export interface DaemonStatusSnapshot {
   readonly lastCompletedCycle: DaemonStatusCompletedCycle | null;
   readonly lastRetryObservation: DaemonStatusRetryObservation | null;
   readonly journalInitialized: boolean;
+  readonly operatorHistory: OperatorHistoryObservation | null;
+  readonly queue: QueueObservation | null;
+  readonly storedFactDispute: StoredFactDisputeObservation | null;
   readonly attemptSummary: DaemonStatusAttemptSummary;
   readonly attempts: readonly DaemonStatusAttempt[];
   readonly lastObservedGate: {
@@ -222,6 +235,12 @@ export function readDaemonStatusSnapshot(
     throw new TypeError(INVALID);
   }
 
+  const operatorHistory = readOperatorHistory(statusField(root, 'operatorHistory'));
+
+  if (!root.journalInitialized && operatorHistory !== null) {
+    throw new TypeError(INVALID);
+  }
+
   let rpcFields: Pick<DaemonStatusSnapshot, 'rpcUsage'> = {};
 
   if (root.rpcUsage !== undefined) {
@@ -243,6 +262,9 @@ export function readDaemonStatusSnapshot(
     lastCompletedCycle,
     lastRetryObservation,
     journalInitialized: root.journalInitialized,
+    operatorHistory,
+    queue: readQueueObservation(statusField(root, 'queue')),
+    storedFactDispute: readStoredFactDispute(statusField(root, 'storedFactDispute')),
     attemptSummary,
     attempts,
     lastObservedGate: Object.freeze({

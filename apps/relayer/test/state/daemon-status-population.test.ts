@@ -70,6 +70,12 @@ function snapshot() {
     runId: RUN_ID,
     observedAt: AT,
     journalInitialized: true,
+    operatorHistory: {
+      count: 0,
+      limit: 32,
+    },
+    storedFactDispute: null,
+    queue: null,
     lastCompletedCycle: null,
     lastRetryObservation: null,
     attemptSummary: {
@@ -110,6 +116,11 @@ function outputInput() {
 function runtime(): SignerRuntimeObservation {
   return {
     journalInitialized: true,
+    operatorHistory: {
+      count: 0,
+      limit: 32,
+    },
+    storedFactDispute: null,
     status: {
       open: false,
       primaryReason: 'unresolved-attempt',

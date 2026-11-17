@@ -27,6 +27,12 @@ function snapshot(): DaemonStatusSnapshot {
     lastCompletedCycle: null,
     lastRetryObservation: null,
     journalInitialized: true,
+    operatorHistory: {
+      count: 0,
+      limit: 32,
+    },
+    storedFactDispute: null,
+    queue: null,
     attemptSummary: {
       retainedCount: 0,
       includedCount: 0,

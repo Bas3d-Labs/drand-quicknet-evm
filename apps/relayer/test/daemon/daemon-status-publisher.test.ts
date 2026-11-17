@@ -42,6 +42,11 @@ const START = Date.parse('2026-10-12T12:00:00.000Z');
 function runtime(): SignerRuntimeObservation {
   return {
     journalInitialized: true,
+    operatorHistory: {
+      count: 0,
+      limit: 32,
+    },
+    storedFactDispute: null,
     status: {
       open: false,
       primaryReason: 'unresolved-attempt',
@@ -548,5 +553,71 @@ describe('daemon status publisher', () => {
     expect(written.attempts[0]?.transactionHashes)
       .toEqual([FIRST_HASH, SECOND_HASH]);
     expect(written.lastObservedGate).toEqual(runtime().status);
+  });
+});
+describe('status queue capture timing', () => {
+  it('captures queued publications at their own start time', async () => {
+    const t = fixture();
+
+    let release: () => void = () => {};
+
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+
+    t.write.mockImplementationOnce(() => pending);
+    t.publisher.onInitialized(t.readObservation);
+
+    const readQueue = vi.fn((at: number) => ({
+      queuedCount: 1,
+      dueCount: Number(at >= START + 1000),
+      limit: 1024,
+      rejectedOffers: '0',
+    }));
+
+    t.publisher.onSchedulerInitialized(readQueue);
+
+    const first = t.publisher.publish();
+
+    await Promise.resolve();
+
+    const second = t.publisher.publish();
+
+    t.setTime(START + 1000);
+
+    expect(readQueue).toHaveBeenCalledTimes(1);
+
+    release();
+
+    await Promise.all([first, second]);
+
+    expect(readQueue.mock.calls).toEqual([[START], [START + 1000]]);
+    expect(t.write.mock.calls[0]?.[0].snapshot.queue?.dueCount).toBe(0);
+    expect(t.write.mock.calls[1]?.[0].snapshot.queue?.dueCount).toBe(1);
+    expect(t.write.mock.calls[1]?.[0].snapshot.observedAt)
+      .toBe(new Date(START + 1000).toISOString());
+  });
+
+  it('keeps unavailable and failed queue reads distinct from empty', async () => {
+    const t = fixture();
+
+    t.publisher.onInitialized(t.readObservation);
+
+    await t.publisher.publish();
+
+    expect(t.write.mock.calls[0]?.[0].snapshot.queue).toBeNull();
+
+    t.publisher.onSchedulerInitialized(() => { throw new Error('queue unavailable'); });
+
+    await t.publisher.publish();
+
+    expect(t.write).toHaveBeenCalledTimes(1);
+    expect(t.onFailure).toHaveBeenCalledOnce();
+
+    // An attached but malformed reader is a failure, not an unavailable source.
+    t.publisher.onSchedulerInitialized(() => undefined as never);
+
+    await t.publisher.publish();
+
+    expect(t.write).toHaveBeenCalledTimes(1);
+    expect(t.onFailure).toHaveBeenCalledTimes(2);
   });
 });

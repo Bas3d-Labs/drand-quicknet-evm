@@ -350,6 +350,11 @@ describe('runDaemonCommand', () => {
   function enableStatusObservation(): void {
     const observation: SignerRuntimeObservation = {
       journalInitialized: true,
+      operatorHistory: {
+        count: 0,
+        limit: 32,
+      },
+      storedFactDispute: null,
       status: {
         open: true,
         primaryReason: null,
@@ -678,6 +683,7 @@ describe('runDaemonCommand', () => {
       onCycle: expect.any(Function),
       onUnfulfillable: expect.any(Function),
       onWaitTransition: expect.any(Function),
+      onSchedulerInitialized: expect.any(Function),
     });
 
     const daemonOptions = vi.mocked(runDaemon).mock.calls[0]![0];

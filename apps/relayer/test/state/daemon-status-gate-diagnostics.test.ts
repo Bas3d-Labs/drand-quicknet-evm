@@ -21,6 +21,12 @@ function snapshot(): DaemonStatusSnapshot {
     runId: '12345678-1234-4123-8123-123456789abc',
     observedAt: '2026-10-12T12:00:00.000Z',
     journalInitialized: true,
+    operatorHistory: {
+      count: 0,
+      limit: 32,
+    },
+    storedFactDispute: null,
+    queue: null,
     attemptSummary: {
       retainedCount: 0,
       includedCount: 0,

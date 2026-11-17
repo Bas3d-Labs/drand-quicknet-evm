@@ -412,6 +412,11 @@ describe('operator acceptance evidence and persistence', () => {
     });
 
     const save = vi.fn(async (next: TransactionJournalSnapshot) => {
+      expect(coordinator.status.operatorHistory).toEqual({
+        count: 0,
+        limit: 32,
+      });
+
       if (retry && save.mock.calls.length === 1) {
         throw new Error('uncertain save');
       }
@@ -456,16 +461,23 @@ describe('operator acceptance evidence and persistence', () => {
       await expect(operation).rejects.toThrow('Journal persistence did not complete.');
       expect(stored.attempts).toHaveLength(1);
       expect(lines.join('')).not.toContain('signer_attempt_operator_accepted_unattributed');
+      expect(coordinator.status.operatorHistory?.count).toBe(0);
+
       await coordinator.retryPersistence(22);
     } else {
       expect((await operation).status).toBe('operator-acceptance-committed');
     }
 
     expect(stored.lastObservation.nonce).toBe(9n);
+    expect(coordinator.status.operatorHistory).toEqual({
+      count: 1,
+      limit: 32,
+    });
     expect(coordinator.status.recoveryComplete).toBe(false);
     expect(coordinator.status.open).toBe(false);
     expect(coordinator.status.blockers).toContain('unattributed-signer-activity');
     expect((await create()).status.blockers).toContain('unattributed-signer-activity');
+    expect((await create()).status.operatorHistory?.count).toBe(1);
     expect(coordinator.operatorOutcome(acceptance().requestId)?.kind)
       .toBe('operator-accepted-unattributed');
     expect(rpc.sendRawTransaction).not.toHaveBeenCalled();

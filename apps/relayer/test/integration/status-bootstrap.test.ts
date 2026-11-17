@@ -143,6 +143,12 @@ describe.skipIf(process.platform !== 'linux')('status bootstrap', () => {
       runId: '11111111-1111-4111-8111-111111111111',
       observedAt,
       journalInitialized: true,
+      operatorHistory: {
+        count: 0,
+        limit: 32,
+      },
+      storedFactDispute: null,
+      queue: null,
       attemptSummary: {
         retainedCount: 0,
         includedCount: 0,

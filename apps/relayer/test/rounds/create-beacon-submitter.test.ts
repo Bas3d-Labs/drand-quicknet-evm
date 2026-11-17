@@ -68,6 +68,11 @@ function setup() {
   const status: TransactionManagerStatus = {
     chainId: 4663,
     journalInitialized: true,
+    operatorHistory: {
+      count: 0,
+      limit: 32,
+    },
+    storedFactDispute: null,
     busy: false,
     open: true,
     primaryReason: null,

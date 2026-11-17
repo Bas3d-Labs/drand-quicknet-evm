@@ -23,6 +23,7 @@ import {
 } from '../../src/execution/work-identity.js';
 
 import {
+  MAX_UINT64,
   MAX_UINT256,
 } from '../../src/shared/uint.js';
 
@@ -135,6 +136,12 @@ function recoverySnapshot() {
     runId: ID,
     observedAt: AT,
     journalInitialized: true,
+    operatorHistory: {
+      count: 0,
+      limit: 32,
+    },
+    storedFactDispute: null,
+    queue: null,
     attemptSummary: {
       retainedCount: MAX_RETAINED_ATTEMPTS,
       includedCount: 0,
@@ -306,6 +313,39 @@ describe('daemon status size budget', () => {
 
     const candidate = readDaemonStatusSnapshot({
       ...recovery,
+      operatorHistory: {
+        count: 32,
+        limit: 32,
+      },
+      queue: {
+        queuedCount: 1024,
+        dueCount: 1024,
+        limit: 1024,
+        rejectedOffers: MAX_UINT64.toString(),
+      },
+      storedFactDispute: {
+        observedAt: AT,
+        origin: 'preparation',
+        detail: {
+          reason: 'stored-fact-nonce-conflict',
+          anchor: {
+            blockNumber: MAX_UINT256.toString(),
+            blockHash: `0x${'ff'.repeat(32)}`,
+          },
+          first: {
+            attemptId: ID,
+            kind: 'lowerBound',
+            source: 'candidate',
+            nonce: MAX_UINT256.toString(),
+          },
+          second: {
+            attemptId: '22222222-2222-4222-8222-222222222222',
+            kind: 'lowerBound',
+            source: 'retained',
+            nonce: (MAX_UINT256 - 1n).toString(),
+          },
+        },
+      },
       rpcUsage,
     }, IDENTITY);
 
@@ -355,6 +395,7 @@ describe('daemon status size budget', () => {
     );
 
     expect(actualBytes).toBeLessThanOrEqual(conservativeBytes);
+
 
     expect(
       conservativeBytes + REQUIRED_MARGIN_BYTES,

@@ -50,6 +50,12 @@ const SNAPSHOT = readDaemonStatusSnapshot({
   lastCompletedCycle: null,
   lastRetryObservation: null,
   journalInitialized: true,
+  operatorHistory: {
+    count: 0,
+    limit: 32,
+  },
+  storedFactDispute: null,
+  queue: null,
   attemptSummary: {
     retainedCount: 0,
     includedCount: 0,
@@ -78,6 +84,9 @@ describe('readRelayerStatus', () => {
       .mockResolvedValue({
         source: 'journal',
         journal: 'missing',
+        operatorHistory: null,
+        storedFactDispute: null,
+        queue: null,
         gate: 'unknown',
       });
 
@@ -99,6 +108,9 @@ describe('readRelayerStatus', () => {
     expect(result).toEqual({
       source: 'journal',
       journal: 'missing',
+      operatorHistory: null,
+      storedFactDispute: null,
+      queue: null,
       gate: 'unknown',
     });
 

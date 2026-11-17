@@ -65,6 +65,9 @@ describe('projectJournalStatus', () => {
     expect(projectJournalStatus({ kind: 'missing' })).toEqual({
       source: 'journal',
       journal: 'missing',
+      operatorHistory: null,
+      storedFactDispute: null,
+      queue: null,
       gate: 'unknown',
     });
   });
@@ -78,6 +81,12 @@ describe('projectJournalStatus', () => {
     expect(result).toEqual({
       source: 'journal',
       journal: 'present',
+      operatorHistory: {
+        count: 0,
+        limit: 32,
+      },
+      storedFactDispute: null,
+      queue: null,
       gate: 'unknown',
       identity: {
         chainId: 4663,
