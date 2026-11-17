@@ -223,7 +223,7 @@ function decodeSearch(input: unknown) {
 
   let exhausted: ReturnType<typeof decodeObservation> | null = null;
 
-  if (value.exhausted !== undefined && value.exhausted !== null) {
+  if (value.exhausted !== null) {
     exhausted = decodeObservation(value.exhausted);
   }
 

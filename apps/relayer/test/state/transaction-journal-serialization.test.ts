@@ -192,24 +192,64 @@ describe('transaction journal serialization', () => {
     expect(Object.isFrozen(decoded.ledger.obligations)).toBe(true);
   });
 
-  it.each(['omitted', 'null'] as const)(
-    'normalizes a %s exhaustion field in a version-1 encoding',
+  it.each(['omitted', 'undefined', 'boolean', 'number', 'string'] as const)(
+    'rejects a %s exhaustion field on encode',
+    async (kind) => {
+      const input = await fixture();
+      const search = input.attempts[0]!.replacementSearch as unknown as Record<string, unknown>;
+
+      if (kind === 'omitted') {
+        delete search.exhausted;
+      } else if (kind === 'undefined') {
+        search.exhausted = undefined;
+      } else if (kind === 'boolean') {
+        search.exhausted = false;
+      } else if (kind === 'number') {
+        search.exhausted = 0;
+      } else {
+        search.exhausted = 'null';
+      }
+
+      const before = structuredClone(input);
+
+      await expect(encodeJournalSnapshot(input, IDENTITY)).rejects.toThrow(FAILURE);
+
+      expect(input).toEqual(before);
+    },
+  );
+
+  it.each(['omitted', 'boolean', 'number', 'string'] as const)(
+    'rejects a %s exhaustion field on decode',
     async (kind) => {
       const raw = await encodedFixture();
       const search = raw.attempts[0].replacementSearch;
 
       if (kind === 'omitted') {
         delete search.exhausted;
+      } else if (kind === 'boolean') {
+        search.exhausted = false;
+      } else if (kind === 'number') {
+        search.exhausted = 0;
+      } else {
+        search.exhausted = 'null';
       }
 
-      const decoded = await decodeJournalSnapshot(JSON.stringify(raw), IDENTITY);
-
-      expect(decoded.version).toBe(1);
-      expect(decoded.attempts[0]!.replacementSearch?.exhausted).toBeNull();
-      const reencoded = JSON.parse(await encodeJournalSnapshot(decoded, IDENTITY));
-      expect(reencoded.attempts[0].replacementSearch.exhausted).toBeNull();
+      await expect(
+        decodeJournalSnapshot(JSON.stringify(raw), IDENTITY),
+      ).rejects.toThrow(FAILURE);
     },
   );
+
+  it('preserves explicit null exhaustion and canonical bytes', async () => {
+    const input = await fixture();
+    const before = structuredClone(input);
+    const encoded = await encodeJournalSnapshot(input, IDENTITY);
+    const decoded = await decodeJournalSnapshot(encoded, IDENTITY);
+
+    expect(decoded.attempts[0]!.replacementSearch?.exhausted).toBeNull();
+    expect(await encodeJournalSnapshot(decoded, IDENTITY)).toBe(encoded);
+    expect(input).toEqual(before);
+  });
 
   it('round-trips exhaustion independently of the cursor and last observation', async () => {
     const input = await fixture();

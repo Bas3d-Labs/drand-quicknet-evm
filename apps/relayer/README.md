@@ -2178,3 +2178,11 @@ review: chain-derived eligible-to-storage median at most four seconds and p95 at
 most six seconds, against the earlier three-second median. Unit tests and builds
 do not establish that latency result; any failed live comparison must be retained
 and disclosed.
+
+### Replacement-search journal encoding
+
+A non-null `replacementSearch` must include `exhausted`, explicitly `null` or a
+valid anchored nonce observation. Both loading and encoding reject omission;
+there is no defaulting or automatic migration. Existing encoder-produced journals
+already include this field, and valid journal bytes are unchanged. Preserve an
+invalid existing journal for investigation; never delete it to force startup.

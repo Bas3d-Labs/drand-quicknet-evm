@@ -65,6 +65,7 @@ function attempt(nonce = 4n) {
         blockNumber: 110n,
         blockHash: HASH,
       },
+      exhausted: null,
     },
   };
 }
@@ -133,11 +134,24 @@ function expectInvalid(input: unknown) {
 }
 
 describe('journal snapshot structure', () => {
-  it.each(['omitted', 'null'] as const)('normalizes %s exhaustion to null', (kind) => {
+  it.each(['omitted', 'undefined'] as const)(
+    'rejects %s exhaustion',
+    (kind) => {
+      const input = fixture();
+      const search: Record<string, unknown> = input.attempts[0]!.replacementSearch;
+
+      if (kind === 'omitted') {
+        delete search.exhausted;
+      } else {
+        search.exhausted = undefined;
+      }
+
+      expectInvalid(input);
+    },
+  );
+
+  it('accepts explicit null exhaustion', () => {
     const input = fixture();
-    if (kind === 'null') {
-      Object.assign(input.attempts[0]!.replacementSearch, { exhausted: null });
-    }
 
     expect(validate(input).attempts[0]!.replacementSearch?.exhausted).toBeNull();
   });

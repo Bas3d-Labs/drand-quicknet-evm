@@ -268,10 +268,10 @@ function readReplacementSearch(
     );
   }
 
-  const rawExhausted = field(input, 'exhausted', true);
+  const rawExhausted = field(input, 'exhausted');
   let exhausted: AnchoredNonceObservation | null = null;
 
-  if (rawExhausted !== undefined && rawExhausted !== null) {
+  if (rawExhausted !== null) {
     exhausted = readObservation(rawExhausted);
 
     requireValid(exhausted.nonce > attemptNonce);
