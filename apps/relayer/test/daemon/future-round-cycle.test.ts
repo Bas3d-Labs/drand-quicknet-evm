@@ -37,6 +37,14 @@ import type {
   RoundImporter,
 } from '../../src/rounds/create-round-importer.js';
 
+import {
+  BLOCKER_PRECEDENCE,
+} from '../../src/state/signer-gate.js';
+
+import {
+  recoveryReport,
+} from '../helpers/recovery-report.js';
+
 const CONSUMER = '0x1111111111111111111111111111111111111111';
 
 const REGISTRY = '0x2222222222222222222222222222222222222222';
@@ -163,6 +171,159 @@ function scheduling() {
 }
 
 describe('future-round scans and cycle wiring', () => {
+  it.each(BLOCKER_PRECEDENCE)(
+    'keeps queued work and normal sleep when recovery reports %s',
+    async (blocker) => {
+      const f = fixture();
+
+      const waiting = scheduling().makeQueue();
+
+      waiting.offer(request(99n), roundScheduledTime(99n));
+      waiting.offer(request(100n), roundScheduledTime(100n));
+
+      const bindRoundImporter = vi.fn(() => f.importRound);
+
+      const recover = vi.fn().mockResolvedValue(recoveryReport(blocker));
+
+      const result = await runDaemonCycle({
+        ...f.options,
+        waiting,
+        bindRoundImporter,
+        submitter: {
+          recover,
+        } as unknown as BeaconSubmitter,
+        consumers: [],
+        softCursors: new Map(),
+      });
+
+      expect(recover).toHaveBeenCalledTimes(1);
+      expect(bindRoundImporter).not.toHaveBeenCalled();
+      expect(f.importRound).not.toHaveBeenCalled();
+      expect(result.scheduled).toBeUndefined();
+      expect(waiting.size).toBe(2);
+      expect(waiting.sleepMilliseconds(5000, result.scheduled)).toBe(5000);
+      expect(f.save).not.toHaveBeenCalled();
+    },
+  );
+
+  it('uses each recovery result and dispatches in the cycle that reopens the gate', async () => {
+    const f = fixture();
+
+    const waiting = scheduling().makeQueue();
+
+    waiting.offer(request(99n), roundScheduledTime(99n));
+
+    const recover = vi.fn()
+      .mockResolvedValueOnce(recoveryReport('retention-capacity-reached'))
+      .mockResolvedValueOnce(recoveryReport())
+      .mockResolvedValueOnce(recoveryReport('retention-capacity-reached'));
+
+    const options = {
+      ...f.options,
+      waiting,
+      submitter: {
+        recover,
+      } as unknown as BeaconSubmitter,
+      consumers: [],
+      softCursors: new Map(),
+    };
+
+    const blocked = await runDaemonCycle(options);
+
+    expect(blocked.scheduled).toBeUndefined();
+    expect(f.importRound).not.toHaveBeenCalled();
+    expect(waiting.size).toBe(1);
+
+    const reopened = await runDaemonCycle(options);
+
+    expect(reopened.scheduled?.handedOff).toBe(1);
+    expect(f.importRound).toHaveBeenCalledExactlyOnceWith(99n);
+    expect(recover.mock.invocationCallOrder[1]!)
+      .toBeLessThan(f.importRound.mock.invocationCallOrder[0]!);
+    expect(waiting.size).toBe(0);
+
+    waiting.offer(request(98n), roundScheduledTime(98n));
+
+    const closedAgain = await runDaemonCycle(options);
+
+    expect(closedAgain.scheduled).toBeUndefined();
+    expect(f.importRound).toHaveBeenCalledTimes(1);
+    expect(waiting.size).toBe(1);
+    expect(f.save).not.toHaveBeenCalled();
+  });
+
+  it('continues soft discovery while scheduled dispatch is skipped', async () => {
+    const f = fixture([99n]);
+
+    f.setDurable(9n);
+
+    const waiting = scheduling().makeQueue();
+
+    waiting.offer(request(98n), roundScheduledTime(98n));
+
+    f.importRound.mockResolvedValue({
+      status: 'deferred',
+      reason: 'signer-unavailable',
+      blocker: 'retention-capacity-reached',
+      round: 99n,
+    });
+
+    const softCursors = new Map();
+
+    const result = await runDaemonCycle({
+      ...f.options,
+      waiting,
+      softCursors,
+      submitter: {
+        recover: vi.fn().mockResolvedValue(recoveryReport('retention-capacity-reached')),
+      } as unknown as BeaconSubmitter,
+      consumers: [{
+        address: CONSUMER,
+        registry: REGISTRY,
+      }] as const,
+    });
+
+    expect(result.scheduled).toBeUndefined();
+    expect(result.consumers[0]?.status).toBe('success');
+    expect(f.getLogs).toHaveBeenCalledTimes(1);
+    expect(f.importRound).toHaveBeenCalledExactlyOnceWith(99n);
+    expect(softCursors.get(CONSUMER)?.nextBlock).toBe(11n);
+    expect(waiting.size).toBe(2);
+    expect(f.save).not.toHaveBeenCalled();
+  });
+
+  it('still honors importer refusal after recovery reports an open gate', async () => {
+    const f = fixture();
+
+    const waiting = scheduling().makeQueue();
+
+    waiting.offer(request(98n), roundScheduledTime(98n));
+    waiting.offer(request(99n), roundScheduledTime(99n));
+
+    f.importRound.mockResolvedValue({
+      status: 'deferred',
+      reason: 'signer-unavailable',
+      blocker: 'retention-capacity-reached',
+      round: 98n,
+    });
+
+    const result = await runDaemonCycle({
+      ...f.options,
+      waiting,
+      submitter: {
+        recover: vi.fn().mockResolvedValue(recoveryReport()),
+      } as unknown as BeaconSubmitter,
+      consumers: [],
+      softCursors: new Map(),
+    });
+
+    expect(f.importRound).toHaveBeenCalledExactlyOnceWith(98n);
+    expect(result.scheduled?.blocked).toBe(true);
+    expect(result.scheduled?.handedOff).toBe(0);
+    expect(waiting.size).toBe(2);
+    expect(waiting.sleepMilliseconds(1000, result.scheduled)).toBe(1000);
+  });
+
   it('retries a scheduled throw before safe after soft discovery advances', async () => {
     const f = fixture();
 
@@ -189,7 +350,7 @@ describe('future-round scans and cycle wiring', () => {
       ...f.options,
       waiting,
       submitter: {
-        recover: vi.fn(),
+        recover: vi.fn().mockResolvedValue(recoveryReport()),
       } as unknown as BeaconSubmitter,
       consumers: [{
         address: CONSUMER,
@@ -239,7 +400,7 @@ describe('future-round scans and cycle wiring', () => {
     expect(waiting.size).toBe(2);
     expect(f.importRound).toHaveBeenCalledTimes(1);
 
-    const recover = vi.fn();
+    const recover = vi.fn().mockResolvedValue(recoveryReport());
 
     const result = await runDaemonCycle({
       ...f.options,
@@ -302,7 +463,7 @@ describe('future-round scans and cycle wiring', () => {
       waiting,
       softCursors,
       submitter: {
-        recover: vi.fn(),
+        recover: vi.fn().mockResolvedValue(recoveryReport()),
       } as unknown as BeaconSubmitter,
       consumers: [{
         address: CONSUMER,
@@ -334,7 +495,7 @@ describe('future-round scans and cycle wiring', () => {
     waiting.offer(request(98n), roundScheduledTime(98n));
     waiting.offer(request(97n), roundScheduledTime(97n));
 
-    const recover = vi.fn();
+    const recover = vi.fn().mockResolvedValue(recoveryReport());
 
     f.importRound.mockRejectedValueOnce(new Error('unavailable'));
 

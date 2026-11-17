@@ -56,6 +56,10 @@ import type {
   CheckpointStore,
 } from '../state/checkpoint.js';
 
+import type {
+  TransactionReconciliationReport,
+} from '../state/transaction-manager-types.js';
+
 import {
   runDaemonIteration,
   type RunDaemonIterationOptions,
@@ -126,8 +130,10 @@ export async function runDaemonCycle(
 ): Promise<RunDaemonCycleResult> {
   options.signal?.throwIfAborted();
 
+  let recovery: TransactionReconciliationReport;
+
   try {
-    await options.submitter.recover();
+    recovery = await options.submitter.recover();
   } catch (error) {
     if (isOperationCancelled(error, options.signal)) {
       throw error;
@@ -146,7 +152,9 @@ export async function runDaemonCycle(
 
   let scheduled: ScheduledPass | undefined;
 
-  if (options.waiting !== undefined) {
+  // This cycle's closed gate can skip work; an open gate never authorizes it.
+  // Imports still perform their normal checks, including admission at submission.
+  if (options.waiting !== undefined && recovery.state.open) {
     const importRound = options.bindRoundImporter({
       submitter: options.submitter,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -211,7 +219,7 @@ export async function runDaemonCycle(
         ...(options.waiting === undefined
           ? {}
           : {
-              waiting: options.waiting
+              waiting: options.waiting,
             }),
           
         ...(options.readChainHeads !== undefined
