@@ -674,6 +674,7 @@ describe('runDaemonIteration', () => {
       durableBlock: 1_200n,
       maxBlockRange: 100n,
       importRound: expect.any(Function),
+      onRequestDiscovered: expect.any(Function),
       onCompleted: expect.any(Function),
       onIncomplete: expect.any(Function),
       onUnfulfillable: expect.any(Function),
@@ -1156,6 +1157,7 @@ describe('runDaemonIteration', () => {
     const result = await run(overrides);
 
     expect(scanQuicknetRequests).toHaveBeenCalledExactlyOnceWith({
+      onRequestDiscovered: expect.any(Function),
       publicClient: PUBLIC_CLIENT,
       consumers: [CONSUMER],
       nextBlock: expected,

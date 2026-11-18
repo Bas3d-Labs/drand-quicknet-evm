@@ -272,6 +272,13 @@ export async function runDaemonCommand(
         : {}),
 
       readChainHeads,
+      onRequestDiscovered(scanType, observation, context) {
+        logger.withContext({ cycle: context.cycle }).requestDiscovered({
+          ...observation,
+          logIndex: BigInt(observation.logIndex),
+          scanType,
+        });
+      },
       onUnfulfillable: daemonLogger.onUnfulfillable,
       onWaitTransition: daemonLogger.onWaitTransition,
       onSchedulerInitialized: statusPublisher.onSchedulerInitialized,

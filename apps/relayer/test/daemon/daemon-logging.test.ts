@@ -74,6 +74,7 @@ const loggerMocks = {
     roundWaitStarted: vi.fn(),
     roundWaitReleased: vi.fn(),
     roundWaitEvicted: vi.fn(),
+  requestDiscovered: vi.fn<RelayerLog['requestDiscovered']>(),
   roundImported: vi.fn<RelayerLog['roundImported']>(),
   roundAlreadyStored: vi.fn<RelayerLog['roundAlreadyStored']>(),
   roundDeferred: vi.fn<RelayerLog['roundDeferred']>(),

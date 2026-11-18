@@ -3,6 +3,10 @@ import {
   type PublicClient,
 } from 'viem';
 
+import type {
+  RequestDiscoveryObserver,
+} from '../diagnostics/request-discovery.js';
+
 import {
   QUICKNET_RANDOMNESS_REQUESTED_EVENT,
 } from './consumer-abi.js';
@@ -20,6 +24,7 @@ export interface GetQuicknetRandomnessRequestOptions {
   consumers: readonly Address[];
   fromBlock: bigint;
   toBlock: bigint;
+  onRequestDiscovered?: RequestDiscoveryObserver | undefined;
 }
 
 export async function getQuicknetRandomnessRequests(
@@ -42,7 +47,7 @@ export async function getQuicknetRandomnessRequests(
     strict: true,
   });
 
-  return logs.map((log) => {
+  const requests = logs.map((log) => {
     if (
       log.blockNumber === null ||
       log.transactionHash === null ||
@@ -59,4 +64,26 @@ export async function getQuicknetRandomnessRequests(
       logIndex: log.logIndex,
     };
   });
+
+  // Decode the entire response before emitting anything. Preserve scan errors.
+  if (options.onRequestDiscovered !== undefined) {
+    for (const [index, request] of requests.entries()) {
+      try {
+        const blockHash = logs[index]!.blockHash;
+
+        options.onRequestDiscovered(Object.freeze({
+          consumer: request.consumer,
+          round: request.round,
+          blockNumber: request.blockNumber,
+          transactionHash: request.transactionHash,
+          logIndex: request.logIndex,
+          ...(blockHash == null ? {} : { blockHash }),
+        }));
+      } catch {
+        // Diagnostic failures must not change requests or processing.
+      }
+    }
+  }
+
+  return requests;
 }

@@ -14,6 +14,10 @@ import {
   type BlockAnchor,
 } from '../chain/block-anchor.js';
 
+import type {
+  RequestDiscoveryObserver,
+} from '../diagnostics/request-discovery.js';
+
 import {
   scanQuicknetRequests,
 } from './request-scanner.js';
@@ -92,6 +96,7 @@ export interface ReconcileDurableRequestsOptions
   nextBlock: bigint;
   durableBlock: bigint;
   maxBlockRange: bigint;
+  onRequestDiscovered?: RequestDiscoveryObserver | undefined;
 }
 
 // Bracket the log scan, imports, and historical storage reads.
@@ -151,6 +156,7 @@ export async function reconcileDurableRequests(
     nextBlock: options.nextBlock,
     throughBlock: anchor.blockNumber,
     maxBlockRange: options.maxBlockRange,
+    onRequestDiscovered: options.onRequestDiscovered,
   });
 
   if (scan.status === 'caught-up') {

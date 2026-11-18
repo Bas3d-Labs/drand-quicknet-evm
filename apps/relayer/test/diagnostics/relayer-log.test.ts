@@ -174,6 +174,7 @@ describe('createRelayerLog', () => {
       'durableHeadRegressed',
       'heartbeat',
       'loggingFailed',
+      'requestDiscovered',
       'requestUnfulfillable',
       'roundAlreadyStored',
       'roundDeferred',
@@ -1355,5 +1356,42 @@ describe('createRelayerLog', () => {
     })).toThrow('Invalid logging run ID.');
 
     expect(write).not.toHaveBeenCalled();
+  });
+});
+
+describe('request discovery event', () => {
+  const fields = {
+    consumer: CONSUMER,
+    round: 123n,
+    blockNumber: 456n,
+    transactionHash: HASH,
+    logIndex: 7n,
+    scanType: 'soft',
+  } as const;
+
+  it('projects debug fields, cycle and optional hash, dropping unknown fields', () => {
+    const { log, lines } = capture('debug');
+    const input = { ...fields, blockHash: HASH, secret: SECRET };
+    log.withContext({ cycle: 9 }).requestDiscovered(input);
+    expect(recordAt(lines)).toMatchObject({
+      event: 'request_discovered', level: 20, cycle: 9,
+      consumer: CONSUMER, round: '123', blockNumber: '456',
+      transactionHash: HASH, logIndex: '7', scanType: 'soft', blockHash: HASH,
+    });
+    expect(lines.join('')).not.toContain(SECRET);
+  });
+
+  it('omits a missing hash and preserves repeated durable observations', () => {
+    const { log, lines } = capture('debug');
+    log.requestDiscovered({ ...fields, scanType: 'durable' });
+    log.requestDiscovered({ ...fields, scanType: 'durable' });
+    expect(lines).toHaveLength(2);
+    expect(recordAt(lines)).not.toHaveProperty('blockHash');
+  });
+
+  it('filters discovery at info level', () => {
+    const { log, lines } = capture('info');
+    log.requestDiscovered(fields);
+    expect(lines).toHaveLength(0);
   });
 });

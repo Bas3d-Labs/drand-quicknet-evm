@@ -33,6 +33,10 @@ import type {
 } from '../consumers/consumer.js';
 
 import type {
+  RequestDiscovery,
+} from '../diagnostics/request-discovery.js';
+
+import type {
   BeaconSubmitter,
 } from '../rounds/create-beacon-submitter.js';
 
@@ -87,6 +91,11 @@ export interface RunDaemonOptions {
   pollIntervalMs: number;
   receiptTimeoutMs?: number;
   fetchTimeoutMs?: number;
+  onRequestDiscovered?: ((
+    scanType: 'durable' | 'soft',
+    observation: RequestDiscovery,
+    context: DaemonCycleContext,
+  ) => void) | undefined;
   onUnfulfillable?: ((
     scanType: 'durable' | 'soft',
     request: QuicknetRandomnessRequest,
@@ -182,6 +191,9 @@ export async function runDaemon(
       finality: options.finality,
       softCursors,
       readChainHeads,
+      onRequestDiscovered(scanType, observation) {
+        options.onRequestDiscovered?.(scanType, observation, context);
+      },
       onUnfulfillable: options.onUnfulfillable,
     };
 

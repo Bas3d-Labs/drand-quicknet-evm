@@ -78,6 +78,7 @@ const relayerLogMocks = vi.hoisted(() => ({
     roundWaitStarted: vi.fn(),
     roundWaitReleased: vi.fn(),
     roundWaitEvicted: vi.fn(),
+  requestDiscovered: vi.fn(),
   roundImported: vi.fn(),
   roundAlreadyStored: vi.fn(),
   heartbeat: vi.fn(),
@@ -681,6 +682,7 @@ describe('runDaemonCommand', () => {
       pollIntervalMs: 1_000,
       receiptTimeoutMs: 45_000,
       onCycle: expect.any(Function),
+      onRequestDiscovered: expect.any(Function),
       onUnfulfillable: expect.any(Function),
       onWaitTransition: expect.any(Function),
       onSchedulerInitialized: expect.any(Function),
@@ -1194,6 +1196,27 @@ describe('runDaemonCommand', () => {
     ).rejects.toBe(failure);
 
     expect(onDiagnostics).toHaveBeenCalledExactlyOnceWith(policy);
+  });
+
+  it('logs discovery through the cycle-scoped logger', async () => {
+    const observation = {
+      consumer: VALIDATED_CONSUMERS[0]!.address,
+      round: 123n,
+      blockNumber: 456n,
+      transactionHash: `0x${'ab'.repeat(32)}` as const,
+      blockHash: `0x${'cd'.repeat(32)}` as const,
+      logIndex: 7,
+    };
+    vi.mocked(runDaemon).mockImplementation(async (options) => {
+      options.onRequestDiscovered?.('durable', observation, { cycle: 9 });
+    });
+    await runDaemonCommand({ source: SOURCE });
+    expect(relayerLogMocks.withContext).toHaveBeenCalledWith({ cycle: 9 });
+    expect(relayerLogMocks.requestDiscovered).toHaveBeenCalledExactlyOnceWith({
+      ...observation,
+      logIndex: 7n,
+      scanType: 'durable',
+    });
   });
 
   it('does not install a policy when daemon loading fails before the callback', async () => {
