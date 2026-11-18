@@ -97,6 +97,7 @@ interface Values {
   id: string;
   address: Address;
   hash: Hash;
+  optionalHash: Hash | undefined;
   uint: bigint;
   timestamp: string;
   scanType: ScanType;
@@ -221,6 +222,20 @@ const EVENTS = {
       consumer: 'address',
       scanType: 'scanType',
       round: 'uint',
+    },
+  ],
+  requestDiscovered: [
+    'debug',
+    'request_discovered',
+    'Quicknet request observed in scan',
+    {
+      consumer: 'address',
+      round: 'uint',
+      blockNumber: 'uint',
+      blockHash: 'optionalHash',
+      transactionHash: 'hash',
+      logIndex: 'uint',
+      scanType: 'scanType',
     },
   ],
   roundImported: [
@@ -581,7 +596,7 @@ type EventDefinition =
 
 type EventName = EventDefinition[1] | 'invalid_log_level';
 
-type OptionalKind = 'operation' | 'optionalUint';
+type OptionalKind = 'operation' | 'optionalUint' | 'optionalHash';
 
 type Context<S extends Schema> = {
   [K in keyof S as S[K] extends OptionalKind ? never : K]: Values[S[K]];
@@ -1239,7 +1254,11 @@ function scalar(
     return value;
   }
 
-  if (kind === 'hash' && isFixedHex(value, 32)) {
+  if (kind === 'optionalHash' && value === undefined) {
+    return undefined;
+  }
+
+  if ((kind === 'hash' || kind === 'optionalHash') && isFixedHex(value, 32)) {
     return value;
   }
 

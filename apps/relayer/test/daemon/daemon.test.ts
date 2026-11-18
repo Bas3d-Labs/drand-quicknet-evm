@@ -321,8 +321,33 @@ describe('runDaemon', () => {
       finality: FINALITY,
       softCursors: expect.any(Map),
       readChainHeads: expect.any(Function),
+      onRequestDiscovered: expect.any(Function),
       signal: controller.signal,
     });
+  });
+
+  it('forwards discovery immediately with the active cycle number', async () => {
+    const controller = new AbortController();
+    const onRequestDiscovered = vi.fn();
+    const observation = {
+      consumer: VALIDATED_CONSUMER_A.address,
+      round: 123n,
+      blockNumber: 456n,
+      transactionHash: `0x${'ab'.repeat(32)}` as const,
+      logIndex: 0,
+    };
+    vi.mocked(runDaemonCycle).mockImplementation(async (options) => {
+      options.onRequestDiscovered?.('soft', observation);
+      expect(onRequestDiscovered).toHaveBeenCalledExactlyOnceWith(
+        'soft', observation, { cycle: 1 },
+      );
+      controller.abort();
+      return caughtUpCycle();
+    });
+    await runDaemon(daemonOptions({
+      signal: controller.signal,
+      onRequestDiscovered,
+    }));
   });
 
   it('starts with an empty soft cursor map', async () => {

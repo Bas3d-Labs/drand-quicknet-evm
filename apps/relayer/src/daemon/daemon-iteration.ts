@@ -47,6 +47,10 @@ import type {
 } from '../diagnostics/operation-context.js';
 
 import type {
+  ScanDiscoveryObserver,
+} from '../diagnostics/request-discovery.js';
+
+import type {
   BeaconSubmitter,
 } from '../rounds/create-beacon-submitter.js';
 
@@ -88,6 +92,7 @@ export interface RunDaemonIterationOptions {
   waiting?: WaitingRequestScheduling | undefined;
   readChainHeads?: () => Promise<ChainHeads>;
   onOperation?: (operation: OperationContext) => void;
+  onRequestDiscovered?: ScanDiscoveryObserver | undefined;
   onCompleted?: (
     scanType: 'durable' | 'soft',
     result: ProcessedQuicknetRound,
@@ -233,6 +238,10 @@ export async function runDaemonIteration(
         },
       }),
 
+      onRequestDiscovered(observation) {
+        options.onRequestDiscovered?.('durable', observation);
+      },
+
       onCompleted(result) {
         reportCompleted('durable', result);
       },
@@ -366,6 +375,9 @@ export async function runDaemonIteration(
     nextBlock: softNextBlock,
     throughBlock: heads.latestBlock,
     maxBlockRange: options.maxBlockRange,
+    onRequestDiscovered(observation) {
+      options.onRequestDiscovered?.('soft', observation);
+    },
   });
 
   options.signal?.throwIfAborted();

@@ -40,6 +40,10 @@ import type {
   OperationContext,
 } from '../diagnostics/operation-context.js';
 
+import type {
+  ScanDiscoveryObserver,
+} from '../diagnostics/request-discovery.js';
+
 import {
   isOperationCancelled
 } from '../execution/is-operation-cancelled.js';
@@ -85,6 +89,7 @@ export interface RunDaemonCycleOptions {
   softCursors: Map<Address, SoftScanCursor>;
   waiting?: FutureRoundScheduler | undefined;
   readChainHeads?: () => Promise<ChainHeads>;
+  onRequestDiscovered?: ScanDiscoveryObserver | undefined;
   onUnfulfillable?: ((
     scanType: 'durable' | 'soft',
     request: QuicknetRandomnessRequest,
@@ -192,6 +197,7 @@ export async function runDaemonCycle(
         maxBlockRange: options.maxBlockRange,
         finality: options.finality,
 
+        onRequestDiscovered: options.onRequestDiscovered,
         onUnfulfillable: options.onUnfulfillable,
 
         onOperation(current) {

@@ -475,3 +475,72 @@ describe(
     });
   },
 );
+
+describe('request discovery diagnostics', () => {
+  it.each([undefined, null, TRANSACTION_HASH_B])(
+    'keeps block hash %s out of processing requests',
+    async (blockHash) => {
+      const { publicClient, getLogs } = createPublicClient();
+      getLogs.mockResolvedValue([{ ...createRequestLog(), blockHash }]);
+      const observed: unknown[] = [];
+      const requests = await getQuicknetRandomnessRequests({
+        publicClient,
+        consumers: [CONSUMER_A],
+        fromBlock: 1_000n,
+        toBlock: 1_000n,
+        onRequestDiscovered(observation) {
+          observed.push(observation);
+          expect(Object.isFrozen(observation)).toBe(true);
+          throw new Error('observer failed');
+        },
+      });
+      expect(getLogs).toHaveBeenCalledTimes(1);
+      expect(requests).toEqual([{
+        consumer: CONSUMER_A,
+        round: 31_192_648n,
+        blockNumber: 1_000n,
+        transactionHash: TRANSACTION_HASH_A,
+        logIndex: 0,
+      }]);
+      expect(observed).toEqual([{
+        ...requests[0],
+        ...(blockHash == null ? {} : { blockHash }),
+      }]);
+    },
+  );
+
+  it('emits nothing if a later log fails decoding', async () => {
+    const { publicClient, getLogs } = createPublicClient();
+    getLogs.mockResolvedValue([
+      createRequestLog(),
+      createRequestLog({ transactionHash: null }),
+    ]);
+    const onRequestDiscovered = vi.fn();
+    await expect(getQuicknetRandomnessRequests({
+      publicClient,
+      consumers: [CONSUMER_A],
+      fromBlock: 1_000n,
+      toBlock: 1_000n,
+      onRequestDiscovered,
+    })).rejects.toThrow(
+      'Quicknet randomness request log is missing canonical log metadata.',
+    );
+    expect(onRequestDiscovered).not.toHaveBeenCalled();
+    expect(getLogs).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the original RPC error without observations', async () => {
+    const { publicClient, getLogs } = createPublicClient();
+    const failure = new Error('scan failed');
+    getLogs.mockRejectedValue(failure);
+    const onRequestDiscovered = vi.fn();
+    await expect(getQuicknetRandomnessRequests({
+      publicClient,
+      consumers: [CONSUMER_A],
+      fromBlock: 1_000n,
+      toBlock: 1_000n,
+      onRequestDiscovered,
+    })).rejects.toBe(failure);
+    expect(onRequestDiscovered).not.toHaveBeenCalled();
+  });
+});

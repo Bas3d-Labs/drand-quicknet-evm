@@ -2269,3 +2269,24 @@ at one instant before writing; a failed publication leaves the previous file and
 its original timestamp. The 16 KiB cap and 2 KiB conservative margin are unchanged.
 Rejected offers are encoded exactly through uint64 maximum; overflow fails only
 diagnostic publication and never resets or saturates the scheduler counter.
+
+### Request discovery diagnostics
+
+At debug level, `request_discovered` records each decoded request returned by a
+soft or durable scan, before processing begins. Fields are `consumer`, `round`,
+`transactionHash` (the request transaction), `logIndex`, `blockNumber`, optional
+`blockHash`, and `scanType`; the daemon envelope supplies `cycle`, `runId`, chain
+identity and `time`. The timestamp records diagnostic emission after successful
+response decoding, not chain inclusion, finality, queue entry or authorization.
+A scan whose RPC request or decoding fails emits no discovery records. Later
+processing or anchor validation can still fail after discovery was logged.
+
+Every returned log is reported, including repeats while a durable checkpoint
+remains pinned. This can produce substantial debug volume; there is no production
+deduplication. For latency analysis, retain the first observation for each
+consumer/request transaction/log index/block hash/round identity within a run,
+and preserve changed block hashes as distinct evidence. Missing block hashes
+are omitted, without changing processing acceptance; such observations are
+incomplete for canonical identity analysis. Logging failures do not stop request
+processing. These diagnostics add no RPC calls and are not read by scheduling,
+recovery, admission or checkpoint logic.

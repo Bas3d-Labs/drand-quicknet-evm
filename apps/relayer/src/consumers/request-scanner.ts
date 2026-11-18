@@ -3,6 +3,10 @@ import type {
   PublicClient,
 } from 'viem';
 
+import type {
+  RequestDiscoveryObserver,
+} from '../diagnostics/request-discovery.js';
+
 import {
   getQuicknetRandomnessRequests,
   type QuicknetRandomnessRequest,
@@ -14,6 +18,7 @@ export interface ScanQuicknetRequestOptions {
   nextBlock: bigint;
   throughBlock: bigint;
   maxBlockRange: bigint;
+  onRequestDiscovered?: RequestDiscoveryObserver | undefined;
 }
 
 export type ScanQuicknetRequestsResult =
@@ -64,6 +69,7 @@ export async function scanQuicknetRequests(
     consumers: options.consumers,
     fromBlock: options.nextBlock,
     toBlock,
+    onRequestDiscovered: options.onRequestDiscovered,
   });
 
   return {
