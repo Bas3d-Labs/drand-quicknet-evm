@@ -309,14 +309,16 @@ describe('parseMaxBlockRange', () => {
 });
 
 describe('parsePollIntervalMs', () => {
-  it('uses the default when QUICKNET_POLL_INTERVAL_MS is missing', () => {
+  it('uses 15 seconds when QUICKNET_POLL_INTERVAL_MS is missing', () => {
     expect(
       parsePollIntervalMs(undefined),
-    ).toBe(DEFAULT_POLL_INTERVAL_MS);
+    ).toBe(15_000);
   });
 
   it.each([
     ['2500', 2_500],
+    ['1000', 1_000],
+    ['5000', 5_000],
     ['1', 1],
     [
       Number.MAX_SAFE_INTEGER.toString(),
