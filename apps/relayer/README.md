@@ -691,7 +691,7 @@ variables are unset:
 
 ```dotenv
 QUICKNET_MAX_BLOCK_RANGE=2000
-QUICKNET_POLL_INTERVAL_MS=1000
+QUICKNET_POLL_INTERVAL_MS=15000
 QUICKNET_LOG_LEVEL=info
 ```
 
@@ -718,7 +718,14 @@ Accepts a positive decimal integer.
 
 #### `QUICKNET_POLL_INTERVAL_MS`
 
-Default: `1000` milliseconds.
+Default: `15000` milliseconds.
+
+This default reduces recurring RPC traffic for independent operators.
+Upgrading from the previous `1000` ms default changes behavior when
+`QUICKNET_POLL_INTERVAL_MS` is unset. Explicit values remain unchanged;
+set `QUICKNET_POLL_INTERVAL_MS=1000` to retain the previous interval.
+Operators serving applications with short discovery deadlines should
+coordinate the setting with those teams before upgrading.
 
 Delay after each completed daemon cycle before starting the next one.
 Shutdown interrupts this delay. During first-use daemon startup, this 
@@ -732,6 +739,44 @@ take additional time.
 A shorter interval improves responsiveness and catch-up throughput
 but increases RPC traffic. A longer interval reduces cycle frequency
 but can delay discovery of new requests and historical catch-up.
+
+Catch-up scans remain limited by `QUICKNET_MAX_BLOCK_RANGE` and do not
+skip the polling delay merely because a cursor is behind. For a fresh
+checkpoint, set `QUICKNET_START_BLOCK` to the earliest deployment block
+among the configured consumers to avoid scanning unrelated history
+without skipping their requests. Existing checkpoints retain their saved
+progress; preserve them across upgrades.
+
+Choose the polling interval with the consumer’s requested lead and the
+network’s timing assumptions in mind. Shorter intervals can improve
+discovery before release, but cycle processing and RPC visibility add
+delay, so an interval below the minimum lead does not guarantee discovery
+before release.
+
+With a three-round Quicknet lead (7–9 seconds relative to the request
+block timestamp), the 15-second setting can discover requests after their
+scheduled beacon release. In a ten-request Robinhood testnet run, eight
+were discovered after release; in a separate ten-request run at 5 seconds,
+none were. These small sequential samples do not establish long-run miss
+rates or latency bounds. Already-discovered future rounds can wake the
+scheduler at release rather than waiting for the entire polling delay.
+
+Observed daemon HTTP usage on Robinhood testnet with one consumer,
+safe finality, and a maximum block range of 2000:
+
+| Poll interval | Idle HTTP attempts/hour | Workload HTTP attempts/hour |
+| --- | ---: | ---: |
+| 15 seconds | about 2,609 | about 4,172 |
+| 5 seconds | about 6,507 | about 9,395 |
+
+The 15-second idle rate comes from a separate hour-long idle measurement.
+The 5-second idle rate extrapolates approximately ten minutes, observing
+one safe-head advance at heartbeat resolution. Workload rates cover
+approximately one hour with ten distinct requested rounds, exclude the
+subsequent drain, and are not steady-state loaded-cost estimates. They
+exclude the separate experiment observer's RPC traffic. Provider method
+weights, retries, consumer count, retained attempts, and chain behavior
+affect cost; these figures do not guarantee a particular bill or plan fit.
 
 This setting controls cycle frequency, not individual RPC calls.
 One cycle can make multiple calls and process multiple rounds.

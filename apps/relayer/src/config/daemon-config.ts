@@ -24,7 +24,7 @@ import {
 } from '../shared/decimal.js';
 
 export const DEFAULT_MAX_BLOCK_RANGE = 2_000n;
-export const DEFAULT_POLL_INTERVAL_MS = 1_000;
+export const DEFAULT_POLL_INTERVAL_MS = 15_000;
 
 export interface DaemonConfig extends RelayerConfig {
   consumers: readonly Address[];
