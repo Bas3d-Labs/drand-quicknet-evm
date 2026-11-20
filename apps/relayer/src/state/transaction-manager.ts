@@ -182,6 +182,9 @@ export class TransactionManager {
     const recovery = new SignerRecoveryCycle({
       coordinator,
       schedule,
+      ...(options.schedulerObserver === undefined
+        ? {}
+        : { schedulerObserver: options.schedulerObserver }),
       ...(durableSchedule === undefined ? {} : { durableSchedule }),
     });
 

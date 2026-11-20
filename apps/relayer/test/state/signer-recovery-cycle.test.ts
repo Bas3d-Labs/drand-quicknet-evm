@@ -49,6 +49,10 @@ import type {
   TransactionJournalStore,
 } from '../../src/state/transaction-journal.js';
 
+import type {
+  SchedulerRecoveryObserver,
+} from '../../src/state/scheduler-recovery-observer.js';
+
 const KEY = `0x${'11'.repeat(32)}` as const;
 const ACCOUNT = privateKeyToAccount(KEY);
 
@@ -74,6 +78,8 @@ async function setup(options: {
   empty?: boolean;
   missing?: boolean;
   maxRetainedAttempts?: number;
+  schedulerObserver?: SchedulerRecoveryObserver;
+  recordHeaders?: boolean;
 } = {}) {
   let visible: TransactionJournalRead = {
     kind: 'present',
@@ -112,6 +118,9 @@ async function setup(options: {
   );
 
   const create = () => SignerCoordinator.create({
+    ...(options.schedulerObserver === undefined
+      ? {}
+      : { schedulerObserver: options.schedulerObserver }),
     identity: IDENTITY,
     maxRetainedAttempts: options.maxRetainedAttempts ?? 3,
     store: { load, save },
@@ -221,10 +230,16 @@ async function setup(options: {
       });
 
   const getBlock = vi.fn<PublicClient['getBlock']>()
-    .mockImplementation(async ({ blockNumber } = {}) => ({
-      number: blockNumber,
-      hash: HASH,
-    }) as never);
+    .mockImplementation(async ({ blockNumber } = {}) => {
+      if (options.recordHeaders) {
+        events.push(`header:${blockNumber}`);
+      }
+
+      return {
+        number: blockNumber,
+        hash: HASH,
+      } as never;
+    });
 
   const publicClient = {
     request,
@@ -244,6 +259,9 @@ async function setup(options: {
   const cycle = new SignerRecoveryCycle({
     coordinator,
     schedule,
+    ...(options.schedulerObserver === undefined
+      ? {}
+      : { schedulerObserver: options.schedulerObserver }),
   });
 
   const recovery = {
@@ -4721,5 +4739,244 @@ describe('inspection bracket final nonce and anchor validation', () => {
 
     const next = t.coordinator.beginInspection();
     await next.abandon();
+  });
+});
+
+describe('scheduler recovery observations', () => {
+  it('does not sample the observation clock without a hook', async () => {
+    const now = vi.fn(() => 10);
+    const t = await setup({ schedulerObserver: { now } });
+
+    await t.cycle.run(t.recovery);
+
+    expect(now).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    'preserves provider and persistence order when hooks throw: %s',
+    async (throws) => {
+      const baseline = await setup({ recordHeaders: true });
+
+      await baseline.cycle.run(baseline.recovery);
+
+      const order: string[] = [];
+      const now = vi.fn()
+        .mockReturnValueOnce(10)
+        .mockReturnValueOnce(20)
+        .mockReturnValueOnce(30);
+      const onInspectionCompleted = vi.fn<
+        NonNullable<SchedulerRecoveryObserver['onInspectionCompleted']>
+      >(() => {
+        order.push('inspection');
+
+        if (throws) {
+          throw new Error('observer failure');
+        }
+      });
+      const onBroadcastAcknowledged = vi.fn(() => {
+        order.push('acknowledgement');
+
+        if (throws) {
+          throw new Error('observer failure');
+        }
+      });
+      const t = await setup({
+        recordHeaders: true,
+        schedulerObserver: {
+          now,
+          onInspectionCompleted,
+          onBroadcastAcknowledged,
+        },
+      });
+
+      const beginInspection = t.coordinator.beginInspection.bind(t.coordinator);
+      const abandon = vi.fn();
+
+      vi.spyOn(t.coordinator, 'beginInspection').mockImplementation((options) => {
+        const owner = beginInspection(options);
+
+        return {
+          recover: (...args) => owner.recover(...args),
+          checkInclusions: (...args) => owner.checkInclusions(...args),
+          finish() {
+            owner.finish();
+
+            order.push('finished');
+          },
+          async abandon() {
+            abandon();
+
+            await owner.abandon();
+          },
+        };
+      });
+
+      const result = await t.cycle.run(t.recovery);
+      const fact = onInspectionCompleted.mock.calls[0]![0];
+
+      expect(Object.isFrozen(fact)).toBe(true);
+      expect(Object.isFrozen(fact.coveredAttemptIds)).toBe(true);
+      expect(Object.isFrozen(fact.retainedAttemptIds)).toBe(true);
+      expect(abandon).not.toHaveBeenCalled();
+      expect(t.events).toEqual(baseline.events);
+      expect(result.broadcast?.status).toBe('acknowledged');
+      expect(order).toEqual(['finished', 'inspection', 'acknowledgement']);
+      expect(now).toHaveBeenCalledTimes(3);
+      expect(onInspectionCompleted).toHaveBeenCalledWith({
+        startedAt: 10,
+        completedAt: 20,
+        recoveryComplete: true,
+        inclusionChecksComplete: false,
+        persistenceIdle: true,
+        retainedCount: 1,
+        retainedAttemptIds: [t.coordinator.attempts[0]!.attemptId],
+        coveredAttemptIds: [],
+      });
+      expect(onBroadcastAcknowledged).toHaveBeenCalledWith({
+        attemptId: t.coordinator.attempts[0]!.attemptId,
+        workId: 'test-work:first',
+        acknowledgedAt: 30,
+      });
+    },
+  );
+
+  it('keeps inspection completion when the later broadcast throws', async () => {
+    const onInspectionCompleted = vi.fn();
+    const onBroadcastAcknowledged = vi.fn();
+    const t = await setup({
+      schedulerObserver: {
+        now: () => 10,
+        onInspectionCompleted,
+        onBroadcastAcknowledged,
+      },
+    });
+    const failure = new Error('broadcast failure');
+
+    vi.spyOn(t.coordinator, 'broadcastAttempt').mockRejectedValue(failure);
+
+    await expect(t.cycle.run(t.recovery)).rejects.toBe(failure);
+
+    expect(onInspectionCompleted).toHaveBeenCalledTimes(1);
+    expect(onBroadcastAcknowledged).not.toHaveBeenCalled();
+  });
+
+  it('does not publish completion after an abandoned inspection', async () => {
+    const onInspectionCompleted = vi.fn();
+    const t = await setup({
+      schedulerObserver: { now: () => 10, onInspectionCompleted },
+    });
+    const failure = new Error('provider failure');
+
+    t.getTransactionCount.mockRejectedValue(failure);
+
+    await expect(t.cycle.run(t.recovery)).rejects.toBe(failure);
+
+    expect(onInspectionCompleted).not.toHaveBeenCalled();
+  });
+
+  it('isolates a throwing observation clock', async () => {
+    const baseline = await setup({ recordHeaders: true });
+
+    await baseline.cycle.run(baseline.recovery);
+
+    const t = await setup({
+      recordHeaders: true,
+      schedulerObserver: {
+        now() {
+          throw new Error('clock failure');
+        },
+        onInspectionCompleted: vi.fn(),
+        onBroadcastAcknowledged: vi.fn(),
+      },
+    });
+
+    expect((await t.cycle.run(t.recovery)).broadcast?.status)
+      .toBe('acknowledged');
+    expect(t.events).toEqual(baseline.events);
+  });
+
+  it('does not claim latest coverage for attempts resolved during durable recovery', async () => {
+    const onInspectionCompleted = vi.fn();
+    const t = await setup({
+      schedulerObserver: { now: () => 10, onInspectionCompleted },
+    });
+
+    t.getTransactionReceipt.mockImplementation(async ({ hash }) => ({
+      transactionHash: hash,
+      blockNumber: 100n,
+      blockHash: HASH,
+      status: 'success',
+    }) as never);
+
+    t.getTransactionCount.mockResolvedValue(5);
+
+    await t.cycle.run({ ...t.recovery, head: ANCHOR });
+
+    expect(onInspectionCompleted).toHaveBeenCalledWith({
+      startedAt: 10,
+      completedAt: 10,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      persistenceIdle: true,
+      retainedCount: 0,
+      retainedAttemptIds: [],
+      coveredAttemptIds: [],
+    });
+  });
+
+  it('reports only latest-checked coverage for a retained included attempt', async () => {
+    const onInspectionCompleted = vi.fn();
+    const t = await setup({
+      schedulerObserver: { now: () => 10, onInspectionCompleted },
+    });
+    const attempt = t.coordinator.attempts[0]!;
+
+    t.getTransactionReceipt.mockResolvedValue({
+      transactionHash: attempt.transactionHashes[0],
+      blockNumber: 105n,
+      blockHash: HASH,
+      status: 'success',
+    } as never);
+
+    t.getTransactionCount
+      .mockResolvedValueOnce(4)
+      .mockResolvedValueOnce(5);
+
+    await t.cycle.run({
+      ...t.recovery,
+      head: { blockNumber: 110n, blockHash: HASH },
+    });
+
+    expect(onInspectionCompleted).toHaveBeenCalledWith({
+      startedAt: 10,
+      completedAt: 10,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      persistenceIdle: true,
+      retainedCount: 1,
+      retainedAttemptIds: [attempt.attemptId],
+      coveredAttemptIds: [attempt.attemptId],
+    });
+  });
+
+  it('reports every acknowledged rebroadcast for the same attempt', async () => {
+    const onBroadcastAcknowledged = vi.fn();
+    const now = vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(20);
+    const t = await setup({
+      schedulerObserver: { now, onBroadcastAcknowledged },
+    });
+
+    await t.cycle.run(t.recovery);
+
+    t.at(100);
+
+    await t.cycle.run(t.recovery);
+
+    expect(onBroadcastAcknowledged).toHaveBeenCalledTimes(2);
+    expect(onBroadcastAcknowledged.mock.calls[0]![0].attemptId)
+      .toBe(onBroadcastAcknowledged.mock.calls[1]![0].attemptId);
+    expect(onBroadcastAcknowledged.mock.calls[0]![0].acknowledgedAt).toBe(10);
+    expect(onBroadcastAcknowledged.mock.calls[1]![0].acknowledgedAt).toBe(20);
+    expect(now).toHaveBeenCalledTimes(2);
   });
 });

@@ -95,6 +95,7 @@ async function managerFixture(options: {
   maxRetainedAttempts?: number;
   durableRecovery?: TransactionManagerOptions['durableRecovery'];
   onRecoveryCompleted?: TransactionManagerOptions['onRecoveryCompleted'];
+  schedulerObserver?: TransactionManagerOptions['schedulerObserver'];
 } = {}) {
   const observation = {
     anchor: DURABLE,
@@ -197,6 +198,9 @@ async function managerFixture(options: {
     },
     readChainHeads,
     maxBlockRange: 2n,
+    ...(options.schedulerObserver === undefined
+      ? {}
+      : { schedulerObserver: options.schedulerObserver }),
     ...(options.onRecoveryCompleted === undefined
       ? {}
       : { onRecoveryCompleted: options.onRecoveryCompleted }),
@@ -1363,4 +1367,38 @@ describe('isOperationCancelled', () => {
     expect(isOperationCancelled(error, controller.signal)).toBe(false);
     expect(getter).not.toHaveBeenCalled();
   });
+});
+
+it('supplies inspection and acknowledgement facts through pre-submit reconciliation', async () => {
+  const order: string[] = [];
+  const now = vi.fn(() => 100);
+  const onInspectionCompleted = vi.fn(() => {
+    order.push('inspection');
+  });
+  const onBroadcastAcknowledged = vi.fn(() => {
+    order.push('acknowledgement');
+  });
+  const t = await managerFixture({
+    schedulerObserver: {
+      now,
+      onInspectionCompleted,
+      onBroadcastAcknowledged,
+    },
+  });
+
+  await t.manager.submit(submissionOptions());
+
+  expect(order).toEqual(['inspection', 'acknowledgement']);
+  expect(now).toHaveBeenCalledTimes(3);
+  expect(onInspectionCompleted).toHaveBeenCalledWith({
+    startedAt: 100,
+    completedAt: 100,
+    recoveryComplete: true,
+    inclusionChecksComplete: true,
+    persistenceIdle: true,
+    retainedCount: 0,
+    retainedAttemptIds: [],
+    coveredAttemptIds: [],
+  });
+  expect(onBroadcastAcknowledged).toHaveBeenCalledTimes(1);
 });
