@@ -12,6 +12,7 @@ import {
 import {
   FutureRoundScheduler,
   MAX_WAITING_ROUNDS,
+  type DispatchObservation,
   type ScheduledPass,
   type WaitTransition,
 } from '../../src/daemon/future-round-scheduler.js';
@@ -486,4 +487,175 @@ describe('scheduler status capture', () => {
     expect(f.queue.observe(at).rejectedOffers).toBe('1');
     expect(clock().queue.observe(at).rejectedOffers).toBe('0');
   });
+});
+
+
+describe('dispatch observation adapter', () => {
+  async function run(throws: boolean | undefined) {
+    const facts: DispatchObservation[] = [];
+    const calls: bigint[] = [];
+    const transitions: WaitTransition[] = [];
+    const now = vi.fn(() => Number(roundScheduledTime(200n) * 1000n));
+    const queue = new FutureRoundScheduler({
+      chainId: 46630,
+      registry: REGISTRY,
+      now,
+      onTransition(event) {
+        transitions.push(event);
+      },
+      ...(throws === undefined ? {} : {
+        onDispatch(fact: DispatchObservation) {
+          facts.push(fact);
+
+          if (throws) {
+            throw new Error('observer failure');
+          }
+        },
+      }),
+    });
+
+    for (let round = 100n; round < 118n; round += 1n) {
+      queue.offer(request(round), roundScheduledTime(round));
+    }
+
+    const pass = await queue.dispatch(async (round) => {
+      calls.push(round);
+
+      if (round === 100n) {
+        return {
+          status: 'waiting',
+          reason: 'round-not-released',
+          round,
+          releaseTime: roundScheduledTime(round),
+        };
+      }
+
+      return { status: 'already-stored', round, randomness: HASH };
+    });
+    const sleep = queue.sleepMilliseconds(15_000, pass);
+
+    return { pass, sleep, calls, transitions, facts, reads: now.mock.calls.length };
+  }
+
+  it.each([false, true])('preserves dispatch, transitions and sleep with throwing hook: %s', async (throws) => {
+    const baseline = await run(undefined);
+    const observed = await run(throws);
+
+    expect(observed.pass).toEqual(baseline.pass);
+    expect(observed.calls).toEqual(baseline.calls);
+    expect(observed.transitions).toEqual(baseline.transitions);
+    expect(observed.sleep).toBe(baseline.sleep);
+    expect(observed.reads).toBe(baseline.reads);
+    expect(observed.facts.filter((fact) => fact.disposition === 'waiting')).toHaveLength(1);
+    expect(observed.facts.filter((fact) => fact.disposition === 'completed')).toHaveLength(15);
+    expect(observed.facts.filter((fact) => fact.disposition === 'remainder')).toHaveLength(2);
+    expect(observed.facts.every(Object.isFrozen)).toBe(true);
+  });
+
+  it('does not turn backward-clock skips into dispatch remainders', async () => {
+    const release = Number(roundScheduledTime(100n) * 1000n);
+    let now = release;
+    const facts: DispatchObservation[] = [];
+    const queue = new FutureRoundScheduler({
+      chainId: 46630,
+      registry: REGISTRY,
+      now: () => now,
+      onDispatch: (fact) => facts.push(fact),
+    });
+
+    queue.offer(request(99n), roundScheduledTime(99n));
+    queue.offer(request(100n), roundScheduledTime(100n));
+
+    const pass = await queue.dispatch(async (round) => {
+      now = release - 1;
+
+      return { status: 'already-stored', round, randomness: HASH };
+    });
+
+    expect(pass.handedOff).toBe(1);
+    expect(facts.map((fact) => fact.disposition)).toEqual(['completed', 'clock-deferred']);
+    expect(queue.size).toBe(1);
+  });
+
+  it.each(['failed', 'blocked'] as const)('reports %s without a continuation', async (disposition) => {
+    const facts: DispatchObservation[] = [];
+    const queue = new FutureRoundScheduler({
+      chainId: 46630,
+      registry: REGISTRY,
+      now: () => Number(roundScheduledTime(200n) * 1000n),
+      onDispatch: (fact) => facts.push(fact),
+    });
+
+    for (let round = 100n; round < 118n; round += 1n) {
+      queue.offer(request(round), roundScheduledTime(round));
+    }
+
+    await queue.dispatch(async (round) => {
+      if (disposition === 'failed') {
+        throw new Error('import failed');
+      }
+
+      return {
+        status: 'deferred',
+        round,
+        reason: 'signer-unavailable',
+        blocker: 'recovery-incomplete',
+      };
+    });
+
+    expect(facts.map((fact) => fact.disposition)).toEqual([disposition]);
+    expect(queue.size).toBe(18);
+  });
+
+  it('does not report cap continuation when every attempted round is waiting', async () => {
+    const facts: DispatchObservation[] = [];
+    const queue = new FutureRoundScheduler({
+      chainId: 46630,
+      registry: REGISTRY,
+      now: () => Number(roundScheduledTime(200n) * 1000n),
+      onDispatch: (fact) => facts.push(fact),
+    });
+
+    for (let round = 100n; round < 118n; round += 1n) {
+      queue.offer(request(round), roundScheduledTime(round));
+    }
+
+    const pass = await queue.dispatch(async (round) => ({
+      status: 'waiting',
+      reason: 'round-not-released',
+      round,
+      releaseTime: roundScheduledTime(round),
+    }));
+
+    expect(facts).toHaveLength(16);
+    expect(facts.every((fact) => fact.disposition === 'waiting')).toBe(true);
+    expect(pass.handedOff).toBe(0);
+    expect(queue.sleepMilliseconds(15_000, pass)).toBe(15_000);
+  });
+
+  it('suppresses cap continuation when an in-pass clock step makes selected work future', async () => {
+    let now = Number(roundScheduledTime(200n) * 1000n);
+    const facts: DispatchObservation[] = [];
+    const queue = new FutureRoundScheduler({
+      chainId: 46630,
+      registry: REGISTRY,
+      now: () => now,
+      onDispatch: (fact) => facts.push(fact),
+    });
+
+    for (let round = 100n; round < 118n; round += 1n) {
+      queue.offer(request(round), roundScheduledTime(round));
+    }
+
+    const pass = await queue.dispatch(async (round) => {
+      now = Number(roundScheduledTime(99n) * 1000n);
+
+      return { status: 'already-stored', round, randomness: HASH };
+    });
+
+    expect(pass.handedOff).toBe(1);
+    expect(facts.filter((fact) => fact.disposition === 'clock-deferred')).toHaveLength(15);
+    expect(facts.some((fact) => fact.disposition === 'remainder')).toBe(false);
+  });
+
 });

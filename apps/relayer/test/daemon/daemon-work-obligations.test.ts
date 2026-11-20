@@ -312,3 +312,79 @@ describe('partial settlement', () => {
     expect(owner.get(scan)?.eligibleAt).toBe(90_100);
   });
 });
+
+describe('authoritative cursor replacement', () => {
+  it('replaces a normalized soft range without erasing backoff or its fixed target', () => {
+    const owner = new DaemonWorkObligations(15_000);
+    const old = owner.observeScan('soft', 'soft-continuation', 10n, 20n, 0);
+    const captured = owner.capture('discovery', 0);
+
+    owner.fail(captured, 100, EMPTY);
+    owner.observeScan('soft', 'soft-continuation', 10n, 40n, 0);
+
+    const next = owner.replaceScan(old, 'soft-normalization', 15n, 200)!;
+
+    expect(owner.get(old)).toBeUndefined();
+    expect(next.generation).not.toBe(old.generation);
+    expect(next.eligibleAt).toBe(15_100);
+    expect(owner.scanTarget(next)).toBe(20n);
+
+    owner.fail(captured, 1_000, EMPTY);
+
+    expect(owner.get(next)?.eligibleAt).toBe(15_100);
+    expect(owner.replaceScan(old, 'soft-normalization', 18n, 300)).toBeUndefined();
+
+    const promoted = owner.scanProgress(next, 21n, 16_000)!;
+
+    expect(owner.scanTarget(promoted)).toBe(40n);
+  });
+
+  it('promotes a remembered target when normalization covers the active range', () => {
+    const owner = new DaemonWorkObligations(15_000);
+    const old = owner.observeScan('soft', 'soft-continuation', 10n, 20n, 0);
+
+    owner.observeScan('soft', 'soft-continuation', 10n, 40n, 0);
+    owner.fail(owner.capture('discovery', 0), 100, EMPTY);
+
+    const next = owner.replaceScan(old, 'soft-normalization', 25n, 200)!;
+
+    expect(owner.scanTarget(next)).toBe(40n);
+    expect(next.eligibleAt).toBe(15_100);
+    expect(owner.replaceScan(next, 'soft-normalization', 41n, 300)).toBeUndefined();
+    expect(owner.nextDeadline('discovery')).toBeNull();
+  });
+
+  it('allows an authoritative checkpoint reload to move backward with inherited eligibility', () => {
+    const owner = new DaemonWorkObligations(15_000);
+    const old = owner.observeScan('durable', 'durable-continuation', 10n, 20n, 0);
+
+    owner.fail(owner.capture('full', 0), 100, EMPTY);
+
+    const next = owner.replaceScan(old, 'checkpoint-reload', 5n, 200)!;
+
+    expect(next.eligibleAt).toBe(90_100);
+    expect(owner.scanTarget(next)).toBe(20n);
+    expect(owner.capture('full', 90_099).obligations).toEqual([]);
+    expect(owner.capture('full', 90_100).obligations).toHaveLength(1);
+  });
+
+  it('rejects refreshes and mismatched reasons without changing the obligation', () => {
+    const owner = new DaemonWorkObligations(15_000);
+    const old = owner.observeScan('soft', 'soft-continuation', 10n, 20n, 0);
+
+    owner.fail(owner.capture('discovery', 0), 100, EMPTY);
+
+    for (const nextBlock of [10n, 9n, -1n]) {
+      expect(() => owner.replaceScan(old, 'soft-normalization', nextBlock, 200))
+        .toThrow('Invalid scan cursor replacement');
+    }
+
+    expect(() => owner.replaceScan(old, 'checkpoint-reload', 15n, 200))
+      .toThrow('Invalid scan cursor replacement');
+
+    owner.observeScan('soft', 'soft-continuation', 10n, 15n, 200);
+
+    expect(owner.get(old)?.eligibleAt).toBe(15_100);
+    expect(owner.scanTarget(old)).toBe(20n);
+  });
+});

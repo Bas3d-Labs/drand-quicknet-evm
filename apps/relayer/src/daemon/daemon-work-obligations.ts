@@ -520,6 +520,70 @@ export class DaemonWorkObligations {
     return next;
   }
 
+  /** Replace an authoritative cursor jump, never an ordinary head refresh. */
+  replaceScan(
+    reference: ObligationReference,
+    reason: 'soft-normalization' | 'checkpoint-reload',
+    nextBlock: bigint,
+    observedAt: number,
+  ): WorkObligation | undefined {
+    assertTime(observedAt);
+
+    const current = this.get(reference);
+    const scan = this.scans.get(reference.identity);
+
+    if (current === undefined || scan === undefined) {
+      return undefined;
+    }
+
+    if (
+      nextBlock < 0n ||
+      nextBlock === scan.nextBlock ||
+      (
+        reason === 'soft-normalization' &&
+        (current.reason !== 'soft-continuation' || nextBlock < scan.nextBlock)
+      ) ||
+      (reason === 'checkpoint-reload' && current.reason !== 'durable-continuation') ||
+      (reason !== 'soft-normalization' && reason !== 'checkpoint-reload')
+    ) {
+      throw new TypeError('Invalid scan cursor replacement.');
+    }
+
+    let target = scan.target;
+
+    if (nextBlock > target) {
+      target = scan.latestTarget;
+    }
+
+    // Check before retiring the old generation so a refused replacement
+    // cannot lose the existing obligation.
+    if (nextBlock <= target && this.generation === Number.MAX_SAFE_INTEGER) {
+      throw new Error('Obligation generations exhausted.');
+    }
+
+    this.complete(reference);
+
+    if (nextBlock > target) {
+      return undefined;
+    }
+
+    const replacement = this.observe(
+      current.identity,
+      current.reason,
+      Math.min(current.dueAt, observedAt),
+    );
+
+    this.scans.set(current.identity, {
+      target,
+      latestTarget: scan.latestTarget,
+      nextBlock,
+    });
+
+    this.delay(replacement, current.eligibleAt);
+
+    return this.get(replacement);
+  }
+
   dispatchOutcome(
     reference: ObligationReference,
     outcome: 'completed' | 'waiting' | 'remainder',
