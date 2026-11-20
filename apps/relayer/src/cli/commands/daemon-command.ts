@@ -22,6 +22,7 @@ import {
 
 import {
   createRelayerClients,
+  type RelayerClients,
 } from '../../chain/clients.js';
 
 import type {
@@ -64,6 +65,14 @@ import {
 import {
   createRpcUsageSnapshot,
 } from '../../diagnostics/rpc/rpc-usage-snapshot.js';
+
+import {
+  openDiagnosticTrace,
+} from '../../diagnostics/trace/open-diagnostic-trace.js';
+
+import type {
+  DiagnosticTrace,
+} from '../../diagnostics/trace/diagnostic-trace.js';
 
 import {
   FileCheckpointStore,
@@ -138,6 +147,14 @@ export async function runDaemonCommand(
     errorSummary,
   });
 
+  let trace: DiagnosticTrace | undefined;
+
+  const tracePath = env.QUICKNET_DIAGNOSTIC_TRACE_FILE;
+
+  let traceOutcome: 'success' | 'incomplete' = 'incomplete';
+
+  let traceCyclePending: number | undefined;
+
   const statusPublisher = createDaemonStatusPublisher({
     identity: {
       chainId: config.chain.id,
@@ -154,6 +171,13 @@ export async function runDaemonCommand(
         observedAt,
       );
     },
+    onSnapshot(snapshot) {
+      if (traceCyclePending !== undefined) {
+        trace?.cycle(traceCyclePending, snapshot, traceOutcome);
+
+        traceCyclePending = undefined;
+      }
+    },
     onFailure(error) {
       logger.statusPublicationFailed({
         signer: config.account.address,
@@ -166,7 +190,17 @@ export async function runDaemonCommand(
     logger,
   });
 
-  const clients = createRelayerClients(config);
+  let clients: RelayerClients;
+
+  if (tracePath === undefined) {
+    clients = createRelayerClients(config);
+  } else {
+    clients = createRelayerClients(config, {
+      onTrace(event) {
+        trace?.rpc(event);
+      },
+    });
+  }
 
   const rpcUsageSession = createRpcUsageSession({
     readSnapshot: () => clients.rpcMetrics.snapshot(),
@@ -179,6 +213,25 @@ export async function runDaemonCommand(
   });
 
   try {
+    if (tracePath !== undefined) {
+      trace = await openDiagnosticTrace(tracePath, {
+        identity: {
+          chainId: config.chain.id,
+          signer: config.account.address,
+        },
+        runId,
+        onFailure(reason) {
+          logger.diagnosticTraceFailed({ reason });
+        },
+      });
+    }
+
+    if (trace !== undefined) {
+      trace.start(clients.rpcMetrics.snapshot());
+
+      logger.diagnosticTraceEnabled({ schemaVersion: 1n });
+    }
+
     await verifyRegistryDeployment(
       clients.publicClient,
       config.deployment,
@@ -286,6 +339,20 @@ export async function runDaemonCommand(
       async onCycle(result, context) {
         statusPublisher.onCycleCompleted(context.cycle);
 
+        traceOutcome = 'success';
+
+        if (
+          result.scheduled?.failed || result.scheduled?.blocked ||
+          result.consumers.some((consumer) => (
+            consumer.status !== 'success' ||
+            (consumer.incomplete?.length ?? 0) > 0
+          ))
+        ) {
+          traceOutcome = 'incomplete';
+        }
+
+        traceCyclePending = context.cycle;
+
         try {
           const cycleLogger = logger.withContext({
             cycle: context.cycle,
@@ -296,6 +363,13 @@ export async function runDaemonCommand(
         } finally {
           try {
             await statusPublisher.publish();
+
+            if (traceCyclePending !== undefined && trace !== undefined) {
+              // A missing/invalid status cut must invalidate the capture.
+              trace.cycle(traceCyclePending, null, 'incomplete');
+
+              traceCyclePending = undefined;
+            }
           } finally {
             rpcUsageSession.onCycle();
           }
@@ -307,5 +381,7 @@ export async function runDaemonCommand(
     });
   } finally {
     rpcUsageSession.finish();
+
+    await trace?.close(clients.rpcMetrics.snapshot());
   }
 }

@@ -41,6 +41,9 @@ export interface DaemonStatusPublisherOptions {
   /** Captures cumulative RPC usage synchronously at publication time. */
   readonly readRpcUsage?: (observedAt: string) => RpcUsageSnapshot;
 
+  /** Receives the validated immutable payload at its counter cut, before I/O. */
+  readonly onSnapshot?: ((snapshot: DaemonStatusSnapshot) => void) | undefined;
+
   /** Synchronous diagnostic callback. Must not perform transaction work. */
   readonly onFailure: (error: unknown) => void;
 }
@@ -222,6 +225,12 @@ export function createDaemonStatusPublisher(
         attempts: projection.details,
         ...rpcFields,
       }, identity);
+
+      try {
+        options.onSnapshot?.(snapshot);
+      } catch (error) {
+        reportFailure(error);
+      }
 
       await write({
         identity,

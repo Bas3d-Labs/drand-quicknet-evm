@@ -58,6 +58,10 @@ import type {
   AttemptResolutionEvidence,
 } from './transaction-evidence.js';
 
+import type {
+  TraceFailure,
+} from './trace/diagnostic-trace.js';
+
 type Level = 'debug' | 'info' | 'warn' | 'error';
 type ScanType = 'durable' | 'soft' | 'scheduled';
 
@@ -134,6 +138,7 @@ interface Values {
   blocker: SignerBlocker;
   blockers: readonly SignerBlocker[];
   rpcReport: RpcUsageReport;
+  traceFailure: TraceFailure;
 }
 
 type Kind = keyof Values;
@@ -368,6 +373,22 @@ const EVENTS = {
     {
       signer: 'address',
       error: 'error',
+    },
+  ],
+  diagnosticTraceEnabled: [
+    'info',
+    'diagnostic_trace_enabled',
+    'Diagnostic tracing enabled',
+    {
+      schemaVersion: 'uint',
+    },
+  ],
+  diagnosticTraceFailed: [
+    'error',
+    'diagnostic_trace_failed',
+    'Diagnostic trace invalid; daemon recovery continues',
+    {
+      reason: 'traceFailure',
     },
   ],
   loggingFailed: [
@@ -1291,6 +1312,21 @@ function scalar(
       value === undefined ||
       value === 'witness-rejected' ||
       value === 'witness-decode-failed'
+    )
+  ) {
+    return value;
+  }
+
+  if (
+    kind === 'traceFailure' &&
+    (
+      value === 'invalid-event' ||
+      value === 'buffer-limit' ||
+      value === 'file-limit' ||
+      value === 'write-failed' ||
+      value === 'close-failed' ||
+      value === 'close-timeout' ||
+      value === 'rpc-in-flight'
     )
   ) {
     return value;

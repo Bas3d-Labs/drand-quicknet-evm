@@ -155,6 +155,8 @@ const loggerMocks = {
   roundPending: vi.fn<RelayerLog['roundPending']>(),
   heartbeat: vi.fn<RelayerLog['heartbeat']>(),
   rpcUsage: vi.fn<ScopedRelayerLog['rpcUsage']>(),
+  diagnosticTraceEnabled: vi.fn<RelayerLog['diagnosticTraceEnabled']>(),
+  diagnosticTraceFailed: vi.fn<RelayerLog['diagnosticTraceFailed']>(),
   loggingFailed: vi.fn<RelayerLog['loggingFailed']>(),
   statusPublicationFailed:
     vi.fn<RelayerLog['statusPublicationFailed']>(),

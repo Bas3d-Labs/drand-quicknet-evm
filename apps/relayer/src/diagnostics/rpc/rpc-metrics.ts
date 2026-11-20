@@ -1,3 +1,7 @@
+import {
+  AsyncLocalStorage,
+} from 'node:async_hooks';
+
 import { performance } from 'node:perf_hooks';
 
 import {
@@ -31,13 +35,32 @@ export const RPC_METHOD_LABELS = Object.freeze([
   'other',
 ] as const);
 
-type RpcMethod = typeof RPC_METHOD_LABELS[number];
+export type RpcMethod = typeof RPC_METHOD_LABELS[number];
 
-type StatusClass =
+export type StatusClass =
   | '2xx'
   | '3xx'
   | '4xx'
   | '5xx';
+
+/** Values only: no request arguments, responses or exceptions cross this boundary. */
+export interface RpcTraceEvent {
+  readonly collectorId: string;
+  readonly layer: 'logical' | 'http';
+  readonly phase: 'start' | 'end';
+  readonly callId: number;
+  readonly parentLogicalId: number | null;
+  readonly client: RpcClientRole;
+  readonly method: RpcMethod | null;
+  readonly atMs: number;
+  readonly durationMs: number;
+  readonly outcome: 'pending' | 'success' | 'failure';
+  readonly status: StatusClass | null;
+}
+
+export interface RpcMetricsOptions {
+  readonly onTrace?: ((event: RpcTraceEvent) => void) | undefined;
+}
 
 interface Counters {
   started: number;
@@ -142,30 +165,70 @@ function statusClass(status: number): StatusClass | undefined {
   return undefined;
 }
 
-export function createRpcMetrics(): RpcMetrics {
+export function createRpcMetrics(
+  options: RpcMetricsOptions = {},
+): RpcMetrics {
   const collectorId = randomUUID();
   const startedAt = new Date().toISOString();
+
   const logical = new Map<string, LogicalCounters>();
+
   const http = new Map<RpcClientRole, HttpCounters>();
+
+  const onTrace = options.onTrace;
+
+  const context = new AsyncLocalStorage<number>();
+
+  let nextCallId = 0;
+
+  function notify(event: RpcTraceEvent): void {
+    try {
+      onTrace?.(Object.freeze(event));
+    } catch {
+      // Optional diagnostics cannot replace the RPC result or rejection.
+    }
+  }
 
   async function measure<T>(
     row: Counters,
     action: () => Promise<T>,
-    onSuccess?: (result: T) => void,
+    onSuccess?: (result: T) => StatusClass | undefined,
+    trace?: Omit<
+      RpcTraceEvent,
+      'phase' | 'atMs' | 'durationMs' | 'outcome' | 'status'
+    >,
   ): Promise<T> {
     const startedAt = performance.now();
 
     row.started += 1;
+
     row.inFlight += 1;
+
+    let outcome: RpcTraceEvent['outcome'] = 'failure';
+
+    let status: StatusClass | null = null;
+
+    if (trace !== undefined) {
+      notify({
+        ...trace,
+        phase: 'start',
+        atMs: startedAt,
+        durationMs: 0,
+        outcome: 'pending',
+        status: null,
+      });
+    }
 
     try {
       const result = await action();
 
       row.succeeded += 1;
 
+      outcome = 'success';
+
       if (onSuccess !== undefined) {
         try {
-          onSuccess(result);
+          status = onSuccess(result) ?? null;
         } catch {
           // Status inspection must not alter the request outcome.
         }
@@ -174,10 +237,27 @@ export function createRpcMetrics(): RpcMetrics {
       return result;
     } catch (error) {
       row.failed += 1;
+
       throw error;
     } finally {
       row.inFlight -= 1;
-      row.durationMs += Math.max(0, performance.now() - startedAt);
+
+      const endedAt = performance.now();
+
+      const durationMs = Math.max(0, endedAt - startedAt);
+
+      row.durationMs += durationMs;
+
+      if (trace !== undefined) {
+        notify({
+          ...trace,
+          phase: 'end',
+          atMs: endedAt,
+          durationMs,
+          outcome,
+          status,
+        });
+      }
     }
   }
 
@@ -218,7 +298,24 @@ export function createRpcMetrics(): RpcMetrics {
         logical.set(key, row);
       }
 
-      return measure(row, action);
+      if (onTrace === undefined) {
+        return measure(row, action);
+      }
+
+      const callId = ++nextCallId;
+
+      const trace = {
+        collectorId,
+        layer: 'logical' as const,
+        callId,
+        parentLogicalId: context.getStore() ?? null,
+        client,
+        method: label,
+      };
+
+      const current = row;
+
+      return context.run(callId, () => measure(current, action, undefined, trace));
     },
 
     http(
@@ -244,13 +341,32 @@ export function createRpcMetrics(): RpcMetrics {
 
       const current = row;
 
+      let trace: Omit<
+        RpcTraceEvent,
+        'phase' | 'atMs' | 'durationMs' | 'outcome' | 'status'
+      > | undefined;
+
+      if (onTrace !== undefined) {
+        trace = {
+          collectorId,
+          layer: 'http',
+          callId: ++nextCallId,
+          // Async ancestry is not proof of membership in a transport batch.
+          parentLogicalId: null,
+          client,
+          method: null,
+        };
+      }
+
       return measure(current, action, (response) => {
         const category = statusClass(response.status);
 
         if (category !== undefined) {
           current.statuses[category] += 1;
         }
-      });
+
+        return category;
+      }, trace);
     },
   });
 }

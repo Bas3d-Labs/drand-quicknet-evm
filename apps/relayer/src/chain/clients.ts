@@ -12,6 +12,7 @@ import type {
 import {
   createRpcMetrics,
   type RpcMetrics,
+  type RpcMetricsOptions,
 } from '../diagnostics/rpc/rpc-metrics.js';
 
 import {
@@ -25,9 +26,10 @@ export interface RelayerClients {
 }
 
 export function createRelayerClients(
-  config: RelayerConfig
+  config: RelayerConfig,
+  metricsOptions: RpcMetricsOptions = {},
 ): RelayerClients {
-  const rpcMetrics = createRpcMetrics();
+  const rpcMetrics = createRpcMetrics(metricsOptions);
 
   const publicClient = createPublicClient({
     chain: config.chain,

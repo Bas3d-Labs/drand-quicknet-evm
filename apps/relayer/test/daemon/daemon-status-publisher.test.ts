@@ -621,3 +621,52 @@ describe('status queue capture timing', () => {
     expect(t.onFailure).toHaveBeenCalledTimes(2);
   });
 });
+
+
+describe('diagnostic snapshot callback', () => {
+  it('delivers the same immutable counter/status cut before file I/O', async () => {
+    const events: string[] = [];
+    const snapshots: unknown[] = [];
+    const onFailure = vi.fn();
+    const publisher = createDaemonStatusPublisher({
+      identity: IDENTITY,
+      runId: RUN_ID,
+      now: () => START,
+      readRpcUsage: rpcUsage,
+      onSnapshot(snapshot) {
+        events.push('snapshot');
+        snapshots.push(snapshot);
+      },
+      async write({ snapshot }) {
+        events.push('write');
+        expect(snapshot).toBe(snapshots[0]);
+      },
+      onFailure,
+    });
+    publisher.onInitialized(runtime);
+    publisher.onCycleCompleted(1);
+    await publisher.publish();
+    expect(events).toEqual(['snapshot', 'write']);
+    expect(snapshots).toHaveLength(1);
+    expect(onFailure).not.toHaveBeenCalled();
+    expect(snapshots[0]).toMatchObject({ lastCompletedCycle: { cycle: 1 }, rpcUsage: { observedAt: new Date(START).toISOString() } });
+  });
+
+  it('contains a throwing snapshot observer and still publishes', async () => {
+    const write = vi.fn(async () => {});
+    const onFailure = vi.fn();
+    const error = new Error('diagnostic callback');
+    const publisher = createDaemonStatusPublisher({
+      identity: IDENTITY,
+      runId: RUN_ID,
+      now: () => START,
+      onSnapshot() { throw error; },
+      write,
+      onFailure,
+    });
+    publisher.onInitialized(runtime);
+    await publisher.publish();
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(onFailure).toHaveBeenCalledWith(error);
+  });
+});
