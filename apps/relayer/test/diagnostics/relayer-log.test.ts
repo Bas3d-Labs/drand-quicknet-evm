@@ -167,8 +167,6 @@ describe('createRelayerLog', () => {
       'attemptResolved',
       'checkpointAdvanced',
       'consumerFailed',
-      'diagnosticTraceEnabled',
-      'diagnosticTraceFailed',
       'durableAnchorChanged',
       'durableAnchorUnavailable',
       'durableFulfillmentPending',
@@ -1395,62 +1393,5 @@ describe('request discovery event', () => {
     const { log, lines } = capture('info');
     log.requestDiscovered(fields);
     expect(lines).toHaveLength(0);
-  });
-});
-
-
-describe('diagnostic trace events', () => {
-  it('projects enabled fields without a destination or raw error', () => {
-    const { log, lines } = capture('info');
-
-    log.diagnosticTraceEnabled({
-      schemaVersion: 1n,
-      ...{ path: '/private/' + SECRET, error: providerError() },
-    });
-
-    expect(recordAt(lines)).toMatchObject({
-      event: 'diagnostic_trace_enabled',
-      level: 30,
-      schemaVersion: '1',
-    });
-
-    expect(lines.join('')).not.toContain(SECRET);
-  });
-
-  it.each([
-    'invalid-event', 'buffer-limit', 'file-limit', 'write-failed',
-    'close-failed', 'close-timeout', 'rpc-in-flight',
-  ] as const)('reports bounded trace failure %s', (reason) => {
-    const { log, lines } = capture('info');
-
-    log.diagnosticTraceFailed({ reason, ...{ error: providerError() } });
-
-    expect(recordAt(lines)).toMatchObject({
-      event: 'diagnostic_trace_failed',
-      level: 50,
-      reason,
-      msg: 'Diagnostic trace invalid; daemon recovery continues',
-    });
-
-    expect(lines.join('')).not.toContain(SECRET);
-  });
-
-  it('rejects unbounded failure reasons rather than serializing them', () => {
-    const { log, lines } = capture('info');
-
-    log.diagnosticTraceFailed({ reason: SECRET as never });
-
-    expect(lines.join('')).not.toContain(SECRET);
-    expect(lines.join('')).not.toContain('diagnostic_trace_failed');
-  });
-
-  it('filters enabled at warn while retaining trace failures', () => {
-    const { log, lines } = capture('warn');
-
-    log.diagnosticTraceEnabled({ schemaVersion: 1n });
-    log.diagnosticTraceFailed({ reason: 'write-failed' });
-
-    expect(lines).toHaveLength(1);
-    expect(recordAt(lines).event).toBe('diagnostic_trace_failed');
   });
 });

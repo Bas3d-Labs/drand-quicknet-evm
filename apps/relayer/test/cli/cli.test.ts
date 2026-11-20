@@ -583,8 +583,6 @@ beforeEach(() => {
     .mockReset()
     .mockReturnValue({
       rpcUsage: vi.fn(),
-      diagnosticTraceEnabled: vi.fn(),
-      diagnosticTraceFailed: vi.fn(),
       loggingFailed: vi.fn(),
     });
 });

@@ -70,19 +70,6 @@ import type {
   FinalityPolicy,
 } from '../../src/chain/finality-policy.js';
 
-import {
-  createRpcMetrics,
-} from '../../src/diagnostics/rpc/rpc-metrics.js';
-
-import {
-  createDiagnosticTrace,
-} from '../../src/diagnostics/trace/diagnostic-trace.js';
-
-import {
-  IDENTITY,
-  RUN_ID,
-} from '../diagnostics/trace/trace-fixtures.js';
-
 const CONSUMER_A: Address = '0x1111111111111111111111111111111111111111';
 const CONSUMER_B: Address = '0x2222222222222222222222222222222222222222';
 
@@ -228,71 +215,6 @@ function daemonOptions(
 }
 
 describe('runDaemon', () => {
-  it('settles awaited RPCs and the cycle callback before closing on abort', async () => {
-    const controller = new AbortController();
-    const entered = Promise.withResolvers<void>();
-    const held = Promise.withResolvers<Response>();
-    const lines: string[] = [];
-    const onFailure = vi.fn();
-    const trace = createDiagnosticTrace({
-      identity: IDENTITY,
-      runId: RUN_ID,
-      onFailure,
-      writer: {
-        async write(bytes) {
-          lines.push(bytes.toString());
-        },
-        async close() {},
-      },
-    });
-    const metrics = createRpcMetrics({ onTrace: trace.rpc });
-    const onCycle = vi.fn();
-
-    trace.start(metrics.snapshot());
-
-    vi.mocked(runDaemonCycle).mockImplementationOnce(async () => {
-      await metrics.logical('public', 'eth_getLogs', () => {
-        return metrics.http('public', () => {
-          entered.resolve();
-          return held.promise;
-        });
-      });
-
-      return caughtUpCycle();
-    });
-
-    let exited = false;
-    const running = runDaemon(daemonOptions({
-      signal: controller.signal,
-      onCycle,
-    })).finally(async () => {
-      exited = true;
-      await trace.close(metrics.snapshot());
-    });
-
-    await entered.promise;
-    controller.abort();
-    await new Promise(setImmediate);
-
-    expect(exited).toBe(false);
-    expect(onCycle).not.toHaveBeenCalled();
-    expect(metrics.snapshot().http[0]!.inFlight).toBe(1);
-
-    held.resolve(new Response());
-    await running;
-
-    const rows = lines.map((line) => JSON.parse(line));
-    const ends = rows.filter((row) => row.kind === 'rpc' && row.rpc.phase === 'end');
-    const final = rows.find((row) => row.kind === 'final_counters');
-
-    expect(ends).toHaveLength(2);
-    expect(ends.every((row) => row.sequence < final.sequence)).toBe(true);
-    expect(onCycle).toHaveBeenCalledTimes(1);
-    expect(rows.at(-1).health.valid).toBe(true);
-    expect(trace.health().droppedEvents).toBe(0);
-    expect(onFailure).not.toHaveBeenCalled();
-  });
-
   it('rejects a zero pollIntervalMs', async () => {
     await expect(
       runDaemon(daemonOptions({ pollIntervalMs: 0 }))

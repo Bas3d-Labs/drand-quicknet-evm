@@ -1715,68 +1715,6 @@ RPC reporting failures do not replace command results or execution errors.
 These measurements are diagnostic observations, not provider billing
 totals or evidence of daemon health.
 
-### Opt-in diagnostic trace
-
-`QUICKNET_DIAGNOSTIC_TRACE_FILE` enables a supported, off-by-default daemon
-trace. Enabling it emits the info-level `diagnostic_trace_enabled` event
-with the schema version through the normal logger. Set it to an absolute,
-previously unused JSONL file path in an existing directory you control. The daemon creates the file with mode
-`0600`; it refuses existing files, symlinks and symlinked parent paths.
-An invalid destination fails startup before transaction work. Keep the
-file private even though credentials and provider URLs are excluded.
-
-Schema 1 records logical and HTTP starts and completions, initial and
-final cumulative counters, and a copy of the existing status snapshot at
-every completed cycle. The snapshot must name the expected completed cycle;
-a mismatch invalidates tracing. The cycle outcome is `success` or `incomplete`;
-read the embedded gate, queue and recovery state when assessing readiness.
-Counters and status share the same publication cut, before asynchronous
-status-file writing. This adds no RPC requests and changes neither the
-journal nor the status schema. It does not change the polling schedule.
-
-Only bounded, validated fields are serialized. Request parameters,
-responses, raw errors, provider URLs and filesystem paths are excluded.
-Embedded status must pass the existing validator unchanged and use
-canonical Quicknet work IDs; unsupported opaque IDs invalidate the trace.
-HTTP-to-logical associations and operation ownership remain explicitly
-unattributed in this first tracing slice. Cache and recovery decision
-instrumentation is a separate slice; this trace alone is not yet the
-complete diagnostic capture protocol.
-
-The queue holds at most 2 MiB and 4,096 records, including an outstanding
-write. A record may be at most 256 KiB. Each file is limited to 256 MiB,
-including a reserved footer; there is no rotation or overwrite. A limit,
-invalid event or runtime write failure invalidates the capture and stops
-accepting trace data without stopping recovery. The daemon attempts a
-bounded `diagnostic_trace_failed` event with its reason; normal log
-filtering and log-output failures still apply. An incomplete trace must never be treated as valid
-evidence because the daemon continued running.
-
-Shutdown waits at most five seconds for tracing, then marks a timeout as
-invalid. This bounds the trace wait, not operating-system I/O or process
-exit. A pending write can finish later. The `trace_closed` footer describes
-health before the footer write and file close; it is not proof that close
-succeeded, data was fsynced, or the process exited. Preserve daemon logs,
-confirm process exit separately, and reject missing, truncated or invalid
-captures. A finalized capture must also account for close failures reported
-after the footer. `writtenBytes` counts completed record writes, not bytes
-partially written by a failed write.
-
-The close path checks both logical and HTTP in-flight counters before the
-footer. Outstanding calls invalidate the capture with `rpc-in-flight`;
-later completions are dropped. The serial daemon loop awaits its current
-cycle and publication before returning on an ordinary stop. Startup can
-still fail while sibling reads in a `Promise.all` remain outstanding;
-that is an invalid startup capture, not an orderly completed-cycle stop.
-Starting new work after finalization is unsupported and invalidates tracing.
-Sequence gaps can identify dropped records that reached record allocation;
-the dropped-event count also covers events rejected before allocation.
-
-Record the source commit and effective configuration in the capture
-manifest. The trace has its own run ID, collector ID, sequence and monotonic
-time origin, but does not authenticate the build. Tracing overhead still
-requires measurement before live comparison results are accepted.
-
 ### Daemon status snapshot
 
 The daemon attempts to publish `daemon-status.json` in the canonical

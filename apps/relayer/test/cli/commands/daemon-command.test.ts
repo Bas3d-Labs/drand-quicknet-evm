@@ -55,18 +55,6 @@ import {
   writeDaemonStatusFile,
 } from '../../../src/state/file-daemon-status-store.js';
 
-import {
-  openDiagnosticTrace,
-} from '../../../src/diagnostics/trace/open-diagnostic-trace.js';
-
-import {
-  createDiagnosticTrace,
-} from '../../../src/diagnostics/trace/diagnostic-trace.js';
-
-vi.mock('../../../src/diagnostics/trace/open-diagnostic-trace.js', () => ({
-  openDiagnosticTrace: vi.fn(),
-}));
-
 const signerRuntimeMocks = vi.hoisted(() => ({
   openBeaconSubmitter: vi.fn(),
 }));
@@ -95,8 +83,6 @@ const relayerLogMocks = vi.hoisted(() => ({
   roundAlreadyStored: vi.fn(),
   heartbeat: vi.fn(),
   rpcUsage: vi.fn(),
-  diagnosticTraceEnabled: vi.fn(),
-  diagnosticTraceFailed: vi.fn(),
   loggingFailed: vi.fn(),
   durableFulfillmentPending: vi.fn(),
   durableFulfillmentUnavailable: vi.fn(),
@@ -396,8 +382,6 @@ describe('runDaemonCommand', () => {
   }
 
   beforeEach(() => {
-    vi.mocked(openDiagnosticTrace).mockReset();
-
     vi.stubEnv('QUICKNET_LOG_LEVEL', undefined);
     vi.spyOn(console, 'log').mockImplementation(() => {});
 
@@ -1958,181 +1942,6 @@ describe('runDaemonCommand', () => {
     expect(writeDaemonStatusFile).toHaveBeenCalledTimes(4);
     expect(relayerLogMocks.loggingFailed).not.toHaveBeenCalled();
   });
-
-  it('captures completed-cycle cuts and closes the opt-in trace', async () => {
-    const lines: string[] = [];
-
-    vi.mocked(openDiagnosticTrace).mockImplementationOnce(async (_path, options) => {
-      return createDiagnosticTrace({
-        ...options,
-        writer: {
-          async write(bytes) {
-            lines.push(bytes.toString());
-          },
-          async close() {},
-        },
-      });
-    });
-
-    enableStatusObservation();
-
-    vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
-      await onCycle?.({ consumers: [] }, { cycle: 1 });
-    });
-
-    await runDaemonCommand({
-      source: SOURCE,
-      env: { QUICKNET_DIAGNOSTIC_TRACE_FILE: '/private/trace.jsonl' },
-    });
-
-    const rows = lines.map((line) => JSON.parse(line));
-
-    expect(rows.map((row) => row.kind)).toEqual([
-      'trace_started',
-      'cycle_completed_snapshot',
-      'final_counters',
-      'trace_closed',
-    ]);
-
-    expect(rows[1].outcome).toBe('success');
-
-    expect(rows[1].cycle).toBe(1);
-
-    expect(relayerLogMocks.diagnosticTraceEnabled).toHaveBeenCalledWith({
-      schemaVersion: 1n,
-    });
-
-    expect(relayerLogMocks.diagnosticTraceFailed).not.toHaveBeenCalled();
-
-    expect(rows[1].status.lastCompletedCycle.cycle).toBe(1);
-
-    expect(rows[3].health.valid).toBe(true);
-
-    expect(lines.join('')).not.toContain('/private/trace.jsonl');
-
-    expect(vi.mocked(createRelayerClients).mock.calls[0]![1]?.onTrace)
-      .toBeTypeOf('function');
-  });
-
-  it('finalizes the opt-in trace without replacing a startup failure', async () => {
-    const lines: string[] = [];
-
-    vi.mocked(openDiagnosticTrace).mockImplementationOnce(async (_path, options) => {
-      return createDiagnosticTrace({
-        ...options,
-        writer: {
-          async write(bytes) {
-            lines.push(bytes.toString());
-          },
-          async close() {},
-        },
-      });
-    });
-
-    const failure = new Error('registry failed');
-
-    vi.mocked(verifyRegistryDeployment).mockRejectedValueOnce(failure);
-
-    await expect(runDaemonCommand({
-      source: SOURCE,
-      env: { QUICKNET_DIAGNOSTIC_TRACE_FILE: '/private/trace.jsonl' },
-    })).rejects.toBe(failure);
-
-    expect(lines.map((line) => JSON.parse(line).kind)).toEqual([
-      'trace_started',
-      'final_counters',
-      'trace_closed',
-    ]);
-  });
-
-  it('invalidates startup with outstanding sibling RPCs before the footer', async () => {
-    const lines: string[] = [];
-
-    const held = Promise.withResolvers<Response>();
-
-    const failure = new Error('balance lookup failed');
-
-    let metrics = createRpcMetrics();
-
-    let sibling: Promise<bigint> | undefined;
-
-    vi.mocked(createRelayerClients).mockImplementationOnce((_config, options) => {
-      metrics = createRpcMetrics(options);
-
-      return {
-        publicClient: PUBLIC_CLIENT,
-        walletClient: WALLET_CLIENT,
-        rpcMetrics: metrics,
-      };
-    });
-
-    vi.mocked(openDiagnosticTrace).mockImplementationOnce(async (_path, options) => {
-      return createDiagnosticTrace({
-        ...options,
-        writer: {
-          async write(bytes) {
-            lines.push(bytes.toString());
-          },
-          async close() {},
-        },
-      });
-    });
-
-    const actual = await vi.importActual<
-      typeof import('../../../src/daemon/daemon-startup.js')
-    >('../../../src/daemon/daemon-startup.js');
-
-    vi.mocked(collectDaemonStartupSummary).mockImplementationOnce((options) => {
-      return actual.collectDaemonStartupSummary({
-        ...options,
-        publicClient: {
-          getBalance() {
-            return metrics.logical('public', 'eth_getBalance', async () => {
-              throw failure;
-            });
-          },
-          getBlockNumber() {
-            sibling = metrics.logical('public', 'eth_blockNumber', async () => {
-              await metrics.http('public', () => held.promise);
-
-              return 100n;
-            });
-
-            return sibling;
-          },
-          async getBlock() {
-            return { number: 90n };
-          },
-        } as unknown as PublicClient,
-      });
-    });
-
-    await expect(runDaemonCommand({
-      source: SOURCE,
-      env: { QUICKNET_DIAGNOSTIC_TRACE_FILE: '/private/trace.jsonl' },
-    })).rejects.toBe(failure);
-
-    expect(JSON.parse(lines.at(-1)!).health).toMatchObject({
-      valid: false,
-      failure: 'rpc-in-flight',
-    });
-
-    expect(relayerLogMocks.diagnosticTraceFailed).toHaveBeenCalledExactlyOnceWith({
-      reason: 'rpc-in-flight',
-    });
-
-    expect(relayerLogMocks.loggingFailed).not.toHaveBeenCalled();
-
-    held.resolve(new Response());
-
-    await sibling;
-
-    expect(relayerLogMocks.diagnosticTraceFailed).toHaveBeenCalledTimes(1);
-
-    expect(JSON.parse(lines.at(-1)!).health.valid).toBe(false);
-  });
-
-
 
   it('emits a cumulative-only final report when the daemon ends before the threshold', async () => {
     vi.spyOn(performance, 'now').mockReturnValue(0);
