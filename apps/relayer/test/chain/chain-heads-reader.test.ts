@@ -238,3 +238,96 @@ describe('createChainHeadsReader', () => {
     );
   });
 });
+
+describe('head observation timestamps', () => {
+  it.each(['safe', 'finalized', 'confirmations'] as const)(
+    'preserves ordered calls with %s observations enabled',
+    async (type) => {
+      async function run(observe: boolean) {
+        const calls: unknown[] = [];
+        let monotonic = 0;
+        let wall = Date.parse('2026-11-20T00:00:00.000Z');
+
+        const clock = vi.fn(() => wall++);
+        const finality: FinalityPolicy = type === 'confirmations'
+          ? { type, confirmations: 10n }
+          : { type };
+
+        const client = {
+          async getBlock(args: unknown) {
+            calls.push(['getBlock', args]);
+            return { number: 100n };
+          },
+          async getBlockNumber(args: unknown) {
+            calls.push(['getBlockNumber', args]);
+            return 120n;
+          },
+        } as unknown as PublicClient;
+
+        const read = createChainHeadsReader({
+          publicClient: client,
+          finality,
+          durableHeadPollIntervalMs: 30_000,
+          now: () => monotonic,
+          ...(observe ? { observationClock: clock } : {}),
+        });
+
+        const first = await read();
+
+        monotonic = 15_000;
+        wall += 15_000;
+
+        const cached = await read();
+
+        monotonic = 30_000;
+        wall += 15_000;
+
+        const refreshed = await read();
+
+        return { calls, clock, first, cached, refreshed };
+      }
+
+      const plain = await run(false);
+      const observed = await run(true);
+
+      expect(observed.calls).toEqual(plain.calls);
+      expect(plain.clock).not.toHaveBeenCalled();
+      expect(plain.first).not.toHaveProperty('durableBlockObservedAt');
+      expect(observed.first.latestBlockObservedAt)
+        .not.toEqual(observed.first.durableBlockObservedAt);
+
+      if (type !== 'confirmations') {
+        expect(observed.cached.durableBlockObservedAt)
+          .toEqual(observed.first.durableBlockObservedAt);
+        expect(observed.clock).toHaveBeenCalledTimes(5);
+      } else {
+        expect(observed.cached.durableBlockObservedAt)
+          .not.toEqual(observed.first.durableBlockObservedAt);
+        expect(observed.clock).toHaveBeenCalledTimes(6);
+      }
+
+      expect(observed.cached.latestBlockObservedAt)
+        .not.toEqual(observed.first.latestBlockObservedAt);
+      expect(observed.refreshed.durableBlockObservedAt)
+        .not.toEqual(observed.first.durableBlockObservedAt);
+    },
+  );
+
+  it('does not replace a successful read when the observation clock throws', async () => {
+    const getBlock = vi.fn().mockResolvedValue({ number: 100n });
+    const getBlockNumber = vi.fn().mockResolvedValue(120n);
+    const read = createChainHeadsReader({
+      publicClient: { getBlock, getBlockNumber } as unknown as PublicClient,
+      finality: { type: 'safe' },
+      durableHeadPollIntervalMs: 30_000,
+      observationClock() {
+        throw new Error('Diagnostic clock unavailable');
+      },
+    });
+
+    await expect(read()).resolves.toEqual({ latestBlock: 120n, durableBlock: 100n });
+    await expect(read()).resolves.toEqual({ latestBlock: 120n, durableBlock: 100n });
+    expect(getBlock).toHaveBeenCalledOnce();
+    expect(getBlockNumber).toHaveBeenCalledTimes(2);
+  });
+});

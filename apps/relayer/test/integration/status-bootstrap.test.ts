@@ -159,6 +159,9 @@ describe.skipIf(process.platform !== 'linux')('status bootstrap', () => {
         omittedCount: 0,
       },
       attempts: [],
+      lastCompletedWork: null,
+      lastDiscoveryCompleted: null,
+      lastQualifyingReconciliation: null,
       lastCompletedCycle: null,
       lastRetryObservation: null,
       lastObservedGate: {

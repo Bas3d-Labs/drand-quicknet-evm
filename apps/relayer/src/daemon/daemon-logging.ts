@@ -62,7 +62,7 @@ export interface DaemonLogger {
     cycleLogger?: RelayerLog,
   ): void;
 
-  onWaitTransition(event: WaitTransition): void;
+  onWaitTransition(event: WaitTransition, workLogger?: RelayerLog): void;
 }
 
 export function createDaemonLogger(
@@ -81,7 +81,10 @@ export function createDaemonLogger(
   const reported = new Set<string>();
 
   return {
-    onWaitTransition(event): void {
+    onWaitTransition(
+      event,
+      workLogger: RelayerLog = options.logger,
+    ): void {
       const { entry } = event;
 
       const fields = {
@@ -99,11 +102,11 @@ export function createDaemonLogger(
 
       switch (event.kind) {
         case 'started':
-          options.logger.roundWaitStarted(fields);
+          workLogger.roundWaitStarted(fields);
           break;
 
         case 'released':
-          options.logger.roundWaitReleased({
+          workLogger.roundWaitReleased({
             ...fields,
             reason: 'released',
             disposition: event.disposition,
@@ -111,7 +114,7 @@ export function createDaemonLogger(
           break;
 
         case 'evicted':
-          options.logger.roundWaitEvicted({
+          workLogger.roundWaitEvicted({
             ...fields,
             reason: 'evicted',
           });
@@ -460,6 +463,12 @@ function logHeartbeat(
       durableBlock: consumer.iteration.durableBlock,
       durableNextBlock: consumer.iteration.durableNextBlock,
       softNextBlock: consumer.iteration.softCursor.nextBlock,
+      ...(consumer.iteration.latestBlockObservedAt === undefined
+        ? {}
+        : { latestBlockObservedAt: consumer.iteration.latestBlockObservedAt }),
+      ...(consumer.iteration.durableBlockObservedAt === undefined
+        ? {}
+        : { durableBlockObservedAt: consumer.iteration.durableBlockObservedAt }),
     };
   });
 

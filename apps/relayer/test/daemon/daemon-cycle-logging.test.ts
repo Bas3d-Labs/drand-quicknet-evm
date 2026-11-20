@@ -153,6 +153,7 @@ const loggerMocks = {
     vi.fn<RelayerLog['roundAlreadyStored']>(),
   roundDeferred: vi.fn<RelayerLog['roundDeferred']>(),
   roundPending: vi.fn<RelayerLog['roundPending']>(),
+  workCompleted: vi.fn(),
   heartbeat: vi.fn<RelayerLog['heartbeat']>(),
   rpcUsage: vi.fn<ScopedRelayerLog['rpcUsage']>(),
   loggingFailed: vi.fn<RelayerLog['loggingFailed']>(),

@@ -8,6 +8,7 @@ import {
 
 import {
   getChainHeads,
+  observeHeadTime,
   type ChainHeads,
   type GetChainHeadsOptions,
 } from './chain-heads.js';
@@ -21,6 +22,7 @@ export interface CreateChainHeadsReaderOptions
 interface CachedDurableHead {
   blockNumber: bigint;
   readStartedAt: number;
+  observedAt?: string;
 }
 
 // Create one reader per daemon and use it sequentially.
@@ -45,6 +47,7 @@ export function createChainHeadsReader(
       return getChainHeads({
         publicClient,
         finality,
+        observationClock: options.observationClock,
       });
     }
 
@@ -60,11 +63,15 @@ export function createChainHeadsReader(
       const heads = await getChainHeads({
         publicClient,
         finality,
+        observationClock: options.observationClock,
       });
 
       cached = {
         blockNumber: heads.durableBlock,
         readStartedAt,
+        ...(heads.durableBlockObservedAt === undefined
+          ? {}
+          : { observedAt: heads.durableBlockObservedAt }),
       };
 
       return heads;
@@ -85,6 +92,10 @@ export function createChainHeadsReader(
       return {
         latestBlock,
         durableBlock,
+        ...observeHeadTime(options.observationClock, 'latestBlockObservedAt'),
+        ...(previous.observedAt === undefined
+          ? {}
+          : { durableBlockObservedAt: previous.observedAt }),
       };
     } catch (error) {
       cached = undefined;

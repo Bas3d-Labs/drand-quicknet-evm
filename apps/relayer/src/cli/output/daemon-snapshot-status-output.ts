@@ -129,6 +129,18 @@ export function projectDaemonSnapshotStatusOutput(
       own(raw, 'lastCompletedCycle'),
       ['cycle', 'completedAt'],
     ),
+    lastCompletedWork: nullableFields(
+      own(raw, 'lastCompletedWork'),
+      ['iteration', 'kind', 'completedAt'],
+    ),
+    lastDiscoveryCompleted: nullableFields(
+      own(raw, 'lastDiscoveryCompleted'),
+      ['iteration', 'completedAt'],
+    ),
+    lastQualifyingReconciliation: nullableFields(
+      own(raw, 'lastQualifyingReconciliation'),
+      ['sequence', 'completedAt'],
+    ),
     lastRetryObservation: nullableFields(
       own(raw, 'lastRetryObservation'),
       ['observedAt', 'retryDelayMs'],
@@ -272,6 +284,44 @@ export function renderDaemonSnapshotStatusOutput(
       'Cycle completion does not imply every consumer succeeded.',
     );
   }
+
+  const work = observation.lastCompletedWork;
+
+  if (work === null) {
+    lines.push('Last completed work: not observed');
+  } else {
+    lines.push(
+      'Last completed work: ' + work.iteration,
+      'Last completed work kind: ' + work.kind,
+      'Work completed at: ' + work.completedAt,
+    );
+  }
+
+  const discovery = observation.lastDiscoveryCompleted;
+
+  if (discovery === null) {
+    lines.push('Last discovery completion: not observed');
+  } else {
+    lines.push(
+      'Last discovery completion: ' + discovery.iteration,
+      'Discovery completed at: ' + discovery.completedAt,
+    );
+  }
+
+  const reconciliation = observation.lastQualifyingReconciliation;
+
+  if (reconciliation === null) {
+    lines.push('Last qualifying reconciliation: not observed');
+  } else {
+    lines.push(
+      'Last qualifying reconciliation: ' + reconciliation.sequence,
+      'Qualifying reconciliation observed at: ' + reconciliation.completedAt,
+    );
+  }
+
+  lines.push(
+    'Snapshot age is publication freshness, not reconciliation freshness.',
+  );
 
   const retry = observation.lastRetryObservation;
 

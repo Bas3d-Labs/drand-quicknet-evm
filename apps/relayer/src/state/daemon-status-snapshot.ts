@@ -90,6 +90,22 @@ export interface DaemonStatusCompletedCycle {
   readonly completedAt: string;
 }
 
+export interface DaemonStatusCompletedWork {
+  readonly iteration: number;
+  readonly kind: 'full' | 'discovery';
+  readonly completedAt: string;
+}
+
+export interface DaemonStatusDiscoveryCompletion {
+  readonly iteration: number;
+  readonly completedAt: string;
+}
+
+export interface DaemonStatusQualifyingReconciliation {
+  readonly sequence: number;
+  readonly completedAt: string;
+}
+
 export interface DaemonStatusRetryObservation {
   readonly observedAt: string;
 
@@ -107,6 +123,10 @@ export interface DaemonStatusSnapshot {
   readonly runId: string;
   readonly observedAt: string;
   readonly lastCompletedCycle: DaemonStatusCompletedCycle | null;
+  readonly lastCompletedWork: DaemonStatusCompletedWork | null;
+  readonly lastDiscoveryCompleted: DaemonStatusDiscoveryCompletion | null;
+  readonly lastQualifyingReconciliation:
+    DaemonStatusQualifyingReconciliation | null;
   readonly lastRetryObservation: DaemonStatusRetryObservation | null;
   readonly journalInitialized: boolean;
   readonly operatorHistory: OperatorHistoryObservation | null;
@@ -260,6 +280,15 @@ export function readDaemonStatusSnapshot(
     runId: root.runId,
     observedAt: root.observedAt as string,
     lastCompletedCycle,
+    lastCompletedWork: readCompletedWork(root.lastCompletedWork),
+    lastDiscoveryCompleted: readNumberedCompletion(
+      root.lastDiscoveryCompleted,
+      'iteration',
+    ),
+    lastQualifyingReconciliation: readNumberedCompletion(
+      root.lastQualifyingReconciliation,
+      'sequence',
+    ),
     lastRetryObservation,
     journalInitialized: root.journalInitialized,
     operatorHistory,
@@ -370,6 +399,47 @@ function readCompletedCycle(
     cycle: value.cycle,
     completedAt: value.completedAt as string,
   });
+}
+
+function readNumberedCompletion<K extends 'iteration' | 'sequence'>(
+  input: unknown,
+  key: K,
+): (Readonly<Record<K, number>> & { readonly completedAt: string }) | null {
+  if (input === null) {
+    return null;
+  }
+
+  const value = object(input);
+  const number = value[key];
+
+  if (!isPositiveSafeInteger(number)) {
+    throw new TypeError(INVALID);
+  }
+
+  readTimestamp(value.completedAt);
+
+  return Object.freeze({
+    [key]: number,
+    completedAt: value.completedAt as string,
+  }) as Readonly<Record<K, number>> & { readonly completedAt: string };
+}
+
+function readCompletedWork(
+  input: unknown,
+): DaemonStatusCompletedWork | null {
+  const completion = readNumberedCompletion(input, 'iteration');
+
+  if (completion === null) {
+    return null;
+  }
+
+  const kind = object(input).kind;
+
+  if (kind !== 'full' && kind !== 'discovery') {
+    throw new TypeError(INVALID);
+  }
+
+  return Object.freeze({ ...completion, kind });
 }
 
 function readRetryObservation(

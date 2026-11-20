@@ -228,6 +228,7 @@ function writePreload(
   replace('diagnostics/relayer-log.js', `
     export function createRelayerLog() {
       const logger = {
+        workCompleted() {},
         withContext() {
           return logger;
         },

@@ -81,6 +81,9 @@ function snapshot(): DaemonStatusSnapshot {
       omittedCount: 0,
     },
     attempts: [],
+    lastCompletedWork: null,
+    lastDiscoveryCompleted: null,
+    lastQualifyingReconciliation: null,
     lastCompletedCycle: null,
     lastRetryObservation: null,
     lastObservedGate: {
@@ -189,6 +192,9 @@ describe('daemon status file storage', () => {
         omittedCount: 0,
       },
       attempts: [],
+      lastCompletedWork: null,
+      lastDiscoveryCompleted: null,
+      lastQualifyingReconciliation: null,
       lastCompletedCycle: null,
       lastRetryObservation: null,
       lastObservedGate: {

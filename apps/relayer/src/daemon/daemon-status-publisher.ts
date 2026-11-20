@@ -7,6 +7,9 @@ import {
   readDaemonStatusAttemptPopulation,
   readDaemonStatusSnapshot,
   type DaemonStatusCompletedCycle,
+  type DaemonStatusCompletedWork,
+  type DaemonStatusDiscoveryCompletion,
+  type DaemonStatusQualifyingReconciliation,
   type DaemonStatusRetryObservation,
   type DaemonStatusSnapshot,
 } from '../state/daemon-status-snapshot.js';
@@ -22,6 +25,10 @@ import {
 import type {
   SignerRuntimeObservation,
 } from '../state/read-signer-runtime-observation.js';
+
+import type {
+  SchedulerInspectionCompletion,
+} from '../state/scheduler-recovery-observer.js';
 
 import type {
   QueueObservation,
@@ -56,7 +63,21 @@ export interface DaemonStatusPublisher {
     observation: { readonly retryDelayMs: number | null },
   ): void;
 
-  onCycleCompleted(cycle: number): void;
+  onWorkCompleted(
+    context:
+      | {
+          readonly iteration: number;
+          readonly kind: 'full';
+          readonly cycle: number;
+        }
+      | {
+          readonly iteration: number;
+          readonly kind: 'discovery';
+        },
+    discoveryCompleted: boolean,
+  ): DaemonStatusCompletedWork | undefined;
+
+  onInspectionCompleted(observation: SchedulerInspectionCompletion): void;
 
   /** Resolves after this publication attempt, including failure reporting. */
   publish(): Promise<void>;
@@ -83,8 +104,18 @@ export function createDaemonStatusPublisher(
   let readQueue: ((at: number) => QueueObservation) | undefined;
 
   let readObservation: (() => SignerRuntimeObservation) | undefined;
+
   let lastCompletedCycle: DaemonStatusCompletedCycle | null = null;
+
+  let lastCompletedWork: DaemonStatusCompletedWork | null = null;
+
+  let lastDiscoveryCompleted: DaemonStatusDiscoveryCompletion | null = null;
+
+  let lastQualifyingReconciliation:
+    DaemonStatusQualifyingReconciliation | null = null;
+
   let lastRetryObservation: DaemonStatusRetryObservation | null = null;
+
   let publication = Promise.resolve();
 
   function reportFailure(error: unknown): void {
@@ -139,14 +170,77 @@ export function createDaemonStatusPublisher(
     }
   }
 
-  function onCycleCompleted(cycle: number): void {
+  function onWorkCompleted(
+    context: Parameters<DaemonStatusPublisher['onWorkCompleted']>[0],
+    discoveryCompleted: boolean,
+  ): DaemonStatusCompletedWork | undefined {
     try {
-      if (!Number.isSafeInteger(cycle) || cycle <= 0) {
-        throw new TypeError('Invalid daemon status cycle.');
+      if (
+        !Number.isSafeInteger(context.iteration) ||
+        context.iteration <= (lastCompletedWork?.iteration ?? 0) ||
+        (context.kind !== 'full' && context.kind !== 'discovery') ||
+        typeof discoveryCompleted !== 'boolean' ||
+        (
+          context.kind === 'full' &&
+          (
+            !Number.isSafeInteger(context.cycle) ||
+            context.cycle <= (lastCompletedCycle?.cycle ?? 0)
+          )
+        )
+      ) {
+        throw new TypeError('Invalid daemon status work completion.');
       }
 
-      lastCompletedCycle = Object.freeze({
-        cycle,
+      const completedAt = timestamp();
+
+      lastCompletedWork = Object.freeze({
+        iteration: context.iteration,
+        kind: context.kind,
+        completedAt,
+      });
+
+      if (context.kind === 'full') {
+        lastCompletedCycle = Object.freeze({
+          cycle: context.cycle,
+          completedAt,
+        });
+      }
+
+      if (discoveryCompleted) {
+        lastDiscoveryCompleted = Object.freeze({
+          iteration: context.iteration,
+          completedAt,
+        });
+      }
+
+      return lastCompletedWork;
+    } catch (error) {
+      reportFailure(error);
+      return undefined;
+    }
+  }
+
+  function onInspectionCompleted(
+    observation: SchedulerInspectionCompletion,
+  ): void {
+    try {
+      if (
+        observation.recoveryComplete !== true ||
+        observation.inclusionChecksComplete !== true ||
+        observation.persistenceIdle !== true
+      ) {
+        return;
+      }
+
+      const sequence = (lastQualifyingReconciliation?.sequence ?? 0) + 1;
+
+      if (!Number.isSafeInteger(sequence)) {
+        throw new TypeError('Daemon reconciliation sequence exhausted.');
+      }
+
+      // Wall time describes callback delivery, not the monotonic start sample.
+      lastQualifyingReconciliation = Object.freeze({
+        sequence,
         completedAt: timestamp(),
       });
     } catch (error) {
@@ -216,6 +310,9 @@ export function createDaemonStatusPublisher(
         storedFactDispute: runtime.storedFactDispute,
         queue,
         lastCompletedCycle,
+        lastCompletedWork,
+        lastDiscoveryCompleted,
+        lastQualifyingReconciliation,
         lastRetryObservation,
         lastObservedGate: runtime.status,
         attemptSummary: projection.summary,
@@ -246,7 +343,8 @@ export function createDaemonStatusPublisher(
     },
     onInitialized,
     onRecoveryCompleted,
-    onCycleCompleted,
+    onWorkCompleted,
+    onInspectionCompleted,
     publish,
   });
 }

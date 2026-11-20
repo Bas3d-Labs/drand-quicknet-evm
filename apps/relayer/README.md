@@ -1629,6 +1629,23 @@ status_publication_failed
 `checkpoint_advanced` and `round_already_stored` are debug-level routine
 progress. `heartbeat` is emitted periodically at info level.
 
+Healthy heartbeat consumers include `latestBlockObservedAt` and
+`durableBlockObservedAt` when those head observations are available. They are
+wall-clock response observation times, separate from heartbeat emission time.
+A cached durable head keeps its original timestamp. For confirmations finality,
+the durable timestamp belongs to the head read used to derive that height.
+Diagnostic clock failures omit the affected timestamp; they never invent one.
+Failed consumers carry no head timestamps. Cursors remain current local state;
+there are no cursor-observation timestamps.
+
+Daemon-scoped request-discovery, queue-transition and completion events carry
+`iteration` and `workKind`. Full work also carries `cycle`; discovery work has no cycle.
+The debug `work_completed` event carries `completedAt` and provides the full
+cycle-to-iteration mapping. Transaction lifecycle events retain their existing
+cycle context. Events outside work carry no work context. Readers needing the
+mapping and request-discovery evidence must enable debug logging. Heartbeat
+scheduling is unchanged in this slice.
+
 `round_deferred` reports a round for which no new transaction attempt
 was prepared. Its reason distinguishes `signer-unavailable`, which
 includes a signer blocker, from `already-retained`, which includes the
@@ -1719,7 +1736,7 @@ totals or evidence of daemon health.
 
 The daemon attempts to publish `daemon-status.json` in the canonical
 `QUICKNET_STATE_DIR` after successful startup and after each completed
-cycle. Publication starts only after signer journal initialization.
+full work item. Publication starts only after signer journal initialization.
 Writes are serialized and awaited.
 
 When available, the snapshot also includes cumulative RPC usage captured
@@ -1762,17 +1779,35 @@ nonce, phase, and every recorded candidate transaction hash.
 Explicit journal status reports every retained attempt. Signed transaction
 bytes are excluded from both status sources.
 
-Cycle completion and retry observations carry separate timestamps.
-Publishing another snapshot does not refresh those timestamps.
-`lastCompletedCycle` describes a returned full daemon cycle, not a successful
-reconciliation. `lastRetryObservation` describes the recovery call that supplied
-the retry delay; its timestamp alone does not establish successful recovery.
-Read the gate's recovery and inclusion-check fields as well. Discovery activity
-must not be interpreted as a new reconciliation. Discovery-only passes are not
-enabled in this version.
-A completed cycle may include consumer failures. A recorded retry
-delay is historical; it is neither a live countdown nor permission
-to broadcast.
+Status version 1 requires these separate, nullable observations:
+
+- `lastCompletedWork`: `{ iteration, kind, completedAt }`, null at startup.
+  Every work item is currently `full`, with iteration equal to cycle.
+- `lastCompletedCycle`: `{ cycle, completedAt }`, updated only by full work.
+  A completed cycle can contain consumer failures.
+- `lastDiscoveryCompleted`: `{ iteration, completedAt }`, updated only when
+  the soft-scan path succeeds for every configured consumer. A caught-up check
+  counts without a log query. Completion of a bounded scan does not mean the
+  cursor is caught up, and waiting for fulfilment does not mean discovery failed.
+- `lastQualifyingReconciliation`: `{ sequence, completedAt }`, updated by an
+  inspection reporting recovery complete, inclusion checks complete and
+  persistence idle. The time is the completion callback's wall-clock observation.
+  The sequence is local to the run and includes pre-submit inspections. An open
+  gate alone does not update it. A later rebroadcast or scan failure does not
+  erase it. It does not identify the reconciliation behind the last signature.
+
+Publishing does not refresh these observations. Snapshot age describes publication
+freshness, not reconciliation freshness. A reader waiting for new reconciliation
+must require a sequence greater than at the start of its wait, within the same
+run ID. A restart invalidates that comparison. Discovery succeeded in a work item
+when `lastDiscoveryCompleted.iteration` equals `lastCompletedWork.iteration`;
+that equality says nothing about reconciliation or fulfilment.
+
+`lastRetryObservation` describes the recovery call that supplied the retry delay.
+The delay is historical, not a countdown or permission to broadcast.
+Discovery-only execution is not enabled in this slice. There is no compatibility
+reader for snapshots missing the new required fields; startup publication writes
+the current shape. There is no periodic or shutdown publication.
 
 The snapshot is diagnostic state. It does not replace the signer
 journal or checkpoints and is not used to authorize transaction work.

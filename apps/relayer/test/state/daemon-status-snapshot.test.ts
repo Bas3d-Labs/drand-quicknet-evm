@@ -50,6 +50,9 @@ function snapshot() {
       omittedCount: 0,
     },
     attempts: [],
+    lastCompletedWork: null,
+    lastDiscoveryCompleted: null,
+    lastQualifyingReconciliation: null,
     lastCompletedCycle: null,
     lastRetryObservation: null,
     lastObservedGate: {
@@ -462,4 +465,42 @@ describe('classifySnapshotAge', () => {
         .toThrow('Invalid snapshot age parameters.');
     },
   );
+});
+
+
+describe('work observation schema', () => {
+  it('validates, copies and freezes each new observation', () => {
+    const input = {
+      ...snapshot(),
+      lastCompletedWork: { iteration: 3, kind: 'discovery', completedAt: AT },
+      lastDiscoveryCompleted: { iteration: 3, completedAt: AT },
+      lastQualifyingReconciliation: { sequence: 2, completedAt: AT },
+    };
+
+    const value = readDaemonStatusSnapshot(input, IDENTITY);
+
+    for (const field of [
+      'lastCompletedWork',
+      'lastDiscoveryCompleted',
+      'lastQualifyingReconciliation',
+    ] as const) {
+      expect(value[field]).toEqual(input[field]);
+      expect(value[field]).not.toBe(input[field]);
+      expect(Object.isFrozen(value[field])).toBe(true);
+    }
+  });
+
+  it.each([
+    ['lastCompletedWork', undefined],
+    ['lastCompletedWork', { iteration: 1, kind: 'other', completedAt: AT }],
+    ['lastCompletedWork', { iteration: 0, kind: 'full', completedAt: AT }],
+    ['lastDiscoveryCompleted', { iteration: 1, completedAt: 'invalid' }],
+    ['lastQualifyingReconciliation', { sequence: -1, completedAt: AT }],
+    ['lastQualifyingReconciliation', undefined],
+  ])('rejects invalid %s without a compatibility fallback', (field, value) => {
+    expect(() => readDaemonStatusSnapshot({
+      ...snapshot(),
+      [field as string]: value,
+    }, IDENTITY)).toThrow();
+  });
 });

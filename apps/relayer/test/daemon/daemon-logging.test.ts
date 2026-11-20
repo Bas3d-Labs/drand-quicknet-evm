@@ -79,6 +79,7 @@ const loggerMocks = {
   roundAlreadyStored: vi.fn<RelayerLog['roundAlreadyStored']>(),
   roundDeferred: vi.fn<RelayerLog['roundDeferred']>(),
   roundPending: vi.fn<RelayerLog['roundPending']>(),
+  workCompleted: vi.fn(),
   heartbeat: vi.fn<RelayerLog['heartbeat']>(),
   rpcUsage: vi.fn<ScopedRelayerLog['rpcUsage']>(),
   loggingFailed: vi.fn<RelayerLog['loggingFailed']>(),
@@ -210,6 +211,30 @@ describe('createDaemonLogger', () => {
     for (const mock of Object.values(loggerMocks)) {
       mock.mockReset();
     }
+  });
+
+  it('preserves head observation times across later heartbeat emissions', () => {
+    let now = 0;
+    const logger = createDaemonLogger({ logger: LOGGER, now: () => now });
+    const iteration = {
+      ...createIteration(),
+      latestBlockObservedAt: '2026-11-20T00:00:15.000Z',
+      durableBlockObservedAt: '2026-11-20T00:00:00.000Z',
+    };
+
+    now = 60_000;
+    logger.onCycle(createSuccessfulCycle(iteration));
+    now = 120_000;
+    logger.onCycle(createSuccessfulCycle(iteration));
+
+    for (const [heartbeat] of loggerMocks.heartbeat.mock.calls) {
+      expect(heartbeat.consumers[0]).toMatchObject({
+        latestBlockObservedAt: iteration.latestBlockObservedAt,
+        durableBlockObservedAt: iteration.durableBlockObservedAt,
+      });
+    }
+
+    expect(loggerMocks.heartbeat).toHaveBeenCalledTimes(2);
   });
 
   it.each([

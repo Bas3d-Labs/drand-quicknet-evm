@@ -9,6 +9,10 @@ import {
 } from 'node:path';
 
 import {
+  performance,
+} from 'node:perf_hooks';
+
+import {
   type Address,
 } from 'viem';
 
@@ -198,6 +202,7 @@ export async function runDaemonCommand(
       publicClient: clients.publicClient,
       finality: config.finality,
       durableHeadPollIntervalMs: 30_000,
+      observationClock: Date.now,
     });
 
     const submitter = await openBeaconSubmitter({
@@ -211,6 +216,10 @@ export async function runDaemonCommand(
       startupPollIntervalMs: config.pollIntervalMs,
       onInitialized: statusPublisher.onInitialized,
       onRecoveryCompleted: statusPublisher.onRecoveryCompleted,
+      schedulerObserver: {
+        now: () => performance.now(),
+        onInspectionCompleted: statusPublisher.onInspectionCompleted,
+      },
       signal: options.signal,
       env,
     });
@@ -273,26 +282,67 @@ export async function runDaemonCommand(
 
       readChainHeads,
       onRequestDiscovered(scanType, observation, context) {
-        logger.withContext({ cycle: context.cycle }).requestDiscovered({
+        logger.withContext({
+          cycle: context.cycle,
+          iteration: context.cycle,
+          workKind: 'full',
+        }).requestDiscovered({
           ...observation,
           logIndex: BigInt(observation.logIndex),
           scanType,
         });
       },
       onUnfulfillable: daemonLogger.onUnfulfillable,
-      onWaitTransition: daemonLogger.onWaitTransition,
+      onWaitTransition(event, context) {
+        if (context === undefined) {
+          daemonLogger.onWaitTransition(event);
+          return;
+        }
+
+        daemonLogger.onWaitTransition(event, logger.withContext({
+          cycle: context.cycle,
+          iteration: context.cycle,
+          workKind: 'full',
+        }));
+      },
       onSchedulerInitialized: statusPublisher.onSchedulerInitialized,
       
       async onCycle(result, context) {
-        statusPublisher.onCycleCompleted(context.cycle);
+        const workContext = {
+          cycle: context.cycle,
+          iteration: context.cycle,
+          kind: 'full' as const,
+        };
+
+        const discoveryCompleted =
+          result.consumers.length === validatedConsumers.length &&
+          validatedConsumers.every((consumer) => {
+            return result.consumers.some((outcome) => {
+              return outcome.consumer.address === consumer.address &&
+                outcome.status === 'success';
+            });
+          });
+
+        const completion = statusPublisher.onWorkCompleted(
+          workContext,
+          discoveryCompleted,
+        );
 
         try {
           const cycleLogger = logger.withContext({
-            cycle: context.cycle,
+            cycle: workContext.cycle,
+            iteration: workContext.iteration,
+            workKind: workContext.kind,
             signer: config.account.address,
           });
 
           daemonLogger.onCycle(result, cycleLogger);
+
+          if (completion !== undefined) {
+            cycleLogger.workCompleted({
+              completedAt: completion.completedAt,
+            });
+          }
         } finally {
           try {
             await statusPublisher.publish();

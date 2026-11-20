@@ -114,6 +114,8 @@ export interface RunDaemonIterationOptions {
 
 export interface RunDaemonIterationResult {
   status: 'caught-up' | 'processed' | 'deferred';
+  latestBlockObservedAt?: string;
+  durableBlockObservedAt?: string;
   consumer: Address;
   latestBlock: bigint;
   durableBlock: bigint;
@@ -503,6 +505,12 @@ function createResult(
   return {
     status,
     consumer: options.consumer,
+    ...(options.heads.latestBlockObservedAt === undefined
+      ? {}
+      : { latestBlockObservedAt: options.heads.latestBlockObservedAt }),
+    ...(options.heads.durableBlockObservedAt === undefined
+      ? {}
+      : { durableBlockObservedAt: options.heads.durableBlockObservedAt }),
     latestBlock: options.heads.latestBlock,
     durableBlock: options.heads.durableBlock,
     durableNextBlock: options.durableNextBlock,

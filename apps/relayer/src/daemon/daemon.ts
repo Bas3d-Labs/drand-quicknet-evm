@@ -82,7 +82,10 @@ export interface RunDaemonOptions {
   onSchedulerInitialized?: (
     read: (at: number) => ReturnType<FutureRoundScheduler['observe']>,
   ) => void;
-  onWaitTransition?: ((event: WaitTransition) => void) | undefined;
+  onWaitTransition?: ((
+    event: WaitTransition,
+    context?: DaemonCycleContext,
+  ) => void) | undefined;
   publicClient: PublicClient;
   account: Account;
   submitter: BeaconSubmitter;
@@ -121,10 +124,18 @@ export async function runDaemon(
     throw new Error('pollIntervalMs must be a positive safe integer.');
   }
 
+  let activeContext: DaemonCycleContext | undefined;
+
   const waiting = new FutureRoundScheduler({
     chainId: options.deployment.chainId,
     registry: options.deployment.address,
-    onTransition: options.onWaitTransition,
+    ...(options.onWaitTransition === undefined
+      ? {}
+      : {
+          onTransition(event: WaitTransition) {
+            options.onWaitTransition?.(event, activeContext);
+          },
+        }),
     ...(options.now === undefined ? {} : { now: options.now }),
   });
 
@@ -216,15 +227,20 @@ export async function runDaemon(
         throw new Error('Discovery-only execution is not enabled.');
       }
 
-      const result = await runDaemonCycle(cycleOptions);
+      activeContext = context;
 
-      // Only this full-cycle path can publish a completed cycle. Keep the
-      // publication inside execution ownership and await it before sleeping.
-      if (options.onCycle !== undefined) {
-        await options.onCycle(result, context);
+      try {
+        const result = await runDaemonCycle(cycleOptions);
+
+        // Publication remains inside execution ownership and precedes sleep.
+        if (options.onCycle !== undefined) {
+          await options.onCycle(result, context);
+        }
+
+        return result;
+      } finally {
+        activeContext = undefined;
       }
-
-      return result;
     });
 
     if (executed === undefined) {

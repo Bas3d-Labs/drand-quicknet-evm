@@ -196,6 +196,7 @@ describe('createRelayerLog', () => {
       'storedFactNonceConflictRepeated',
       'withContext',
       'withErrorSummary',
+      'workCompleted',
     ]);
   });
 
@@ -1393,5 +1394,87 @@ describe('request discovery event', () => {
     const { log, lines } = capture('info');
     log.requestDiscovered(fields);
     expect(lines).toHaveLength(0);
+  });
+});
+
+
+describe('daemon work log context', () => {
+  it('scopes full and discovery work without leaking into outside events', () => {
+    const { log, lines } = capture('debug');
+    const completedAt = '2026-11-20T00:00:00.000Z';
+
+    log.withContext({ iteration: 4, workKind: 'full', cycle: 2 })
+      .workCompleted({ completedAt });
+    log.withContext({ iteration: 5, workKind: 'discovery' })
+      .workCompleted({ completedAt });
+    log.signerGateReleased({
+      signer: CONSUMER,
+      cleared: ['recovery-incomplete'],
+      blockedSince: completedAt,
+    });
+
+    expect(recordAt(lines, 0)).toMatchObject({
+      event: 'work_completed',
+      iteration: 4,
+      workKind: 'full',
+      cycle: 2,
+      completedAt,
+    });
+    expect(recordAt(lines, 1)).toMatchObject({ iteration: 5, workKind: 'discovery' });
+    expect(recordAt(lines, 1)).not.toHaveProperty('cycle');
+    expect(recordAt(lines, 2)).not.toHaveProperty('iteration');
+    expect(recordAt(lines, 2)).not.toHaveProperty('workKind');
+    expect(recordAt(lines, 0)).not.toHaveProperty('kind');
+    expect(recordAt(lines, 1)).not.toHaveProperty('kind');
+    expect(recordAt(lines, 2)).not.toHaveProperty('cycle');
+  });
+
+  it('rejects discovery context carrying a cycle and incomplete work context', () => {
+    const { log } = capture();
+
+    expect(() => log.withContext({ iteration: 1, workKind: 'discovery', cycle: 1 }))
+      .toThrow();
+    expect(() => log.withContext({ iteration: 1 })).toThrow();
+    expect(() => log.withContext({ workKind: 'full' })).toThrow();
+    expect(() => log.withContext({ cycle: 1 }).withContext({
+      iteration: 2,
+      workKind: 'discovery',
+    })).toThrow();
+  });
+
+  it('projects only head observation times for healthy heartbeat consumers', () => {
+    const { log, lines } = capture();
+    const first = '2026-11-20T00:00:00.000Z';
+    const second = '2026-11-20T00:00:15.000Z';
+
+    log.heartbeat({
+      consumers: [{
+        consumer: CONSUMER,
+        status: 'healthy',
+        latestBlock: 20n,
+        durableBlock: 10n,
+        softNextBlock: 21n,
+        durableNextBlock: 11n,
+        latestBlockObservedAt: second,
+        durableBlockObservedAt: first,
+      }, {
+        consumer: OTHER_CONSUMER,
+        status: 'failed',
+      }],
+    });
+
+    expect(recordAt(lines).consumers).toEqual([{
+      consumer: CONSUMER,
+      status: 'healthy',
+      latestBlock: '20',
+      durableBlock: '10',
+      softNextBlock: '21',
+      durableNextBlock: '11',
+      latestBlockObservedAt: second,
+      durableBlockObservedAt: first,
+    }, {
+      consumer: OTHER_CONSUMER,
+      status: 'failed',
+    }]);
   });
 });

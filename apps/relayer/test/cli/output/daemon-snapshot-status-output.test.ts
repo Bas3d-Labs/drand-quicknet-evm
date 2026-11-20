@@ -69,6 +69,9 @@ function status() {
         phase: 'signed',
         transactionHashes: [HASH, SECOND_HASH],
       }],
+      lastCompletedWork: null,
+      lastDiscoveryCompleted: null,
+      lastQualifyingReconciliation: null,
       lastCompletedCycle: {
         cycle: 2,
         completedAt: EARLIER,
@@ -290,6 +293,9 @@ describe('renderDaemonSnapshotStatusOutput', () => {
       ...input,
       observation: {
         ...input.observation,
+        lastCompletedWork: null,
+        lastDiscoveryCompleted: null,
+        lastQualifyingReconciliation: null,
         lastCompletedCycle: null,
         lastRetryObservation: null,
       },
@@ -783,5 +789,40 @@ describe('daemon snapshot RPC usage rendering', () => {
     expect(output).toContain('HTTP RPC rows: 0');
     expect(output).not.toContain('RPC usage: not reported');
     expect(output).not.toContain('Average duration (ms):');
+  });
+});
+
+
+describe('work freshness CLI fields', () => {
+  it('prints missing observations explicitly', () => {
+    const output = renderDaemonSnapshotStatusOutput(status());
+
+    expect(output).toContain('Last completed work: not observed');
+    expect(output).toContain('Last discovery completion: not observed');
+    expect(output).toContain('Last qualifying reconciliation: not observed');
+    expect(output).toContain('Snapshot age is publication freshness, not reconciliation freshness.');
+  });
+
+  it('renders independent identities without repeating README caveats', () => {
+    const input = status();
+    const output = renderDaemonSnapshotStatusOutput({
+      ...input,
+      observation: {
+        ...input.observation,
+        lastCompletedWork: { iteration: 5, kind: 'discovery', completedAt: AT },
+        lastDiscoveryCompleted: { iteration: 5, completedAt: AT },
+        lastQualifyingReconciliation: { sequence: 2, completedAt: EARLIER },
+      },
+    });
+
+    expect(output).toContain('Last completed work: 5');
+    expect(output).toContain('Last completed work kind: discovery');
+    expect(output).toContain('Last completed cycle: 2');
+    expect(output).toContain('Last discovery completion: 5');
+    expect(output).toContain('Last qualifying reconciliation: 2');
+    expect(output).toContain('Qualifying reconciliation observed at: ' + EARLIER);
+    expect(output).not.toContain('does not identify the last signature authorization');
+    expect(output).not.toContain('Work completion does not establish');
+    expect(output).toContain('Snapshot age is publication freshness, not reconciliation freshness.');
   });
 });

@@ -52,6 +52,10 @@ import {
 } from '../../src/cli/sync-nonce.js';
 
 import {
+  createDaemonStatusPublisher,
+} from '../../src/daemon/daemon-status-publisher.js';
+
+import {
   createRelayerLog,
 } from '../../src/diagnostics/relayer-log.js';
 
@@ -291,6 +295,101 @@ describe('command signer runtime', () => {
       .filter((name) => name !== 'relayer.flock')
       .sort();
   }
+
+  it('preserves ordered provider calls through the production inspection observer adapter', async () => {
+    async function run(observe: boolean) {
+      const stateDirectory = join(directory, observe ? 'observed' : 'plain');
+
+      await mkdir(stateDirectory);
+      await writeFile(join(stateDirectory, 'relayer.flock'), '');
+
+      const lock = await lstat(join(stateDirectory, 'relayer.flock'), { bigint: true });
+
+      vi.mocked(assertServiceLockHeld).mockReturnValue({
+        stateDirectory,
+        dev: lock.dev,
+        ino: lock.ino,
+      });
+
+      const calls: unknown[] = [];
+
+      const client = {
+        async getBlock(args: { blockNumber: bigint }) {
+          calls.push(['getBlock', args]);
+          return { number: args.blockNumber, hash: HASH };
+        },
+        async getTransactionCount(args: unknown) {
+          calls.push(['getTransactionCount', args]);
+          return 4;
+        },
+      } as unknown as PublicClient;
+
+      const write = vi.fn().mockResolvedValue(undefined);
+
+      const publisher = createDaemonStatusPublisher({
+        identity: IDENTITY,
+        runId: '11111111-1111-4111-8111-111111111111',
+        now: () => Date.parse('2026-11-20T00:00:00.000Z'),
+        write,
+        onFailure(error) {
+          throw error;
+        },
+      });
+
+      const clock = vi.fn(() => 100);
+
+      const input = options(client);
+
+      const runtime = await openSignerRuntime({
+        ...input,
+        env: { QUICKNET_STATE_DIR: stateDirectory },
+        ...(observe ? {
+          schedulerObserver: {
+            now: clock,
+            onInspectionCompleted: publisher.onInspectionCompleted,
+          },
+        } : {}),
+      });
+
+      await runtime.reconcile(recovery());
+
+      // A pre-submit inspection must still be observed if preparation later fails.
+      await expect(runtime.submit({
+        work: {
+          workId: 'test:status-observer',
+          call: { to: ACCOUNT.address, data: '0x1234', value: 0n, gas: 100_000n },
+        },
+      })).rejects.toThrow();
+
+      publisher.onInitialized(() => ({
+        journalInitialized: true,
+        operatorHistory: { count: 0, limit: 32 },
+        storedFactDispute: null,
+        status: runtime.status,
+        attempts: [],
+      }));
+      await publisher.publish();
+
+      return {
+        calls,
+        clock,
+        snapshot: write.mock.calls[0]![0].snapshot,
+      };
+    }
+
+    const plain = await run(false);
+    const observed = await run(true);
+
+    expect(observed.calls).toEqual(plain.calls);
+    expect(observed.calls.length).toBeGreaterThan(0);
+    expect(plain.clock).not.toHaveBeenCalled();
+    expect(observed.clock).toHaveBeenCalledTimes(4);
+    expect(plain.snapshot.lastQualifyingReconciliation).toBeNull();
+    expect(observed.snapshot.lastQualifyingReconciliation).toEqual({
+      sequence: 2,
+      completedAt: '2026-11-20T00:00:00.000Z',
+    });
+  });
 
   it('leaves a missing journal untouched until automatic recovery', async () => {
     const runtime = await openSignerRuntime(options());

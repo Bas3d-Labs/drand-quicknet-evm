@@ -24,6 +24,9 @@ function snapshot(): DaemonStatusSnapshot {
     identity: IDENTITY,
     runId: '11111111-1111-4111-8111-111111111111',
     observedAt: AT,
+    lastCompletedWork: null,
+    lastDiscoveryCompleted: null,
+    lastQualifyingReconciliation: null,
     lastCompletedCycle: null,
     lastRetryObservation: null,
     journalInitialized: true,
@@ -78,6 +81,9 @@ describe('daemon status progress observations', () => {
 
     const result = readDaemonStatusSnapshot({
       ...snapshot(),
+      lastCompletedWork: null,
+      lastDiscoveryCompleted: null,
+      lastQualifyingReconciliation: null,
       lastCompletedCycle: completed,
       lastRetryObservation: retry,
     }, IDENTITY);
@@ -171,6 +177,9 @@ describe('daemon status progress observations', () => {
   ])('rejects invalid cycle number %s', (cycle) => {
     expect(() => readDaemonStatusSnapshot({
       ...snapshot(),
+      lastCompletedWork: null,
+      lastDiscoveryCompleted: null,
+      lastQualifyingReconciliation: null,
       lastCompletedCycle: {
         cycle,
         completedAt: EARLIER,
@@ -204,6 +213,9 @@ describe('daemon status progress observations', () => {
   ])('rejects invalid observation timestamps: %s', (timestamp) => {
     expect(() => readDaemonStatusSnapshot({
       ...snapshot(),
+      lastCompletedWork: null,
+      lastDiscoveryCompleted: null,
+      lastQualifyingReconciliation: null,
       lastCompletedCycle: {
         cycle: 1,
         completedAt: timestamp,
@@ -224,6 +236,9 @@ describe('daemon status progress observations', () => {
     (value) => {
       expect(() => readDaemonStatusSnapshot({
         ...snapshot(),
+        lastCompletedWork: null,
+        lastDiscoveryCompleted: null,
+        lastQualifyingReconciliation: null,
         lastCompletedCycle: value,
       }, IDENTITY)).toThrow('Invalid daemon status snapshot.');
 
@@ -237,6 +252,9 @@ describe('daemon status progress observations', () => {
   it('preserves timestamps across a backward wall-clock adjustment', () => {
     const result = readDaemonStatusSnapshot({
       ...snapshot(),
+      lastCompletedWork: null,
+      lastDiscoveryCompleted: null,
+      lastQualifyingReconciliation: null,
       lastCompletedCycle: {
         cycle: 1,
         completedAt: LATER,

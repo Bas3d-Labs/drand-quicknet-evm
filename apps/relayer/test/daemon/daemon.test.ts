@@ -1173,7 +1173,9 @@ describe('daemon cycle correlation', () => {
     }
   });
 
-  it('wakes at release and reuses the queue in the next cycle', async () => {
+  it('wakes at release and reuses the queue with the active cycle context', async () => {
+    const onWaitTransition = vi.fn();
+
     const controller = new AbortController();
 
     const release = Number(roundScheduledTime(100n) * 1000n);
@@ -1215,6 +1217,7 @@ describe('daemon cycle correlation', () => {
 
     await runDaemon(daemonOptions({
       now: () => now,
+      onWaitTransition,
       signal: controller.signal,
       sleep,
       onCycle: () => {
@@ -1226,6 +1229,12 @@ describe('daemon cycle correlation', () => {
 
     expect(sleep).toHaveBeenCalledExactlyOnceWith(200, controller.signal);
     expect(imported).toHaveBeenCalledExactlyOnceWith(100n);
+    expect(onWaitTransition.mock.calls.map(([event, context]) => [
+      event.kind, context,
+    ])).toEqual([
+      ['started', { cycle: 1 }],
+      ['released', { cycle: 2 }],
+    ]);
   });
 
 });
