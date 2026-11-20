@@ -1764,6 +1764,12 @@ bytes are excluded from both status sources.
 
 Cycle completion and retry observations carry separate timestamps.
 Publishing another snapshot does not refresh those timestamps.
+`lastCompletedCycle` describes a returned full daemon cycle, not a successful
+reconciliation. `lastRetryObservation` describes the recovery call that supplied
+the retry delay; its timestamp alone does not establish successful recovery.
+Read the gate's recovery and inclusion-check fields as well. Discovery activity
+must not be interpreted as a new reconciliation. Discovery-only passes are not
+enabled in this version.
 A completed cycle may include consumer failures. A recorded retry
 delay is historical; it is neither a live countdown nor permission
 to broadcast.

@@ -1,8 +1,4 @@
 import {
-  roundScheduledTime,
-} from '@based-labs/drand-quicknet';
-
-import {
   beforeEach,
   describe,
   expect,
@@ -16,6 +12,10 @@ import type {
   Hex,
   PublicClient,
 } from 'viem';
+
+import {
+  roundScheduledTime,
+} from '@based-labs/drand-quicknet';
 
 import type {
   RegistryDeployment,
@@ -45,8 +45,8 @@ vi.mock(
 );
 
 import type {
-  CheckpointStore,
-} from '../../src/state/checkpoint.js';
+  FinalityPolicy,
+} from '../../src/chain/finality-policy.js';
 
 import type {
   ValidatedQuicknetConsumer,
@@ -57,18 +57,18 @@ import {
   type RunDaemonCycleResult,
 } from '../../src/daemon/daemon-cycle.js';
 
+import type {
+  SoftScanCursor,
+} from '../../src/daemon/daemon-iteration.js';
+
 import {
   runDaemon,
   type RunDaemonOptions,
 } from '../../src/daemon/daemon.js';
 
 import type {
-  SoftScanCursor,
-} from '../../src/daemon/daemon-iteration.js';
-
-import type {
-  FinalityPolicy,
-} from '../../src/chain/finality-policy.js';
+  CheckpointStore,
+} from '../../src/state/checkpoint.js';
 
 const CONSUMER_A: Address = '0x1111111111111111111111111111111111111111';
 const CONSUMER_B: Address = '0x2222222222222222222222222222222222222222';
@@ -1228,4 +1228,139 @@ describe('daemon cycle correlation', () => {
     expect(imported).toHaveBeenCalledExactlyOnceWith(100n);
   });
 
+});
+
+describe('serial daemon work integration', () => {
+  it('awaits cycle work and publication before honoring an abort', async () => {
+    const controller = new AbortController();
+
+    const enteredCycle = Promise.withResolvers<void>();
+
+    const heldCycle = Promise.withResolvers<void>();
+
+    const enteredPublication = Promise.withResolvers<void>();
+
+    const heldPublication = Promise.withResolvers<void>();
+
+    const order: string[] = [];
+
+    const sleep = vi.fn(async () => {});
+
+    vi.mocked(runDaemonCycle).mockImplementation(async () => {
+      order.push('cycle-start');
+      enteredCycle.resolve();
+
+      await heldCycle.promise;
+
+      order.push('cycle-end');
+
+      return processedCycle();
+    });
+
+    let finished = false;
+
+    const pending = runDaemon(daemonOptions({
+      signal: controller.signal,
+      sleep,
+      async onCycle(_result, context) {
+        expect(context.cycle).toBe(1);
+        order.push('publication-start');
+        enteredPublication.resolve();
+
+        await heldPublication.promise;
+
+        order.push('publication-end');
+      },
+    })).then(() => {
+      finished = true;
+    });
+
+    await enteredCycle.promise;
+
+    controller.abort();
+    expect(finished).toBe(false);
+    expect(sleep).not.toHaveBeenCalled();
+    heldCycle.resolve();
+
+    await enteredPublication.promise;
+
+    expect(finished).toBe(false);
+    expect(sleep).not.toHaveBeenCalled();
+    heldPublication.resolve();
+
+    await pending;
+
+    expect(order).toEqual([
+      'cycle-start', 'cycle-end', 'publication-start', 'publication-end',
+    ]);
+    expect(runDaemonCycle).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it.each([1_000, 5_000, 15_000])(
+    'preserves ordered work, publication and the %s ms sleep',
+    async (pollIntervalMs) => {
+      const controller = new AbortController();
+
+      const order: string[] = [];
+
+      let publications = 0;
+
+      vi.mocked(runDaemonCycle).mockImplementation(async (options) => {
+        await options.readChainHeads!();
+        await options.submitter.recover();
+
+        return processedCycle();
+      });
+
+      vi.mocked(submitter.recover).mockImplementation(async () => {
+        order.push('recovery');
+
+        return undefined as never;
+      });
+
+      await runDaemon(daemonOptions({
+        signal: controller.signal,
+        pollIntervalMs,
+        async readChainHeads() {
+          order.push('heads');
+
+          return { latestBlock: 1_500n, durableBlock: 1_200n };
+        },
+        async onCycle(_result, context) {
+          publications += 1;
+          expect(context.cycle).toBe(publications);
+          order.push('publication');
+
+          if (publications === 2) {
+            controller.abort();
+          }
+        },
+        async sleep(milliseconds) {
+          order.push(`sleep:${milliseconds}`);
+        },
+      }));
+
+      expect(order).toEqual([
+        'heads', 'recovery', 'publication', `sleep:${pollIntervalMs}`,
+        'heads', 'recovery', 'publication',
+      ]);
+    },
+  );
+
+  it('does not publish or sleep after a cycle throws', async () => {
+    const error = new Error('cycle failure');
+
+    const onCycle = vi.fn();
+
+    const sleep = vi.fn();
+
+    vi.mocked(runDaemonCycle).mockRejectedValue(error);
+
+    await expect(runDaemon(daemonOptions({ onCycle, sleep }))).rejects.toBe(error);
+
+    expect(onCycle).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+    expect(runDaemonCycle).toHaveBeenCalledOnce();
+  });
 });

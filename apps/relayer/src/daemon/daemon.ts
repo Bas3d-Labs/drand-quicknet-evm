@@ -8,21 +8,13 @@ import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
-import type {
-  TerminalRoundReason,
-} from '../rounds/terminal-round-reason.js';
-
-import type {
-  QuicknetRandomnessRequest,
-} from '../consumers/request-events.js';
+import {
+  createChainHeadsReader,
+} from '../chain/chain-heads-reader.js';
 
 import type {
   ChainHeads,
 } from '../chain/chain-heads.js';
-
-import {
-  createChainHeadsReader,
-} from '../chain/chain-heads-reader.js';
 
 import type {
   FinalityPolicy,
@@ -31,6 +23,10 @@ import type {
 import type {
   ValidatedQuicknetConsumer,
 } from '../consumers/consumer.js';
+
+import type {
+  QuicknetRandomnessRequest,
+} from '../consumers/request-events.js';
 
 import type {
   RequestDiscovery,
@@ -43,6 +39,10 @@ import type {
 import {
   createRoundImporter,
 } from '../rounds/create-round-importer.js';
+
+import type {
+  TerminalRoundReason,
+} from '../rounds/terminal-round-reason.js';
 
 import {
   isPositiveSafeInteger,
@@ -61,6 +61,10 @@ import {
 import type {
   SoftScanCursor,
 } from './daemon-iteration.js';
+
+import {
+  DaemonWorkExecutor,
+} from './daemon-work-executor.js';
 
 import {
   FutureRoundScheduler,
@@ -153,6 +157,12 @@ export async function runDaemon(
       durableHeadPollIntervalMs: DURABLE_HEAD_POLL_INTERVAL_MS,
     });
 
+  const executor = new DaemonWorkExecutor();
+
+  // Until discovery is separated, the existing awaited sleep controls the
+  // schedule. Zero represents immediately due work and adds no clock reads.
+  executor.request('full', 0);
+
   let cycle = 0;
 
   while (!options.signal?.aborted) {
@@ -201,11 +211,27 @@ export async function runDaemon(
       cycleOptions.signal = options.signal;
     }
 
-    const result = await runDaemonCycle(cycleOptions);
+    const executed = await executor.runNext(0, async (kind) => {
+      if (kind !== 'full') {
+        throw new Error('Discovery-only execution is not enabled.');
+      }
 
-    if (options.onCycle !== undefined) {
-      await options.onCycle(result, context);
+      const result = await runDaemonCycle(cycleOptions);
+
+      // Only this full-cycle path can publish a completed cycle. Keep the
+      // publication inside execution ownership and await it before sleeping.
+      if (options.onCycle !== undefined) {
+        await options.onCycle(result, context);
+      }
+
+      return result;
+    });
+
+    if (executed === undefined) {
+      throw new Error('Expected a due daemon cycle.');
     }
+
+    const result = executed.value;
 
     if (options.signal?.aborted) {
       return;
@@ -215,6 +241,8 @@ export async function runDaemon(
       waiting.sleepMilliseconds(options.pollIntervalMs, result.scheduled),
       options.signal,
     );
+
+    executor.request('full', 0);
   }
 }
 
