@@ -69,8 +69,6 @@ export class DaemonWorkExecutor {
       return undefined;
     }
 
-    const deadline = this.deadlines.get(kind)!;
-
     // Consume before awaiting. A trigger arriving during the action creates
     // new pending work and cannot be erased by this action's completion.
     this.deadlines.delete(kind);
@@ -81,13 +79,6 @@ export class DaemonWorkExecutor {
       const value = await action(kind);
 
       return { kind, value };
-    } catch (error) {
-      // Failure is not completion. Preserve the original due work as well as
-      // any earlier trigger that arrived while it was running. Retry timing
-      // belongs to the owner; this class never starts a retry itself.
-      this.request(kind, deadline);
-
-      throw error;
     } finally {
       this.running = false;
     }

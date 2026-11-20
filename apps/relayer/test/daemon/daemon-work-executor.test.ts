@@ -95,7 +95,7 @@ describe('daemon work executor', () => {
   });
 
   it.each(['throw', 'reject'] as const)(
-    'preserves failed work and the original error on %s',
+    'preserves new triggers and the original error on %s',
     async (mode) => {
       const executor = new DaemonWorkExecutor();
 
@@ -120,6 +120,28 @@ describe('daemon work executor', () => {
       });
     },
   );
+
+  it('consumes failed work without scheduling its own retry', async () => {
+    const executor = new DaemonWorkExecutor();
+
+    const error = new Error('failed action');
+
+    executor.request('full', 20);
+
+    await expect(executor.runNext(20, async () => {
+      throw error;
+    })).rejects.toBe(error);
+
+    expect(executor.nextDeadline).toBeNull();
+    expect(await executor.runNext(100, async () => 'unexpected')).toBeUndefined();
+
+    executor.request('full', 200);
+
+    expect(await executor.runNext(200, async () => 'owner retry')).toEqual({
+      kind: 'full',
+      value: 'owner retry',
+    });
+  });
 
   it('does not equate discovery completion with full work completion', async () => {
     const executor = new DaemonWorkExecutor();
