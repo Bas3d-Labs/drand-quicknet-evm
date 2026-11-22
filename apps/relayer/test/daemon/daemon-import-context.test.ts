@@ -499,13 +499,21 @@ describe('round import diagnostic context', () => {
       await runDaemon({
         ...fixtureState.options,
         receiptTimeoutMs: 45_000,
+        now: () => Number(roundScheduledTime(ROUND) * 1000n) + 1000,
+        maxBlockRange: 2_000n,
         pollIntervalMs: 1_000,
         signal: controller.signal,
         readChainHeads: async () => ({
           latestBlock: 1200n,
           durableBlock: 1100n,
         }),
-        onCycle: () => controller.abort(),
+        monotonicNow: () => 0,
+        readSchedulingState: () => ({ open: true, blockers: [], retainedCount: 0 }),
+        onWork: () => {
+          if (fixtureState.waitForTransactionReceipt.mock.calls.length > 0) {
+            controller.abort();
+          }
+        },
       });
 
       expect(fixtureState.waitForTransactionReceipt)
@@ -524,7 +532,7 @@ describe('round import diagnostic context', () => {
       const fixtureState = fixture();
       const controller = new AbortController();
       const reason = new Error('Shutdown requested.');
-      const onCycle = vi.fn();
+      const onWork = vi.fn();
       const sleep = vi.fn(async () => {
         controller.abort(reason);
       });
@@ -561,7 +569,10 @@ describe('round import diagnostic context', () => {
           latestBlock: 1200n,
           durableBlock: 1100n,
         }),
-        onCycle,
+        maxBlockRange: 2_000n,
+        onWork,
+        monotonicNow: () => 0,
+        readSchedulingState: () => ({ open: true, blockers: [], retainedCount: 0 }),
         sleep,
         now: () => Number(roundScheduledTime(ROUND) * 1000n) - 1000,
       })).resolves.toBeUndefined();
@@ -572,7 +583,7 @@ describe('round import diagnostic context', () => {
       expect(mocks.simulateBeaconSubmission).not.toHaveBeenCalled();
       expect(fixtureState.submitTransaction).not.toHaveBeenCalled();
       expect(fixtureState.waitForTransactionReceipt).not.toHaveBeenCalled();
-      expect(onCycle).toHaveBeenCalledOnce();
+      expect(onWork).toHaveBeenCalledTimes(2);
       expect(sleep).toHaveBeenCalledExactlyOnceWith(1000, controller.signal);
 
       if (scanType === 'durable') {

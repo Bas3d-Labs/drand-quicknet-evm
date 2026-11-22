@@ -43,6 +43,14 @@ import {
   privateKeyToAccount,
 } from 'viem/accounts';
 
+import type {
+  RegistryDeployment,
+} from '@based-labs/drand-quicknet-registry';
+
+import {
+  createChainHeadsReader,
+} from '../../src/chain/chain-heads-reader.js';
+
 import {
   openSignerRuntime,
 } from '../../src/cli/open-signer-runtime.js';
@@ -56,6 +64,10 @@ import {
 } from '../../src/daemon/daemon-status-publisher.js';
 
 import {
+  runDaemon,
+} from '../../src/daemon/daemon.js';
+
+import {
   createRelayerLog,
 } from '../../src/diagnostics/relayer-log.js';
 
@@ -64,13 +76,17 @@ import {
 } from '../../src/diagnostics/signer-journal-errors.js';
 
 import {
-  DEFAULT_JOURNAL_BOUNDS,
-  MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
-} from '../../src/state/journal-bounds.js';
+  createBeaconSubmitter,
+} from '../../src/rounds/create-beacon-submitter.js';
 
 import {
   JournalBoundsExceededError,
 } from '../../src/state/journal-bounds-error.js';
+
+import {
+  DEFAULT_JOURNAL_BOUNDS,
+  MAX_SIGNED_TRANSACTIONS_PER_ATTEMPT,
+} from '../../src/state/journal-bounds.js';
 
 import {
   journalFilename,
@@ -81,16 +97,16 @@ import {
   serviceLockReason,
 } from '../../src/state/service-lock.js';
 
+import {
+  decodeJournalSnapshot,
+  encodeJournalSnapshot,
+} from '../../src/state/transaction-journal-serialization.js';
+
 import type {
   JournalAttempt,
   JournalSignedTransaction,
   TransactionJournalSnapshot,
 } from '../../src/state/transaction-journal.js';
-
-import {
-  decodeJournalSnapshot,
-  encodeJournalSnapshot,
-} from '../../src/state/transaction-journal-serialization.js';
 
 vi.mock('../../src/state/service-lock.js', async (importOriginal) => {
   const actual = await importOriginal<
@@ -389,6 +405,106 @@ describe('command signer runtime', () => {
       sequence: 2,
       completedAt: '2026-11-20T00:00:00.000Z',
     });
+  });
+
+  it('pins ordered full/discovery calls with real recovery and a reusable empty journal', async () => {
+    let time = 0;
+
+    vi.spyOn(performance, 'now').mockImplementation(() => time);
+
+    const calls: string[] = [];
+
+    const client = {
+      async getBlockNumber() {
+        calls.push('eth_blockNumber');
+        return 200n;
+      },
+      async getBlock(args: { blockNumber?: bigint; blockTag?: string }) {
+        calls.push(`eth_getBlockByNumber:${args.blockTag ?? args.blockNumber}`);
+        return { number: args.blockNumber ?? 100n, hash: HASH };
+      },
+      async getTransactionCount() {
+        calls.push('eth_getTransactionCount');
+        return 4;
+      },
+      async getLogs() {
+        calls.push('eth_getLogs');
+        return [];
+      },
+    } as unknown as PublicClient;
+
+    const readChainHeads = createChainHeadsReader({
+      publicClient: client,
+      finality: { type: 'safe' },
+      durableHeadPollIntervalMs: 30_000,
+    });
+
+    const runtime = await openSignerRuntime({ ...options(client), readChainHeads });
+
+    const submitter = createBeaconSubmitter({
+      publicClient: client,
+      manager: runtime,
+      readChainHeads,
+    });
+
+    const controller = new AbortController();
+
+    const workCalls: string[][] = [];
+
+    await runDaemon({
+      account: ACCOUNT,
+      publicClient: client,
+      submitter,
+      deployment: { chainId: 4663, address: ACCOUNT.address } as RegistryDeployment,
+      consumers: [{ address: ACCOUNT.address, registry: ACCOUNT.address }],
+      checkpointStore: {
+        async load() {
+          return 101n;
+        },
+        async save() {
+          throw new Error('No durable scan expected.');
+        },
+      },
+      readChainHeads,
+      readSchedulingState: () => ({
+        open: runtime.status.open,
+        blockers: runtime.status.blockers,
+        retainedCount: runtime.status.attempts.length,
+      }),
+      startBlock: 101n,
+      maxBlockRange: 2_000n,
+      finality: { type: 'safe' },
+      pollIntervalMs: 15_000,
+      monotonicNow: () => time,
+      now: () => time,
+      sleep: async (delay) => {
+        time += delay;
+      },
+      signal: controller.signal,
+      onWork(_result, context) {
+        workCalls.push(calls.splice(0));
+
+        if (context.iteration === 4) {
+          controller.abort();
+        }
+      },
+    });
+
+    expect(workCalls[1]).toEqual(['eth_blockNumber', 'eth_getLogs']);
+    // Selection reads durable/latest once; the latest inspection brackets its
+    // nonce read with two pairs of latest-anchor headers.
+    expect(workCalls[2]).toEqual([
+      'eth_blockNumber',
+      'eth_getBlockByNumber:100',
+      'eth_getBlockByNumber:200',
+      'eth_getBlockByNumber:200',
+      'eth_getBlockByNumber:200',
+      'eth_getTransactionCount',
+      'eth_getBlockByNumber:200',
+      'eth_getBlockByNumber:200',
+      'eth_blockNumber',
+    ]);
+    expect(workCalls[3]).toEqual(['eth_blockNumber']);
   });
 
   it('leaves a missing journal untouched until automatic recovery', async () => {

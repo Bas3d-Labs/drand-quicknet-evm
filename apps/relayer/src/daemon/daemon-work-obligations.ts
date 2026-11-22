@@ -70,7 +70,7 @@ function kindFor(reason: DaemonWorkReason): DaemonWorkKind {
   return 'full';
 }
 
-/** In-memory bookkeeping only. No clocks, timers, RPCs or daemon integration. */
+/** In-memory bookkeeping only. No clocks, timers, RPCs or execution. */
 export class DaemonWorkObligations {
   private readonly pending = new Map<string, WorkObligation>();
 
@@ -493,6 +493,14 @@ export class DaemonWorkObligations {
     return obligation;
   }
 
+  scanNextBlock(reference: ObligationReference): bigint | undefined {
+    if (this.get(reference) === undefined) {
+      return undefined;
+    }
+
+    return this.scans.get(reference.identity)?.nextBlock;
+  }
+
   scanTarget(reference: ObligationReference): bigint | undefined {
     if (this.get(reference) === undefined) {
       return undefined;
@@ -538,7 +546,9 @@ export class DaemonWorkObligations {
 
     this.scans.set(current.identity, { target, latestTarget, nextBlock });
 
-    return next;
+    this.delay(next, current.eligibleAt);
+
+    return this.get(next);
   }
 
   /** Replace an authoritative cursor jump, never an ordinary head refresh. */

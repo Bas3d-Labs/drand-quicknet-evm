@@ -213,6 +213,64 @@ describe('createDaemonLogger', () => {
     }
   });
 
+  it('emits discovery-only heartbeats and preserves the supplied head observation times', () => {
+    let time = 0;
+
+    const logger = createDaemonLogger({ logger: LOGGER, now: () => time });
+    const consumers = [{
+      consumer: CONSUMER_A,
+      status: 'healthy' as const,
+      latestBlock: 1_000n,
+      softNextBlock: 1_001n,
+      durableBlock: 900n,
+      durableNextBlock: 901n,
+      latestBlockObservedAt: '2026-11-20T00:01:00.000Z',
+      durableBlockObservedAt: '2026-11-20T00:00:00.000Z',
+    }];
+    const work = {
+      discoveryCompleted: true,
+      consumers,
+      waitingRejectedOffers: 0n,
+      discoveryFailures: [],
+    };
+
+    time = 59_999;
+    logger.onWork(work);
+
+    expect(loggerMocks.heartbeat).not.toHaveBeenCalled();
+
+    time = 60_000;
+    logger.onWork(work);
+
+    expect(loggerMocks.heartbeat).toHaveBeenCalledExactlyOnceWith({
+      consumers,
+      waitingRejectedOffers: 0n,
+    });
+
+    time = 120_000;
+    logger.onWork({ ...work, cycle: createSuccessfulCycle(), discoveryCompleted: false });
+
+    expect(loggerMocks.heartbeat).toHaveBeenLastCalledWith({ consumers, waitingRejectedOffers: 0n });
+    expect(loggerMocks.heartbeat).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports discovery failures without inventing a scan or signing operation', () => {
+    const logger = createDaemonLogger({ logger: LOGGER });
+    const error = new Error('Query failed');
+
+    logger.onWork({
+      discoveryCompleted: false,
+      consumers: [{ consumer: CONSUMER_A, status: 'failed' }],
+      waitingRejectedOffers: 0n,
+      discoveryFailures: [{ consumer: CONSUMER_A, error }],
+    });
+
+    expect(loggerMocks.consumerFailed).toHaveBeenCalledExactlyOnceWith({
+      consumer: CONSUMER_A,
+      error,
+    });
+  });
+
   it('preserves head observation times across later heartbeat emissions', () => {
     let now = 0;
     const logger = createDaemonLogger({ logger: LOGGER, now: () => now });

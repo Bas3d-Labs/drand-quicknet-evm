@@ -231,7 +231,8 @@ describe('obligation completion evidence', () => {
       const partial = owner.scanProgress(item, 5n, 100)!;
 
       expect(owner.scanTarget(partial)).toBe(9n);
-      expect(partial.eligibleAt).toBe(0);
+      // Incidental progress before eligibility cannot erase the remaining backoff.
+      expect(partial.eligibleAt).toBe(observed.eligibleAt);
       expect(owner.scanProgress(item, 6n, 101)).toBeUndefined();
 
       const next = owner.scanProgress(partial, 10n, 200)!;

@@ -88,6 +88,12 @@ export interface RunDaemonCycleOptions {
   finality: FinalityPolicy;
   softCursors: Map<Address, SoftScanCursor>;
   waiting?: FutureRoundScheduler | undefined;
+  scanSoft?: boolean;
+  selectDurableTarget?: (
+    consumer: Address,
+    nextBlock: bigint,
+    head: bigint,
+  ) => bigint;
   readChainHeads?: () => Promise<ChainHeads>;
   onRequestDiscovered?: ScanDiscoveryObserver | undefined;
   onUnfulfillable?: ((
@@ -125,6 +131,7 @@ type DaemonConsumerCycleResult =
     };
 
 export interface RunDaemonCycleResult {
+  recoveryFailed?: boolean;
   scheduled?: ScheduledPass;
   waitingRejectedOffers?: bigint;
   consumers: readonly DaemonConsumerCycleResult[];
@@ -147,6 +154,7 @@ export async function runDaemonCycle(
     // Recovery failure prevents this cycle from preparing transactions.
     // Use the existing consumer-failure reporting and retry next cycle.
     return {
+      recoveryFailed: true,
       consumers: options.consumers.map((consumer) => ({
         status: 'failed' as const,
         consumer,
@@ -196,6 +204,11 @@ export async function runDaemonCycle(
         startBlock: options.startBlock,
         maxBlockRange: options.maxBlockRange,
         finality: options.finality,
+        ...(options.scanSoft === undefined ? {} : { scanSoft: options.scanSoft }),
+        ...(options.selectDurableTarget === undefined ? {} : {
+          selectDurableTarget: (nextBlock: bigint, head: bigint) =>
+            options.selectDurableTarget!(consumer.address, nextBlock, head),
+        }),
 
         onRequestDiscovered: options.onRequestDiscovered,
         onUnfulfillable: options.onUnfulfillable,
@@ -239,7 +252,9 @@ export async function runDaemonCycle(
 
       const iteration = await runDaemonIteration(iterationOptions);
 
-      options.softCursors.set(consumer.address, iteration.softCursor);
+      if (options.scanSoft !== false) {
+        options.softCursors.set(consumer.address, iteration.softCursor);
+      }
 
       const successful: Extract<
         DaemonConsumerCycleResult,

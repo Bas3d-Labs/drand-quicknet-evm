@@ -3,12 +3,25 @@ import type {
 } from 'viem';
 
 import type {
-  TerminalRoundReason,
-} from '../rounds/terminal-round-reason.js';
+  DurableRequestResult
+} from '../consumers/durable-requests.js';
 
 import type {
   QuicknetRandomnessRequest,
 } from '../consumers/request-events.js';
+
+import type {
+  ProcessedQuicknetRound
+} from '../consumers/request-processor.js';
+
+import type {
+  ConsumerHealth,
+  RelayerLog,
+} from '../diagnostics/relayer-log.js';
+
+import type {
+  TerminalRoundReason,
+} from '../rounds/terminal-round-reason.js';
 
 import type {
   RunDaemonCycleResult,
@@ -19,17 +32,8 @@ import type {
 } from './daemon-iteration.js';
 
 import type {
-  ConsumerHealth,
-  RelayerLog,
-} from '../diagnostics/relayer-log.js';
-
-import type {
-  ProcessedQuicknetRound
-} from '../consumers/request-processor.js';
-
-import type {
-  DurableRequestResult
-} from '../consumers/durable-requests.js';
+  DaemonWorkResult,
+} from './daemon.js';
 
 import type {
   WaitTransition,
@@ -51,6 +55,8 @@ export interface CreateDaemonLoggerOptions {
 }
 
 export interface DaemonLogger {
+  onWork(result: DaemonWorkResult, workLogger?: RelayerLog): void;
+
   onUnfulfillable(
     scanType: DaemonScanType,
     request: QuicknetRandomnessRequest,
@@ -81,6 +87,36 @@ export function createDaemonLogger(
   const reported = new Set<string>();
 
   return {
+    onWork(
+      result: DaemonWorkResult,
+      workLogger: RelayerLog = options.logger,
+    ): void {
+      try {
+        if (result.cycle !== undefined) {
+          logCycle(workLogger, result.cycle);
+        }
+
+        for (const failure of result.discoveryFailures) {
+          workLogger.consumerFailed({
+            consumer: failure.consumer,
+            error: failure.error,
+          });
+        }
+
+        const currentTime = now();
+
+        if (currentTime - lastHeartbeatAt >= heartbeatIntervalMs) {
+          workLogger.heartbeat({
+            consumers: result.consumers,
+            waitingRejectedOffers: result.waitingRejectedOffers,
+          });
+          lastHeartbeatAt = currentTime;
+        }
+      } catch (error) {
+        logLoggingFailure(workLogger, error);
+      }
+    },
+
     onWaitTransition(
       event,
       workLogger: RelayerLog = options.logger,

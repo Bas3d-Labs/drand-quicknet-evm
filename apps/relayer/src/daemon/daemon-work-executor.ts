@@ -11,26 +11,13 @@ export interface ExecutedDaemonWork<T> {
 }
 
 /**
- * Holds due work for one serial owner. Requesting work never executes it.
+ * Holds due work for one serial owner. Replacing deadlines never executes work.
  * Deadlines are monotonic milliseconds supplied by the caller, not wall time.
  */
 export class DaemonWorkExecutor {
   private readonly deadlines = new Map<DaemonWorkKind, number>();
   private running = false;
   private lastStarted: DaemonWorkKind | undefined;
-
-  request(
-    kind: DaemonWorkKind,
-    dueAt: number,
-  ): void {
-    this.validateTime(dueAt);
-
-    const previous = this.deadlines.get(kind);
-
-    if (previous === undefined || dueAt < previous) {
-      this.deadlines.set(kind, dueAt);
-    }
-  }
 
   /** Replace the owner's entire projection between executions. */
   replace(
@@ -106,8 +93,8 @@ export class DaemonWorkExecutor {
       return undefined;
     }
 
-    // Consume before awaiting. A trigger arriving during the action creates
-    // new pending work and cannot be erased by this action's completion.
+    // Consume before awaiting. The owner applies observations and replaces
+    // the projection only after execution has completed.
     this.deadlines.delete(kind);
     this.running = true;
     this.lastStarted = kind;

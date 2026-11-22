@@ -52,6 +52,89 @@ describe('daemon chain-head polling', () => {
     vi.restoreAllMocks();
   });
 
+  it('drains fixed durable targets without moving the soft heartbeat pair', async () => {
+    let checkpoint = 1n;
+    let reads = 0;
+
+    const ranges: { fromBlock: bigint; toBlock: bigint }[] = [];
+    const anchors: bigint[] = [];
+    const controller = new AbortController();
+    const health: unknown[] = [];
+    const kinds: string[] = [];
+
+    const client = {
+      async getBlockNumber() {
+        return 6_000n;
+      },
+      async getBlock({ blockNumber }: { blockNumber: bigint }) {
+        anchors.push(blockNumber);
+        return { number: blockNumber, hash: `0x${'aa'.repeat(32)}` };
+      },
+      async getLogs(args: { fromBlock: bigint; toBlock: bigint }) {
+        ranges.push({ fromBlock: args.fromBlock, toBlock: args.toBlock });
+        return [];
+      },
+    } as unknown as PublicClient;
+
+    await runDaemon({
+      publicClient: client,
+      account: {} as Account,
+      submitter: {
+        findRetainedWork: () => null,
+        recover: async () => recoveryReport(),
+        submit: vi.fn(),
+      },
+      deployment: { chainId: 46630, address: REGISTRY } as RegistryDeployment,
+      checkpointStore: {
+        async load() {
+          return checkpoint;
+        },
+        async save(_consumer, next) {
+          checkpoint = next;
+        },
+      },
+      consumers: [{ address: CONSUMER_A, registry: REGISTRY }],
+      startBlock: 1n,
+      maxBlockRange: 2_000n,
+      finality: { type: 'safe' },
+      pollIntervalMs: 15_000,
+      now: () => 0,
+      monotonicNow: () => 0,
+      readSchedulingState: () => ({ open: true, blockers: [], retainedCount: 0 }),
+      readChainHeads: async () => ({
+        latestBlock: 6_000n,
+        durableBlock: ++reads === 1 ? 4_000n : 5_000n,
+      }),
+      sleep: async () => {
+        throw new Error('Backlog should continue immediately');
+      },
+      signal: controller.signal,
+      onWork(result, context) {
+        kinds.push(context.kind);
+        health.push(result.consumers[0]);
+
+        if (context.iteration === 4) {
+          controller.abort();
+        }
+      },
+    });
+
+    expect(kinds).toEqual(['full', 'discovery', 'full', 'full']);
+    expect(ranges).toEqual([
+      { fromBlock: 1n, toBlock: 2_000n },
+      { fromBlock: 4_001n, toBlock: 6_000n },
+      { fromBlock: 2_001n, toBlock: 4_000n },
+      { fromBlock: 4_001n, toBlock: 5_000n },
+    ]);
+    expect(anchors).toEqual([4_000n, 4_000n, 4_000n, 4_000n, 5_000n, 5_000n]);
+    expect(checkpoint).toBe(5_001n);
+    expect(health.slice(1)).toEqual([
+      expect.objectContaining({ latestBlock: 6_000n, softNextBlock: 6_001n }),
+      expect.objectContaining({ latestBlock: 6_000n, softNextBlock: 6_001n }),
+      expect.objectContaining({ latestBlock: 6_000n, softNextBlock: 6_001n }),
+    ]);
+  });
+
   it('shares durable polling across consumers and cycles', async () => {
     let now = 0;
 
@@ -124,12 +207,8 @@ describe('daemon chain-head polling', () => {
     const controller = new AbortController();
     const cycles: RunDaemonCycleResult[] = [];
 
-    const sleep = vi.fn(async () => {
-      if (cycles.length === 1) {
-        now = 29_999;
-      } else {
-        now = 30_000;
-      }
+    const sleep = vi.fn(async (delay: number) => {
+      now += delay;
     });
 
     const submitter: BeaconSubmitter = {
@@ -141,6 +220,9 @@ describe('daemon chain-head polling', () => {
     };
 
     await runDaemon({
+      now: () => now,
+      monotonicNow: () => now,
+      readSchedulingState: () => ({ open: true, blockers: [], retainedCount: 0 }),
       publicClient,
       account: {} as Account,
       submitter,
@@ -153,11 +235,15 @@ describe('daemon chain-head polling', () => {
       startBlock: 101n,
       maxBlockRange: 1_000n,
       finality: { type: 'safe' },
-      pollIntervalMs: 2_000,
+      pollIntervalMs: 15_000,
       signal: controller.signal,
       sleep,
-      onCycle(result) {
-        cycles.push(result);
+      onWork(result) {
+        if (result.cycle === undefined) {
+          return;
+        }
+
+        cycles.push(result.cycle);
 
         if (cycles.length === 3) {
           controller.abort();
@@ -196,11 +282,11 @@ describe('daemon chain-head polling', () => {
     ]);
 
     // Latest-head reads still occur for each consumer iteration.
-    expect(getBlockNumber).toHaveBeenCalledTimes(6);
+    expect(getBlockNumber).toHaveBeenCalledTimes(10);
 
     expect(sleep).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledWith(
-      2_000,
+      15_000,
       controller.signal,
     );
 

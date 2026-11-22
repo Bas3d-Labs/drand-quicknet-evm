@@ -36,6 +36,10 @@ import type {
 } from '../../../src/cli/open-beacon-submitter.js';
 
 import type {
+  RunDaemonCycleResult,
+} from '../../../src/daemon/daemon-cycle.js';
+
+import type {
   ScopedRelayerLog
 } from '../../../src/diagnostics/relayer-log.js';
 
@@ -68,6 +72,7 @@ const daemonLoggerMocks = vi.hoisted(() => ({
   onUnfulfillable: vi.fn(),
   onWaitTransition: vi.fn(),
   onCycle: vi.fn(),
+  onWork: vi.fn(),
 }));
 
 const relayerLogMocks = vi.hoisted(() => ({
@@ -444,7 +449,7 @@ describe('runDaemonCommand', () => {
       .mockReset()
       .mockResolvedValue(undefined);
 
-    daemonLoggerMocks.onCycle.mockReset();
+    daemonLoggerMocks.onWork.mockReset();
 
     for (const mock of Object.values(relayerLogMocks)) {
       mock.mockReset();
@@ -674,6 +679,8 @@ describe('runDaemonCommand', () => {
       signerRuntimeMocks.openBeaconSubmitter.mock.calls[0]![0];
 
     expect(runDaemon).toHaveBeenCalledExactlyOnceWith({
+      monotonicNow: expect.any(Function),
+      readSchedulingState: expect.any(Function),
       publicClient: PUBLIC_CLIENT,
       account: ACCOUNT,
       submitter,
@@ -686,7 +693,7 @@ describe('runDaemonCommand', () => {
       finality: { type: 'safe' },
       pollIntervalMs: 1_000,
       receiptTimeoutMs: 45_000,
-      onCycle: expect.any(Function),
+      onWork: expect.any(Function),
       onRequestDiscovered: expect.any(Function),
       onUnfulfillable: expect.any(Function),
       onWaitTransition: expect.any(Function),
@@ -1007,14 +1014,14 @@ describe('runDaemonCommand', () => {
       consumers: [],
     };
 
-    vi.mocked(runDaemon).mockImplementation(async ({ onCycle }) => {
-      await onCycle?.(cycle, { cycle: 1 });
+    vi.mocked(runDaemon).mockImplementation(async ({ onWork }) => {
+      await onWork?.(fullWork(cycle), fullContext({ cycle: 1 }));
     });
 
     await runDaemonCommand({ source: SOURCE });
 
-    expect(daemonLoggerMocks.onCycle).toHaveBeenCalledExactlyOnceWith(
-      cycle,
+    expect(daemonLoggerMocks.onWork).toHaveBeenCalledExactlyOnceWith(
+      fullWork(cycle),
       relayerLogMocks,
     );
   });
@@ -1203,6 +1210,48 @@ describe('runDaemonCommand', () => {
     expect(onDiagnostics).toHaveBeenCalledExactlyOnceWith(policy);
   });
 
+  it('scopes discovery events and completion without a cycle number', async () => {
+    enableStatusObservation();
+
+    vi.mocked(runDaemon).mockImplementationOnce(async (options) => {
+      const context = { iteration: 12, kind: 'discovery' as const };
+
+      options.onRequestDiscovered?.('soft', {
+        consumer: CONSUMER_A,
+        round: 123n,
+        blockNumber: 456n,
+        transactionHash: `0x${'ab'.repeat(32)}`,
+        logIndex: 0,
+      }, context);
+
+      await options.onWork?.({
+        consumers: [],
+        discoveryCompleted: true,
+        discoveryFailures: [],
+        waitingRejectedOffers: 0n,
+      }, context);
+    });
+
+    await runDaemonCommand({ source: SOURCE });
+
+    expect(relayerLogMocks.withContext).toHaveBeenCalledWith({
+      iteration: 12,
+      workKind: 'discovery',
+    });
+    expect(relayerLogMocks.withContext).toHaveBeenCalledWith({
+      iteration: 12,
+      workKind: 'discovery',
+      signer: ACCOUNT.address,
+    });
+
+    const completed = vi.mocked(writeDaemonStatusFile).mock.calls[1]![0].snapshot;
+
+    expect(completed.lastCompletedWork).toMatchObject({ iteration: 12, kind: 'discovery' });
+    expect(completed.lastCompletedCycle).toBeNull();
+    expect(completed.lastQualifyingReconciliation).toBeNull();
+    expect(completed.lastDiscoveryCompleted?.iteration).toBe(12);
+  });
+
   it('logs discovery through the cycle-scoped logger', async () => {
     const observation = {
       consumer: VALIDATED_CONSUMERS[0]!.address,
@@ -1213,7 +1262,7 @@ describe('runDaemonCommand', () => {
       logIndex: 7,
     };
     vi.mocked(runDaemon).mockImplementation(async (options) => {
-      options.onRequestDiscovered?.('durable', observation, { cycle: 9 });
+      options.onRequestDiscovered?.('durable', observation, fullContext({ cycle: 9 }));
     });
     await runDaemonCommand({ source: SOURCE });
     expect(relayerLogMocks.withContext).toHaveBeenCalledWith({
@@ -1289,7 +1338,7 @@ describe('runDaemonCommand', () => {
     };
 
     daemonLoggerMocks.onWaitTransition.mockClear();
-    options.onWaitTransition!(event, { cycle: 3 });
+    options.onWaitTransition!(event, fullContext({ cycle: 3 }));
 
     expect(relayerLogMocks.withContext).toHaveBeenCalledWith({
       iteration: 3,
@@ -1321,7 +1370,7 @@ describe('runDaemonCommand', () => {
       consumers: [],
     };
 
-    await options.onCycle!(result, { cycle: 7 });
+    await options.onWork!(fullWork(result), fullContext({ cycle: 7 }));
 
     expect(relayerLogMocks.withContext).toHaveBeenCalledExactlyOnceWith({
       cycle: 7,
@@ -1330,8 +1379,8 @@ describe('runDaemonCommand', () => {
       signer: ACCOUNT.address,
     });
 
-    expect(daemonLoggerMocks.onCycle)
-      .toHaveBeenCalledExactlyOnceWith(result, child);
+    expect(daemonLoggerMocks.onWork)
+      .toHaveBeenCalledExactlyOnceWith(fullWork(result), child);
   });
 
   it('stops startup when opening the signer runtime fails', async () => {
@@ -1619,29 +1668,20 @@ describe('runDaemonCommand', () => {
   it('records aggregate discovery only after every consumer succeeds', async () => {
     enableStatusObservation();
 
-    vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
-      const consumers = VALIDATED_CONSUMERS.map((consumer) => ({
-        status: 'success' as const,
-        consumer,
-        iteration: {
-          consumer: consumer.address,
-          status: 'caught-up' as const,
-          latestBlock: 100n,
-          durableBlock: 90n,
-          durableNextBlock: 91n,
-          durableHeadRegressed: false,
-          softCursor: { nextBlock: 101n },
-          durableScan: undefined,
-          softScan: undefined,
-        },
-      }));
+    vi.mocked(runDaemon).mockImplementationOnce(async ({ onWork }) => {
+      await onWork?.({
+        consumers: [],
+        waitingRejectedOffers: 0n,
+        discoveryFailures: [],
+        discoveryCompleted: true,
+      }, { iteration: 1, kind: 'discovery' });
 
-      await onCycle?.({ consumers }, { cycle: 1 });
-      await onCycle?.({ consumers: [consumers[0]!, {
-        status: 'failed',
-        consumer: VALIDATED_CONSUMERS[1]!,
-        error: new Error('Soft scan unavailable'),
-      }] }, { cycle: 2 });
+      await onWork?.({
+        consumers: [],
+        waitingRejectedOffers: 0n,
+        discoveryFailures: [],
+        discoveryCompleted: false,
+      }, { iteration: 2, kind: 'discovery' });
     });
 
     await runDaemonCommand({ source: SOURCE });
@@ -1651,6 +1691,7 @@ describe('runDaemonCommand', () => {
 
     expect(full.lastDiscoveryCompleted?.iteration).toBe(1);
     expect(partial.lastCompletedWork?.iteration).toBe(2);
+    expect(partial.lastCompletedCycle).toBeNull();
     expect(partial.lastDiscoveryCompleted).toEqual(full.lastDiscoveryCompleted);
     expect(relayerLogMocks.workCompleted).toHaveBeenCalledTimes(2);
   });
@@ -1658,7 +1699,7 @@ describe('runDaemonCommand', () => {
   it('publishes qualifying inspections from the enabled production hook', async () => {
     enableStatusObservation();
 
-    vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
+    vi.mocked(runDaemon).mockImplementationOnce(async ({ onWork }) => {
       const opened = signerRuntimeMocks.openBeaconSubmitter.mock.calls[0]![0] as
         OpenBeaconSubmitterOptions;
 
@@ -1673,7 +1714,7 @@ describe('runDaemonCommand', () => {
         coveredAttemptIds: [],
       });
 
-      await onCycle?.({ consumers: [] }, { cycle: 1 });
+      await onWork?.(fullWork({ consumers: [] }), fullContext({ cycle: 1 }));
     });
 
     await runDaemonCommand({ source: SOURCE });
@@ -1690,8 +1731,8 @@ describe('runDaemonCommand', () => {
   it('publishes startup and cycle snapshots with the logger run ID', async () => {
     enableStatusObservation();
 
-    vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
-      await onCycle?.({ consumers: [] }, { cycle: 1 });
+    vi.mocked(runDaemon).mockImplementationOnce(async ({ onWork }) => {
+      await onWork?.(fullWork({ consumers: [] }), fullContext({ cycle: 1 }));
     });
 
     await runDaemonCommand({ source: SOURCE });
@@ -1802,8 +1843,8 @@ describe('runDaemonCommand', () => {
 
     let cycleReturned = false;
 
-    vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
-      await onCycle?.({ consumers: [] }, { cycle: 1 });
+    vi.mocked(runDaemon).mockImplementationOnce(async ({ onWork }) => {
+      await onWork?.(fullWork({ consumers: [] }), fullContext({ cycle: 1 }));
       cycleReturned = true;
     });
 
@@ -1840,8 +1881,8 @@ describe('runDaemonCommand', () => {
         );
       }
 
-      vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
-        await onCycle?.({ consumers: [] }, { cycle: 1 });
+      vi.mocked(runDaemon).mockImplementationOnce(async ({ onWork }) => {
+        await onWork?.(fullWork({ consumers: [] }), fullContext({ cycle: 1 }));
       });
 
       await expect(runDaemonCommand({
@@ -1906,9 +1947,9 @@ describe('runDaemonCommand', () => {
       },
     });
 
-    vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
+    vi.mocked(runDaemon).mockImplementationOnce(async ({ onWork }) => {
       expect(capture).toHaveBeenCalledOnce();
-      await onCycle?.({ consumers: [] }, { cycle: 1 });
+      await onWork?.(fullWork({ consumers: [] }), fullContext({ cycle: 1 }));
     });
 
     await runDaemonCommand({ source: SOURCE });
@@ -1979,8 +2020,8 @@ describe('runDaemonCommand', () => {
       },
     });
 
-    vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
-      await onCycle?.({ consumers: [] }, { cycle: 1 });
+    vi.mocked(runDaemon).mockImplementationOnce(async ({ onWork }) => {
+      await onWork?.(fullWork({ consumers: [] }), fullContext({ cycle: 1 }));
     });
 
     await expect(runDaemonCommand({
@@ -2016,20 +2057,25 @@ describe('runDaemonCommand', () => {
     expect(completed.lastCompletedCycle?.cycle).toBe(1);
   });
 
-  it('reports at cycle boundaries and emits a final interval', async () => {
+  it('reports after either work kind and emits a final interval', async () => {
     let monotonicMs = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => monotonicMs);
 
     enableStatusObservation();
 
-    vi.mocked(runDaemon).mockImplementationOnce(async ({ onCycle }) => {
+    vi.mocked(runDaemon).mockImplementationOnce(async ({ onWork }) => {
       monotonicMs = 59_999;
-      await onCycle?.({ consumers: [] }, { cycle: 1 });
+      await onWork?.(fullWork({ consumers: [] }), fullContext({ cycle: 1 }));
 
       expect(relayerLogMocks.rpcUsage).not.toHaveBeenCalled();
 
       monotonicMs = 60_000;
-      await onCycle?.({ consumers: [] }, { cycle: 2 });
+      await onWork?.({
+        consumers: [],
+        discoveryCompleted: true,
+        waitingRejectedOffers: 0n,
+        discoveryFailures: [],
+      }, { iteration: 2, kind: 'discovery' });
 
       expect(relayerLogMocks.rpcUsage).toHaveBeenCalledOnce();
       expect(relayerLogMocks.rpcUsage.mock.calls[0]![0].report.interval)
@@ -2039,7 +2085,7 @@ describe('runDaemonCommand', () => {
         });
 
       monotonicMs = 135_000;
-      await onCycle?.({ consumers: [] }, { cycle: 3 });
+      await onWork?.(fullWork({ consumers: [] }), { iteration: 3, kind: 'full', cycle: 2 });
 
       expect(relayerLogMocks.rpcUsage).toHaveBeenCalledTimes(2);
       expect(relayerLogMocks.rpcUsage.mock.calls[1]![0].report.interval)
@@ -2060,8 +2106,14 @@ describe('runDaemonCommand', () => {
         elapsedMs: 250,
       });
 
-    // Startup plus each of the three cycles still publishes status.
+    // Startup plus each work completion publishes status.
     expect(writeDaemonStatusFile).toHaveBeenCalledTimes(4);
+
+    const snapshot = vi.mocked(writeDaemonStatusFile).mock.calls[3]![0].snapshot;
+
+    expect(snapshot.lastCompletedCycle?.cycle).toBe(2);
+    expect(snapshot.lastCompletedWork?.iteration).toBe(3);
+    expect(snapshot.lastDiscoveryCompleted?.iteration).toBe(2);
     expect(relayerLogMocks.loggingFailed).not.toHaveBeenCalled();
   });
 
@@ -2165,3 +2217,18 @@ describe('runDaemonCommand', () => {
       });
   });
 });
+
+
+function fullContext(context: { cycle: number }) {
+  return { ...context, iteration: context.cycle, kind: 'full' as const };
+}
+
+function fullWork(cycle: RunDaemonCycleResult) {
+  return {
+    cycle,
+    consumers: [],
+    discoveryCompleted: false,
+    waitingRejectedOffers: cycle.waitingRejectedOffers ?? 0n,
+    discoveryFailures: [],
+  };
+}

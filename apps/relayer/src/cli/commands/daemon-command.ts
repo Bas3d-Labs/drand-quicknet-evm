@@ -37,8 +37,8 @@ import {
 } from '../../config/daemon-config.js';
 
 import {
-  runDaemon,
-} from '../../daemon/daemon.js';
+  validateQuicknetConsumers,
+} from '../../consumers/validate-consumers.js';
 
 import {
   createDaemonLogger,
@@ -52,6 +52,10 @@ import {
 import {
   createDaemonStatusPublisher,
 } from '../../daemon/daemon-status-publisher.js';
+
+import {
+  runDaemon,
+} from '../../daemon/daemon.js';
 
 import type {
   SummarizeErrorOptions,
@@ -73,9 +77,9 @@ import {
   FileCheckpointStore,
 } from '../../state/file-checkpoint-store.js';
 
-import {
-  validateQuicknetConsumers,
-} from '../../consumers/validate-consumers.js';
+import type {
+  SignerRuntimeObservation,
+} from '../../state/read-signer-runtime-observation.js';
 
 import {
   assertServiceLockHeld,
@@ -205,6 +209,10 @@ export async function runDaemonCommand(
       observationClock: Date.now,
     });
 
+    let readRuntime: (() => SignerRuntimeObservation) | undefined;
+
+    const monotonicNow = () => performance.now();
+
     const submitter = await openBeaconSubmitter({
       config,
       publicClient: clients.publicClient,
@@ -214,10 +222,13 @@ export async function runDaemonCommand(
       maxBlockRange: config.maxBlockRange,
       checkpointFile: config.checkpointFile,
       startupPollIntervalMs: config.pollIntervalMs,
-      onInitialized: statusPublisher.onInitialized,
+      onInitialized(read) {
+        readRuntime = read;
+        statusPublisher.onInitialized(read);
+      },
       onRecoveryCompleted: statusPublisher.onRecoveryCompleted,
       schedulerObserver: {
-        now: () => performance.now(),
+        now: monotonicNow,
         onInspectionCompleted: statusPublisher.onInspectionCompleted,
       },
       signal: options.signal,
@@ -261,6 +272,20 @@ export async function runDaemonCommand(
     options.signal?.throwIfAborted();
 
     await runDaemon({
+      monotonicNow,
+      readSchedulingState() {
+        if (readRuntime === undefined) {
+          throw new Error('Signer runtime is not initialized.');
+        }
+
+        const current = readRuntime();
+
+        return {
+          open: current.status.open,
+          blockers: current.status.blockers,
+          retainedCount: current.attempts.length,
+        };
+      },
       publicClient: clients.publicClient,
       account: config.account,
       submitter,
@@ -283,9 +308,9 @@ export async function runDaemonCommand(
       readChainHeads,
       onRequestDiscovered(scanType, observation, context) {
         logger.withContext({
-          cycle: context.cycle,
-          iteration: context.cycle,
-          workKind: 'full',
+          ...(context.kind === 'full' ? { cycle: context.cycle } : {}),
+          iteration: context.iteration,
+          workKind: context.kind,
         }).requestDiscovered({
           ...observation,
           logIndex: BigInt(observation.logIndex),
@@ -300,46 +325,31 @@ export async function runDaemonCommand(
         }
 
         daemonLogger.onWaitTransition(event, logger.withContext({
-          cycle: context.cycle,
-          iteration: context.cycle,
-          workKind: 'full',
+          ...(context.kind === 'full' ? { cycle: context.cycle } : {}),
+          iteration: context.iteration,
+          workKind: context.kind,
         }));
       },
       onSchedulerInitialized: statusPublisher.onSchedulerInitialized,
       
-      async onCycle(result, context) {
-        const workContext = {
-          cycle: context.cycle,
-          iteration: context.cycle,
-          kind: 'full' as const,
-        };
-
-        const discoveryCompleted =
-          result.consumers.length === validatedConsumers.length &&
-          validatedConsumers.every((consumer) => {
-            return result.consumers.some((outcome) => {
-              return outcome.consumer.address === consumer.address &&
-                outcome.status === 'success';
-            });
-          });
-
+      async onWork(result, context) {
         const completion = statusPublisher.onWorkCompleted(
-          workContext,
-          discoveryCompleted,
+          context,
+          result.discoveryCompleted,
         );
 
         try {
-          const cycleLogger = logger.withContext({
-            cycle: workContext.cycle,
-            iteration: workContext.iteration,
-            workKind: workContext.kind,
+          const workLogger = logger.withContext({
+            ...(context.kind === 'full' ? { cycle: context.cycle } : {}),
+            iteration: context.iteration,
+            workKind: context.kind,
             signer: config.account.address,
           });
 
-          daemonLogger.onCycle(result, cycleLogger);
+          daemonLogger.onWork(result, workLogger);
 
           if (completion !== undefined) {
-            cycleLogger.workCompleted({
+            workLogger.workCompleted({
               completedAt: completion.completedAt,
             });
           }
