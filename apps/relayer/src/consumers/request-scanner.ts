@@ -13,7 +13,7 @@ import {
 } from './request-events.js';
 
 export interface ScanQuicknetRequestOptions {
-  publicClient: PublicClient;
+  publicClient: Pick<PublicClient, 'getLogs'>;
   consumers: readonly Address[];
   nextBlock: bigint;
   throughBlock: bigint;

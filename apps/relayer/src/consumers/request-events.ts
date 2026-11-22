@@ -20,7 +20,7 @@ export interface QuicknetRandomnessRequest {
 }
 
 export interface GetQuicknetRandomnessRequestOptions {
-  publicClient: PublicClient;
+  publicClient: Pick<PublicClient, 'getLogs'>;
   consumers: readonly Address[];
   fromBlock: bigint;
   toBlock: bigint;

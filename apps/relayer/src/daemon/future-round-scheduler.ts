@@ -95,6 +95,11 @@ export interface DispatchObservation {
   readonly handedOff: number;
 }
 
+export interface QueueAdmission {
+  readonly status: 'accepted' | 'duplicate' | 'rejected';
+  readonly workId: string;
+}
+
 interface SchedulerOptions {
   chainId: number;
   registry: Address;
@@ -155,6 +160,14 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
     releaseTime: bigint,
     source: 'durable' | 'soft' = 'soft',
   ): void {
+    this.admit(request, releaseTime, source);
+  }
+
+  admit(
+    request: QuicknetRandomnessRequest,
+    releaseTime: bigint,
+    source: 'durable' | 'soft' = 'soft',
+  ): QueueAdmission {
     const workId = createBeaconWorkId({
       chainId: this.options.chainId,
       registry: this.options.registry,
@@ -162,7 +175,7 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
     });
 
     if (this.entries.has(workId)) {
-      return;
+      return { status: 'duplicate', workId };
     }
 
     const entry: QueuedEntry = {
@@ -181,7 +194,8 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
 
       if (releaseOrder(entry, furthest) >= 0) {
         this.rejected += 1n;
-        return;
+
+        return { status: 'rejected', workId };
       }
 
       this.entries.delete(furthest.workId);
@@ -198,6 +212,8 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
       kind: 'started',
       entry,
     });
+
+    return { status: 'accepted', workId };
   }
 
   async dispatch(

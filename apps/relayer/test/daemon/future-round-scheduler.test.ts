@@ -87,6 +87,79 @@ function emptyPass(): ScheduledPass {
 }
 
 describe('future-round scheduler', () => {
+  it('reports admission without changing legacy offer effects or clock reads', () => {
+    function exercise(explicit: boolean) {
+      const events: WaitTransition[] = [];
+
+      const now = vi.fn(() => Number(roundScheduledTime(100n) * 1000n));
+
+      const queue = new FutureRoundScheduler({
+        chainId: 46630,
+        registry: REGISTRY,
+        now,
+        onTransition: (event) => {
+          events.push(event);
+        },
+      });
+
+      const statuses: string[] = [];
+
+      function offer(round: bigint): void {
+        if (explicit) {
+          statuses.push(queue.admit(request(round), roundScheduledTime(round)).status);
+        } else {
+          expect(queue.offer(request(round), roundScheduledTime(round))).toBeUndefined();
+        }
+      }
+
+      for (let round = 100n; round < 100n + BigInt(MAX_WAITING_ROUNDS); round += 1n) {
+        offer(round);
+      }
+
+      offer(100n);
+      offer(2_000n);
+      offer(99n);
+
+      return {
+        events,
+        clockReads: now.mock.calls.length,
+        population: queue.observe(Number(roundScheduledTime(100n) * 1000n)),
+        statuses,
+      };
+    }
+
+    const legacy = exercise(false);
+
+    const explicit = exercise(true);
+
+    expect(explicit.events).toEqual(legacy.events);
+    expect(explicit.population).toEqual(legacy.population);
+    expect(explicit.clockReads).toBe(legacy.clockReads);
+    expect(explicit.clockReads).toBe(MAX_WAITING_ROUNDS + 2);
+    expect(explicit.statuses.slice(-3)).toEqual(['duplicate', 'rejected', 'accepted']);
+    expect(explicit.events.slice(-2).map((event) => event.kind)).toEqual([
+      'evicted',
+      'started',
+    ]);
+    expect(explicit.events.at(-2)?.entry.request.round).toBe(1_123n);
+  });
+
+  it('keeps an accepted result when transition reporting throws', () => {
+    const queue = new FutureRoundScheduler({
+      chainId: 46630,
+      registry: REGISTRY,
+      now: () => 0,
+      onTransition: () => {
+        throw new Error('observer failed');
+      },
+    });
+
+    const result = queue.admit(request(100n), roundScheduledTime(100n));
+
+    expect(result.status).toBe('accepted');
+    expect(queue.size).toBe(1);
+  });
+
   it('uses the exact release boundary and bigint for distant rounds', () => {
     const release = Number(roundScheduledTime(100n) * 1000n);
 
