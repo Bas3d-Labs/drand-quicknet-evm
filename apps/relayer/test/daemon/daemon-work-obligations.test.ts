@@ -8,6 +8,13 @@ import {
   DaemonWorkObligations,
 } from '../../src/daemon/daemon-work-obligations.js';
 
+// Explicit future policy for the existing isolated bookkeeping fixtures.
+// No production caller selects this policy in delivery 1.
+const DEFERRED_CADENCE = {
+  idleIntervalMs: 90_000,
+  retainedIntervalMs: 30_000,
+};
+
 const EMPTY = {
   retainedCount: 0,
   releasedBehindRecoveryClearableBlockers: false,
@@ -15,7 +22,7 @@ const EMPTY = {
 
 describe('daemon work obligations', () => {
   it('delays captured work without delaying a later release', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
     const idle = owner.observe('idle', 'inspection', 0);
 
@@ -32,7 +39,7 @@ describe('daemon work obligations', () => {
   });
 
   it('preserves ineligible work on another failure and permits completion', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
     const a = owner.observe('a', 'release', 0);
 
@@ -46,7 +53,7 @@ describe('daemon work obligations', () => {
   });
 
   it('ignores stale captures after replacement', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
     const old = owner.observe('a', 'release', 0);
 
@@ -68,7 +75,7 @@ describe('daemon work obligations', () => {
     [0, true, 15_000],
     [1, true, 15_000],
   ] as const)('maps retained=%s, recoverable=%s to %s', (count, blocked, delay) => {
-    const owner = new DaemonWorkObligations(5_000);
+    const owner = new DaemonWorkObligations(5_000, DEFERRED_CADENCE);
 
     const item = owner.observe('a', 'release', 0);
 
@@ -81,7 +88,7 @@ describe('daemon work obligations', () => {
   });
 
   it.each([5_000, 15_000, 120_000])('bounds waiting at poll=%s', (poll) => {
-    const owner = new DaemonWorkObligations(poll);
+    const owner = new DaemonWorkObligations(poll, DEFERRED_CADENCE);
 
     const waiting = owner.observe('waiting', 'release', 0);
 
@@ -104,7 +111,7 @@ const INSPECTION = {
 
 describe('obligation completion evidence', () => {
   it.each([0, 1])('uses the completed inspection population %s', (retainedCount) => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
     const item = owner.observe('inspection', 'inspection', 0);
 
@@ -120,7 +127,7 @@ describe('obligation completion evidence', () => {
   it.each(['recoveryComplete', 'inclusionChecksComplete', 'persistenceIdle'] as const)(
     'requires inspection fact %s',
     (field) => {
-      const owner = new DaemonWorkObligations(15_000);
+      const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
       const item = owner.observe('inspection', 'inspection', 0);
 
@@ -133,7 +140,7 @@ describe('obligation completion evidence', () => {
   );
 
   it('does not let a later failed scan undo a completed inspection', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
     const item = owner.observe('inspection', 'inspection', 0);
 
@@ -151,7 +158,7 @@ describe('obligation completion evidence', () => {
   });
 
   it('requires follow-up coverage by an inspection starting after acknowledgement', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
     const item = owner.followUp('attempt-a', 500);
 
@@ -170,7 +177,7 @@ describe('obligation completion evidence', () => {
   });
 
   it('clears a follow-up when its attempt no longer exists', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
     const item = owner.followUp('attempt-a', 500);
 
@@ -180,7 +187,7 @@ describe('obligation completion evidence', () => {
   });
 
   it('keeps follow-up identity and backoff stable across rebroadcasts', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
     const item = owner.followUp('attempt-a', 500);
 
@@ -209,7 +216,7 @@ describe('obligation completion evidence', () => {
   it.each(['durable-continuation', 'soft-continuation'] as const)(
     'holds a fixed %s target and promotes the remembered target after progress',
     (reason) => {
-      const owner = new DaemonWorkObligations(15_000);
+      const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
       const item = owner.observeScan('scan', reason, 0n, 9n, 0);
 
@@ -236,7 +243,7 @@ describe('obligation completion evidence', () => {
   );
 
   it('does not manufacture a scan continuation without progress', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
     const item = owner.observeScan('scan', 'durable-continuation', 5n, 9n, 0);
 
@@ -248,7 +255,7 @@ describe('obligation completion evidence', () => {
   });
 
   it('separates immediate dispatch remainder from waiting even after a handoff', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
     const waiting = owner.observe('waiting', 'release', 0);
 
@@ -269,7 +276,7 @@ describe('obligation completion evidence', () => {
   });
 
   it('a dispatch remainder does not erase an existing failure delay', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
     const item = owner.observe('release', 'release', 0);
 
@@ -280,7 +287,7 @@ describe('obligation completion evidence', () => {
   });
 
   it('resets only a completed discovery obligation', () => {
-    const owner = new DaemonWorkObligations(5_000);
+    const owner = new DaemonWorkObligations(5_000, DEFERRED_CADENCE);
 
     const item = owner.observe('discovery', 'discovery', 0);
 
@@ -294,7 +301,7 @@ describe('obligation completion evidence', () => {
 
 describe('partial settlement', () => {
   it('keeps dispatch outcomes separate from a failed durable scan', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
     const waiting = owner.observe('waiting', 'release', 0);
 
@@ -315,7 +322,7 @@ describe('partial settlement', () => {
 
 describe('authoritative cursor replacement', () => {
   it('replaces a normalized soft range without erasing backoff or its fixed target', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
     const old = owner.observeScan('soft', 'soft-continuation', 10n, 20n, 0);
     const captured = owner.capture('discovery', 0);
 
@@ -340,7 +347,7 @@ describe('authoritative cursor replacement', () => {
   });
 
   it('promotes a remembered target when normalization covers the active range', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
     const old = owner.observeScan('soft', 'soft-continuation', 10n, 20n, 0);
 
     owner.observeScan('soft', 'soft-continuation', 10n, 40n, 0);
@@ -355,7 +362,7 @@ describe('authoritative cursor replacement', () => {
   });
 
   it('allows an authoritative checkpoint reload to move backward with inherited eligibility', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
     const old = owner.observeScan('durable', 'durable-continuation', 10n, 20n, 0);
 
     owner.fail(owner.capture('full', 0), 100, EMPTY);
@@ -369,7 +376,7 @@ describe('authoritative cursor replacement', () => {
   });
 
   it('rejects refreshes and mismatched reasons without changing the obligation', () => {
-    const owner = new DaemonWorkObligations(15_000);
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
     const old = owner.observeScan('soft', 'soft-continuation', 10n, 20n, 0);
 
     owner.fail(owner.capture('discovery', 0), 100, EMPTY);
@@ -387,4 +394,90 @@ describe('authoritative cursor replacement', () => {
     expect(owner.get(old)?.eligibleAt).toBe(15_100);
     expect(owner.scanTarget(old)).toBe(20n);
   });
+});
+
+describe('injected inspection cadence', () => {
+  it.each([
+    { idleIntervalMs: 15_000, retainedIntervalMs: 15_000 },
+    DEFERRED_CADENCE,
+    { idleIntervalMs: 4_000, retainedIntervalMs: 2_000 },
+  ])('uses $idleIntervalMs/$retainedIntervalMs for failure and inspection', (cadence) => {
+    for (const retainedCount of [0, 1]) {
+      const owner = new DaemonWorkObligations(15_000, cadence);
+
+      const item = owner.observe('inspection', 'inspection', 0);
+
+      let delay = cadence.idleIntervalMs;
+
+      if (retainedCount > 0) {
+        delay = cadence.retainedIntervalMs;
+      }
+
+      owner.fail(owner.capture('full', 0), 100, {
+        ...EMPTY,
+        retainedCount,
+      });
+
+      expect(owner.get(item)?.eligibleAt).toBe(100 + delay);
+      expect(owner.inspection(item, {
+        ...INSPECTION,
+        retainedCount,
+      })?.dueAt).toBe(INSPECTION.completedAt + delay);
+    }
+  });
+
+  it('keeps discovery, released-work retry and waiting independent of inspection cadence', () => {
+    const owner = new DaemonWorkObligations(120_000, {
+      idleIntervalMs: 4_000,
+      retainedIntervalMs: 2_000,
+    });
+
+    const discovery = owner.observe('discovery', 'discovery', 0);
+
+    const release = owner.observe('release', 'release', 0);
+
+    owner.fail(owner.capture('discovery', 0), 100, EMPTY);
+    owner.fail(owner.capture('full', 0), 100, {
+      retainedCount: 1,
+      releasedBehindRecoveryClearableBlockers: true,
+    });
+
+    const waiting = owner.observe('waiting', 'release', 0);
+
+    owner.waiting(waiting, 100);
+
+    expect(owner.get(discovery)?.eligibleAt).toBe(120_100);
+    expect(owner.get(release)?.eligibleAt).toBe(15_100);
+    expect(owner.get(waiting)?.eligibleAt).toBe(15_100);
+  });
+
+  it('copies the policy so later caller mutation cannot change deadlines', () => {
+    const cadence = { idleIntervalMs: 15_000, retainedIntervalMs: 15_000 };
+
+    const owner = new DaemonWorkObligations(15_000, cadence);
+
+    cadence.idleIntervalMs = 90_000;
+    cadence.retainedIntervalMs = 30_000;
+
+    const item = owner.observe('inspection', 'inspection', 0);
+
+    owner.fail(owner.capture('full', 0), 100, EMPTY);
+
+    expect(owner.get(item)?.eligibleAt).toBe(15_100);
+    expect(owner.inspection(item, INSPECTION)?.dueAt).toBe(16_000);
+  });
+
+  it.each([0, -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid policy intervals: %s',
+    (interval) => {
+      expect(() => new DaemonWorkObligations(15_000, {
+        idleIntervalMs: interval,
+        retainedIntervalMs: 15_000,
+      })).toThrow('Invalid obligation inspection cadence.');
+      expect(() => new DaemonWorkObligations(15_000, {
+        idleIntervalMs: 15_000,
+        retainedIntervalMs: interval,
+      })).toThrow('Invalid obligation inspection cadence.');
+    },
+  );
 });

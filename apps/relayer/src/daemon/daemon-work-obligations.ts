@@ -4,8 +4,11 @@ import type {
 
 const RELEASED_WORK_RETRY_INTERVAL_MS = 15_000;
 const WAITING_RETRY_CAP_MS = 15_000;
-const RETAINED_INSPECTION_INTERVAL_MS = 30_000;
-const IDLE_INSPECTION_INTERVAL_MS = 90_000;
+
+export interface DaemonInspectionCadence {
+  readonly idleIntervalMs: number;
+  readonly retainedIntervalMs: number;
+}
 
 export type DaemonWorkReason =
   | 'inspection'
@@ -81,10 +84,28 @@ export class DaemonWorkObligations {
     nextBlock: bigint;
   }>();
 
-  constructor(private readonly pollIntervalMs: number) {
+  private readonly cadence: DaemonInspectionCadence;
+
+  constructor(
+    private readonly pollIntervalMs: number,
+    cadence: DaemonInspectionCadence,
+  ) {
     if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs <= 0) {
       throw new TypeError('Invalid obligation poll interval.');
     }
+
+    const { idleIntervalMs, retainedIntervalMs } = cadence;
+
+    if (
+      !Number.isSafeInteger(idleIntervalMs) ||
+      idleIntervalMs <= 0 ||
+      !Number.isSafeInteger(retainedIntervalMs) ||
+      retainedIntervalMs <= 0
+    ) {
+      throw new TypeError('Invalid obligation inspection cadence.');
+    }
+
+    this.cadence = Object.freeze({ idleIntervalMs, retainedIntervalMs });
   }
 
   observe(
@@ -214,14 +235,14 @@ export class DaemonWorkObligations {
       throw new TypeError('Failure precedes execution.');
     }
 
-    let delay = IDLE_INSPECTION_INTERVAL_MS;
+    let delay = this.cadence.idleIntervalMs;
 
     if (capture.kind === 'discovery') {
       delay = this.pollIntervalMs;
     } else if (facts.releasedBehindRecoveryClearableBlockers) {
       delay = RELEASED_WORK_RETRY_INTERVAL_MS;
     } else if (facts.retainedCount > 0) {
-      delay = RETAINED_INSPECTION_INTERVAL_MS;
+      delay = this.cadence.retainedIntervalMs;
     }
 
     const eligibleAt = completedAt + delay;
@@ -335,10 +356,10 @@ export class DaemonWorkObligations {
       return undefined;
     }
 
-    let delay = IDLE_INSPECTION_INTERVAL_MS;
+    let delay = this.cadence.idleIntervalMs;
 
     if (facts.retainedCount > 0) {
-      delay = RETAINED_INSPECTION_INTERVAL_MS;
+      delay = this.cadence.retainedIntervalMs;
     }
 
     const dueAt = facts.completedAt + delay;

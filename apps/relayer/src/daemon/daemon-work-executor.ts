@@ -1,5 +1,10 @@
 export type DaemonWorkKind = 'full' | 'discovery';
 
+export interface DaemonWorkDeadlines {
+  readonly full: number | null;
+  readonly discovery: number | null;
+}
+
 export interface ExecutedDaemonWork<T> {
   readonly kind: DaemonWorkKind;
   readonly value: T;
@@ -25,6 +30,38 @@ export class DaemonWorkExecutor {
     if (previous === undefined || dueAt < previous) {
       this.deadlines.set(kind, dueAt);
     }
+  }
+
+  /** Replace the owner's entire projection between executions. */
+  replace(
+    deadlines: DaemonWorkDeadlines,
+  ): void {
+    if (this.running) {
+      throw new Error('Daemon work is already running.');
+    }
+
+    const { full, discovery } = deadlines;
+
+    // Validate both before mutating either pending kind.
+    if (full !== null) {
+      this.validateTime(full);
+    }
+
+    if (discovery !== null) {
+      this.validateTime(discovery);
+    }
+
+    this.deadlines.clear();
+
+    if (full !== null) {
+      this.deadlines.set('full', full);
+    }
+
+    if (discovery !== null) {
+      this.deadlines.set('discovery', discovery);
+    }
+
+    // lastStarted survives replacement, including an empty projection.
   }
 
   get nextDeadline(): number | null {
