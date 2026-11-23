@@ -31,7 +31,7 @@ import {
 } from '../rounds/round-release.js';
 
 export const MAX_WAITING_ROUNDS = 1_024;
-export const MAX_SCHEDULED_DISPATCHES = 16;
+const MAX_SCHEDULED_DISPATCHES = 16;
 
 export interface WaitingEntry {
   readonly workId: string;
@@ -62,7 +62,7 @@ export type WaitTransition =
       disposition: ImportQuicknetRoundResult['status'];
     };
 
-export type ScheduledOutcome =
+type ScheduledOutcome =
   | {
       entry: WaitingEntry;
       status: 'returned';

@@ -6,7 +6,7 @@ import {
   MAX_UINT256,
 } from '../shared/uint.js';
 
-export type AnchoredReadOperation =
+type AnchoredReadOperation =
   | 'signer-bootstrap'
   | 'signer-recovery'
   | 'signer-inclusions'
@@ -22,7 +22,7 @@ export interface AnchoredReadScope {
       }>;
 }
 
-export interface AnchoredReadScopeDetails {
+interface AnchoredReadScopeDetails {
   operation?: AnchoredReadOperation;
   finality?:
     | { type: 'safe' | 'finalized' }

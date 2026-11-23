@@ -46,7 +46,7 @@ export interface DiscoverRequestsOptions {
   signal?: AbortSignal;
 }
 
-export type DiscoveryAdmission = {
+type DiscoveryAdmission = {
   request: QuicknetRandomnessRequest;
 } & (
   | {

@@ -12,7 +12,7 @@ import type {
   TransactionJournalSnapshot,
 } from '../../src/state/transaction-journal.js';
 
-export const FACT_ACCOUNT = privateKeyToAccount(`0x${'11'.repeat(32)}`);
+const FACT_ACCOUNT = privateKeyToAccount(`0x${'11'.repeat(32)}`);
 
 export const FACT_IDENTITY = { chainId: 4663, signer: FACT_ACCOUNT.address };
 
