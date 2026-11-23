@@ -53,10 +53,6 @@ import {
 } from '../execution/work-identity.js';
 
 import {
-  isFixedHex,
-} from '../shared/hex.js';
-
-import {
   isPositiveSafeInteger,
 } from '../shared/integer.js';
 
@@ -69,6 +65,18 @@ import {
 import {
   durableRecoveryRevision as computeDurableRecoveryRevision,
 } from './durable-recovery-revision.js';
+
+import {
+  assertInspectionCompleted,
+  createInspectionBracket,
+  discardInspectionEvidence,
+  inspectionNeedsOpening,
+  latestNonceIsConsistent,
+  mergeBlockObservations,
+  nextInspectionPhase,
+  observeDurableNonce,
+  type InspectionBracket,
+} from './inspection-bracket.js';
 
 import {
   JournalPersistence,
@@ -266,24 +274,6 @@ export interface OpenSignerInspectionOptions {
   readonly durableAnchor?: Readonly<BlockAnchor>;
 }
 
-interface InspectionBracket {
-  readonly publicClient: PublicClient;
-  readonly head: Readonly<BlockAnchor>;
-  readonly durableAnchor: Readonly<BlockAnchor> | undefined;
-  durableNonce: bigint | undefined;
-
-  /** Observed hashes for this inspection only; never persisted or cached. */
-  durableObservations: ReadonlyMap<bigint, Hash>;
-  phase:
-    | 'opening'
-    | 'durable'
-    | 'latest'
-    | 'closing'
-    | 'persisting'
-    | 'completed'
-    | 'failed';
-}
-
 export interface SignerInspection {
   recover(
     options: RecoverSignerOptions,
@@ -424,7 +414,7 @@ export class SignerCoordinator {
     const owner: InspectionOwner = {
       bracket: options === undefined
         ? null
-        : this.createInspectionBracket(options),
+        : createInspectionBracket(options),
       activeOperation: null,
       abandonment: null,
       abandoning: false,
@@ -1391,7 +1381,7 @@ export class SignerCoordinator {
 
       try {
         if (owner.bracket === null) {
-          owner.bracket = this.createInspectionBracket(options);
+          owner.bracket = createInspectionBracket(options);
         }
 
         bracket = owner.bracket;
@@ -1421,7 +1411,7 @@ export class SignerCoordinator {
           );
         }
 
-        bracket.phase = 'latest';
+        bracket.phase = nextInspectionPhase(bracket.phase, 'latest');
 
         const maxReplacementBlockRange = options.maxReplacementBlockRange;
 
@@ -1451,7 +1441,7 @@ export class SignerCoordinator {
 
         // Keep the result uncommitted until the owner confirms that the selected
         // latest block still matches the hash checked before the inspection.
-        bracket.phase = 'closing';
+        bracket.phase = nextInspectionPhase(bracket.phase, 'closing');
 
         const closing = await checkBlockAnchor(
           options.publicClient,
@@ -1466,10 +1456,7 @@ export class SignerCoordinator {
           return closing;
         }
 
-        if (
-          bracket.durableNonce !== undefined &&
-          result.observation.nonce < bracket.durableNonce
-        ) {
+        if (!latestNonceIsConsistent(bracket, result.observation.nonce)) {
           this.authorization.evidenceContradicted();
           this.failInspectionBracket(owner);
           return {
@@ -1480,7 +1467,7 @@ export class SignerCoordinator {
 
         // Check repeated heights within the latest pass as well as overlaps with
         // durable evidence. This runs after the closing check, before planning.
-        const latestEvidence = this.mergeBlockObservations(
+        const latestEvidence = mergeBlockObservations(
           bracket.durableObservations,
           result.observations,
         );
@@ -1494,7 +1481,7 @@ export class SignerCoordinator {
           };
         }
 
-        bracket.phase = 'persisting';
+        bracket.phase = nextInspectionPhase(bracket.phase, 'persisting');
 
         next = planSignerInclusions({
           identity: this.identity,
@@ -1537,7 +1524,7 @@ export class SignerCoordinator {
 
         // The durable permit was revoked on entry. Only the acknowledged latest
         // result above may grant a replacement permit before successful finish.
-        bracket.phase = 'completed';
+        bracket.phase = nextInspectionPhase(bracket.phase, 'completed');
 
         return result;
       } catch (error) {
@@ -1722,46 +1709,6 @@ export class SignerCoordinator {
     }
   }
 
-  private createInspectionBracket(
-    options: OpenSignerInspectionOptions,
-  ): InspectionBracket {
-    const head = Object.freeze({ ...options.head });
-    const durable = options.durableAnchor;
-
-    if (
-      typeof head.blockNumber !== 'bigint' ||
-      head.blockNumber < 0n ||
-      head.blockNumber >= (1n << 256n) ||
-      !isFixedHex(head.blockHash, 32) ||
-      (
-        durable !== undefined &&
-        (
-          typeof durable.blockNumber !== 'bigint' ||
-          durable.blockNumber < 0n ||
-          !isFixedHex(durable.blockHash, 32) ||
-          head.blockNumber < durable.blockNumber ||
-          (
-            head.blockNumber === durable.blockNumber &&
-            !blockAnchorsMatch(head, durable)
-          )
-        )
-      )
-    ) {
-      throw new TypeError('Invalid signer inspection anchors.');
-    }
-
-    return {
-      publicClient: options.publicClient,
-      head,
-      durableAnchor: durable === undefined
-        ? undefined
-        : Object.freeze({ ...durable }),
-      durableNonce: undefined,
-      durableObservations: new Map(),
-      phase: 'opening',
-    };
-  }
-
   private assertInspectionContinuing(owner: InspectionOwner): void {
     this.assertInspectionOwner(owner);
 
@@ -1775,12 +1722,8 @@ export class SignerCoordinator {
   ): Promise<Readonly<BlockAnchor> | null> {
     const bracket = owner.bracket!;
 
-    if (bracket.phase === 'durable') {
+    if (!inspectionNeedsOpening(bracket)) {
       return null;
-    }
-
-    if (bracket.phase !== 'opening') {
-      throw new Error('Signer inspection bracket cannot accept another operation.');
     }
 
     const changed = await checkBlockAnchor(
@@ -1796,7 +1739,7 @@ export class SignerCoordinator {
       return changed.observedAnchor;
     }
 
-    bracket.phase = 'durable';
+    bracket.phase = nextInspectionPhase(bracket.phase, 'durable');
     return null;
   }
 
@@ -1814,48 +1757,19 @@ export class SignerCoordinator {
       return true;
     }
 
-    if (
-      bracket.durableAnchor === undefined ||
-      !blockAnchorsMatch(bracket.durableAnchor, observation.anchor)
-    ) {
-      throw new Error('Durable observation does not match the inspection anchor.');
-    }
+    const nonce = observeDurableNonce(bracket, observation);
 
-    if (bracket.durableNonce === undefined) {
-      bracket.durableNonce = observation.nonce;
-      return true;
-    }
-
-    if (bracket.durableNonce !== observation.nonce) {
+    if (nonce === null) {
       this.authorization.evidenceContradicted();
       this.failInspectionBracket(owner);
       return false;
     }
 
-    return true;
-  }
-
-  /** Matching repeats are allowed. Different hashes at one height fail closed. */
-  private mergeBlockObservations(
-    previous: ReadonlyMap<bigint, Hash>,
-    observations: readonly Readonly<BlockAnchor>[],
-  ): ReadonlyMap<bigint, Hash> | null {
-    const merged = new Map(previous);
-
-    for (const observation of observations) {
-      const known = merged.get(observation.blockNumber);
-
-      if (
-        known !== undefined &&
-        known.toLowerCase() !== observation.blockHash.toLowerCase()
-      ) {
-        return null;
-      }
-
-      merged.set(observation.blockNumber, observation.blockHash);
+    if (bracket.durableNonce === undefined) {
+      bracket.durableNonce = nonce;
     }
 
-    return merged;
+    return true;
   }
 
   private admitDurableBlockObservations(
@@ -1870,7 +1784,7 @@ export class SignerCoordinator {
       return true;
     }
 
-    const merged = this.mergeBlockObservations(
+    const merged = mergeBlockObservations(
       bracket.durableObservations,
       observations,
     );
@@ -1887,7 +1801,7 @@ export class SignerCoordinator {
 
   private failInspectionBracket(owner: InspectionOwner): void {
     if (owner.bracket !== null) {
-      owner.bracket.phase = 'failed';
+      owner.bracket.phase = nextInspectionPhase(owner.bracket.phase, 'failed');
       this.authorization.bracketFailed();
     }
   }
@@ -1952,10 +1866,8 @@ export class SignerCoordinator {
       throw new Error('Signer inspection has pending persistence.');
     }
 
-    if (owner.bracket !== null && owner.bracket.phase !== 'completed') {
-      throw new Error(
-        'Signer inspection bracket has not completed successfully.',
-      );
+    if (owner.bracket !== null) {
+      assertInspectionCompleted(owner.bracket);
     }
 
     // Diagnostic only; preparation disputes require a later successful preparation.
@@ -1969,7 +1881,7 @@ export class SignerCoordinator {
     }
 
     if (owner.bracket !== null) {
-      owner.bracket.durableObservations = new Map();
+      owner.bracket = discardInspectionEvidence(owner.bracket);
     }
 
     this.inspectionOwner = null;
@@ -2014,7 +1926,7 @@ export class SignerCoordinator {
     this.authorization.abandonmentCompleted();
 
     if (owner.bracket !== null) {
-      owner.bracket.durableObservations = new Map();
+      owner.bracket = discardInspectionEvidence(owner.bracket);
     }
 
     this.inspectionOwner = null;
