@@ -39,6 +39,10 @@ import type {
   ProcessedQuicknetRound,
 } from '../../src/consumers/request-processor.js';
 
+import {
+  fullWorkResult,
+} from '../helpers/full-work-result.js';
+
 const CONSUMER_A: Address =
   '0x1111111111111111111111111111111111111111';
 
@@ -281,9 +285,9 @@ describe('createDaemonLogger', () => {
     };
 
     now = 60_000;
-    logger.onCycle(createSuccessfulCycle(iteration));
+    logger.onWork(fullWorkResult(createSuccessfulCycle(iteration)));
     now = 120_000;
-    logger.onCycle(createSuccessfulCycle(iteration));
+    logger.onWork(fullWorkResult(createSuccessfulCycle(iteration)));
 
     for (const [heartbeat] of loggerMocks.heartbeat.mock.calls) {
       expect(heartbeat.consumers[0]).toMatchObject({
@@ -366,7 +370,7 @@ describe('createDaemonLogger', () => {
         now: () => 0,
       });
 
-      daemonLogger.onCycle(cycle);
+      daemonLogger.onWork(fullWorkResult(cycle));
 
       expect(loggerMocks.roundPending).toHaveBeenCalledExactlyOnceWith({
         consumer: CONSUMER_A,
@@ -452,7 +456,7 @@ describe('createDaemonLogger', () => {
         now: () => 0,
       });
 
-      expect(() => daemonLogger.onCycle(cycle)).not.toThrow();
+      expect(() => daemonLogger.onWork(fullWorkResult(cycle))).not.toThrow();
 
       expect(loggerMocks.roundDeferred).toHaveBeenCalledExactlyOnceWith({
         consumer: CONSUMER_A,
@@ -513,7 +517,7 @@ describe('createDaemonLogger', () => {
       now: () => 0,
     });
 
-    daemonLogger.onCycle(createSuccessfulCycle(iteration));
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle(iteration)));
 
     expect(loggerMocks.roundImported).toHaveBeenCalledOnce();
 
@@ -541,7 +545,7 @@ describe('createDaemonLogger', () => {
       now: () => 0,
     });
 
-    daemonLogger.onCycle(createSuccessfulCycle(iteration));
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle(iteration)));
 
     expect(loggerMocks.roundImported).toHaveBeenCalledOnce();
 
@@ -569,7 +573,7 @@ describe('createDaemonLogger', () => {
       now: () => 0,
     });
 
-    daemonLogger.onCycle(createSuccessfulCycle(iteration));
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle(iteration)));
 
     expect(loggerMocks.roundAlreadyStored).toHaveBeenCalledOnce();
 
@@ -595,7 +599,7 @@ describe('createDaemonLogger', () => {
       now: () => 0,
     });
 
-    daemonLogger.onCycle(createSuccessfulCycle(iteration));
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle(iteration)));
 
     expect(loggerMocks.roundAlreadyStored).toHaveBeenCalledOnce();
 
@@ -622,7 +626,7 @@ describe('createDaemonLogger', () => {
       now: () => 0,
     });
 
-    daemonLogger.onCycle(createSuccessfulCycle(iteration));
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle(iteration)));
 
     expect(loggerMocks.checkpointAdvanced).toHaveBeenCalledOnce();
 
@@ -646,7 +650,7 @@ describe('createDaemonLogger', () => {
       now: () => 0,
     });
 
-    daemonLogger.onCycle(createSuccessfulCycle(iteration));
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle(iteration)));
 
     expect(loggerMocks.roundImported).toHaveBeenCalledOnce();
     expect(loggerMocks.checkpointAdvanced).not.toHaveBeenCalled();
@@ -660,7 +664,7 @@ describe('createDaemonLogger', () => {
       now: () => 0,
     });
 
-    daemonLogger.onCycle(createFailedCycle(error));
+    daemonLogger.onWork(fullWorkResult(createFailedCycle(error)));
 
     expect(loggerMocks.consumerFailed).toHaveBeenCalledOnce();
 
@@ -683,7 +687,7 @@ describe('createDaemonLogger', () => {
       now: () => 0,
     });
 
-    daemonLogger.onCycle(createFailedCycle(failure));
+    daemonLogger.onWork(fullWorkResult(createFailedCycle(failure)));
 
     expect(loggerMocks.consumerFailed).toHaveBeenCalledOnce();
 
@@ -705,7 +709,7 @@ describe('createDaemonLogger', () => {
 
     currentTime = 59_999;
 
-    daemonLogger.onCycle(createSuccessfulCycle());
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle()));
 
     expect(loggerMocks.heartbeat).not.toHaveBeenCalled();
   });
@@ -720,11 +724,12 @@ describe('createDaemonLogger', () => {
 
     currentTime = 60_000;
 
-    daemonLogger.onCycle(createSuccessfulCycle());
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle()));
 
     expect(loggerMocks.heartbeat).toHaveBeenCalledOnce();
 
     expect(loggerMocks.heartbeat).toHaveBeenCalledWith({
+      waitingRejectedOffers: 0n,
       consumers: [
         {
           consumer: CONSUMER_A,
@@ -749,19 +754,19 @@ describe('createDaemonLogger', () => {
 
     currentTime = 1_000;
 
-    daemonLogger.onCycle(createSuccessfulCycle());
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle()));
 
     expect(loggerMocks.heartbeat).toHaveBeenCalledTimes(1);
 
     currentTime = 1_999;
 
-    daemonLogger.onCycle(createSuccessfulCycle());
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle()));
 
     expect(loggerMocks.heartbeat).toHaveBeenCalledTimes(1);
 
     currentTime = 2_000;
 
-    daemonLogger.onCycle(createSuccessfulCycle());
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle()));
 
     expect(loggerMocks.heartbeat).toHaveBeenCalledTimes(2);
   });
@@ -801,7 +806,7 @@ describe('createDaemonLogger', () => {
 
     currentTime = 1_000;
 
-    daemonLogger.onCycle(result);
+    daemonLogger.onWork(fullWorkResult(result));
 
     expect(loggerMocks.consumerFailed).toHaveBeenCalledWith({
       consumer: CONSUMER_B,
@@ -811,6 +816,7 @@ describe('createDaemonLogger', () => {
     expect(loggerMocks.heartbeat).toHaveBeenCalledOnce();
 
     expect(loggerMocks.heartbeat).toHaveBeenCalledWith({
+      waitingRejectedOffers: 0n,
       consumers: [
         {
           consumer: CONSUMER_A,
@@ -849,7 +855,7 @@ describe('createDaemonLogger', () => {
       now: () => 0,
     });
 
-    daemonLogger.onCycle(createSuccessfulCycle(iteration));
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle(iteration)));
 
     expect(loggerMocks.roundImported).toHaveBeenCalledWith({
       consumer: CONSUMER_A,
@@ -886,7 +892,7 @@ describe('createDaemonLogger', () => {
     currentTime = 1_000;
 
     expect(() => {
-      daemonLogger.onCycle(createSuccessfulCycle());
+      daemonLogger.onWork(fullWorkResult(createSuccessfulCycle()));
     }).not.toThrow();
 
     expect(loggerMocks.heartbeat).toHaveBeenCalledOnce();
@@ -918,8 +924,8 @@ describe('createDaemonLogger', () => {
     });
 
     expect(() => {
-      daemonLogger.onCycle(
-        createFailedCycle(new Error('Consumer failed.')),
+      daemonLogger.onWork(
+        fullWorkResult(createFailedCycle(new Error('Consumer failed.'))),
       );
     }).not.toThrow();
 
@@ -943,7 +949,7 @@ describe('createDaemonLogger', () => {
       now: () => 0,
     });
 
-    daemonLogger.onCycle(createSuccessfulCycle(iteration));
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle(iteration)));
 
     expect(loggerMocks.durableHeadRegressed).toHaveBeenCalledOnce();
 
@@ -967,7 +973,7 @@ describe('createDaemonLogger', () => {
       now: () => 0,
     });
 
-    daemonLogger.onCycle(createSuccessfulCycle(iteration));
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle(iteration)));
 
     expect(loggerMocks.durableHeadRegressed).not.toHaveBeenCalled();
   });
@@ -993,7 +999,7 @@ describe('createDaemonLogger', () => {
 
     currentTime = 1_000;
 
-    daemonLogger.onCycle(createSuccessfulCycle(iteration));
+    daemonLogger.onWork(fullWorkResult(createSuccessfulCycle(iteration)));
 
     expect(loggerMocks.durableHeadRegressed).toHaveBeenCalledWith({
       consumer: CONSUMER_A,
@@ -1002,6 +1008,7 @@ describe('createDaemonLogger', () => {
     });
 
     expect(loggerMocks.heartbeat).toHaveBeenCalledWith({
+      waitingRejectedOffers: 0n,
       consumers: [
         {
           consumer: CONSUMER_A,
@@ -1044,8 +1051,8 @@ describe('createDaemonLogger', () => {
         now: () => 0,
       });
 
-      daemonLogger.onCycle(
-        createSuccessfulCycle(iteration),
+      daemonLogger.onWork(
+        fullWorkResult(createSuccessfulCycle(iteration)),
       );
 
       expect(
@@ -1084,8 +1091,8 @@ describe('cycle-scoped daemon output', () => {
 
     time = 100;
 
-    reporter.onCycle(
-      createFailedCycle(new Error('Failed.')),
+    reporter.onWork(
+      fullWorkResult(createFailedCycle(new Error('Failed.'))),
       root.withContext({
         cycle: 1,
         signer: CONSUMER_A,
@@ -1094,8 +1101,8 @@ describe('cycle-scoped daemon output', () => {
 
     time = 150;
 
-    reporter.onCycle(
-      createFailedCycle(new Error('Failed.')),
+    reporter.onWork(
+      fullWorkResult(createFailedCycle(new Error('Failed.'))),
       root.withContext({
         cycle: 2,
         signer: CONSUMER_A,
@@ -1104,8 +1111,8 @@ describe('cycle-scoped daemon output', () => {
 
     time = 200;
 
-    reporter.onCycle(
-      createSuccessfulCycle(),
+    reporter.onWork(
+      fullWorkResult(createSuccessfulCycle()),
       root.withContext({
         cycle: 3,
         signer: CONSUMER_A,
@@ -1157,8 +1164,8 @@ describe('cycle-scoped daemon output', () => {
       now: () => 0,
     });
 
-    reporter.onCycle(
-      createFailedCycle(new Error('Provider failure.')),
+    reporter.onWork(
+      fullWorkResult(createFailedCycle(new Error('Provider failure.'))),
       scoped,
     );
 

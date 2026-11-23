@@ -201,7 +201,6 @@ describe('future-round scans and cycle wiring', () => {
       expect(f.importRound).not.toHaveBeenCalled();
       expect(result.scheduled).toBeUndefined();
       expect(waiting.size).toBe(2);
-      expect(waiting.sleepMilliseconds(5000, result.scheduled)).toBe(5000);
       expect(f.save).not.toHaveBeenCalled();
     },
   );
@@ -321,7 +320,6 @@ describe('future-round scans and cycle wiring', () => {
     expect(result.scheduled?.blocked).toBe(true);
     expect(result.scheduled?.handedOff).toBe(0);
     expect(waiting.size).toBe(2);
-    expect(waiting.sleepMilliseconds(1000, result.scheduled)).toBe(1000);
   });
 
   it('retries a scheduled throw before safe after soft discovery advances', async () => {
@@ -548,7 +546,6 @@ describe('future-round scans and cycle wiring', () => {
     });
 
     expect(result.scheduled).toBeUndefined();
-    expect(waiting.sleepMilliseconds(1000, result.scheduled)).toBe(1000);
     expect(f.importRound).not.toHaveBeenCalled();
     expect(f.getLogs).not.toHaveBeenCalled();
   });

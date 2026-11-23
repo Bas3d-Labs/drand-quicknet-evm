@@ -349,36 +349,6 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
     return pass;
   }
 
-  sleepMilliseconds(pollIntervalMs: number, pass?: ScheduledPass): number {
-    // Failed recovery, signer blockage and all-failed passes must not spin.
-    if (
-      pass === undefined ||
-      pass.blocked === true ||
-      (pass.failed && pass.handedOff === 0)
-    ) {
-      return pollIntervalMs;
-    }
-
-    const now = BigInt(this.now());
-
-    let delay = BigInt(pollIntervalMs);
-
-    for (const entry of this.entries.values()) {
-      const remaining = entry.releaseTime * 1000n - now;
-
-      if (remaining <= 0n) {
-        if (pass.handedOff > 0) {
-          return 0;
-        }
-      } else if (remaining < delay) {
-        delay = remaining;
-      }
-    }
-
-    // The result is bounded by the validated poll interval, never by a lead.
-    return Number(delay);
-  }
-
   private reportDispatch(
     workId: string,
     disposition: DispatchObservation['disposition'],

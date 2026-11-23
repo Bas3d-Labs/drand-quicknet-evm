@@ -2,6 +2,8 @@ import type {
   DaemonWorkKind,
 } from './daemon-work-executor.js';
 
+const INSPECTION_RETRY_INTERVAL_MS = 15_000;
+const DURABLE_SCAN_RETRY_INTERVAL_MS = 15_000;
 const RELEASED_WORK_RETRY_INTERVAL_MS = 15_000;
 const WAITING_RETRY_CAP_MS = 15_000;
 
@@ -12,7 +14,6 @@ export interface DaemonInspectionCadence {
 
 export type DaemonWorkReason =
   | 'inspection'
-  | 'follow-up'
   | 'release'
   | 'blocked-work'
   | 'durable-continuation'
@@ -35,11 +36,6 @@ export interface WorkCapture {
   readonly kind: DaemonWorkKind;
   readonly startedAt: number;
   readonly obligations: readonly ObligationReference[];
-}
-
-export interface FailurePopulation {
-  readonly retainedCount: number;
-  readonly releasedBehindRecoveryClearableBlockers: boolean;
 }
 
 export interface CompletedInspection {
@@ -75,8 +71,6 @@ export class DaemonWorkObligations {
   private readonly pending = new Map<string, WorkObligation>();
 
   private generation = 0;
-
-  private readonly acknowledgements = new Map<string, number>();
 
   private readonly scans = new Map<string, {
     target: bigint;
@@ -114,7 +108,6 @@ export class DaemonWorkObligations {
     dueAt: number,
   ): WorkObligation {
     assertTime(dueAt);
-
 
     if (identity.length === 0) {
       throw new TypeError('Invalid obligation identity.');
@@ -215,7 +208,6 @@ export class DaemonWorkObligations {
     }
 
     this.pending.delete(reference.identity);
-    this.acknowledgements.delete(reference.identity);
     this.scans.delete(reference.identity);
 
     return true;
@@ -224,42 +216,47 @@ export class DaemonWorkObligations {
   fail(
     capture: WorkCapture,
     completedAt: number,
-    facts: FailurePopulation,
   ): void {
     assertTime(completedAt);
-
-    assertPopulation(facts.retainedCount);
-
 
     if (completedAt < capture.startedAt) {
       throw new TypeError('Failure precedes execution.');
     }
 
-    let delay = this.cadence.idleIntervalMs;
-
-    if (capture.kind === 'discovery') {
-      delay = this.pollIntervalMs;
-    } else if (facts.releasedBehindRecoveryClearableBlockers) {
-      delay = RELEASED_WORK_RETRY_INTERVAL_MS;
-    } else if (facts.retainedCount > 0) {
-      delay = this.cadence.retainedIntervalMs;
-    }
-
-    const eligibleAt = completedAt + delay;
-
-    assertTime(eligibleAt);
-
-
     for (const reference of capture.obligations) {
-      this.delay(reference, eligibleAt);
+      const current = this.get(reference);
+
+      if (current !== undefined) {
+        this.delay(reference, completedAt + this.failureDelay(current));
+      }
     }
+  }
+
+  /** Re-attempted work can fail before its ordinary deadline was due. */
+  retry(
+    reference: ObligationReference,
+    completedAt: number,
+  ): void {
+    assertTime(completedAt);
+
+    const current = this.get(reference);
+
+    if (current === undefined) {
+      return;
+    }
+
+    const retryAt = completedAt + this.failureDelay(current);
+
+    assertTime(retryAt);
+
+    this.observe(current.identity, current.reason, retryAt);
+    this.delay(reference, retryAt);
   }
 
   /** Preserve explicit dispatch outcomes when another part of a cycle fails. */
   settle(
     capture: WorkCapture,
     completedAt: number,
-    facts: FailurePopulation,
     dispatch: readonly {
       readonly reference: ObligationReference;
       readonly outcome: 'completed' | 'waiting' | 'remainder';
@@ -267,9 +264,6 @@ export class DaemonWorkObligations {
     }[],
   ): void {
     assertTime(completedAt);
-
-    assertPopulation(facts.retainedCount);
-
 
     if (completedAt < capture.startedAt) {
       throw new TypeError('Completion precedes execution.');
@@ -279,7 +273,6 @@ export class DaemonWorkObligations {
 
     for (const item of dispatch) {
       assertPopulation(item.handedOff);
-
 
       if (seen.has(item.reference.identity)) {
         throw new TypeError('Duplicate dispatch outcome.');
@@ -315,13 +308,12 @@ export class DaemonWorkObligations {
       return !hasOutcome;
     });
 
-    this.fail({ ...capture, obligations }, completedAt, facts);
+    this.fail({ ...capture, obligations }, completedAt);
   }
 
   /** Explicit waiting outcome, not a failure or a dispatch remainder. */
   waiting(reference: ObligationReference, completedAt: number): void {
     assertTime(completedAt);
-
 
     const eligibleAt = completedAt + Math.min(
       this.pollIntervalMs,
@@ -341,7 +333,6 @@ export class DaemonWorkObligations {
 
     assertPopulation(facts.retainedCount);
 
-
     const current = this.get(reference);
 
     if (current === undefined || current.reason !== 'inspection') {
@@ -349,9 +340,9 @@ export class DaemonWorkObligations {
     }
 
     if (
-      !facts.recoveryComplete ||
-      !facts.inclusionChecksComplete ||
-      !facts.persistenceIdle
+      facts.recoveryComplete !== true ||
+      facts.inclusionChecksComplete !== true ||
+      facts.persistenceIdle !== true
     ) {
       return undefined;
     }
@@ -377,7 +368,6 @@ export class DaemonWorkObligations {
   ): WorkObligation | undefined {
     assertTime(completedAt);
 
-
     const current = this.get(reference);
 
     if (current?.reason !== 'discovery') {
@@ -393,74 +383,6 @@ export class DaemonWorkObligations {
     return this.observe(current.identity, current.reason, dueAt);
   }
 
-  followUp(identity: string, acknowledgedAt: number): WorkObligation {
-    assertTime(acknowledgedAt);
-
-    const previous = this.acknowledgements.get(identity);
-
-    const obligation = this.observe(identity, 'follow-up', acknowledgedAt);
-
-    // A rebroadcast strengthens the coverage requirement without resetting
-    // the outstanding obligation or bypassing its existing retry delay.
-    this.acknowledgements.set(
-      identity,
-      Math.max(previous ?? acknowledgedAt, acknowledgedAt),
-    );
-
-    return obligation;
-  }
-
-  settleFollowUp(
-    reference: ObligationReference,
-    facts: {
-      readonly attemptPresent: boolean;
-      readonly inspection?: CompletedInspection & {
-        readonly startedAt: number;
-        readonly covered: boolean;
-      };
-    },
-  ): boolean {
-    const current = this.get(reference);
-    const acknowledgedAt = this.acknowledgements.get(reference.identity);
-
-    if (current?.reason !== 'follow-up' || acknowledgedAt === undefined) {
-      return false;
-    }
-
-    if (!facts.attemptPresent) {
-      return this.complete(reference);
-    }
-
-    const inspection = facts.inspection;
-
-    if (inspection === undefined) {
-      return false;
-    }
-
-    assertTime(inspection.startedAt);
-
-    assertTime(inspection.completedAt);
-
-    assertPopulation(inspection.retainedCount);
-
-
-    if (inspection.completedAt < inspection.startedAt) {
-      throw new TypeError('Inspection precedes its start.');
-    }
-
-    if (
-      inspection.startedAt < acknowledgedAt ||
-      !inspection.covered ||
-      !inspection.recoveryComplete ||
-      !inspection.inclusionChecksComplete ||
-      !inspection.persistenceIdle
-    ) {
-      return false;
-    }
-
-    return this.complete(reference);
-  }
-
   observeScan(
     identity: string,
     reason: 'durable-continuation' | 'soft-continuation',
@@ -469,7 +391,6 @@ export class DaemonWorkObligations {
     dueAt: number,
   ): WorkObligation {
     assertTime(dueAt);
-
 
     if (nextBlock < 0n || target < nextBlock) {
       throw new TypeError('Invalid scan remainder.');
@@ -515,7 +436,6 @@ export class DaemonWorkObligations {
     completedAt: number,
   ): WorkObligation | undefined {
     assertTime(completedAt);
-
 
     const current = this.get(reference);
     const scan = this.scans.get(reference.identity);
@@ -625,7 +545,6 @@ export class DaemonWorkObligations {
 
     assertPopulation(handedOff);
 
-
     const current = this.get(reference);
 
     if (current === undefined) {
@@ -648,7 +567,25 @@ export class DaemonWorkObligations {
     // An unattempted remainder stays due. It never clears existing backoff.
   }
 
+  private failureDelay(obligation: WorkObligation): number {
+    if (obligation.kind === 'discovery') {
+      return this.pollIntervalMs;
+    }
+
+    if (obligation.reason === 'inspection') {
+      return INSPECTION_RETRY_INTERVAL_MS;
+    }
+
+    if (obligation.reason === 'durable-continuation') {
+      return DURABLE_SCAN_RETRY_INTERVAL_MS;
+    }
+
+    return RELEASED_WORK_RETRY_INTERVAL_MS;
+  }
+
   private delay(reference: ObligationReference, eligibleAt: number): void {
+    assertTime(eligibleAt);
+
     const current = this.get(reference);
 
     if (current === undefined) {

@@ -680,6 +680,7 @@ describe('runDaemonCommand', () => {
 
     expect(runDaemon).toHaveBeenCalledExactlyOnceWith({
       monotonicNow: expect.any(Function),
+      installInspectionObserver: expect.any(Function),
       readSchedulingState: expect.any(Function),
       publicClient: PUBLIC_CLIENT,
       account: ACCOUNT,
@@ -1699,7 +1700,10 @@ describe('runDaemonCommand', () => {
   it('publishes qualifying inspections from the enabled production hook', async () => {
     enableStatusObservation();
 
-    vi.mocked(runDaemon).mockImplementationOnce(async ({ onWork }) => {
+    const inspection = vi.fn();
+
+    vi.mocked(runDaemon).mockImplementationOnce(async ({ onWork, installInspectionObserver }) => {
+      const detach = installInspectionObserver!(inspection);
       const opened = signerRuntimeMocks.openBeaconSubmitter.mock.calls[0]![0] as
         OpenBeaconSubmitterOptions;
 
@@ -1713,6 +1717,11 @@ describe('runDaemonCommand', () => {
         retainedAttemptIds: [],
         coveredAttemptIds: [],
       });
+
+      expect(inspection).toHaveBeenCalledOnce();
+      expect(inspection.mock.calls[0]![0]).toMatchObject({ completedAt: 20, retainedCount: 0 });
+
+      detach();
 
       await onWork?.(fullWork({ consumers: [] }), fullContext({ cycle: 1 }));
     });

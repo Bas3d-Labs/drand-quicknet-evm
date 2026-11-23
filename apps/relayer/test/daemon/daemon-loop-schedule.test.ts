@@ -35,10 +35,21 @@ function entry(workId: string, releaseTime = 0n): WaitingEntry {
   };
 }
 
+const INSPECTED = {
+  completedAt: 0,
+  retainedCount: 0,
+  recoveryComplete: true,
+  inclusionChecksComplete: true,
+  persistenceIdle: true,
+};
+
 function fixture(poll = 60_000) {
   const schedule = new DaemonLoopSchedule(poll, 0);
 
-  schedule.fullFinished(schedule.captureFull(0, 0), 0, OPEN, new Map(), false);
+  const capture = schedule.captureFull(0, 0);
+
+  schedule.inspectionCompleted(INSPECTED);
+  schedule.fullFinished(capture, 0, OPEN, new Map(), false);
   schedule.discoveryFinished(CONSUMER, 0, false);
   schedule.discoveryPassFinished(0, 0);
 
@@ -46,6 +57,153 @@ function fixture(poll = 60_000) {
 }
 
 describe('daemon loop obligation projection', () => {
+  it('credits pre-submit inspection without rearming at work completion', () => {
+    const schedule = fixture();
+
+    const capture = schedule.captureFull(10_000, 10_000);
+
+    schedule.inspectionCompleted({ ...INSPECTED, completedAt: 10_100 });
+    schedule.inspectionCompleted({ ...INSPECTED, completedAt: 12_000, retainedCount: 1 });
+    schedule.fullFinished(capture, 17_000, { ...OPEN, retainedCount: 1 }, new Map(), false);
+
+    expect(schedule.deadlines(17_000, 17_000, OPEN).full).toBe(42_000);
+  });
+
+  it.each(['recoveryComplete', 'inclusionChecksComplete', 'persistenceIdle'] as const)(
+    'requires %s for scheduling credit',
+    (flag) => {
+      const schedule = fixture();
+
+      const capture = schedule.captureFull(1_000, 1_000);
+
+      schedule.inspectionCompleted({ ...INSPECTED, completedAt: 2_000, [flag]: false });
+      schedule.fullFinished(capture, 3_000, OPEN, new Map(), true);
+
+      expect(schedule.deadlines(3_000, 3_000, OPEN).full).toBe(18_000);
+    },
+  );
+
+  it('does not accept truthy non-boolean inspection flags', () => {
+    const schedule = fixture();
+
+    const capture = schedule.captureFull(1_000, 1_000);
+
+    schedule.inspectionCompleted({
+      ...INSPECTED,
+      completedAt: 2_000,
+      recoveryComplete: 'true' as never,
+    });
+    schedule.fullFinished(capture, 3_000, OPEN, new Map(), true);
+
+    expect(schedule.deadlines(3_000, 3_000, OPEN).full).toBe(18_000);
+  });
+
+  it('retries the single periodic obligation even when it was not due at failure', () => {
+    const schedule = fixture();
+
+    const capture = schedule.captureFull(1_000, 1_000);
+
+    expect(capture.obligations).toEqual([]);
+
+    schedule.fullFinished(capture, 2_000, OPEN, new Map(), true);
+
+    expect(schedule.deadlines(2_000, 2_000, OPEN).full).toBe(17_000);
+    expect(schedule.captureFull(17_000, 17_000).obligations.map((item) => item.identity))
+      .toEqual(['periodic']);
+  });
+
+  it('lets a qualifying inspection from other work clear an existing retry', () => {
+    const schedule = fixture();
+
+    schedule.fullFinished(schedule.captureFull(0, 0), 1_000, OPEN, new Map(), true);
+
+    const unrelated = schedule.captureFull(5_000, 5_000);
+
+    schedule.inspectionCompleted({ ...INSPECTED, completedAt: 6_000 });
+    schedule.fullFinished(unrelated, 7_000, OPEN, new Map(), false);
+
+    expect(schedule.deadlines(7_000, 7_000, OPEN).full).toBe(96_000);
+  });
+
+  it('keeps successful inspection credit when later work fails', () => {
+    const schedule = fixture();
+
+    const capture = schedule.captureFull(1_000, 1_000);
+
+    schedule.inspectionCompleted({ ...INSPECTED, completedAt: 2_000 });
+    schedule.fullFinished(capture, 3_000, OPEN, new Map(), true);
+
+    expect(schedule.deadlines(3_000, 3_000, OPEN).full).toBe(92_000);
+  });
+
+  it('tightens after a retained send without acknowledgement-triggered work', () => {
+    // Acknowledgement is deliberately not an input. Both outcomes retain bytes.
+    const schedule = fixture();
+
+    const capture = schedule.captureFull(1_000, 1_000);
+
+    schedule.inspectionCompleted({ ...INSPECTED, completedAt: 2_000 });
+    schedule.fullFinished(capture, 3_000, { ...OPEN, retainedCount: 1 }, new Map(), false);
+
+    expect(schedule.deadlines(3_000, 3_000, OPEN).full).toBe(33_000);
+    expect(schedule.captureFull(3_000, 3_000).obligations).toEqual([]);
+  });
+
+  it('does not postpone a nearer retained deadline at later full completion', () => {
+    const schedule = fixture();
+
+    const capture = schedule.captureFull(1_000, 1_000);
+
+    schedule.inspectionCompleted({ ...INSPECTED, completedAt: 2_000, retainedCount: 1 });
+    schedule.fullFinished(capture, 20_000, { ...OPEN, retainedCount: 1 }, new Map(), false);
+
+    expect(schedule.deadlines(20_000, 20_000, OPEN).full).toBe(32_000);
+  });
+
+  it('retries a durable failure in 15 seconds after a qualifying empty inspection', () => {
+    const schedule = fixture();
+
+    const capture = schedule.captureFull(90_000, 90_000);
+
+    schedule.inspectionCompleted({ ...INSPECTED, completedAt: 90_100 });
+    schedule.durableTarget(CONSUMER, 1n, 2_000n, 90_200);
+    schedule.durableFailed(CONSUMER, 91_000);
+    schedule.fullFinished(capture, 91_000, OPEN, new Map(), false);
+
+    expect(schedule.deadlines(91_000, 91_000, OPEN).full).toBe(106_000);
+
+    const retry = schedule.captureFull(106_000, 106_000);
+
+    schedule.inspectionCompleted({ ...INSPECTED, completedAt: 106_100 });
+    schedule.durableFinished(CONSUMER, 2_001n, 107_000);
+    schedule.fullFinished(retry, 107_000, OPEN, new Map(), false);
+
+    expect(schedule.deadlines(107_000, 107_000, OPEN).full).toBe(196_100);
+  });
+
+  it('retries a durable read failure before any range is known and clears it on success', () => {
+    const schedule = fixture();
+
+    const capture = schedule.captureFull(90_000, 90_000);
+
+    schedule.inspectionCompleted({ ...INSPECTED, completedAt: 90_100 });
+    schedule.durableFailed(CONSUMER, 91_000);
+    schedule.fullFinished(capture, 91_000, OPEN, new Map(), false);
+
+    expect(schedule.deadlines(91_000, 91_000, OPEN).full).toBe(106_000);
+
+    const retry = schedule.captureFull(106_000, 106_000);
+
+    schedule.inspectionCompleted({ ...INSPECTED, completedAt: 106_100 });
+
+    expect(schedule.durableTarget(CONSUMER, 101n, 100n, 106_200)).toBe(100n);
+
+    schedule.durableFinished(CONSUMER, 101n, 107_000);
+    schedule.fullFinished(retry, 107_000, OPEN, new Map(), false);
+
+    expect(schedule.deadlines(107_000, 107_000, OPEN).full).toBe(196_100);
+  });
+
   it.each(['waiting', 'failed', 'unattempted'] as const)(
     'retries released %s work at the waiting cap',
     (disposition) => {
@@ -97,7 +255,7 @@ describe('daemon loop obligation projection', () => {
     schedule.fullFinished(schedule.captureFull(5_000, 5_000), 6_000, OPEN, new Map(), true);
     schedule.transition({ kind: 'evicted', entry: entry('b') });
 
-    expect(schedule.deadlines(6_000, 6_000, OPEN).full).toBe(60_000);
+    expect(schedule.deadlines(6_000, 6_000, OPEN).full).toBe(15_001);
     expect(schedule.captureFull(60_001, 60_001).obligations.map((item) => item.identity))
       .toContain('a');
   });
@@ -130,7 +288,7 @@ describe('daemon loop obligation projection', () => {
 
     schedule.transition({ kind: 'evicted', entry: entry('a') });
 
-    expect(schedule.deadlines(0, 0, OPEN).full).toBe(60_000);
+    expect(schedule.deadlines(0, 0, OPEN).full).toBe(90_000);
   });
 
   it.each(['unattributed-signer-activity', 'conflict-search-exhausted', 'unknown'])(
@@ -142,7 +300,7 @@ describe('daemon loop obligation projection', () => {
 
       const state = { ...OPEN, open: false, blockers: ['recovery-incomplete', blocker] };
 
-      expect(schedule.deadlines(0, 0, state).full).toBe(60_000);
+      expect(schedule.deadlines(0, 0, state).full).toBe(90_000);
     },
   );
 
@@ -190,10 +348,10 @@ describe('daemon loop obligation projection', () => {
     const capture = schedule.captureFull(0, 0);
 
     schedule.durableTarget(CONSUMER, 1n, 4_000n, 0);
-    schedule.durableFailed(CONSUMER);
+    schedule.durableFailed(CONSUMER, 1);
     schedule.fullFinished(capture, 1, OPEN, new Map(), false);
 
-    expect(schedule.deadlines(1, 1, OPEN).full).toBe(60_001);
+    expect(schedule.deadlines(1, 1, OPEN).full).toBe(15_001);
   });
 
   it('preserves durable backoff through other work and checkpoint reload', () => {
@@ -205,17 +363,17 @@ describe('daemon loop obligation projection', () => {
 
     const failed = schedule.captureFull(1, 1);
 
-    schedule.durableFailed(CONSUMER);
+    schedule.durableFailed(CONSUMER, 2);
     schedule.fullFinished(failed, 2, OPEN, new Map(), false);
 
     const unrelated = schedule.captureFull(5_000, 5_000);
 
-    schedule.durableFailed(CONSUMER);
+    schedule.durableFailed(CONSUMER, 6_000);
     schedule.fullFinished(unrelated, 6_000, OPEN, new Map(), true);
     schedule.durableFinished(CONSUMER, 2_001n, 7_000);
     schedule.durableTarget(CONSUMER, 2_100n, 4_000n, 8_000);
 
-    expect(schedule.deadlines(8_000, 8_000, OPEN).full).toBe(60_002);
+    expect(schedule.deadlines(8_000, 8_000, OPEN).full).toBe(15_002);
   });
 
   it('uses one ordinary deadline after all healthy consumers finish', () => {

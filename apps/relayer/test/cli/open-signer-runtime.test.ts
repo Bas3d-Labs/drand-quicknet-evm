@@ -32,6 +32,7 @@ import {
 
 import {
   keccak256,
+  toHex,
 } from 'viem';
 
 import type {
@@ -58,6 +59,10 @@ import {
 import {
   syncNonce,
 } from '../../src/cli/sync-nonce.js';
+
+import {
+  createDaemonLogger,
+} from '../../src/daemon/daemon-logging.js';
 
 import {
   createDaemonStatusPublisher,
@@ -91,6 +96,10 @@ import {
 import {
   journalFilename,
 } from '../../src/state/journal-identity.js';
+
+import type {
+  SchedulerInspectionCompletion,
+} from '../../src/state/scheduler-recovery-observer.js';
 
 import {
   assertServiceLockHeld,
@@ -407,7 +416,7 @@ describe('command signer runtime', () => {
     });
   });
 
-  it('pins ordered full/discovery calls with real recovery and a reusable empty journal', async () => {
+  it('pins a nine-call full retry without an inspection observer', async () => {
     let time = 0;
 
     vi.spyOn(performance, 'now').mockImplementation(() => time);
@@ -505,6 +514,269 @@ describe('command signer runtime', () => {
       'eth_blockNumber',
     ]);
     expect(workCalls[3]).toEqual(['eth_blockNumber']);
+  });
+
+  it.each([
+    { label: 'stationary safe head', blockMs: 200, jumpMs: 0 },
+    { label: '200 ms blocks and ten-minute safe jumps', blockMs: 200, jumpMs: 600_000 },
+    { label: '100 ms blocks and ten-minute safe jumps', blockMs: 100, jumpMs: 600_000 },
+  ])('accounts for an idle hour with $label', async ({ blockMs, jumpMs }) => {
+    let time = 0;
+    let checkpoint = 9_001n;
+
+    vi.spyOn(performance, 'now').mockImplementation(() => time);
+
+    const calls: string[] = [];
+    const work: { kind: string; at: number; calls: string[] }[] = [];
+
+    let observe: ((fact: SchedulerInspectionCompletion) => void) | undefined;
+
+    function safeHead() {
+      if (jumpMs === 0) {
+        return 9_000n;
+      }
+
+      return 9_000n + BigInt(Math.floor(time / jumpMs) * jumpMs / blockMs);
+    }
+
+    const client = {
+      async getBlockNumber() {
+        calls.push('eth_blockNumber');
+
+        return 10_000n + BigInt(Math.floor(time / blockMs));
+      },
+      async getBlock(args: { blockNumber?: bigint; blockTag?: string }) {
+        calls.push(`eth_getBlockByNumber:${args.blockTag ?? 'number'}`);
+
+        const number = args.blockNumber ?? safeHead();
+
+        return { number, hash: toHex(number, { size: 32 }) };
+      },
+      async getTransactionCount() {
+        calls.push('eth_getTransactionCount');
+
+        return 4;
+      },
+      async getLogs() {
+        calls.push('eth_getLogs');
+
+        return [];
+      },
+    } as unknown as PublicClient;
+
+    const readChainHeads = createChainHeadsReader({
+      publicClient: client,
+      finality: { type: 'safe' },
+      durableHeadPollIntervalMs: 30_000,
+    });
+
+    const initial = await runtimeBoundsFixture([]);
+
+    const observation = {
+      anchor: { blockNumber: 9_000n, blockHash: toHex(9_000n, { size: 32 }) },
+      nonce: 4n,
+    };
+
+    await writeFile(join(directory, journalFilename(IDENTITY)), await encodeJournalSnapshot({
+      ...initial,
+      baseline: observation,
+      lastObservation: observation,
+    }, IDENTITY));
+
+    const runtime = await openSignerRuntime({
+      ...options(client),
+      readChainHeads,
+      schedulerObserver: {
+        now: () => time,
+        onInspectionCompleted: (fact) => observe?.(fact),
+      },
+    });
+
+    const submitter = createBeaconSubmitter({
+      publicClient: client,
+      manager: runtime,
+      readChainHeads,
+    });
+
+    const heartbeatTimes: number[] = [];
+    const heartbeatKinds: string[] = [];
+
+    const log = createRelayerLog({
+      chainId: IDENTITY.chainId,
+      destination: {
+        write(line) {
+          const event = JSON.parse(String(line));
+
+          if (event.event === 'heartbeat') {
+            heartbeatTimes.push(time);
+            heartbeatKinds.push(event.workKind);
+          }
+        },
+      },
+    });
+
+    const logger = createDaemonLogger({ logger: log, now: () => time });
+
+    const controller = new AbortController();
+
+    await runDaemon({
+      account: ACCOUNT,
+      publicClient: client,
+      submitter,
+      deployment: { chainId: 4663, address: ACCOUNT.address } as RegistryDeployment,
+      consumers: [{ address: ACCOUNT.address, registry: ACCOUNT.address }],
+      checkpointStore: {
+        async load() {
+          return checkpoint;
+        },
+        async save(_consumer, nextBlock) {
+          checkpoint = nextBlock;
+        },
+      },
+      readChainHeads,
+      readSchedulingState: () => ({
+        open: runtime.status.open,
+        blockers: runtime.status.blockers,
+        retainedCount: runtime.status.attempts.length,
+      }),
+      installInspectionObserver(callback) {
+        observe = callback;
+
+        return () => {
+          observe = undefined;
+        };
+      },
+      startBlock: checkpoint,
+      maxBlockRange: 2_000n,
+      finality: { type: 'safe' },
+      pollIntervalMs: 15_000,
+      monotonicNow: () => time,
+      now: () => time,
+      sleep: async (delay) => {
+        time += delay;
+
+        if (time >= 3_600_000) {
+          controller.abort();
+        }
+      },
+      signal: controller.signal,
+      onWork(result, context) {
+        logger.onWork(result, log.withContext({
+          iteration: context.iteration,
+          workKind: context.kind,
+          ...(context.kind === 'full' ? { cycle: context.cycle } : {}),
+        }));
+
+        work.push({ kind: context.kind, at: time, calls: calls.splice(0) });
+      },
+    });
+
+    const discovery = work.filter((item) => item.kind === 'discovery');
+    const full = work.filter((item) => item.kind === 'full');
+    const total = work.reduce((sum, item) => sum + item.calls.length, 0);
+
+    expect(discovery).toHaveLength(240);
+
+    for (const item of discovery) {
+      expect(item.calls).toEqual(['eth_blockNumber', 'eth_getLogs']);
+    }
+
+    // Each full item selects heads, brackets the durable nonce when due,
+    // brackets the latest nonce, and selects scan heads separately.
+    const refreshed = [
+      'eth_getBlockByNumber:safe',
+      'eth_blockNumber',
+      'eth_getBlockByNumber:number',
+      'eth_getBlockByNumber:number',
+      'eth_getBlockByNumber:number',
+      'eth_getBlockByNumber:number',
+      'eth_getTransactionCount',
+      'eth_getBlockByNumber:number',
+      'eth_getBlockByNumber:number',
+      'eth_getTransactionCount',
+      'eth_getBlockByNumber:number',
+      'eth_getBlockByNumber:number',
+      'eth_blockNumber',
+    ];
+
+    if (jumpMs === 0) {
+      expect(full).toHaveLength(40);
+
+      for (const item of full) {
+        expect(item.calls).toEqual(refreshed);
+      }
+
+      expect(total).toBe(1_000);
+    } else {
+      expect(total).toBeLessThan(1_500);
+    }
+
+    const continuation = [
+      'eth_blockNumber',
+      'eth_getBlockByNumber:number',
+      'eth_getBlockByNumber:number',
+      'eth_getBlockByNumber:number',
+      'eth_getBlockByNumber:number',
+      'eth_getTransactionCount',
+      'eth_getBlockByNumber:number',
+      'eth_getBlockByNumber:number',
+      'eth_blockNumber',
+    ];
+
+    const range = [
+      'eth_getBlockByNumber:number',
+      'eth_getLogs',
+      'eth_getBlockByNumber:number',
+    ];
+
+    if (jumpMs !== 0) {
+      const extraRanges = blockMs === 200 ? 5 : 10;
+
+      expect(full).toHaveLength(40 + extraRanges);
+      expect(total).toBe(1_000 + 5 * 3 + extraRanges * 12);
+
+      for (const item of full) {
+        if (item.calls.length === 13) {
+          expect(item.calls).toEqual(refreshed);
+        } else if (item.calls.length === 16) {
+          expect(item.calls).toEqual([...refreshed, ...range]);
+        } else {
+          expect(item.calls).toEqual([...continuation, ...range]);
+        }
+      }
+    }
+
+    const methods: Record<string, number> = {};
+
+    for (const item of work) {
+      for (const call of item.calls) {
+        const method = call.split(':')[0]!;
+
+        methods[method] = (methods[method] ?? 0) + 1;
+      }
+    }
+
+    let continuations = 0;
+    let ranges = 0;
+
+    if (jumpMs !== 0) {
+      continuations = blockMs === 200 ? 5 : 10;
+      ranges = 5 + continuations;
+    }
+
+    expect(methods).toEqual({
+      eth_blockNumber: 320 + continuations * 2,
+      eth_getBlockByNumber: 360 + continuations * 6 + ranges * 2,
+      eth_getTransactionCount: 80 + continuations,
+      eth_getLogs: 240 + ranges,
+    });
+
+    expect(heartbeatTimes).toHaveLength(59);
+    expect(heartbeatKinds).toContain('discovery');
+
+    for (let index = 1; index < heartbeatTimes.length; index += 1) {
+      expect(heartbeatTimes[index]! - heartbeatTimes[index - 1]!).toBe(60_000);
+    }
   });
 
   it('leaves a missing journal untouched until automatic recovery', async () => {

@@ -26,6 +26,10 @@ import {
   type RoundDeferredContext,
 } from '../../src/diagnostics/relayer-log.js';
 
+import {
+  fullWorkResult,
+} from '../helpers/full-work-result.js';
+
 // Keep real Pino; intercept only the emergency stderr writer.
 vi.mock('node:fs', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:fs')>(),
@@ -997,7 +1001,7 @@ describe('createRelayerLog', () => {
 
     now = 1_000;
 
-    daemonLogger.onCycle({
+    daemonLogger.onWork(fullWorkResult({
       consumers: [
         {
           status: 'failed',
@@ -1008,7 +1012,7 @@ describe('createRelayerLog', () => {
           error: providerError(),
         },
       ],
-    });
+    }));
 
     expect(lines).toHaveLength(2);
 

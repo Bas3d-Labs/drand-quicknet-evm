@@ -8,19 +8,50 @@ import {
   DaemonWorkObligations,
 } from '../../src/daemon/daemon-work-obligations.js';
 
-// Explicit future policy for the existing isolated bookkeeping fixtures.
-// No production caller selects this policy in delivery 1.
+// Successful inspection cadence is independent of failure retry.
 const DEFERRED_CADENCE = {
   idleIntervalMs: 90_000,
   retainedIntervalMs: 30_000,
 };
 
-const EMPTY = {
-  retainedCount: 0,
-  releasedBehindRecoveryClearableBlockers: false,
-};
-
 describe('daemon work obligations', () => {
+  it.each(['inspection', 'durable-continuation', 'release'] as const)(
+    'uses a 15-second failure retry for %s',
+    (reason) => {
+      const owner = new DaemonWorkObligations(120_000, DEFERRED_CADENCE);
+
+      const item = owner.observe('work', reason, 0);
+
+      owner.fail(owner.capture('full', 0), 100);
+
+      expect(owner.get(item)?.eligibleAt).toBe(15_100);
+    },
+  );
+
+  it('tightens a future inspection deadline while preserving longer eligibility', () => {
+    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
+
+    const item = owner.observe('inspection', 'inspection', 90_000);
+
+    owner.retry(item, 10_000);
+
+    expect(owner.get(item)).toMatchObject({ dueAt: 25_000, eligibleAt: 25_000 });
+
+    // A later-delivered older failure cannot move eligibility backwards.
+    owner.retry(item, 5_000);
+
+    expect(owner.get(item)).toMatchObject({ dueAt: 20_000, eligibleAt: 25_000 });
+    expect(owner.nextDeadline('full')).toBe(25_000);
+
+    owner.complete(item);
+
+    const replacement = owner.observe('inspection', 'inspection', 30_000);
+
+    owner.retry(item, 50_000);
+
+    expect(owner.get(replacement)).toMatchObject({ dueAt: 30_000, eligibleAt: 0 });
+  });
+
   it('delays captured work without delaying a later release', () => {
     const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
 
@@ -28,10 +59,10 @@ describe('daemon work obligations', () => {
 
     const release = owner.observe('round', 'release', 5_000);
 
-    owner.fail(owner.capture('full', 0), 100, EMPTY);
+    owner.fail(owner.capture('full', 0), 100);
     owner.observe('idle', 'inspection', 0);
 
-    expect(owner.get(idle)?.eligibleAt).toBe(90_100);
+    expect(owner.get(idle)?.eligibleAt).toBe(15_100);
     expect(owner.get(release)?.eligibleAt).toBe(0);
     expect(owner.nextDeadline('full')).toBe(5_000);
     expect(owner.capture('full', 4_999).obligations).toHaveLength(0);
@@ -43,11 +74,11 @@ describe('daemon work obligations', () => {
 
     const a = owner.observe('a', 'release', 0);
 
-    owner.fail(owner.capture('full', 0), 0, EMPTY);
+    owner.fail(owner.capture('full', 0), 0);
     owner.observe('b', 'release', 5_000);
-    owner.fail(owner.capture('full', 5_000), 6_000, EMPTY);
+    owner.fail(owner.capture('full', 5_000), 6_000);
 
-    expect(owner.get(a)?.eligibleAt).toBe(90_000);
+    expect(owner.get(a)?.eligibleAt).toBe(15_000);
     expect(owner.complete(a)).toBe(true);
     expect(owner.get(a)).toBeUndefined();
   });
@@ -63,28 +94,10 @@ describe('daemon work obligations', () => {
 
     const next = owner.observe('a', 'release', 1);
 
-    owner.fail(capture, 2, EMPTY);
+    owner.fail(capture, 2);
 
     expect(owner.get(next)?.eligibleAt).toBe(0);
     expect(owner.complete(old)).toBe(false);
-  });
-
-  it.each([
-    [0, false, 90_000],
-    [1, false, 30_000],
-    [0, true, 15_000],
-    [1, true, 15_000],
-  ] as const)('maps retained=%s, recoverable=%s to %s', (count, blocked, delay) => {
-    const owner = new DaemonWorkObligations(5_000, DEFERRED_CADENCE);
-
-    const item = owner.observe('a', 'release', 0);
-
-    owner.fail(owner.capture('full', 0), 100, {
-      retainedCount: count,
-      releasedBehindRecoveryClearableBlockers: blocked,
-    });
-
-    expect(owner.get(item)?.eligibleAt).toBe(100 + delay);
   });
 
   it.each([5_000, 15_000, 120_000])('bounds waiting at poll=%s', (poll) => {
@@ -115,7 +128,7 @@ describe('obligation completion evidence', () => {
 
     const item = owner.observe('inspection', 'inspection', 0);
 
-    owner.fail(owner.capture('full', 0), 0, EMPTY);
+    owner.fail(owner.capture('full', 0), 0);
 
     const next = owner.inspection(item, { ...INSPECTION, retainedCount });
 
@@ -150,67 +163,11 @@ describe('obligation completion evidence', () => {
 
     const next = owner.inspection(item, INSPECTION);
 
-    owner.fail(captured, 2_000, EMPTY);
+    owner.fail(captured, 2_000);
 
     expect(next?.dueAt).toBe(31_000);
     expect(owner.get(next!)?.eligibleAt).toBe(0);
-    expect(owner.get(scan)?.eligibleAt).toBe(92_000);
-  });
-
-  it('requires follow-up coverage by an inspection starting after acknowledgement', () => {
-    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
-
-    const item = owner.followUp('attempt-a', 500);
-
-    expect(owner.settleFollowUp(item, {
-      attemptPresent: true,
-      inspection: { ...INSPECTION, startedAt: 499, covered: true },
-    })).toBe(false);
-    expect(owner.settleFollowUp(item, {
-      attemptPresent: true,
-      inspection: { ...INSPECTION, startedAt: 500, covered: false },
-    })).toBe(false);
-    expect(owner.settleFollowUp(item, {
-      attemptPresent: true,
-      inspection: { ...INSPECTION, startedAt: 500, covered: true },
-    })).toBe(true);
-  });
-
-  it('clears a follow-up when its attempt no longer exists', () => {
-    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
-
-    const item = owner.followUp('attempt-a', 500);
-
-    expect(owner.settleFollowUp(item, { attemptPresent: true })).toBe(false);
-    expect(owner.settleFollowUp(item, { attemptPresent: false })).toBe(true);
-    expect(owner.nextDeadline('full')).toBeNull();
-  });
-
-  it('keeps follow-up identity and backoff stable across rebroadcasts', () => {
-    const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
-
-    const item = owner.followUp('attempt-a', 500);
-
-    owner.fail(owner.capture('full', 500), 600, EMPTY);
-
-    expect(owner.followUp('attempt-a', 500).generation).toBe(item.generation);
-    expect(owner.get(item)?.eligibleAt).toBe(90_600);
-    const rebroadcast = owner.followUp('attempt-a', 700);
-
-    expect(rebroadcast.generation).toBe(item.generation);
-    expect(rebroadcast.eligibleAt).toBe(90_600);
-
-    // A delayed re-observation of the first send cannot weaken coverage.
-    owner.followUp('attempt-a', 500);
-
-    expect(owner.settleFollowUp(item, {
-      attemptPresent: true,
-      inspection: { ...INSPECTION, startedAt: 600, covered: true },
-    })).toBe(false);
-    expect(owner.settleFollowUp(rebroadcast, {
-      attemptPresent: true,
-      inspection: { ...INSPECTION, startedAt: 700, covered: true },
-    })).toBe(true);
+    expect(owner.get(scan)?.eligibleAt).toBe(17_000);
   });
 
   it.each(['durable-continuation', 'soft-continuation'] as const)(
@@ -220,7 +177,7 @@ describe('obligation completion evidence', () => {
 
       const item = owner.observeScan('scan', reason, 0n, 9n, 0);
 
-      owner.fail(owner.capture(item.kind, 0), 10, EMPTY);
+      owner.fail(owner.capture(item.kind, 0), 10);
 
       const observed = owner.observeScan('scan', reason, 0n, 19n, 0);
 
@@ -248,11 +205,11 @@ describe('obligation completion evidence', () => {
 
     const item = owner.observeScan('scan', 'durable-continuation', 5n, 9n, 0);
 
-    owner.fail(owner.capture('full', 0), 10, EMPTY);
+    owner.fail(owner.capture('full', 0), 10);
 
     expect(() => owner.scanProgress(item, 5n, 20)).toThrow();
     expect(() => owner.scanProgress(item, 11n, 20)).toThrow();
-    expect(owner.get(item)?.eligibleAt).toBe(90_010);
+    expect(owner.get(item)?.eligibleAt).toBe(15_010);
   });
 
   it('separates immediate dispatch remainder from waiting even after a handoff', () => {
@@ -281,10 +238,10 @@ describe('obligation completion evidence', () => {
 
     const item = owner.observe('release', 'release', 0);
 
-    owner.fail(owner.capture('full', 0), 10, EMPTY);
+    owner.fail(owner.capture('full', 0), 10);
     owner.dispatchOutcome(item, 'remainder', 1, 100);
 
-    expect(owner.get(item)?.eligibleAt).toBe(90_010);
+    expect(owner.get(item)?.eligibleAt).toBe(15_010);
   });
 
   it('resets only a completed discovery obligation', () => {
@@ -292,7 +249,7 @@ describe('obligation completion evidence', () => {
 
     const item = owner.observe('discovery', 'discovery', 0);
 
-    owner.fail(owner.capture('discovery', 0), 100, EMPTY);
+    owner.fail(owner.capture('discovery', 0), 100);
 
     expect(owner.get(item)?.eligibleAt).toBe(5_100);
     expect(owner.discoveryCompleted(item, 200)?.dueAt).toBe(5_200);
@@ -310,14 +267,14 @@ describe('partial settlement', () => {
 
     const scan = owner.observeScan('scan', 'durable-continuation', 0n, 9n, 0);
 
-    owner.settle(owner.capture('full', 0), 100, EMPTY, [
+    owner.settle(owner.capture('full', 0), 100, [
       { reference: waiting, outcome: 'waiting', handedOff: 1 },
       { reference: remainder, outcome: 'remainder', handedOff: 1 },
     ]);
 
     expect(owner.get(waiting)?.eligibleAt).toBe(15_100);
     expect(owner.get(remainder)?.eligibleAt).toBe(0);
-    expect(owner.get(scan)?.eligibleAt).toBe(90_100);
+    expect(owner.get(scan)?.eligibleAt).toBe(15_100);
   });
 });
 
@@ -327,7 +284,7 @@ describe('authoritative cursor replacement', () => {
     const old = owner.observeScan('soft', 'soft-continuation', 10n, 20n, 0);
     const captured = owner.capture('discovery', 0);
 
-    owner.fail(captured, 100, EMPTY);
+    owner.fail(captured, 100);
     owner.observeScan('soft', 'soft-continuation', 10n, 40n, 0);
 
     const next = owner.replaceScan(old, 'soft-normalization', 15n, 200)!;
@@ -337,7 +294,7 @@ describe('authoritative cursor replacement', () => {
     expect(next.eligibleAt).toBe(15_100);
     expect(owner.scanTarget(next)).toBe(20n);
 
-    owner.fail(captured, 1_000, EMPTY);
+    owner.fail(captured, 1_000);
 
     expect(owner.get(next)?.eligibleAt).toBe(15_100);
     expect(owner.replaceScan(old, 'soft-normalization', 18n, 300)).toBeUndefined();
@@ -352,7 +309,7 @@ describe('authoritative cursor replacement', () => {
     const old = owner.observeScan('soft', 'soft-continuation', 10n, 20n, 0);
 
     owner.observeScan('soft', 'soft-continuation', 10n, 40n, 0);
-    owner.fail(owner.capture('discovery', 0), 100, EMPTY);
+    owner.fail(owner.capture('discovery', 0), 100);
 
     const next = owner.replaceScan(old, 'soft-normalization', 25n, 200)!;
 
@@ -366,21 +323,21 @@ describe('authoritative cursor replacement', () => {
     const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
     const old = owner.observeScan('durable', 'durable-continuation', 10n, 20n, 0);
 
-    owner.fail(owner.capture('full', 0), 100, EMPTY);
+    owner.fail(owner.capture('full', 0), 100);
 
     const next = owner.replaceScan(old, 'checkpoint-reload', 5n, 200)!;
 
-    expect(next.eligibleAt).toBe(90_100);
+    expect(next.eligibleAt).toBe(15_100);
     expect(owner.scanTarget(next)).toBe(20n);
-    expect(owner.capture('full', 90_099).obligations).toEqual([]);
-    expect(owner.capture('full', 90_100).obligations).toHaveLength(1);
+    expect(owner.capture('full', 15_099).obligations).toEqual([]);
+    expect(owner.capture('full', 15_100).obligations).toHaveLength(1);
   });
 
   it('rejects refreshes and mismatched reasons without changing the obligation', () => {
     const owner = new DaemonWorkObligations(15_000, DEFERRED_CADENCE);
     const old = owner.observeScan('soft', 'soft-continuation', 10n, 20n, 0);
 
-    owner.fail(owner.capture('discovery', 0), 100, EMPTY);
+    owner.fail(owner.capture('discovery', 0), 100);
 
     for (const nextBlock of [10n, 9n, -1n]) {
       expect(() => owner.replaceScan(old, 'soft-normalization', nextBlock, 200))
@@ -402,7 +359,7 @@ describe('injected inspection cadence', () => {
     { idleIntervalMs: 15_000, retainedIntervalMs: 15_000 },
     DEFERRED_CADENCE,
     { idleIntervalMs: 4_000, retainedIntervalMs: 2_000 },
-  ])('uses $idleIntervalMs/$retainedIntervalMs for failure and inspection', (cadence) => {
+  ])('uses $idleIntervalMs/$retainedIntervalMs only for successful inspection', (cadence) => {
     for (const retainedCount of [0, 1]) {
       const owner = new DaemonWorkObligations(15_000, cadence);
 
@@ -414,12 +371,9 @@ describe('injected inspection cadence', () => {
         delay = cadence.retainedIntervalMs;
       }
 
-      owner.fail(owner.capture('full', 0), 100, {
-        ...EMPTY,
-        retainedCount,
-      });
+      owner.fail(owner.capture('full', 0), 100);
 
-      expect(owner.get(item)?.eligibleAt).toBe(100 + delay);
+      expect(owner.get(item)?.eligibleAt).toBe(15_100);
       expect(owner.inspection(item, {
         ...INSPECTION,
         retainedCount,
@@ -437,11 +391,8 @@ describe('injected inspection cadence', () => {
 
     const release = owner.observe('release', 'release', 0);
 
-    owner.fail(owner.capture('discovery', 0), 100, EMPTY);
-    owner.fail(owner.capture('full', 0), 100, {
-      retainedCount: 1,
-      releasedBehindRecoveryClearableBlockers: true,
-    });
+    owner.fail(owner.capture('discovery', 0), 100);
+    owner.fail(owner.capture('full', 0), 100);
 
     const waiting = owner.observe('waiting', 'release', 0);
 
@@ -462,7 +413,7 @@ describe('injected inspection cadence', () => {
 
     const item = owner.observe('inspection', 'inspection', 0);
 
-    owner.fail(owner.capture('full', 0), 100, EMPTY);
+    owner.fail(owner.capture('full', 0), 100);
 
     expect(owner.get(item)?.eligibleAt).toBe(15_100);
     expect(owner.inspection(item, INSPECTION)?.dueAt).toBe(16_000);

@@ -60,6 +60,10 @@ import type {
   CheckpointStore,
 } from '../state/checkpoint.js';
 
+import type {
+  SchedulerInspectionCompletion,
+} from '../state/scheduler-recovery-observer.js';
+
 import {
   runDaemonCycle,
   type RunDaemonCycleOptions,
@@ -122,6 +126,9 @@ export interface RunDaemonOptions {
   now?: () => number;
   monotonicNow?: () => number;
   readSchedulingState: () => SchedulingState;
+  installInspectionObserver?: (
+    observe: (fact: SchedulerInspectionCompletion) => void,
+  ) => () => void;
   onSchedulerInitialized?: (
     read: (at: number) => ReturnType<FutureRoundScheduler['observe']>,
   ) => void;
@@ -291,7 +298,7 @@ export async function runDaemon(
 
         if (outcome.status === 'failed') {
           views.fullFailed(consumer);
-          schedule.durableFailed(consumer);
+          schedule.durableFailed(consumer, completedAt);
 
           continue;
         }
@@ -439,68 +446,76 @@ export async function runDaemon(
     };
   }
 
-  while (!options.signal?.aborted) {
-    const selectedAt = monotonicNow();
-    const wall = now();
-    const deadlines = schedule.deadlines(selectedAt, wall, options.readSchedulingState());
+  const detach = options.installInspectionObserver?.((fact) => {
+    schedule.inspectionCompleted(fact);
+  });
 
-    executor.replace(startup ? { full: selectedAt, discovery: null } : deadlines);
+  try {
+    while (!options.signal?.aborted) {
+      const selectedAt = monotonicNow();
+      const wall = now();
+      const deadlines = schedule.deadlines(selectedAt, wall, options.readSchedulingState());
 
-    const executed = await executor.runNext(selectedAt, async (kind) => {
-      if (
-        iteration === Number.MAX_SAFE_INTEGER ||
-        (kind === 'full' && cycle === Number.MAX_SAFE_INTEGER)
-      ) {
-        throw new Error('Daemon work counter exhausted.');
-      }
+      executor.replace(startup ? { full: selectedAt, discovery: null } : deadlines);
 
-      iteration += 1;
-
-      let context: DaemonWorkContext;
-
-      if (kind === 'full') {
-        cycle += 1;
-        context = Object.freeze({ iteration, kind, cycle });
-      } else {
-        context = Object.freeze({ iteration, kind });
-      }
-
-      activeContext = context;
-
-      try {
-        let result: DaemonWorkResult;
-
-        if (context.kind === 'full') {
-          result = await runFullWork(context, selectedAt, wall);
-        } else {
-          result = await runDiscoveryWork(context, selectedAt);
+      const executed = await executor.runNext(selectedAt, async (kind) => {
+        if (
+          iteration === Number.MAX_SAFE_INTEGER ||
+          (kind === 'full' && cycle === Number.MAX_SAFE_INTEGER)
+        ) {
+          throw new Error('Daemon work counter exhausted.');
         }
 
-        // Publication remains inside serial ownership.
-        await options.onWork?.(result, context);
-      } finally {
-        activeContext = undefined;
+        iteration += 1;
+
+        let context: DaemonWorkContext;
+
+        if (kind === 'full') {
+          cycle += 1;
+          context = Object.freeze({ iteration, kind, cycle });
+        } else {
+          context = Object.freeze({ iteration, kind });
+        }
+
+        activeContext = context;
+
+        try {
+          let result: DaemonWorkResult;
+
+          if (context.kind === 'full') {
+            result = await runFullWork(context, selectedAt, wall);
+          } else {
+            result = await runDiscoveryWork(context, selectedAt);
+          }
+
+          // Publication remains inside serial ownership.
+          await options.onWork?.(result, context);
+        } finally {
+          activeContext = undefined;
+        }
+      });
+
+      startup = false;
+
+      if (options.signal?.aborted) {
+        return;
       }
-    });
 
-    startup = false;
+      if (executed !== undefined) {
+        continue;
+      }
 
-    if (options.signal?.aborted) {
-      return;
+      const next = executor.nextDeadline;
+
+      const remaining = Math.max(
+        0,
+        (next ?? selectedAt + options.pollIntervalMs) - selectedAt,
+      );
+
+      await sleep(Math.min(options.pollIntervalMs, remaining), options.signal);
     }
-
-    if (executed !== undefined) {
-      continue;
-    }
-
-    const next = executor.nextDeadline;
-
-    const remaining = Math.max(
-      0,
-      (next ?? selectedAt + options.pollIntervalMs) - selectedAt,
-    );
-
-    await sleep(Math.min(options.pollIntervalMs, remaining), options.signal);
+  } finally {
+    detach?.();
   }
 }
 

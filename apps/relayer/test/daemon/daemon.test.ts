@@ -24,11 +24,19 @@ import {
 } from '../../src/daemon/daemon-cycle.js';
 
 import {
+  createDaemonLogger,
+} from '../../src/daemon/daemon-logging.js';
+
+import {
   runDaemon,
   type DaemonWorkContext,
   type DaemonWorkResult,
   type RunDaemonOptions,
 } from '../../src/daemon/daemon.js';
+
+import {
+  createRelayerLog,
+} from '../../src/diagnostics/relayer-log.js';
 
 import type {
   BeaconSubmitter,
@@ -84,8 +92,22 @@ function fixture() {
     round: ROUND,
   } as Awaited<ReturnType<RoundImporter>>);
 
+  let inspect: Parameters<NonNullable<RunDaemonOptions['installInspectionObserver']>>[0]
+    | undefined;
+
   const full = vi.mocked(runDaemonCycle).mockImplementation(async (options) => {
     calls.push('recover');
+
+    inspect?.({
+      startedAt: time,
+      completedAt: time,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      persistenceIdle: true,
+      retainedCount: state.retainedCount,
+      retainedAttemptIds: [],
+      coveredAttemptIds: [],
+    });
 
     const scheduled = state.open
       ? await options.waiting!.dispatch(importer, options.signal)
@@ -112,10 +134,19 @@ function fixture() {
     };
   });
 
+  const detach = vi.fn(() => {
+    inspect = undefined;
+  });
+
   const options: RunDaemonOptions = {
     now: () => wall,
     monotonicNow: () => time,
     readSchedulingState: () => state,
+    installInspectionObserver(observe) {
+      inspect = observe;
+
+      return detach;
+    },
     publicClient: {
       getBlockNumber: vi.fn(async () => {
         calls.push('eth_blockNumber');
@@ -156,7 +187,7 @@ function fixture() {
   };
 
   return {
-    options, controller, calls, work, state, getLogs, importer, full,
+    options, controller, calls, work, state, getLogs, importer, full, detach,
     setLatest(value: bigint) {
       latest = value;
     },
@@ -203,22 +234,48 @@ describe('separate daemon work', () => {
     expect(f.calls).toEqual([]);
   });
 
-  it.each([1_000, 5_000, 15_000])('uses the configured %s ms full cadence', async (poll) => {
+  it.each([1_000, 5_000, 15_000])('keeps retained inspections at 30 seconds with poll=%s', async (poll) => {
     const f = fixture();
 
     f.state.retainedCount = 2;
     f.options.pollIntervalMs = poll;
 
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+
+      if (context.kind === 'full' && context.cycle === 3) {
+        f.controller.abort();
+      }
+    };
+
     await runDaemon(f.options);
 
-    expect(f.work.map(({ context }) => context.kind)).toEqual([
-      'full', 'discovery', 'full', 'discovery', 'full', 'discovery',
-    ]);
     expect(f.work.filter((row) => row.context.kind === 'full').map((row) => row.at))
-      .toEqual([0, poll, poll * 2]);
-    expect(f.work.map(({ context }) => context.iteration)).toEqual([1, 2, 3, 4, 5, 6]);
-    expect(f.work[3]!.context).toEqual({ kind: 'discovery', iteration: 4 });
+      .toEqual([0, 30_000, 60_000]);
+    expect(f.work.filter((row) => row.context.kind === 'discovery').slice(0, 2)
+      .map((row) => row.at)).toEqual([0, poll]);
     expect(f.full.mock.calls.every(([options]) => options.scanSoft === false)).toBe(true);
+  });
+
+  it.each([0, 1])('keeps internal cadence with poll=120s and retained=%s', async (count) => {
+    const f = fixture();
+
+    f.state.retainedCount = count;
+    f.options.pollIntervalMs = 120_000;
+    f.options.onWork = (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+
+      if (context.kind === 'full' && context.cycle === 3) {
+        f.controller.abort();
+      }
+    };
+
+    await runDaemon(f.options);
+
+    const interval = count === 0 ? 90_000 : 30_000;
+
+    expect(f.work.filter((item) => item.context.kind === 'full').map((item) => item.at))
+      .toEqual([0, interval, interval * 2]);
   });
 
   it.each(['recovery', 'durable-scan'] as const)(
@@ -293,12 +350,17 @@ describe('separate daemon work', () => {
       return [];
     });
 
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+      if (context.iteration === 4) f.controller.abort();
+    };
+
     await runDaemon(f.options);
 
     const discovery = f.work.filter(({ context }) => context.kind === 'discovery');
 
     expect(f.work.map(({ context }) => context.kind))
-      .toEqual(['full', 'discovery', 'full', 'discovery', 'full', 'discovery']);
+      .toEqual(['full', 'discovery', 'discovery', 'discovery']);
     expect(discovery.map(({ at }) => at)).toEqual([600, 16_200, 31_800]);
     expect(discovery.map(({ result }) => result.discoveryCompleted)).toEqual([true, true, true]);
     expect(f.options.publicClient.getBlockNumber).toHaveBeenCalledTimes(6);
@@ -317,7 +379,7 @@ describe('separate daemon work', () => {
     });
     f.options.onWork = async (result, context) => {
       f.work.push({ result, context, at: 0 });
-      if (context.iteration === 4) {
+      if (context.iteration === 3) {
         f.controller.abort();
       }
     };
@@ -326,7 +388,7 @@ describe('separate daemon work', () => {
 
     expect(f.calls).toEqual([
       'recover', 'eth_blockNumber', 'eth_getLogs',
-      'recover', 'eth_blockNumber', 'eth_getLogs',
+      'eth_blockNumber', 'eth_getLogs',
     ]);
     expect(f.options.sleep).toHaveBeenCalledExactlyOnceWith(15_000, f.controller.signal);
   });
@@ -348,7 +410,7 @@ describe('separate daemon work', () => {
       'recover',
       'eth_blockNumber', 'eth_getLogs',
       'eth_blockNumber', 'eth_getLogs',
-      'recover',
+      'eth_blockNumber',
     ]);
     expect(f.options.sleep).toHaveBeenCalledExactlyOnceWith(15_000, f.controller.signal);
     expect(vi.mocked(f.options.publicClient.getLogs).mock.calls.map(([args]) => ({
@@ -372,8 +434,7 @@ describe('separate daemon work', () => {
 
     expect(f.calls).toEqual([
       'recover', 'eth_blockNumber', 'eth_getLogs',
-      'recover', 'eth_blockNumber',
-      'recover', 'eth_blockNumber',
+      'eth_blockNumber', 'eth_blockNumber', 'eth_blockNumber', 'eth_blockNumber',
     ]);
   });
 
@@ -405,10 +466,15 @@ describe('separate daemon work', () => {
       f.request();
       f.request();
 
+      f.options.onWork = async (result, context) => {
+        f.work.push({ result, context, at: f.options.monotonicNow!() });
+        if (context.kind === 'full' && context.cycle === 3) f.controller.abort();
+      };
+
       await runDaemon(f.options);
 
       expect(f.work.filter((row) => row.context.kind === 'full').map((row) => row.at))
-        .toEqual([0, 15_000, 30_000]);
+        .toEqual([0, 90_000, 180_000]);
       expect(f.importer).not.toHaveBeenCalled();
     },
   );
@@ -461,6 +527,8 @@ describe('separate daemon work', () => {
   it('yields sustained soft backlog to due full work', async () => {
     const f = fixture();
 
+    f.state.retainedCount = 1;
+
     vi.mocked(f.options.publicClient.getBlockNumber).mockImplementation(async () => {
       f.advance(15_000);
       return 100_000n;
@@ -469,7 +537,7 @@ describe('separate daemon work', () => {
     await runDaemon(f.options);
 
     expect(f.work.map(({ context }) => context.kind)).toEqual([
-      'full', 'discovery', 'full', 'discovery', 'full', 'discovery',
+      'full', 'discovery', 'discovery', 'full', 'discovery', 'discovery',
     ]);
     expect(f.options.sleep).not.toHaveBeenCalled();
   });
@@ -534,6 +602,11 @@ describe('separate daemon work', () => {
   it('binds transaction lifecycle calls to full cycle, not work iteration', async () => {
     const f = fixture();
 
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+      if (context.kind === 'full' && context.cycle === 3) f.controller.abort();
+    };
+
     const normal = f.full.getMockImplementation()!;
 
     f.full.mockImplementation(async (options) => {
@@ -562,6 +635,11 @@ describe('separate daemon work', () => {
   it('preserves a prior durable view when recovery fails before scanning', async () => {
     const f = fixture();
 
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+      if (context.kind === 'full' && context.cycle === 3) f.controller.abort();
+    };
+
     const normal = f.full.getMockImplementation()!;
 
     let count = 0;
@@ -577,11 +655,21 @@ describe('separate daemon work', () => {
 
     await runDaemon(f.options);
 
-    expect(f.work[2]!.result.consumers).toEqual(f.work[1]!.result.consumers);
+    const failed = f.work.findIndex((row) => row.result.cycle?.recoveryFailed);
+
+    expect(failed).toBeGreaterThan(1);
+    expect(f.work[failed]!.result.consumers).toEqual(f.work[failed - 1]!.result.consumers);
+    expect(f.work.filter((row) => row.context.kind === 'full').map((row) => row.at))
+      .toEqual([0, 90_000, 105_000]);
   });
 
   it('invalidates only the durable side when its consumer scan fails', async () => {
     const f = fixture();
+
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+      if (context.kind === 'full' && context.cycle === 3) f.controller.abort();
+    };
 
     const normal = f.full.getMockImplementation()!;
 
@@ -601,10 +689,12 @@ describe('separate daemon work', () => {
 
     await runDaemon(f.options);
 
-    expect(f.work[1]!.result.consumers[0]?.status).toBe('healthy');
-    expect(f.work[2]!.result.consumers[0]?.status).toBe('failed');
-    expect(f.work[3]!.result.consumers[0]?.status).toBe('failed');
-    expect(f.work[4]!.result.consumers[0]?.status).toBe('healthy');
+    const failed = f.work.findIndex((row) => row.result.cycle?.consumers[0]?.status === 'failed');
+
+    expect(f.work[failed]!.result.consumers[0]?.status).toBe('failed');
+    expect(f.work.at(-1)!.result.consumers[0]?.status).toBe('healthy');
+    expect(f.work.filter((row) => row.context.kind === 'full').map((row) => row.at))
+      .toEqual([0, 90_000, 105_000]);
   });
 
   it('keeps failed-consumer backoff during another consumer’s continuation', async () => {
@@ -626,14 +716,14 @@ describe('separate daemon work', () => {
     await runDaemon(f.options);
 
     expect(f.work.map(({ context }) => context.kind))
-      .toEqual(['full', 'discovery', 'discovery', 'full']);
+      .toEqual(['full', 'discovery', 'discovery', 'discovery']);
     expect(f.work[1]!.result.discoveryCompleted).toBe(false);
     expect(f.work[2]!.result.discoveryCompleted).toBe(false);
     expect(f.work[2]!.result.consumers).toEqual([
       { consumer: CONSUMER, status: 'failed' },
       expect.objectContaining({ consumer: other, status: 'healthy', softNextBlock: 4_001n }),
     ]);
-    expect(f.options.publicClient.getBlockNumber).toHaveBeenCalledTimes(3);
+    expect(f.options.publicClient.getBlockNumber).toHaveBeenCalledTimes(5);
     expect(f.options.sleep).toHaveBeenCalledExactlyOnceWith(15_000, f.controller.signal);
   });
 
@@ -677,7 +767,14 @@ describe('separate daemon work', () => {
   it('keeps a discovery failure visible through full work until discovery succeeds', async () => {
     const f = fixture();
 
+    f.options.pollIntervalMs = 120_000;
+
     f.getLogs.mockRejectedValueOnce(new Error('soft unavailable'));
+
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+      if (context.iteration === 4) f.controller.abort();
+    };
 
     await runDaemon(f.options);
 
@@ -689,6 +786,11 @@ describe('separate daemon work', () => {
 
   it('forwards full-work options without soft-scan ownership', async () => {
     const f = fixture();
+
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+      if (context.kind === 'full' && context.cycle === 3) f.controller.abort();
+    };
 
     await runDaemon(f.options);
 
@@ -728,6 +830,49 @@ describe('separate daemon work', () => {
     );
   });
 
+  it('keeps observation times when slow discovery delays a heartbeat', async () => {
+    const f = fixture();
+
+    const events: { event: string; consumers?: Record<string, unknown>[] }[] = [];
+
+    const log = createRelayerLog({
+      chainId: 46630,
+      destination: {
+        write(line) {
+          events.push(JSON.parse(String(line)));
+        },
+      },
+    });
+
+    const logger = createDaemonLogger({ logger: log, now: f.options.monotonicNow! });
+
+    f.getLogs.mockImplementationOnce(async () => {
+      f.advance(150_000);
+
+      return [];
+    });
+
+    f.options.onWork = (result, context) => {
+      logger.onWork(result);
+
+      if (context.kind === 'discovery') {
+        f.controller.abort();
+      }
+    };
+
+    await runDaemon(f.options);
+
+    const heartbeats = events.filter((event) => event.event === 'heartbeat');
+
+    expect(heartbeats).toHaveLength(1);
+    expect(f.options.monotonicNow!()).toBe(150_000);
+    expect(heartbeats[0]!.consumers![0]).toMatchObject({
+      latestBlockObservedAt: new Date(RELEASE).toISOString(),
+      durableBlockObservedAt: new Date(RELEASE).toISOString(),
+    });
+    expect(f.full).toHaveBeenCalledOnce();
+  });
+
   it('rejects an invalid receipt timeout before starting work', async () => {
     const f = fixture();
 
@@ -751,6 +896,7 @@ describe('separate daemon work', () => {
     }
 
     await expect(runDaemon(f.options)).rejects.toBe(error);
+    expect(f.detach).toHaveBeenCalledOnce();
     expect(f.full).toHaveBeenCalledOnce();
   });
 
@@ -785,6 +931,7 @@ describe('separate daemon work', () => {
 
     await running;
 
+    expect(f.detach).toHaveBeenCalledOnce();
     expect(f.options.sleep).not.toHaveBeenCalled();
   });
 });

@@ -95,6 +95,10 @@ import type {
   RoundImportProgress,
 } from '../../src/diagnostics/operation-context.js';
 
+import {
+  fullWorkResult,
+} from '../helpers/full-work-result.js';
+
 const CONSUMER: Address =
   '0x1111111111111111111111111111111111111111';
 
@@ -367,7 +371,7 @@ describe('round import diagnostic context', () => {
         },
       });
 
-      createDaemonLogger({ logger }).onCycle(result);
+      createDaemonLogger({ logger }).onWork(fullWorkResult(result));
 
       const records = lines.map((line) => JSON.parse(line));
       const failures = records.filter(

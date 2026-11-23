@@ -81,6 +81,10 @@ import type {
   SignerRuntimeObservation,
 } from '../../state/read-signer-runtime-observation.js';
 
+import type {
+  SchedulerInspectionCompletion,
+} from '../../state/scheduler-recovery-observer.js';
+
 import {
   assertServiceLockHeld,
 } from '../../state/service-lock.js';
@@ -211,6 +215,8 @@ export async function runDaemonCommand(
 
     let readRuntime: (() => SignerRuntimeObservation) | undefined;
 
+    let inspect: ((fact: SchedulerInspectionCompletion) => void) | undefined;
+
     const monotonicNow = () => performance.now();
 
     const submitter = await openBeaconSubmitter({
@@ -229,7 +235,13 @@ export async function runDaemonCommand(
       onRecoveryCompleted: statusPublisher.onRecoveryCompleted,
       schedulerObserver: {
         now: monotonicNow,
-        onInspectionCompleted: statusPublisher.onInspectionCompleted,
+        onInspectionCompleted(fact) {
+          try {
+            statusPublisher.onInspectionCompleted(fact);
+          } finally {
+            inspect?.(fact);
+          }
+        },
       },
       signal: options.signal,
       env,
@@ -273,6 +285,13 @@ export async function runDaemonCommand(
 
     await runDaemon({
       monotonicNow,
+      installInspectionObserver(observe) {
+        inspect = observe;
+
+        return () => {
+          inspect = undefined;
+        };
+      },
       readSchedulingState() {
         if (readRuntime === undefined) {
           throw new Error('Signer runtime is not initialized.');

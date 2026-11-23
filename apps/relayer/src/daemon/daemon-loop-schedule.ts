@@ -12,6 +12,7 @@ import type {
 
 import {
   DaemonWorkObligations,
+  type CompletedInspection,
   type WorkCapture,
   type WorkObligation,
 } from './daemon-work-obligations.js';
@@ -22,6 +23,9 @@ import type {
   WaitingEntry,
 } from './future-round-scheduler.js';
 
+const IDLE_INSPECTION_INTERVAL_MS = 90_000;
+const RETAINED_INSPECTION_INTERVAL_MS = 30_000;
+
 export interface SchedulingState {
   readonly open: boolean;
   readonly blockers: readonly string[];
@@ -31,11 +35,14 @@ export interface SchedulingState {
 /** One owner of obligations. No execution, clocks, timers or provider calls. */
 export class DaemonLoopSchedule {
   private readonly owner: DaemonWorkObligations;
+
   private periodic: WorkObligation;
   private discoveryRoundAt: number;
   private readonly discovery = new Map<Address, WorkObligation>();
   private readonly durable = new Map<Address, WorkObligation>();
-  private readonly durableAtStart = new Set<string>();
+  private periodicAtStart: WorkObligation;
+  private fullStartedAt = 0;
+
   private readonly releases = new Map<string, {
     entry: WaitingEntry;
     obligation: WorkObligation;
@@ -45,13 +52,13 @@ export class DaemonLoopSchedule {
     private readonly pollIntervalMs: number,
     startedAt: number,
   ) {
-    // 3b deliberately retains the ordinary poll cadence for both populations.
     this.owner = new DaemonWorkObligations(pollIntervalMs, {
-      idleIntervalMs: pollIntervalMs,
-      retainedIntervalMs: pollIntervalMs,
+      idleIntervalMs: IDLE_INSPECTION_INTERVAL_MS,
+      retainedIntervalMs: RETAINED_INSPECTION_INTERVAL_MS,
     });
 
     this.periodic = this.owner.observe('periodic', 'inspection', startedAt);
+    this.periodicAtStart = this.periodic;
 
     this.discoveryRoundAt = startedAt;
   }
@@ -126,11 +133,8 @@ export class DaemonLoopSchedule {
     now: number,
     wall: number,
   ): WorkCapture {
-    this.durableAtStart.clear();
-
-    for (const reference of this.durable.values()) {
-      this.durableAtStart.add(reference.identity);
-    }
+    this.periodicAtStart = this.owner.get(this.periodic)!;
+    this.fullStartedAt = now;
 
     const capture = this.owner.capture('full', now);
 
@@ -142,6 +146,16 @@ export class DaemonLoopSchedule {
         return release === undefined || release.entry.releaseTime * 1000n <= BigInt(wall);
       }),
     };
+  }
+
+  inspectionCompleted(
+    fact: CompletedInspection,
+  ): void {
+    const next = this.owner.inspection(this.periodic, fact);
+
+    if (next !== undefined) {
+      this.periodic = next;
+    }
   }
 
   discoveryDue(
@@ -201,10 +215,7 @@ export class DaemonLoopSchedule {
       kind: 'discovery',
       startedAt,
       obligations: [reference],
-    }, completedAt, {
-      retainedCount: 0,
-      releasedBehindRecoveryClearableBlockers: false,
-    });
+    }, completedAt);
   }
 
   discoveryPassFinished(
@@ -226,7 +237,11 @@ export class DaemonLoopSchedule {
   ): bigint {
     let reference = this.durable.get(consumer);
 
-    if (reference !== undefined && this.owner.scanNextBlock(reference) !== nextBlock) {
+    if (
+      reference !== undefined &&
+      this.owner.scanNextBlock(reference) !== undefined &&
+      this.owner.scanNextBlock(reference) !== nextBlock
+    ) {
       reference = this.owner.replaceScan(reference, 'checkpoint-reload', nextBlock, now);
 
       if (reference === undefined) {
@@ -249,7 +264,7 @@ export class DaemonLoopSchedule {
       this.durable.set(consumer, reference);
     }
 
-    return reference === undefined ? head : this.owner.scanTarget(reference)!;
+    return reference === undefined ? head : (this.owner.scanTarget(reference) ?? head);
   }
 
   durableFinished(
@@ -263,12 +278,19 @@ export class DaemonLoopSchedule {
       return;
     }
 
-    const previous = this.owner.scanNextBlock(reference)!;
+    const previous = this.owner.scanNextBlock(reference);
+
+    if (previous === undefined) {
+      // A failed head/checkpoint read can create a retry before a range exists.
+      this.owner.complete(reference);
+      this.durable.delete(consumer);
+
+      return;
+    }
 
     if (nextBlock <= previous) {
-      // No progress cannot create an immediate continuation. Existing obligations
-      // are delayed only by fullFinished's captured, eligible set.
-      this.durableFailed(consumer);
+      this.durableFailed(consumer, now);
+
       return;
     }
 
@@ -288,10 +310,12 @@ export class DaemonLoopSchedule {
     dispatch: ReadonlyMap<string, DispatchObservation>,
     recoveryFailed: boolean,
   ): void {
-    const clearable = classifySchedulerBlockers(state.blockers).recoveryClearableOnly;
-
     for (const reference of capture.obligations) {
       if (this.owner.get(reference) === undefined) {
+        continue;
+      }
+
+      if (reference.identity === this.periodic.identity) {
         continue;
       }
 
@@ -312,38 +336,48 @@ export class DaemonLoopSchedule {
         }
       }
 
-      this.owner.fail({ ...capture, obligations: [reference] }, completedAt, {
-        retainedCount: state.retainedCount,
-        releasedBehindRecoveryClearableBlockers: release !== undefined && clearable,
-      });
+      this.owner.fail({ ...capture, obligations: [reference] }, completedAt);
     }
 
-    const periodicWasCaptured = capture.obligations.some((reference) => (
-      reference.identity === this.periodic.identity &&
-      reference.generation === this.periodic.generation
-    ));
+    if (
+      this.periodic.generation === this.periodicAtStart.generation &&
+      this.periodicAtStart.eligibleAt <= capture.startedAt
+    ) {
+      // No qualifying fact arrived, even if periodic work was not due yet.
+      // A periodic item already in backoff is untouched by unrelated failure.
+      this.owner.retry(this.periodic, completedAt);
+    }
 
-    if (!recoveryFailed || periodicWasCaptured) {
-      this.owner.complete(this.periodic);
+    if (state.retainedCount > 0) {
+      // Population can tighten a deadline, but cannot grant inspection credit.
       this.periodic = this.owner.observe(
         'periodic',
         'inspection',
-        completedAt + this.pollIntervalMs,
+        completedAt + RETAINED_INSPECTION_INTERVAL_MS,
       );
     }
   }
 
   durableFailed(
     consumer: Address,
+    completedAt: number,
   ): void {
-    const reference = this.durable.get(consumer);
+    let reference = this.durable.get(consumer);
 
-    if (reference !== undefined && !this.durableAtStart.has(reference.identity)) {
-      // A first scan that made no progress earns no continuation. The ordinary
-      // full-work deadline retries it. Existing backoff belongs to the capture.
-      this.owner.complete(reference);
+    if (reference === undefined) {
+      reference = this.owner.observe(
+        `durable:${consumer}`,
+        'durable-continuation',
+        completedAt,
+      );
 
-      this.durable.delete(consumer);
+      this.durable.set(consumer, reference);
+    }
+
+    const current = this.owner.get(reference);
+
+    if (current !== undefined && current.eligibleAt <= this.fullStartedAt) {
+      this.owner.retry(reference, completedAt);
     }
   }
 

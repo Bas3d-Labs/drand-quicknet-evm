@@ -45,6 +45,10 @@ import {
   createRoundImporter,
 } from '../../src/rounds/create-round-importer.js';
 
+import {
+  fullWorkResult,
+} from '../helpers/full-work-result.js';
+
 const CONSUMER_A: Address =
   '0x1111111111111111111111111111111111111111';
 
@@ -195,7 +199,7 @@ describe('daemon failure context', () => {
       },
     });
 
-    createDaemonLogger({ logger }).onCycle(result);
+    createDaemonLogger({ logger }).onWork(fullWorkResult(result));
 
     const records = lines.map((line) => JSON.parse(line));
     const record = records.find(

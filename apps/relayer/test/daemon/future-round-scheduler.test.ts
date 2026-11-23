@@ -13,7 +13,6 @@ import {
   FutureRoundScheduler,
   MAX_WAITING_ROUNDS,
   type DispatchObservation,
-  type ScheduledPass,
   type WaitTransition,
 } from '../../src/daemon/future-round-scheduler.js';
 
@@ -75,15 +74,6 @@ function importer() {
     round,
     randomness: HASH,
   }));
-}
-
-function emptyPass(): ScheduledPass {
-  return {
-    attempted: 0,
-    handedOff: 0,
-    failed: false,
-    outcomes: [],
-  };
 }
 
 describe('future-round scheduler', () => {
@@ -208,7 +198,6 @@ describe('future-round scheduler', () => {
     expect(pass.handedOff).toBe(16);
     expect(run).toHaveBeenCalledTimes(16);
     expect(f.queue.size).toBe(4);
-    expect(f.queue.sleepMilliseconds(1000, pass)).toBe(0);
     expect(f.events.filter((event) => event.kind === 'started')).toHaveLength(20);
   });
 
@@ -225,7 +214,6 @@ describe('future-round scheduler', () => {
     expect(run).toHaveBeenCalledExactlyOnceWith(98n);
     expect(first.failed).toBe(true);
     expect(f.queue.size).toBe(2);
-    expect(f.queue.sleepMilliseconds(1000, first)).toBe(1000);
     expect(f.events.filter((event) => event.kind === 'released')).toHaveLength(0);
 
     await f.queue.dispatch(run);
@@ -247,7 +235,6 @@ describe('future-round scheduler', () => {
       const pass = await f.queue.dispatch(run);
 
       expect(pass.attempted).toBe(1);
-      expect(f.queue.sleepMilliseconds(1000, pass)).toBe(1000);
     }
 
     expect(run.mock.calls.map(([round]) => round)).toEqual([98n, 99n, 98n, 99n]);
@@ -286,7 +273,6 @@ describe('future-round scheduler', () => {
       expect(second.outcomes[0]).toMatchObject({
         reportDeferred: false,
       });
-      expect(f.queue.sleepMilliseconds(1000, second)).toBe(1000);
       expect(f.events.filter((event) => event.kind === 'released')).toHaveLength(0);
 
       run.mockImplementation(async (round) => ({
@@ -329,7 +315,6 @@ describe('future-round scheduler', () => {
       attempted: 2,
       blocked: true,
     });
-    expect(f.queue.sleepMilliseconds(1000, pass)).toBe(1000);
     expect(f.queue.size).toBe(2);
   });
 
@@ -407,22 +392,6 @@ describe('future-round scheduler', () => {
 
     expect(pass.handedOff).toBe(0);
     expect(f.queue.size).toBe(1);
-    expect(f.queue.sleepMilliseconds(1000, pass)).toBe(1000);
-  });
-
-  it('uses release-aware sleep without oversized timers or a recovery-failure spin', () => {
-    const f = clock();
-
-    f.offer(101n);
-    f.offer((1n << 64n) - 1n);
-    f.setNow(Number(roundScheduledTime(101n) * 1000n) - 200);
-
-    expect(f.queue.sleepMilliseconds(1000, emptyPass())).toBe(200);
-    expect(f.queue.sleepMilliseconds(1000)).toBe(1000);
-
-    f.setNow(Number(roundScheduledTime(101n) * 1000n));
-
-    expect(f.queue.sleepMilliseconds(1000, emptyPass())).toBe(1000);
   });
 
   it('keeps the soonest entries and provides no consumer reservation', async () => {
@@ -605,19 +574,17 @@ describe('dispatch observation adapter', () => {
 
       return { status: 'already-stored', round, randomness: HASH };
     });
-    const sleep = queue.sleepMilliseconds(15_000, pass);
 
-    return { pass, sleep, calls, transitions, facts, reads: now.mock.calls.length };
+    return { pass, calls, transitions, facts, reads: now.mock.calls.length };
   }
 
-  it.each([false, true])('preserves dispatch, transitions and sleep with throwing hook: %s', async (throws) => {
+  it.each([false, true])('preserves dispatch with throwing hook: %s', async (throws) => {
     const baseline = await run(undefined);
     const observed = await run(throws);
 
     expect(observed.pass).toEqual(baseline.pass);
     expect(observed.calls).toEqual(baseline.calls);
     expect(observed.transitions).toEqual(baseline.transitions);
-    expect(observed.sleep).toBe(baseline.sleep);
     expect(observed.reads).toBe(baseline.reads);
     expect(observed.facts.filter((fact) => fact.disposition === 'waiting')).toHaveLength(1);
     expect(observed.facts.filter((fact) => fact.disposition === 'completed')).toHaveLength(15);
@@ -703,7 +670,6 @@ describe('dispatch observation adapter', () => {
     expect(facts).toHaveLength(16);
     expect(facts.every((fact) => fact.disposition === 'waiting')).toBe(true);
     expect(pass.handedOff).toBe(0);
-    expect(queue.sleepMilliseconds(15_000, pass)).toBe(15_000);
   });
 
   it('suppresses cap continuation when an in-pass clock step makes selected work future', async () => {

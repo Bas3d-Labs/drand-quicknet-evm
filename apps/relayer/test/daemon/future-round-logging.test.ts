@@ -25,6 +25,10 @@ import {
   createScrubber,
 } from '../../src/diagnostics/text-scrubber.js';
 
+import {
+  fullWorkResult,
+} from '../helpers/full-work-result.js';
+
 const CONSUMER = `0x${'11'.repeat(20)}` as const;
 
 const REGISTRY = `0x${'22'.repeat(20)}` as const;
@@ -80,10 +84,10 @@ function setup() {
     records: () => lines.map((line) => JSON.parse(line)),
     heartbeat: () => {
       now += 60000;
-      daemon.onCycle({
+      daemon.onWork(fullWorkResult({
         consumers: [],
         waitingRejectedOffers: queue.rejectedOffers,
-      });
+      }));
     },
   };
 }
@@ -104,10 +108,10 @@ describe('future-round diagnostics', () => {
         round,
       }));
 
-      f.daemon.onCycle({
+      f.daemon.onWork(fullWorkResult({
         consumers: [],
         scheduled,
-      });
+      }));
     }
 
     expect(f.records().find((r) => r.event === 'round_wait_started')).toMatchObject({
@@ -140,10 +144,10 @@ describe('future-round diagnostics', () => {
       submission: 'witness',
     }));
 
-    f.daemon.onCycle({
+    f.daemon.onWork(fullWorkResult({
       consumers: [],
       scheduled,
-    });
+    }));
 
     expect(f.records().filter((r) => r.event === 'round_wait_ended')).toHaveLength(1);
     expect(f.records().at(-1)).toMatchObject({
@@ -160,10 +164,10 @@ describe('future-round diagnostics', () => {
       round,
     }));
 
-    f.daemon.onCycle({
+    f.daemon.onWork(fullWorkResult({
       consumers: [],
       scheduled: blocked,
-    });
+    }));
 
     expect(f.records().filter((r) => r.event === 'round_deferred')).toHaveLength(2);
   });
@@ -202,10 +206,10 @@ describe('future-round diagnostics', () => {
       throw new Error('endpoint late');
     });
 
-    f.daemon.onCycle({
+    f.daemon.onWork(fullWorkResult({
       consumers: [],
       scheduled,
-    });
+    }));
 
     expect(f.records().filter((record) => record.event === 'round_wait_ended'))
       .toHaveLength(0);
@@ -224,10 +228,10 @@ describe('future-round diagnostics', () => {
       randomness: HASH,
     }));
 
-    f.daemon.onCycle({
+    f.daemon.onWork(fullWorkResult({
       consumers: [],
       scheduled: completed,
-    });
+    }));
 
     expect(f.records().filter((record) => record.event === 'round_wait_started'))
       .toHaveLength(1);

@@ -15,7 +15,6 @@ import type {
 } from '../consumers/request-processor.js';
 
 import type {
-  ConsumerHealth,
   RelayerLog,
 } from '../diagnostics/relayer-log.js';
 
@@ -61,11 +60,6 @@ export interface DaemonLogger {
     scanType: DaemonScanType,
     request: QuicknetRandomnessRequest,
     reason: TerminalRoundReason,
-  ): void;
-
-  onCycle(
-    result: RunDaemonCycleResult,
-    cycleLogger?: RelayerLog,
   ): void;
 
   onWaitTransition(event: WaitTransition, workLogger?: RelayerLog): void;
@@ -193,24 +187,6 @@ export function createDaemonLogger(
         });
       } catch {
         // Emission is best-effort; no flush or delivery acknowledgement.
-      }
-    },
-
-    onCycle(
-      result: RunDaemonCycleResult,
-      cycleLogger: RelayerLog = options.logger,
-    ): void {
-      try {
-        logCycle(cycleLogger, result);
-
-        const currentTime = now();
-
-        if (currentTime - lastHeartbeatAt >= heartbeatIntervalMs) {
-          logHeartbeat(cycleLogger, result);
-          lastHeartbeatAt = currentTime;
-        }
-      } catch (error) {
-        logLoggingFailure(cycleLogger, error);
       }
     },
   };
@@ -478,42 +454,6 @@ function logReconciliation(
       });
     }
   }
-}
-
-function logHeartbeat(
-  logger: RelayerLog,
-  result: RunDaemonCycleResult,
-): void {
-  const consumers = result.consumers.map((consumer): ConsumerHealth => {
-    if (consumer.status === 'failed') {
-      return {
-        consumer: consumer.consumer.address,
-        status: 'failed',
-      };
-    }
-
-    return {
-      consumer: consumer.consumer.address,
-      status: 'healthy',
-      latestBlock: consumer.iteration.latestBlock,
-      durableBlock: consumer.iteration.durableBlock,
-      durableNextBlock: consumer.iteration.durableNextBlock,
-      softNextBlock: consumer.iteration.softCursor.nextBlock,
-      ...(consumer.iteration.latestBlockObservedAt === undefined
-        ? {}
-        : { latestBlockObservedAt: consumer.iteration.latestBlockObservedAt }),
-      ...(consumer.iteration.durableBlockObservedAt === undefined
-        ? {}
-        : { durableBlockObservedAt: consumer.iteration.durableBlockObservedAt }),
-    };
-  });
-
-  logger.heartbeat({
-    consumers,
-    ...(result.waitingRejectedOffers === undefined
-      ? {}
-      : { waitingRejectedOffers: result.waitingRejectedOffers }),
-  });
 }
 
 function logLoggingFailure(

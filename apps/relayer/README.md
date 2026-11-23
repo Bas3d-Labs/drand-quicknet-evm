@@ -730,9 +730,18 @@ coordinate the setting with those teams before upgrading.
 Wait between discovery checks once caught up. Discovery reads only the
 latest head and request logs, then queues requests for full work. Full work
 runs recovery, queued dispatch and the durable scan. The two kinds execute
-serially; startup begins with full work. In this intermediate scheduler
-branch, ordinary full work also uses the poll interval. Released queued work
-and successful capped scans can make work due sooner.
+serially; startup begins with full work. A qualifying inspection schedules the
+next ordinary inspection after 90 seconds with no retained attempts, or 30
+seconds with any retained attempt. Pre-submit inspections count too. Full work
+that finishes with retained attempts can bring the next inspection forward to
+30 seconds after completion; it never postpones an earlier deadline. A broadcast
+acknowledgement does not trigger another full item.
+
+Released queued work and successful capped scans can make work due sooner.
+An unsuccessful inspection or durable scan retries after 15 seconds, preserving
+any longer retry delay already in force. A failed discovery pass retries after
+the configured poll interval. These are scheduling delays: ongoing serial work
+and provider latency can make execution later.
 
 An ordinary discovery round checks all consumers whose failure retry is eligible.
 The next ordinary round is scheduled from completion of the whole pass; capped
@@ -748,8 +757,10 @@ guarantee. Scanning, beacon retrieval, and transaction confirmation
 take additional time.
 
 A shorter interval improves responsiveness and catch-up throughput
-but increases RPC traffic. A longer interval reduces cycle frequency
-but can delay discovery of new requests and historical catch-up.
+but increases RPC traffic. A longer interval reduces discovery frequency but can delay new requests.
+It does not lengthen the internal inspection intervals, so RPC savings are not
+proportional to the polling interval. Operators using a long interval may see
+more recovery traffic than under the former combined-cycle scheduler.
 
 Catch-up scans remain limited by `QUICKNET_MAX_BLOCK_RANGE`. A successful
 range that leaves a backlog can continue immediately, yielding to the other
@@ -776,7 +787,7 @@ scheduler at release rather than waiting for the entire polling delay.
 
 Historical daemon HTTP usage before discovery and full work were separated,
 on Robinhood testnet with one consumer, safe finality, and a maximum block
-range of 2000. These figures do not measure this intermediate branch:
+range of 2000. These figures do not measure the separate scheduler:
 
 | Poll interval | Idle HTTP attempts/hour | Workload HTTP attempts/hour |
 | --- | ---: | ---: |
