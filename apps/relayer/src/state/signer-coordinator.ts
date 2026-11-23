@@ -60,8 +60,6 @@ import {
 } from '../shared/integer.js';
 
 import {
-  contradictsExhaustionNonce,
-  supersedesNoMatch,
   validateAttributionRequest,
   journalSnapshotDigest,
   type OperatorAttributionRequest,
@@ -85,7 +83,6 @@ import {
 
 import {
   planSignerRecovery,
-  type RecoveryWriteCompletion,
 } from './plan-signer-recovery.js';
 
 import {
@@ -125,6 +122,12 @@ import {
   validateAcceptanceRequest,
   type OperatorAcceptanceRequest,
 } from './operator-acceptance.js';
+
+import {
+  describeWriteCompletion,
+  type PendingWrite,
+  type SignerEventOperation,
+} from './write-completion.js';
 
 export interface SignerCoordinatorOptions {
   readonly identity: JournalIdentity;
@@ -169,18 +172,6 @@ export type SignerRecoveryResult =
       { status: 'bootstrap-deferred' }
     >;
 
-type PendingWrite =
-  | RecoveryWriteCompletion
-  | {
-      kind: 'bootstrap';
-    }
-  | {
-      kind: 'prepared';
-    }
-  | {
-      kind: 'broadcast';
-    };
-
 export interface PrepareAttemptOptions {
   readonly account: LocalAccount;
   readonly transaction: PreparedRelayerTransaction;
@@ -206,11 +197,6 @@ export type PrepareAttemptResult =
       readonly attemptId: string;
       readonly workId: string;
     };
-
-type SignerEventOperation =
-  | 'prepare-attempt'
-  | 'broadcast-attempt'
-  | 'reconcile-attempt';
 
 export interface BroadcastAttemptOptions {
   readonly publicClient: PublicClient;
@@ -1235,12 +1221,12 @@ export class SignerCoordinator {
 
       await this.persistence.save(plan.snapshot);
 
-      const terminalCorrection =
-        plan.completion.kind === 'operator-acceptance' ||
-        plan.completion.kind === 'operator-attribution' ||
-        plan.completion.kind === 'search-unconsumed-bound-rebase' ||
-        plan.completion.kind === 'search-reset' ||
-        plan.completion.kind === 'search-lower-bound-replacement';
+      // Construction must not throw for planner output: this is after acknowledgement.
+      const { terminalCorrection } = describeWriteCompletion(
+        plan.completion,
+        this.identity.signer,
+      );
+
       this.recoveryComplete = !terminalCorrection;
       this.applyCommittedWrite(cycle);
       if (terminalCorrection) {
@@ -1997,116 +1983,56 @@ export class SignerCoordinator {
   private completeCommittedWrite(
     cycle?: number
   ): SignerEventOperation {
-    const pending = this.pendingWrite!;
+    // Construction must not throw for planner output: this is outside the logging boundary.
+    const description = describeWriteCompletion(
+      this.pendingWrite!,
+      this.identity.signer,
+    );
 
-    if (pending.kind === 'resolution') {
-      // Keep ownership and the signed-byte diagnostic policy through
-      // resolution reporting.
-      this.emit(
-        (log) => log.attemptResolved(pending.event),
-        cycle,
-      );
+    if (description.terminalCorrection) {
+      this.invalidateRecoveryAuthorization();
     }
 
-    if (pending.kind === 'operator-acceptance') {
-      this.invalidateRecoveryAuthorization();
+    const event = description.event;
 
-      const outcome = pending.outcome;
+    if (event !== null) {
+      // Keep ownership and the signed-byte diagnostic policy through reporting.
+      this.emit((log) => {
+        switch (event.kind) {
+          case 'attemptResolved':
+            log.attemptResolved(event.fields);
 
-      this.emit((log) => log.attemptOperatorAccepted({
-        signer: this.identity.signer,
-        requestId: outcome.requestId,
-        attemptId: outcome.attemptId,
-        nonce: outcome.nonce,
-        durableBlock: outcome.durable.anchor.blockNumber,
-        durableBlockHash: outcome.durable.anchor.blockHash,
-      }), cycle);
-    }
+            return;
 
-    if (pending.kind === 'operator-attribution') {
-      this.invalidateRecoveryAuthorization();
+          case 'attemptOperatorAccepted':
+            log.attemptOperatorAccepted(event.fields);
 
-      const outcome = pending.outcome;
+            return;
 
-      this.emit((log) => log.attemptOperatorAttributed({
-        signer: this.identity.signer,
-        requestId: outcome.requestId,
-        attemptId: outcome.attemptId,
-        transactionHash: outcome.replacement.transactionHash,
-        nonce: outcome.nonce,
-        durableBlock: outcome.durable.anchor.blockNumber,
-        durableBlockHash: outcome.durable.anchor.blockHash,
-        supersededNoMatch: supersedesNoMatch(outcome),
-        contradictsExhaustionNonce: contradictsExhaustionNonce(outcome),
-      }), cycle);
-    }
+          case 'attemptOperatorAttributed':
+            log.attemptOperatorAttributed(event.fields);
 
-    if (pending.kind === 'search-reset') {
-      this.invalidateRecoveryAuthorization();
-      this.emit((log) => log.searchReset(pending.event), cycle);
-    }
+            return;
 
-    if (pending.kind === 'search-unconsumed-bound-rebase') {
-      this.invalidateRecoveryAuthorization();
+          case 'searchReset':
+            log.searchReset(event.fields);
 
-      const {
-        evidence,
-        observation,
-        signer,
-        attemptId,
-        nonce,
-      } = pending.event;
+            return;
 
-      this.emit((log) => log.searchUnconsumedBoundRebased({
-        signer,
-        attemptId,
-        nonce,
-        oldLowerBlock: evidence.lowerBound.anchor.blockNumber,
-        oldLowerBlockHash: evidence.lowerBound.anchor.blockHash,
-        oldLowerNonce: evidence.lowerBound.nonce,
-        observedLowerBlockHash: evidence.observedLower.blockHash,
-        durableBlock: observation.anchor.blockNumber,
-        durableBlockHash: observation.anchor.blockHash,
-        durableNonce: observation.nonce,
-        invalidatedFact: {
-          expectedBlock: evidence.fact.anchor.blockNumber,
-          expectedBlockHash: evidence.fact.anchor.blockHash,
-          observedBlock: evidence.observedFact.blockNumber,
-          observedBlockHash: evidence.observedFact.blockHash,
-        },
-      }), cycle);
-    }
+          case 'searchUnconsumedBoundRebased':
+            log.searchUnconsumedBoundRebased(event.fields);
 
-    if (pending.kind === 'search-lower-bound-replacement') {
-      this.invalidateRecoveryAuthorization();
-      const event = pending.event;
-      let invalidatedFact = null;
-      if (event.invalidatedFact !== null) {
-        invalidatedFact = {
-          expectedBlock: event.invalidatedFact.fact.anchor.blockNumber,
-          expectedBlockHash: event.invalidatedFact.fact.anchor.blockHash,
-          observedBlock: event.invalidatedFact.observedAnchor.blockNumber,
-          observedBlockHash: event.invalidatedFact.observedAnchor.blockHash,
-        };
-      }
-      this.emit((log) => log.searchLowerBoundReplaced({
-        signer: event.signer,
-        attemptId: event.attemptId,
-        nonce: event.nonce,
-        oldLowerBlock: event.oldLowerBound.anchor.blockNumber,
-        oldLowerBlockHash: event.oldLowerBound.anchor.blockHash,
-        oldLowerNonce: event.oldLowerBound.nonce,
-        observedLowerBlock: event.observedLower.blockNumber,
-        observedLowerBlockHash: event.observedLower.blockHash,
-        replacementBlock: event.replacement.anchor.blockNumber,
-        replacementBlockHash: event.replacement.anchor.blockHash,
-        replacementNonce: event.replacement.nonce,
-        durableBlock: event.durableObservation.anchor.blockNumber,
-        durableBlockHash: event.durableObservation.anchor.blockHash,
-        durableNonce: event.durableObservation.nonce,
-        probeCount: BigInt(event.probeCount),
-        invalidatedFact,
-      }), cycle);
+            return;
+
+          case 'searchLowerBoundReplaced':
+            log.searchLowerBoundReplaced(event.fields);
+
+            return;
+
+          default:
+            event satisfies never;
+        }
+      }, cycle);
     }
 
     this.pendingWrite = undefined;
@@ -2115,15 +2041,7 @@ export class SignerCoordinator {
     this.reconcileExhaustedSearch();
     this.updateDurableRecoveryRevision();
 
-    let operation: SignerEventOperation = 'reconcile-attempt';
-
-    if (pending.kind === 'prepared') {
-      operation = 'prepare-attempt';
-    } else if (pending.kind === 'broadcast') {
-      operation = 'broadcast-attempt';
-    }
-
-    return operation;
+    return description.operation;
   }
 
   private latchUnattributedActivity(): void {
