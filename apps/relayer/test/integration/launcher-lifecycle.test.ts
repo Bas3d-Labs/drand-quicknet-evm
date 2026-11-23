@@ -199,7 +199,23 @@ function writePreload(
   `);
 
   replace('cli/open-beacon-submitter.js', `
-    export async function openBeaconSubmitter() {
+    export async function openBeaconSubmitter(options) {
+      options.onInitialized?.(() => ({
+        journalInitialized: false,
+        operatorHistory: null,
+        storedFactDispute: null,
+        attempts: [],
+        status: {
+          open: false,
+          primaryReason: 'recovery-incomplete',
+          blockers: ['recovery-incomplete'],
+          recoveryComplete: false,
+          inclusionChecksComplete: false,
+          persistenceState: 'idle',
+          blockedSince: null,
+        },
+      }));
+
       return Object.freeze({
         async recover() {
           throw new Error('Unexpected signer recovery in lifecycle test.');
@@ -228,6 +244,7 @@ function writePreload(
   replace('diagnostics/relayer-log.js', `
     export function createRelayerLog() {
       const logger = {
+        workCompleted() {},
         withContext() {
           return logger;
         },
@@ -240,7 +257,7 @@ function writePreload(
   replace('daemon/daemon-logging.js', `
     export function createDaemonLogger() {
       return {
-        onCycle() {},
+        onWork() {},
       };
     }
   `);

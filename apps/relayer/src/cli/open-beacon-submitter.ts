@@ -26,6 +26,10 @@ import {
   type SignerRuntimeObservation,
 } from '../state/read-signer-runtime-observation.js';
 
+import type {
+  SchedulerRecoveryObserver,
+} from '../state/scheduler-recovery-observer.js';
+
 import {
   openSignerRuntime,
 } from './open-signer-runtime.js';
@@ -64,6 +68,8 @@ export interface OpenBeaconSubmitterOptions {
   readonly onInitialized?: (
     readObservation: () => SignerRuntimeObservation,
   ) => void;
+
+  readonly schedulerObserver?: SchedulerRecoveryObserver | undefined;
 
   readonly signal?: AbortSignal | undefined;
   readonly env?: NodeJS.ProcessEnv | undefined;
@@ -113,6 +119,9 @@ export async function openBeaconSubmitter(
     maxBlockRange,
     checkpointFile: options.checkpointFile,
     env: options.env ?? process.env,
+    ...(options.schedulerObserver === undefined
+      ? {}
+      : { schedulerObserver: options.schedulerObserver }),
     ...(options.onRecoveryCompleted === undefined
       ? {}
       : { onRecoveryCompleted: options.onRecoveryCompleted }),

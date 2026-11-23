@@ -1,8 +1,4 @@
 import {
-  roundScheduledTime,
-} from '@based-labs/drand-quicknet';
-
-import {
   beforeEach,
   describe,
   expect,
@@ -12,1220 +8,928 @@ import {
 
 import type {
   Account,
-  Address,
-  Hex,
   PublicClient,
 } from 'viem';
+
+import {
+  roundScheduledTime,
+} from '@based-labs/drand-quicknet';
 
 import type {
   RegistryDeployment,
 } from '@based-labs/drand-quicknet-registry';
 
+import {
+  runDaemonCycle,
+} from '../../src/daemon/daemon-cycle.js';
+
+import {
+  createDaemonLogger,
+} from '../../src/daemon/daemon-logging.js';
+
+import {
+  runDaemon,
+  type DaemonWorkContext,
+  type DaemonWorkResult,
+  type RunDaemonOptions,
+} from '../../src/daemon/daemon.js';
+
+import {
+  createRelayerLog,
+} from '../../src/diagnostics/relayer-log.js';
+
 import type {
-  BeaconSubmissionRequest,
   BeaconSubmitter,
 } from '../../src/rounds/create-beacon-submitter.js';
 
-import {
-  importQuicknetRoundIfAvailable,
-} from '../../src/rounds/import-round-when-available.js';
-
-vi.mock(
-  '../../src/daemon/daemon-cycle.js',
-  () => ({
-    runDaemonCycle: vi.fn(),
-  }),
-);
-
-vi.mock(
-  '../../src/rounds/import-round-when-available.js',
-  () => ({
-    importQuicknetRoundIfAvailable: vi.fn(),
-  }),
-);
+import type {
+  RoundImporter,
+} from '../../src/rounds/create-round-importer.js';
 
 import type {
   CheckpointStore,
 } from '../../src/state/checkpoint.js';
 
-import type {
-  ValidatedQuicknetConsumer,
-} from '../../src/consumers/consumer.js';
+vi.mock('../../src/daemon/daemon-cycle.js', () => ({
+  runDaemonCycle: vi.fn(),
+}));
 
-import {
-  runDaemonCycle,
-  type RunDaemonCycleResult,
-} from '../../src/daemon/daemon-cycle.js';
+const CONSUMER = `0x${'11'.repeat(20)}` as const;
 
-import {
-  runDaemon,
-  type RunDaemonOptions,
-} from '../../src/daemon/daemon.js';
+const REGISTRY = `0x${'22'.repeat(20)}` as const;
 
-import type {
-  SoftScanCursor,
-} from '../../src/daemon/daemon-iteration.js';
+const HASH = `0x${'33'.repeat(32)}` as const;
 
-import type {
-  FinalityPolicy,
-} from '../../src/chain/finality-policy.js';
+const ROUND = 100n;
 
-const CONSUMER_A: Address = '0x1111111111111111111111111111111111111111';
-const CONSUMER_B: Address = '0x2222222222222222222222222222222222222222';
+const RELEASE = Number(roundScheduledTime(ROUND)) * 1000;
 
-const CHAIN_ID = 12345;
+function fixture() {
+  let time = 0;
 
-const REGISTRY_ADDRESS: Address =
-  '0x3333333333333333333333333333333333333333';
+  let wall = RELEASE;
 
-const REGISTRY_RUNTIME_CODEHASH: Hex =
-  '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-  
-const VERIFIER_ADDRESS: Address =
-  '0x5555555555555555555555555555555555555555';
+  let latest = 10n;
 
-const VERIFIER_RUNTIME_CODEHASH: Hex =
-  '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  const controller = new AbortController();
 
-const PUBLIC_CLIENT = {} as PublicClient;
-const ACCOUNT = {} as Account;
-const CHECKPOINT_STORE = {} as CheckpointStore;
+  const calls: string[] = [];
 
-const FINALITY: FinalityPolicy = {
-  type: 'safe',
-};
+  const work: { result: DaemonWorkResult; context: DaemonWorkContext; at: number }[] = [];
 
-const DEPLOYMENT: RegistryDeployment = {
-  chainId: CHAIN_ID,
-  address: REGISTRY_ADDRESS,
-  runtimeCodehash: REGISTRY_RUNTIME_CODEHASH,
-  verifierAddress: VERIFIER_ADDRESS,
-  verifierRuntimeCodehash: VERIFIER_RUNTIME_CODEHASH,
-};
+  const state = { open: true, blockers: [] as string[], retainedCount: 0 };
 
-const VALIDATED_CONSUMER_A: ValidatedQuicknetConsumer = {
-  address: CONSUMER_A,
-  registry: REGISTRY_ADDRESS,
-};
+  const getLogs = vi.fn(async () => [] as {
+    address: typeof CONSUMER;
+    args: { round: bigint };
+    blockNumber: bigint;
+    transactionHash: typeof HASH;
+    logIndex: number;
+  }[]);
 
-const VALIDATED_CONSUMER_B: ValidatedQuicknetConsumer = {
-  address: CONSUMER_B,
-  registry: REGISTRY_ADDRESS,
-};
+  const importer = vi.fn<RoundImporter>().mockResolvedValue({
+    status: 'already-stored',
+    round: ROUND,
+  } as Awaited<ReturnType<RoundImporter>>);
 
-function caughtUpCycle(): RunDaemonCycleResult {
-  return {
-    consumers: [
-      {
+  let inspect: Parameters<NonNullable<RunDaemonOptions['installInspectionObserver']>>[0]
+    | undefined;
+
+  const full = vi.mocked(runDaemonCycle).mockImplementation(async (options) => {
+    calls.push('recover');
+
+    inspect?.({
+      startedAt: time,
+      completedAt: time,
+      recoveryComplete: true,
+      inclusionChecksComplete: true,
+      persistenceIdle: true,
+      retainedCount: state.retainedCount,
+    });
+
+    const scheduled = state.open
+      ? await options.waiting!.dispatch(importer, options.signal)
+      : undefined;
+
+    return {
+      ...(scheduled === undefined ? {} : { scheduled }),
+      consumers: options.consumers.map((consumer) => ({
         status: 'success',
-        consumer: VALIDATED_CONSUMER_A,
+        consumer,
         iteration: {
+          consumer: consumer.address,
           status: 'caught-up',
-          consumer: CONSUMER_A,
-          latestBlock: 1_500n,
-          durableBlock: 1_200n,
-          durableNextBlock: 1_201n,
+          latestBlock: 999n,
+          durableBlock: 0n,
+          durableNextBlock: 1n,
           durableHeadRegressed: false,
-          softCursor: {
-            nextBlock: 1_501n,
-          },
+          softCursor: { nextBlock: 999n },
           durableScan: undefined,
           softScan: undefined,
+          durableBlockObservedAt: new Date(RELEASE).toISOString(),
         },
-      },
-    ],
-  };
-}
+      })),
+    };
+  });
 
-function processedCycle(): RunDaemonCycleResult {
+  const detach = vi.fn(() => {
+    inspect = undefined;
+  });
+
+  const options: RunDaemonOptions = {
+    now: () => wall,
+    monotonicNow: () => time,
+    readSchedulingState: () => state,
+    installInspectionObserver(observe) {
+      inspect = observe;
+
+      return detach;
+    },
+    publicClient: {
+      getBlockNumber: vi.fn(async () => {
+        calls.push('eth_blockNumber');
+        return latest;
+      }),
+      getLogs: vi.fn(async () => {
+        calls.push('eth_getLogs');
+        return getLogs();
+      }),
+    } as unknown as PublicClient,
+    account: {} as Account,
+    submitter: {
+      findRetainedWork: () => null,
+      recover: vi.fn(),
+      submit: vi.fn(),
+    } as BeaconSubmitter,
+    deployment: { chainId: 46630, address: REGISTRY } as RegistryDeployment,
+    checkpointStore: {} as CheckpointStore,
+    consumers: [{ address: CONSUMER, registry: REGISTRY }],
+    startBlock: 1n,
+    maxBlockRange: 2_000n,
+    finality: { type: 'safe' },
+    pollIntervalMs: 15_000,
+    signal: controller.signal,
+    sleep: vi.fn(async (delay) => {
+      time += delay;
+      wall += delay;
+      if (time > 200_000) {
+        throw new Error('Unbounded fixture');
+      }
+    }),
+    onWork: async (result, context) => {
+      work.push({ result, context, at: time });
+      if (work.length === 6) {
+        controller.abort();
+      }
+    },
+  };
+
   return {
-    consumers: [
-      {
-        status: 'success',
-        consumer: VALIDATED_CONSUMER_A,
-        iteration: {
-          status: 'processed',
-          consumer: CONSUMER_A,
-          latestBlock: 1_500n,
-          durableBlock: 1_200n,
-          durableNextBlock: 1_201n,
-          durableHeadRegressed: false,
-          softCursor: {
-            nextBlock: 1_301n,
-          },
-          durableScan: undefined,
-          softScan: {
-            fromBlock: 1_201n,
-            toBlock: 1_300n,
-            nextBlock: 1_301n,
-            processing: {
-              rounds: [],
-            },
-          },
-        },
-      },
-    ],
+    options, controller, calls, work, state, getLogs, importer, full, detach,
+    setLatest(value: bigint) {
+      latest = value;
+    },
+    setWall(value: number) {
+      wall = value;
+    },
+    advance(value: number) {
+      time += value;
+
+      wall += value;
+    },
+    request(count = 1) {
+      getLogs.mockResolvedValueOnce(Array.from({ length: count }, (_, index) => ({
+        address: CONSUMER,
+        args: { round: ROUND + BigInt(index) },
+        blockNumber: 1n,
+        transactionHash: HASH,
+        logIndex: index,
+      })));
+    },
   };
 }
-
-function failedCycle(
-  error: unknown,
-): RunDaemonCycleResult {
-  return {
-    consumers: [
-      {
-        status: 'failed',
-        consumer: VALIDATED_CONSUMER_A,
-        error,
-      },
-    ],
-  };
-}
-
-let submitter: BeaconSubmitter;
 
 beforeEach(() => {
   vi.mocked(runDaemonCycle).mockReset();
-  vi.mocked(importQuicknetRoundIfAvailable).mockReset();
-
-  submitter = {
-    findRetainedWork: vi.fn<BeaconSubmitter['findRetainedWork']>()
-      .mockReturnValue(null),
-    recover: vi.fn<BeaconSubmitter['recover']>(),
-    submit: vi.fn<BeaconSubmitter['submit']>(),
-  };
 });
 
-function daemonOptions(
-  overrides: Partial<RunDaemonOptions> = {},
-): RunDaemonOptions {
-  return {
-    publicClient: PUBLIC_CLIENT,
-    account: ACCOUNT,
-    submitter,
-    deployment: DEPLOYMENT,
-    checkpointStore: CHECKPOINT_STORE,
-    consumers: [VALIDATED_CONSUMER_A],
-    startBlock: 1_000n,
-    maxBlockRange: 100n,
-    finality: FINALITY,
-    pollIntervalMs: 1_000,
-    ...overrides,
-  };
-}
+describe('separate daemon work', () => {
+  it.each([0, -1, 0.5, Number.MAX_SAFE_INTEGER + 1])('rejects poll interval %s', async (poll) => {
+    const f = fixture();
 
-describe('runDaemon', () => {
-  it('rejects a zero pollIntervalMs', async () => {
-    await expect(
-      runDaemon(daemonOptions({ pollIntervalMs: 0 }))
-    ).rejects.toThrow(
-      'pollIntervalMs must be a positive safe integer.'
-    );
-
-    expect(
-      runDaemonCycle,
-    ).not.toHaveBeenCalled();
+    await expect(runDaemon({ ...f.options, pollIntervalMs: poll }))
+      .rejects.toThrow('pollIntervalMs');
+    expect(f.full).not.toHaveBeenCalled();
   });
 
-  it('rejects a negative pollIntervalMs', async () => {
-    await expect(
-      runDaemon(daemonOptions({ pollIntervalMs: -1 }))
-    ).rejects.toThrow(
-      'pollIntervalMs must be a positive safe integer.'
-    );
+  it('does no work when already aborted', async () => {
+    const f = fixture();
+
+    f.controller.abort();
+
+    await runDaemon(f.options);
+
+    expect(f.calls).toEqual([]);
   });
 
-  it('rejects a fractional pollIntervalMs', async () => {
-    await expect(
-      runDaemon(daemonOptions({ pollIntervalMs: 1.5 }))
-    ).rejects.toThrow(
-      'pollIntervalMs must be a positive safe integer.'
-    );
-  });
+  it.each([1_000, 5_000, 15_000])('keeps retained inspections at 30 seconds with poll=%s', async (poll) => {
+    const f = fixture();
 
-  it('rejects a pollIntervalMs larger than the maximum safe integer', async () => {
-    await expect(
-      runDaemon(daemonOptions({
-        pollIntervalMs: Number.MAX_SAFE_INTEGER + 1,
-      }))
-    ).rejects.toThrow(
-      'pollIntervalMs must be a positive safe integer.'
-    );
-  });
+    f.state.retainedCount = 2;
+    f.options.pollIntervalMs = poll;
 
-  it('does nothing when the signal is already aborted', async () => {
-    const controller = new AbortController();
-    const sleep = vi.fn();
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
 
-    controller.abort();
-
-    await runDaemon(daemonOptions({
-      signal: controller.signal,
-      sleep,
-    }));
-
-    expect(
-      runDaemonCycle,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      sleep,
-    ).not.toHaveBeenCalled();
-  });
-
-  it('forwards daemon options to each cycle', async () => {
-    const controller = new AbortController();
-
-    vi.mocked(
-      runDaemonCycle,
-    ).mockResolvedValue(
-      caughtUpCycle()
-    );
-
-    await runDaemon(daemonOptions({
-      consumers: [
-        VALIDATED_CONSUMER_A,
-        VALIDATED_CONSUMER_B,
-      ],
-      startBlock: 500n,
-      maxBlockRange: 250n,
-      signal: controller.signal,
-      onCycle: () => {
-        controller.abort();
-      },
-    }));
-
-    expect(
-      runDaemonCycle,
-    ).toHaveBeenCalledOnce();
-
-    expect(
-      runDaemonCycle,
-    ).toHaveBeenCalledWith({
-      publicClient: PUBLIC_CLIENT,
-      bindRoundImporter: expect.any(Function),
-      waiting: expect.any(Object),
-      submitter: {
-        findRetainedWork: expect.any(Function),
-        recover: expect.any(Function),
-        submit: expect.any(Function),
-      },
-      deployment: DEPLOYMENT,
-      checkpointStore: CHECKPOINT_STORE,
-      consumers: [
-        VALIDATED_CONSUMER_A,
-        VALIDATED_CONSUMER_B,
-      ],
-      startBlock: 500n,
-      maxBlockRange: 250n,
-      finality: FINALITY,
-      softCursors: expect.any(Map),
-      readChainHeads: expect.any(Function),
-      onRequestDiscovered: expect.any(Function),
-      signal: controller.signal,
-    });
-  });
-
-  it('forwards discovery immediately with the active cycle number', async () => {
-    const controller = new AbortController();
-    const onRequestDiscovered = vi.fn();
-    const observation = {
-      consumer: VALIDATED_CONSUMER_A.address,
-      round: 123n,
-      blockNumber: 456n,
-      transactionHash: `0x${'ab'.repeat(32)}` as const,
-      logIndex: 0,
-    };
-    vi.mocked(runDaemonCycle).mockImplementation(async (options) => {
-      options.onRequestDiscovered?.('soft', observation);
-      expect(onRequestDiscovered).toHaveBeenCalledExactlyOnceWith(
-        'soft', observation, { cycle: 1 },
-      );
-      controller.abort();
-      return caughtUpCycle();
-    });
-    await runDaemon(daemonOptions({
-      signal: controller.signal,
-      onRequestDiscovered,
-    }));
-  });
-
-  it('starts with an empty soft cursor map', async () => {
-    const controller =
-      new AbortController();
-
-    let initialSize:
-      number |
-      undefined;
-
-    vi.mocked(
-      runDaemonCycle,
-    ).mockImplementation(
-      async (options) => {
-        initialSize =
-          options.softCursors.size;
-
-        return caughtUpCycle();
-      },
-    );
-
-    await runDaemon(daemonOptions({
-      signal: controller.signal,
-      onCycle: () => {
-        controller.abort();
-      },
-    }));
-
-    expect(
-      initialSize,
-    ).toBe(
-      0
-    );
-  });
-
-  it('reuses the same soft cursor map across cycles', async () => {
-    const controller =
-      new AbortController();
-
-    const sleep =
-      vi.fn().mockResolvedValue(
-        undefined
-      );
-
-    vi.mocked(
-      runDaemonCycle,
-    )
-      .mockResolvedValueOnce(
-        caughtUpCycle()
-      )
-      .mockResolvedValueOnce(
-        caughtUpCycle()
-      );
-
-    let cycleCount = 0;
-
-    await runDaemon(daemonOptions({
-      signal: controller.signal,
-      sleep,
-      onCycle: () => {
-        cycleCount += 1;
-
-        if (cycleCount === 2) {
-          controller.abort();
-        }
-      },
-    }));
-
-    const firstCall =
-      vi.mocked(
-        runDaemonCycle
-      ).mock.calls[0];
-
-    const secondCall =
-      vi.mocked(
-        runDaemonCycle
-      ).mock.calls[1];
-
-    expect(
-      firstCall,
-    ).toBeDefined();
-
-    expect(
-      secondCall,
-    ).toBeDefined();
-
-    if (
-      firstCall === undefined ||
-      secondCall === undefined
-    ) {
-      throw new Error(
-        'Expected two daemon cycle calls.'
-      );
-    }
-
-    expect(
-      firstCall[0].softCursors,
-    ).toBe(
-      secondCall[0].softCursors
-    );
-  });
-
-  it('preserves soft cursor mutations across cycles', async () => {
-    const controller =
-      new AbortController();
-
-    const sleep =
-      vi.fn().mockResolvedValue(
-        undefined
-      );
-
-    const cursor: SoftScanCursor = {
-      nextBlock: 1_400n,
+      if (context.kind === 'full' && context.cycle === 3) {
+        f.controller.abort();
+      }
     };
 
-    let observedCursor:
-      SoftScanCursor |
-      undefined;
+    await runDaemon(f.options);
 
-    vi.mocked(
-      runDaemonCycle,
-    )
-      .mockImplementationOnce(
-        async (options) => {
-          options.softCursors.set(
-            CONSUMER_A,
-            cursor
-          );
-
-          return caughtUpCycle();
-        },
-      )
-      .mockImplementationOnce(
-        async (options) => {
-          observedCursor =
-            options.softCursors.get(
-              CONSUMER_A
-            );
-
-          return caughtUpCycle();
-        },
-      );
-
-    let cycleCount = 0;
-
-    await runDaemon(daemonOptions({
-      signal: controller.signal,
-      sleep,
-      onCycle: () => {
-        cycleCount += 1;
-
-        if (cycleCount === 2) {
-          controller.abort();
-        }
-      },
-    }));
-
-    expect(
-      observedCursor,
-    ).toBe(
-      cursor
-    );
+    expect(f.work.filter((row) => row.context.kind === 'full').map((row) => row.at))
+      .toEqual([0, 30_000, 60_000]);
+    expect(f.work.filter((row) => row.context.kind === 'discovery').slice(0, 2)
+      .map((row) => row.at)).toEqual([0, poll]);
+    expect(f.full.mock.calls.every(([options]) => options.scanSoft === false)).toBe(true);
   });
 
-  it('passes each cycle result to onCycle', async () => {
-    const controller =
-      new AbortController();
-
-    const cycleResult =
-      caughtUpCycle();
-
-    const onCycle =
-      vi.fn(() => {
-        controller.abort();
-      });
-
-    vi.mocked(
-      runDaemonCycle,
-    ).mockResolvedValue(
-      cycleResult
-    );
-
-    await runDaemon(daemonOptions({
-      signal: controller.signal,
-      onCycle,
-    }));
-
-    expect(
-      onCycle,
-    ).toHaveBeenCalledOnce();
-
-    expect(
-      onCycle,
-    ).toHaveBeenCalledWith(
-      cycleResult,
-      { cycle: 1 },
-    );
-  });
-
-  it('sleeps between cycles when progress was made', async () => {
-    const controller =
-      new AbortController();
-
-    const sleep = vi.fn(async () => {
-      expect(runDaemonCycle).toHaveBeenCalledTimes(1);
-    });
-
-    vi.mocked(
-      runDaemonCycle,
-    )
-      .mockResolvedValueOnce(
-        processedCycle()
-      )
-      .mockResolvedValueOnce(
-        caughtUpCycle()
-      );
-
-    let cycleCount = 0;
-
-    await runDaemon(daemonOptions({
-      signal: controller.signal,
-      sleep,
-      onCycle: () => {
-        cycleCount += 1;
-
-        if (cycleCount === 2) {
-          controller.abort();
-        }
-      },
-    }));
-
-    expect(
-      runDaemonCycle,
-    ).toHaveBeenCalledTimes(
-      2
-    );
-
-    expect(sleep).toHaveBeenCalledOnce();
-    expect(sleep).toHaveBeenCalledWith(
-      1_000,
-      controller.signal,
-    );
-  });
-
-  it('sleeps after scanning an empty range', async () => {
-    const controller =
-      new AbortController();
-
-    const sleep = vi.fn(async () => {
-      expect(runDaemonCycle).toHaveBeenCalledTimes(1);
-    });
-
-    const processedEmpty:
-      RunDaemonCycleResult = {
-        consumers: [
-          {
-            status: 'success',
-            consumer:
-              VALIDATED_CONSUMER_A,
-            iteration: {
-              status: 'processed',
-              consumer: CONSUMER_A,
-              latestBlock: 1_500n,
-              durableBlock: 1_200n,
-              durableNextBlock: 1_201n,
-              durableHeadRegressed: false,
-              softCursor: {
-                nextBlock: 1_301n,
-              },
-              durableScan: undefined,
-              softScan: {
-                fromBlock: 1_201n,
-                toBlock: 1_300n,
-                nextBlock: 1_301n,
-                processing: {
-                  rounds: [],
-                },
-              },
-            },
-          },
-        ],
-      };
-
-    vi.mocked(
-      runDaemonCycle,
-    )
-      .mockResolvedValueOnce(
-        processedEmpty
-      )
-      .mockResolvedValueOnce(
-        caughtUpCycle()
-      );
-
-    let cycleCount = 0;
-
-    await runDaemon(daemonOptions({
-      signal: controller.signal,
-      sleep,
-      onCycle: () => {
-        cycleCount += 1;
-
-        if (cycleCount === 2) {
-          controller.abort();
-        }
-      },
-    }));
-
-    expect(
-      runDaemonCycle,
-    ).toHaveBeenCalledTimes(
-      2
-    );
-
-    expect(sleep).toHaveBeenCalledOnce();
-    expect(sleep).toHaveBeenCalledWith(
-      1_000,
-      controller.signal,
-    );
-  });
-
-  it('sleeps when every successful consumer is caught up', async () => {
-    const controller = new AbortController();
-
-    const sleep =
-      vi.fn(async () => {
-        controller.abort();
-      });
-
-    vi.mocked(
-      runDaemonCycle,
-    ).mockResolvedValue(
-      caughtUpCycle()
-    );
-
-    await runDaemon(daemonOptions({
-      pollIntervalMs: 2_500,
-      signal: controller.signal,
-      sleep,
-    }));
-
-    expect(
-      sleep,
-    ).toHaveBeenCalledOnce();
-
-    expect(
-      sleep,
-    ).toHaveBeenCalledWith(
-      2_500,
-      controller.signal
-    );
-  });
-
-  it('sleeps when the cycle only contains failures', async () => {
-    const controller =
-      new AbortController();
-
-    const sleep =
-      vi.fn(async () => {
-        controller.abort();
-      });
-
-    vi.mocked(
-      runDaemonCycle,
-    ).mockResolvedValue(
-      failedCycle(
-        new Error(
-          'Consumer failed.',
-        )
-      )
-    );
-
-    await runDaemon(daemonOptions({
-      signal: controller.signal,
-      sleep,
-    }));
-
-    expect(
-      sleep,
-    ).toHaveBeenCalledOnce();
-  });
-
-  it('sleeps after a cycle containing progress and failures', async () => {
-    const controller =
-      new AbortController();
-
-    const sleep = vi.fn(async () => {
-      controller.abort();
-    });
-
-    const cycleResult:
-      RunDaemonCycleResult = {
-        consumers: [
-          {
-            status: 'failed',
-            consumer:
-              VALIDATED_CONSUMER_A,
-            error:
-              new Error(
-                'Consumer A failed.',
-              ),
-          },
-          {
-            status: 'success',
-            consumer:
-              VALIDATED_CONSUMER_B,
-            iteration: {
-              status: 'processed',
-              consumer: CONSUMER_B,
-              latestBlock: 1_500n,
-              durableBlock: 1_200n,
-              durableNextBlock: 1_201n,
-              durableHeadRegressed: false,
-              softCursor: {
-                nextBlock: 1_301n,
-              },
-              durableScan: undefined,
-              softScan: {
-                fromBlock: 1_201n,
-                toBlock: 1_300n,
-                nextBlock: 1_301n,
-                processing: {
-                  rounds: [],
-                },
-              },
-            },
-          },
-        ],
-      };
-
-    vi.mocked(
-      runDaemonCycle,
-    ).mockResolvedValue(
-      cycleResult
-    );
-
-    await runDaemon(daemonOptions({
-      consumers: [
-        VALIDATED_CONSUMER_A,
-        VALIDATED_CONSUMER_B,
-      ],
-      signal: controller.signal,
-      sleep,
-    }));
-
-    expect(runDaemonCycle).toHaveBeenCalledOnce();
-    expect(sleep).toHaveBeenCalledOnce();
-    expect(sleep).toHaveBeenCalledWith(
-      1_000,
-      controller.signal,
-    );
-  });
-
-  it('does not sleep when onCycle aborts the daemon', async () => {
-    const controller =
-      new AbortController();
-
-    const sleep =
-      vi.fn();
-
-    vi.mocked(
-      runDaemonCycle,
-    ).mockResolvedValue(
-      caughtUpCycle()
-    );
-
-    await runDaemon(daemonOptions({
-      signal: controller.signal,
-      sleep,
-      onCycle: () => {
-        controller.abort();
-      },
-    }));
-
-    expect(
-      sleep,
-    ).not.toHaveBeenCalled();
-  });
-
-  it('runs another cycle after sleeping when not aborted', async () => {
-    const controller =
-      new AbortController();
-
-    const sleep =
-      vi.fn().mockResolvedValue(
-        undefined
-      );
-
-    vi.mocked(
-      runDaemonCycle,
-    )
-      .mockResolvedValueOnce(
-        caughtUpCycle()
-      )
-      .mockResolvedValueOnce(
-        caughtUpCycle()
-      );
-
-    let cycleCount = 0;
-
-    await runDaemon(daemonOptions({
-      signal: controller.signal,
-      sleep,
-      onCycle: () => {
-        cycleCount += 1;
-
-        if (cycleCount === 2) {
-          controller.abort();
-        }
-      },
-    }));
-
-    expect(
-      runDaemonCycle,
-    ).toHaveBeenCalledTimes(
-      2
-    );
-
-    expect(
-      sleep,
-    ).toHaveBeenCalledOnce();
-  });
-
-  it('propagates an unexpected daemon cycle failure', async () => {
-    const failure =
-      new Error(
-        'Daemon cycle failed.',
-      );
-
-    const onCycle =
-      vi.fn();
-
-    const sleep =
-      vi.fn();
-
-    vi.mocked(
-      runDaemonCycle,
-    ).mockRejectedValue(
-      failure
-    );
-
-    await expect(runDaemon(daemonOptions({
-      sleep,
-      onCycle,
-    }))).rejects.toBe(failure);
-
-    expect(
-      onCycle,
-    ).not.toHaveBeenCalled();
-
-    expect(
-      sleep,
-    ).not.toHaveBeenCalled();
-  });
-
-  it('propagates onCycle failures', async () => {
-    const failure =
-      new Error(
-        'Cycle observer failed.',
-      );
-
-    const sleep =
-      vi.fn();
-
-    vi.mocked(
-      runDaemonCycle,
-    ).mockResolvedValue(
-      caughtUpCycle()
-    );
-
-    await expect(runDaemon(daemonOptions({
-      sleep,
-      onCycle: () => {
-        throw failure;
-      },
-    }))).rejects.toBe(failure);
-
-    expect(
-      sleep,
-    ).not.toHaveBeenCalled();
-  });
-
-  it('propagates sleep failures', async () => {
-    const failure =
-      new Error(
-        'Sleep failed.',
-      );
-
-    vi.mocked(
-      runDaemonCycle,
-    ).mockResolvedValue(
-      caughtUpCycle()
-    );
-
-    await expect(runDaemon(daemonOptions({
-      sleep: async () => {
-        throw failure;
-      },
-    }))).rejects.toBe(failure);
-  });
-
-  it('rejects an invalid receipt timeout before starting a cycle', async () => {
-    const readChainHeads = vi.fn();
-
-    await expect(runDaemon(daemonOptions({
-      receiptTimeoutMs: 0,
-      readChainHeads,
-    }))).rejects.toThrow('Invalid receipt timeout.');
-
-    expect(readChainHeads).not.toHaveBeenCalled();
-    expect(runDaemonCycle).not.toHaveBeenCalled();
-    expect(submitter.recover).not.toHaveBeenCalled();
-  });
-
-  it('propagates cycle cancellation without sleeping or starting another cycle', async () => {
-    const controller = new AbortController();
-    const reason = new Error('Shutdown requested.');
-    const sleep = vi.fn();
-    const onCycle = vi.fn();
-
-    vi.mocked(runDaemonCycle).mockImplementationOnce(async (options) => {
-      expect(options.signal).toBe(controller.signal);
-
-      controller.abort(reason);
-      throw reason;
-    });
-
-    await expect(runDaemon(daemonOptions({
-      signal: controller.signal,
-      sleep,
-      onCycle,
-    }))).rejects.toBe(reason);
-
-    expect(runDaemonCycle).toHaveBeenCalledOnce();
-    expect(sleep).not.toHaveBeenCalled();
-    expect(onCycle).not.toHaveBeenCalled();
-  });
-});
-
-describe('daemon cycle correlation', () => {
-  it('numbers idle and failed cycles and restarts the count for a new run', async () => {
-    const failed: RunDaemonCycleResult = {
-      consumers: [{
-        status: 'failed',
-        consumer: VALIDATED_CONSUMER_A,
-        error: new Error('Provider unavailable.'),
-      }],
+  it.each([0, 1])('keeps internal cadence with poll=120s and retained=%s', async (count) => {
+    const f = fixture();
+
+    f.state.retainedCount = count;
+    f.options.pollIntervalMs = 120_000;
+    f.options.onWork = (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+
+      if (context.kind === 'full' && context.cycle === 3) {
+        f.controller.abort();
+      }
     };
 
-    for (let run = 0; run < 2; run += 1) {
-      vi.mocked(runDaemonCycle).mockReset();
+    await runDaemon(f.options);
 
-      vi.mocked(runDaemonCycle)
-        .mockResolvedValueOnce(caughtUpCycle())
-        .mockResolvedValueOnce(failed)
-        .mockResolvedValueOnce(processedCycle());
+    const interval = count === 0 ? 90_000 : 30_000;
 
-      const controller = new AbortController();
-      const observed: number[] = [];
+    expect(f.work.filter((item) => item.context.kind === 'full').map((item) => item.at))
+      .toEqual([0, interval, interval * 2]);
+  });
 
-      await runDaemon(daemonOptions({
-        signal: controller.signal,
-        sleep: async () => {},
-        onCycle(_result, context) {
-          observed.push(context.cycle);
+  it.each(['recovery', 'durable-scan'] as const)(
+    'does not discover from startBlock after startup %s failure',
+    async (stage) => {
+      const f = fixture();
 
-          expect(Object.isFrozen(context)).toBe(true);
+      const normal = f.full.getMockImplementation()!;
 
-          if (observed.length === 3) {
-            controller.abort();
-          }
-        },
+      f.full.mockImplementationOnce(async (options) => ({
+        ...(stage === 'recovery' ? { recoveryFailed: true } : {}),
+        consumers: [{
+          status: 'failed',
+          consumer: options.consumers[0]!,
+          error: new Error('Startup failure'),
+        }],
       }));
+      f.options.startBlock = 0n;
+      f.setLatest(5_000_000n);
+      f.options.onWork = async (result, context) => {
+        f.work.push({ result, context, at: f.options.monotonicNow!() });
 
-      expect(observed).toEqual([1, 2, 3]);
-    }
-  });
-
-  it('binds recovery and submission to each cycle number', async () => {
-    const controller = new AbortController();
-
-    vi.mocked(runDaemonCycle)
-      .mockResolvedValueOnce(caughtUpCycle())
-      .mockResolvedValueOnce(caughtUpCycle());
-
-    await runDaemon(daemonOptions({
-      receiptTimeoutMs: 45_000,
-      fetchTimeoutMs: 12_000,
-      signal: controller.signal,
-      sleep: async () => {},
-      onCycle(_result, context) {
-        if (context.cycle === 2) {
-          controller.abort();
+        if (context.iteration === 2) {
+          expect(f.options.publicClient.getBlockNumber).not.toHaveBeenCalled();
+          expect(f.getLogs).not.toHaveBeenCalled();
+          expect(result.discoveryCompleted).toBe(false);
+          expect(f.importer).not.toHaveBeenCalled();
         }
-      },
-    }));
 
-    const first = vi.mocked(runDaemonCycle).mock.calls[0]?.[0];
-    const second = vi.mocked(runDaemonCycle).mock.calls[1]?.[0];
+        if (context.iteration === 4) {
+          f.controller.abort();
+        }
+      };
+      f.full.mockImplementation(async (options) => {
+        const result = await normal(options);
 
-    if (first === undefined || second === undefined) {
-      throw new Error('Expected two daemon cycle calls.');
-    }
+        for (const outcome of result.consumers) {
+          if (outcome.status === 'success') {
+            outcome.iteration.durableBlock = 4_999_999n;
+            outcome.iteration.durableNextBlock = 5_000_000n;
+          }
+        }
 
-    type RetainedWork = NonNullable<
-      ReturnType<BeaconSubmitter['findRetainedWork']>
-    >;
+        return result;
+      });
 
-    const workId = 'test-work:daemon-wrapper';
+      await runDaemon(f.options);
 
-    const transactionHashes: RetainedWork['transactionHashes'] = [
-      `0x${'aa'.repeat(32)}`,
-    ];
+      expect(f.work.map(({ context }) => context.kind))
+        .toEqual(['full', 'discovery', 'full', 'discovery']);
+      expect(f.options.sleep).toHaveBeenCalledExactlyOnceWith(15_000, f.controller.signal);
+      expect(f.options.publicClient.getLogs).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ fromBlock: 5_000_000n, toBlock: 5_000_000n }),
+      );
+      expect(f.work[3]!.result.discoveryCompleted).toBe(true);
+    },
+  );
 
-    Object.freeze(transactionHashes);
+  it('keeps two healthy consumers in one ordinary discovery pass per interval', async () => {
+    const f = fixture();
 
-    const retained: RetainedWork = Object.freeze({
-      attemptId: '00000000-0000-4000-8000-000000000001',
-      workId,
-      nonce: 4n,
-      phase: 'included',
-      transactionHashes,
+    const other = `0x${'44'.repeat(20)}` as const;
+
+    f.options.consumers = [...f.options.consumers, { address: other, registry: REGISTRY }];
+
+    vi.mocked(f.options.publicClient.getBlockNumber).mockImplementation(async () => {
+      f.advance(100);
+      return 10n + BigInt(Math.floor(f.options.monotonicNow!() / 15_000));
+    });
+    f.getLogs.mockImplementation(async () => {
+      f.advance(200);
+      return [];
     });
 
-    const lookup = vi.mocked(submitter.findRetainedWork);
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+      if (context.iteration === 4) f.controller.abort();
+    };
 
-    lookup
-      .mockReturnValueOnce(retained)
-      .mockReturnValueOnce(null)
-      .mockReturnValueOnce(null);
+    await runDaemon(f.options);
 
-    expect(first.submitter.findRetainedWork(workId)).toBe(retained);
-    expect(second.submitter.findRetainedWork(workId)).toBeNull();
+    const discovery = f.work.filter(({ context }) => context.kind === 'discovery');
 
-    // An older cycle wrapper must also observe the current lookup result.
-    expect(first.submitter.findRetainedWork(workId)).toBeNull();
-
-    expect(lookup.mock.calls).toEqual([
-      [workId],
-      [workId],
-      [workId],
-    ]);
-
-    expect(submitter.recover).not.toHaveBeenCalled();
-    expect(submitter.submit).not.toHaveBeenCalled();
-
-    lookup.mockClear();
-
-    // Opaque request: this test only checks forwarding, not encoding.
-    const request = Object.freeze({}) as BeaconSubmissionRequest;
-
-    expect(first.bindRoundImporter).toBe(second.bindRoundImporter);
-
-    // The daemon's controller is already aborted. These later calls exercise
-    // the captured bindings independently with a live import signal.
-    const importController = new AbortController();
-    const onProgress = vi.fn();
-
-    vi.mocked(importQuicknetRoundIfAvailable)
-      .mockImplementation(async (options) => {
-        expect(options.publicClient).toBe(PUBLIC_CLIENT);
-        expect(options.account).toBe(ACCOUNT);
-        expect(options.deployment).toBe(DEPLOYMENT);
-        expect(options.receiptTimeoutMs).toBe(45_000);
-        expect(options.fetchTimeoutMs).toBe(12_000);
-        expect(options.onProgress).toBe(onProgress);
-        expect(options.signal).toBe(importController.signal);
-
-        await options.submitter.submit(request);
-
-        return {
-          status: 'already-stored',
-          round: options.round,
-          randomness: `0x${'11'.repeat(32)}`,
-        };
-      });
-
-      const firstImport = first.bindRoundImporter({
-        submitter: first.submitter,
-        onProgress,
-        signal: importController.signal,
-      });
-
-      const secondImport = second.bindRoundImporter({
-        submitter: second.submitter,
-        onProgress,
-        signal: importController.signal,
-      });
-
-    expect(first.submitter).not.toBe(submitter);
-    expect(second.submitter).not.toBe(first.submitter);
-    expect(Object.isFrozen(first.submitter)).toBe(true);
-    expect(Object.isFrozen(second.submitter)).toBe(true);
-
-    await first.submitter.recover();
-    await firstImport(100n);
-
-    await second.submitter.recover();
-    await secondImport(101n);
-
-    // A retained importer and wrapper must still use their original cycle.
-    await first.submitter.recover();
-    await firstImport(102n);
-
-    expect(
-      vi.mocked(importQuicknetRoundIfAvailable)
-        .mock.calls.map(([options]) => options.round),
-    ).toEqual([100n, 101n, 102n]);
-
-    expect(vi.mocked(submitter.recover).mock.calls).toEqual([
-      [1],
-      [2],
-      [1],
-    ]);
-
-    expect(vi.mocked(submitter.submit).mock.calls).toEqual([
-      [request, 1],
-      [request, 2],
-      [request, 1],
-    ]);
-
-    for (const call of vi.mocked(submitter.submit).mock.calls) {
-      expect(call[0]).toBe(request);
-    }
+    expect(f.work.map(({ context }) => context.kind))
+      .toEqual(['full', 'discovery', 'discovery', 'discovery']);
+    expect(discovery.map(({ at }) => at)).toEqual([600, 16_200, 31_800]);
+    expect(discovery.map(({ result }) => result.discoveryCompleted)).toEqual([true, true, true]);
+    expect(f.options.publicClient.getBlockNumber).toHaveBeenCalledTimes(6);
+    expect(vi.mocked(f.options.publicClient.getLogs).mock.calls.map(([args]) => args!.address))
+      .toEqual([[CONSUMER], [other], [CONSUMER], [other], [CONSUMER], [other]]);
   });
 
-  it('wakes at release and reuses the queue in the next cycle', async () => {
-    const controller = new AbortController();
+  it('stops at its own moving head and performs no third head read before poll', async () => {
+    const f = fixture();
 
-    const release = Number(roundScheduledTime(100n) * 1000n);
+    let head = 10n;
 
-    let now = release - 200;
+    vi.mocked(f.options.publicClient.getBlockNumber).mockImplementation(async () => {
+      f.calls.push('eth_blockNumber');
+      return head++;
+    });
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: 0 });
+      if (context.iteration === 3) {
+        f.controller.abort();
+      }
+    };
 
-    let cycles = 0;
+    await runDaemon(f.options);
 
-    const imported = vi.fn(async (round: bigint) => ({
-      status: 'already-stored' as const,
-      round,
-      randomness: REGISTRY_RUNTIME_CODEHASH,
-    }));
+    expect(f.calls).toEqual([
+      'recover', 'eth_blockNumber', 'eth_getLogs',
+      'eth_blockNumber', 'eth_getLogs',
+    ]);
+    expect(f.options.sleep).toHaveBeenCalledExactlyOnceWith(15_000, f.controller.signal);
+  });
 
-    vi.mocked(runDaemonCycle).mockImplementation(async (options) => {
-      cycles += 1;
+  it('runs exactly two capped ranges, then waits before a third head read', async () => {
+    const f = fixture();
 
-      if (cycles === 1) {
-        options.waiting!.offer({
-          consumer: CONSUMER_A,
-          round: 100n,
-          blockNumber: 1000n,
-          transactionHash: REGISTRY_RUNTIME_CODEHASH,
-          logIndex: 0,
-        }, roundScheduledTime(100n));
+    f.setLatest(4_000n);
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: 0 });
+      if (context.iteration === 4) {
+        f.controller.abort();
+      }
+    };
+
+    await runDaemon(f.options);
+
+    expect(f.calls).toEqual([
+      'recover',
+      'eth_blockNumber', 'eth_getLogs',
+      'eth_blockNumber', 'eth_getLogs',
+      'eth_blockNumber',
+    ]);
+    expect(f.options.sleep).toHaveBeenCalledExactlyOnceWith(15_000, f.controller.signal);
+    expect(vi.mocked(f.options.publicClient.getLogs).mock.calls.map(([args]) => ({
+      from: args!.fromBlock,
+      to: args!.toBlock,
+      address: args!.address,
+    }))).toEqual([
+      { from: 1n, to: 2_000n, address: [CONSUMER] },
+      { from: 2_001n, to: 4_000n, address: [CONSUMER] },
+    ]);
+    expect(f.work[2]!.result.consumers[0]).toMatchObject({
+      latestBlock: 4_000n,
+      softNextBlock: 4_001n,
+    });
+  });
+
+  it('makes one head-only call when discovery is caught up', async () => {
+    const f = fixture();
+
+    await runDaemon(f.options);
+
+    expect(f.calls).toEqual([
+      'recover', 'eth_blockNumber', 'eth_getLogs',
+      'eth_blockNumber', 'eth_blockNumber', 'eth_blockNumber', 'eth_blockNumber',
+    ]);
+  });
+
+  it('queues a released request and runs recovery before dispatch without sleeping', async () => {
+    const f = fixture();
+
+    f.request();
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: 0 });
+      if (context.iteration === 3) {
+        f.controller.abort();
+      }
+    };
+
+    await runDaemon(f.options);
+
+    expect(f.calls).toEqual(['recover', 'eth_blockNumber', 'eth_getLogs', 'recover']);
+    expect(f.importer).toHaveBeenCalledExactlyOnceWith(ROUND);
+    expect(f.options.sleep).not.toHaveBeenCalled();
+    expect(f.work[2]!.result.consumers[0]).toMatchObject({ latestBlock: 10n, softNextBlock: 11n });
+  });
+
+  it.each(['unattributed-signer-activity', 'conflict-search-exhausted', 'future-unknown'])(
+    'does not accelerate released duplicates behind %s', async (blocker) => {
+      const f = fixture();
+
+      f.state.open = false;
+      f.state.blockers = [blocker];
+      f.request();
+      f.request();
+
+      f.options.onWork = async (result, context) => {
+        f.work.push({ result, context, at: f.options.monotonicNow!() });
+        if (context.kind === 'full' && context.cycle === 3) f.controller.abort();
+      };
+
+      await runDaemon(f.options);
+
+      expect(f.work.filter((row) => row.context.kind === 'full').map((row) => row.at))
+        .toEqual([0, 90_000, 180_000]);
+      expect(f.importer).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rechecks a backward wall step and wakes at release without dispatching early', async () => {
+    const f = fixture();
+
+    f.setWall(RELEASE - 1_000);
+    f.request();
+    f.options.sleep = vi.fn(async (delay) => {
+      f.advance(delay);
+    });
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: 0 });
+      if (context.iteration === 2) {
+        f.setWall(RELEASE - 2_000);
+      }
+      if (context.iteration === 3) {
+        f.controller.abort();
+      }
+    };
+
+    await runDaemon(f.options);
+
+    expect(f.options.sleep).toHaveBeenCalledExactlyOnceWith(2_000, f.controller.signal);
+    expect(f.importer).toHaveBeenCalledExactlyOnceWith(ROUND);
+  });
+
+  it('bounds wall-clock rechecks by polling and notices a forward step', async () => {
+    const f = fixture();
+
+    f.setWall(RELEASE - 60_000);
+    f.request();
+    f.options.sleep = vi.fn(async (delay) => {
+      f.advance(delay);
+      f.setWall(RELEASE + 1_000);
+    });
+    f.options.onWork = async (_result, context) => {
+      if (context.iteration === 3) {
+        f.controller.abort();
+      }
+    };
+
+    await runDaemon(f.options);
+
+    expect(f.options.sleep).toHaveBeenCalledExactlyOnceWith(15_000, f.controller.signal);
+    expect(f.importer).toHaveBeenCalledExactlyOnceWith(ROUND);
+  });
+
+  it('yields sustained soft backlog to due full work', async () => {
+    const f = fixture();
+
+    f.state.retainedCount = 1;
+
+    vi.mocked(f.options.publicClient.getBlockNumber).mockImplementation(async () => {
+      f.advance(15_000);
+      return 100_000n;
+    });
+
+    await runDaemon(f.options);
+
+    expect(f.work.map(({ context }) => context.kind)).toEqual([
+      'full', 'discovery', 'discovery', 'full', 'discovery', 'discovery',
+    ]);
+    expect(f.options.sleep).not.toHaveBeenCalled();
+  });
+
+  it.each(['waiting', 'failed'] as const)(
+    'delays %s and unattempted released work without a busy loop',
+    async (outcome) => {
+      const f = fixture();
+
+      f.setWall(RELEASE + 60_000);
+      f.request(17);
+
+      if (outcome === 'failed') {
+        f.importer.mockRejectedValue(new Error('Import unavailable'));
+      } else {
+        f.importer.mockImplementation(async (round) => ({
+          status: 'waiting',
+          reason: 'round-not-released',
+          round,
+          releaseTime: roundScheduledTime(round),
+        }));
       }
 
-      const scheduled = await options.waiting!.dispatch(imported);
+      f.options.onWork = async (result, context) => {
+        f.work.push({ result, context, at: f.options.monotonicNow!() });
 
-      return {
-        ...caughtUpCycle(),
-        scheduled,
-      };
-    });
-
-    const sleep = vi.fn(async (milliseconds: number) => {
-      now += milliseconds;
-    });
-
-    await runDaemon(daemonOptions({
-      now: () => now,
-      signal: controller.signal,
-      sleep,
-      onCycle: () => {
-        if (cycles === 2) {
-          controller.abort();
+        if (context.iteration === 7) {
+          f.controller.abort();
         }
-      },
-    }));
+      };
 
-    expect(sleep).toHaveBeenCalledExactlyOnceWith(200, controller.signal);
-    expect(imported).toHaveBeenCalledExactlyOnceWith(100n);
+      await runDaemon(f.options);
+
+      const fullTimes = f.work.filter(({ context }) => context.kind === 'full').map(({ at }) => at);
+
+      expect(fullTimes).toEqual([0, 0, 15_000, 30_000]);
+      expect(f.options.sleep).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('continues an explicit dispatch remainder immediately after sixteen handoffs', async () => {
+    const f = fixture();
+
+    f.setWall(RELEASE + 60_000);
+    f.request(17);
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: 0 });
+
+      if (context.iteration === 4) {
+        f.controller.abort();
+      }
+    };
+
+    await runDaemon(f.options);
+
+    expect(f.work.map(({ context }) => context.kind))
+      .toEqual(['full', 'discovery', 'full', 'full']);
+    expect(f.importer).toHaveBeenCalledTimes(17);
+    expect(f.options.sleep).not.toHaveBeenCalled();
   });
 
+  it('binds transaction lifecycle calls to full cycle, not work iteration', async () => {
+    const f = fixture();
+
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+      if (context.kind === 'full' && context.cycle === 3) f.controller.abort();
+    };
+
+    const normal = f.full.getMockImplementation()!;
+
+    f.full.mockImplementation(async (options) => {
+      await options.submitter.recover();
+      return normal(options);
+    });
+
+    await runDaemon(f.options);
+
+    expect(vi.mocked(f.options.submitter.recover).mock.calls).toEqual([[1], [2], [3]]);
+  });
+
+  it('does not publish an interrupted discovery or start another work item', async () => {
+    const f = fixture();
+
+    f.getLogs.mockImplementationOnce(async () => {
+      f.controller.abort(new Error('Stopped during query'));
+      return [];
+    });
+
+    await expect(runDaemon(f.options)).rejects.toThrow('Stopped during query');
+    expect(f.work.map(({ context }) => context.kind)).toEqual(['full']);
+    expect(f.full).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a prior durable view when recovery fails before scanning', async () => {
+    const f = fixture();
+
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+      if (context.kind === 'full' && context.cycle === 3) f.controller.abort();
+    };
+
+    const normal = f.full.getMockImplementation()!;
+
+    let count = 0;
+
+    f.full.mockImplementation(async (options) => {
+      if (++count === 2) {
+        return { recoveryFailed: true, consumers: [{
+          status: 'failed', consumer: options.consumers[0]!, error: new Error('recovery failed'),
+        }] };
+      }
+      return normal(options);
+    });
+
+    await runDaemon(f.options);
+
+    const failed = f.work.findIndex((row) => row.result.cycle?.recoveryFailed);
+
+    expect(failed).toBeGreaterThan(1);
+    expect(f.work[failed]!.result.consumers).toEqual(f.work[failed - 1]!.result.consumers);
+    expect(f.work.filter((row) => row.context.kind === 'full').map((row) => row.at))
+      .toEqual([0, 90_000, 105_000]);
+  });
+
+  it('invalidates only the durable side when its consumer scan fails', async () => {
+    const f = fixture();
+
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+      if (context.kind === 'full' && context.cycle === 3) f.controller.abort();
+    };
+
+    const normal = f.full.getMockImplementation()!;
+
+    let calls = 0;
+
+    f.full.mockImplementation(async (options) => {
+      if (++calls === 2) {
+        return { consumers: [{
+          status: 'failed',
+          consumer: options.consumers[0]!,
+          error: new Error('Durable scan failed'),
+        }] };
+      }
+
+      return normal(options);
+    });
+
+    await runDaemon(f.options);
+
+    const failed = f.work.findIndex((row) => row.result.cycle?.consumers[0]?.status === 'failed');
+
+    expect(f.work[failed]!.result.consumers[0]?.status).toBe('failed');
+    expect(f.work.at(-1)!.result.consumers[0]?.status).toBe('healthy');
+    expect(f.work.filter((row) => row.context.kind === 'full').map((row) => row.at))
+      .toEqual([0, 90_000, 105_000]);
+  });
+
+  it('keeps failed-consumer backoff during another consumer’s continuation', async () => {
+    const f = fixture();
+
+    const other = `0x${'44'.repeat(20)}` as const;
+
+    f.options.consumers = [...f.options.consumers, { address: other, registry: REGISTRY }];
+    f.setLatest(4_000n);
+    f.getLogs.mockRejectedValueOnce(new Error('First consumer unavailable'));
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+
+      if (context.iteration === 4) {
+        f.controller.abort();
+      }
+    };
+
+    await runDaemon(f.options);
+
+    expect(f.work.map(({ context }) => context.kind))
+      .toEqual(['full', 'discovery', 'discovery', 'discovery']);
+    expect(f.work[1]!.result.discoveryCompleted).toBe(false);
+    expect(f.work[2]!.result.discoveryCompleted).toBe(false);
+    expect(f.work[2]!.result.consumers).toEqual([
+      { consumer: CONSUMER, status: 'failed' },
+      expect.objectContaining({ consumer: other, status: 'healthy', softNextBlock: 4_001n }),
+    ]);
+    expect(f.options.publicClient.getBlockNumber).toHaveBeenCalledTimes(5);
+    expect(f.options.sleep).toHaveBeenCalledExactlyOnceWith(15_000, f.controller.signal);
+  });
+
+  it('evicts future work in favor of an urgent discovered round', async () => {
+    const f = fixture();
+
+    const transitions = vi.fn();
+
+    f.getLogs.mockResolvedValueOnce(Array.from({ length: 1_025 }, (_, index) => ({
+      address: CONSUMER,
+      args: { round: ROUND + BigInt(1_024 - index) },
+      blockNumber: 1n,
+      transactionHash: HASH,
+      logIndex: index,
+    })));
+    f.options.onWaitTransition = transitions;
+    f.options.onWork = async (_result, context) => {
+      if (context.iteration === 3) {
+        f.controller.abort();
+      }
+    };
+
+    await runDaemon(f.options);
+
+    const evictions = transitions.mock.calls.filter(([event]) => event.kind === 'evicted');
+
+    expect(evictions).toHaveLength(1);
+    expect(evictions[0]).toEqual([
+      expect.objectContaining({
+        kind: 'evicted',
+        entry: expect.objectContaining({
+          request: expect.objectContaining({ round: ROUND + 1_024n }),
+        }),
+      }),
+      { iteration: 2, kind: 'discovery' },
+    ]);
+    expect(f.importer).toHaveBeenCalledExactlyOnceWith(ROUND);
+    expect(f.options.sleep).not.toHaveBeenCalled();
+  });
+
+  it('keeps a discovery failure visible through full work until discovery succeeds', async () => {
+    const f = fixture();
+
+    f.options.pollIntervalMs = 120_000;
+
+    f.getLogs.mockRejectedValueOnce(new Error('soft unavailable'));
+
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+      if (context.iteration === 4) f.controller.abort();
+    };
+
+    await runDaemon(f.options);
+
+    expect(f.work[1]!.result.discoveryCompleted).toBe(false);
+    expect(f.work[1]!.result.consumers[0]?.status).toBe('failed');
+    expect(f.work[2]!.result.consumers[0]?.status).toBe('failed');
+    expect(f.work[3]!.result.consumers[0]?.status).toBe('healthy');
+  });
+
+  it('forwards full-work options without soft-scan ownership', async () => {
+    const f = fixture();
+
+    f.options.onWork = async (result, context) => {
+      f.work.push({ result, context, at: f.options.monotonicNow!() });
+      if (context.kind === 'full' && context.cycle === 3) f.controller.abort();
+    };
+
+    await runDaemon(f.options);
+
+    const first = f.full.mock.calls[0]![0];
+
+    const second = f.full.mock.calls[1]![0];
+
+    expect(first).toMatchObject({
+      publicClient: f.options.publicClient,
+      checkpointStore: f.options.checkpointStore,
+      deployment: f.options.deployment,
+      consumers: f.options.consumers,
+      startBlock: 1n,
+      maxBlockRange: 2_000n,
+      finality: { type: 'safe' },
+      scanSoft: false,
+      signal: f.controller.signal,
+    });
+    expect(second.softCursors).toBe(first.softCursors);
+    expect(first.softCursors.get(CONSUMER)).toEqual({ nextBlock: 11n });
+  });
+
+  it('reports discovery immediately in its own iteration without a cycle', async () => {
+    const f = fixture();
+
+    const discovered = vi.fn();
+
+    f.request();
+    f.options.onRequestDiscovered = discovered;
+
+    await runDaemon(f.options);
+
+    expect(discovered).toHaveBeenCalledWith(
+      'soft',
+      expect.objectContaining({ consumer: CONSUMER, round: ROUND }),
+      { iteration: 2, kind: 'discovery' },
+    );
+  });
+
+  it('keeps observation times when slow discovery delays a heartbeat', async () => {
+    const f = fixture();
+
+    const events: { event: string; consumers?: Record<string, unknown>[] }[] = [];
+
+    const log = createRelayerLog({
+      chainId: 46630,
+      destination: {
+        write(line) {
+          events.push(JSON.parse(String(line)));
+        },
+      },
+    });
+
+    const logger = createDaemonLogger({ logger: log, now: f.options.monotonicNow! });
+
+    f.getLogs.mockImplementationOnce(async () => {
+      f.advance(150_000);
+
+      return [];
+    });
+
+    f.options.onWork = (result, context) => {
+      logger.onWork(result);
+
+      if (context.kind === 'discovery') {
+        f.controller.abort();
+      }
+    };
+
+    await runDaemon(f.options);
+
+    const heartbeats = events.filter((event) => event.event === 'heartbeat');
+
+    expect(heartbeats).toHaveLength(1);
+    expect(f.options.monotonicNow!()).toBe(150_000);
+    expect(heartbeats[0]!.consumers![0]).toMatchObject({
+      latestBlockObservedAt: new Date(RELEASE).toISOString(),
+      durableBlockObservedAt: new Date(RELEASE).toISOString(),
+    });
+    expect(f.full).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an invalid receipt timeout before starting work', async () => {
+    const f = fixture();
+
+    await expect(runDaemon({ ...f.options, receiptTimeoutMs: 0 })).rejects.toThrow();
+    expect(f.full).not.toHaveBeenCalled();
+  });
+
+  it.each(['publication', 'sleep'] as const)('propagates %s failure', async (kind) => {
+    const f = fixture();
+
+    const error = new Error(kind);
+
+    if (kind === 'publication') {
+      f.options.onWork = async () => {
+        throw error;
+      };
+    } else {
+      f.options.sleep = async () => {
+        throw error;
+      };
+    }
+
+    await expect(runDaemon(f.options)).rejects.toBe(error);
+    expect(f.detach).toHaveBeenCalledOnce();
+    expect(f.full).toHaveBeenCalledOnce();
+  });
+
+  it('propagates unexpected action and publication errors without another work item', async () => {
+    const f = fixture();
+
+    const error = new Error('unexpected');
+
+    f.full.mockRejectedValueOnce(error);
+
+    await expect(runDaemon(f.options)).rejects.toBe(error);
+    expect(f.work).toEqual([]);
+    expect(f.options.sleep).not.toHaveBeenCalled();
+  });
+
+  it('keeps publication inside serial ownership and honors abort after it completes', async () => {
+    const f = fixture();
+
+    const held = Promise.withResolvers<void>();
+
+    f.options.onWork = vi.fn(async () => held.promise);
+
+    const running = runDaemon(f.options);
+
+    await vi.waitFor(() => expect(f.options.onWork).toHaveBeenCalledOnce());
+
+    f.controller.abort();
+
+    expect(f.full).toHaveBeenCalledOnce();
+
+    held.resolve();
+
+    await running;
+
+    expect(f.detach).toHaveBeenCalledOnce();
+    expect(f.options.sleep).not.toHaveBeenCalled();
+  });
 });

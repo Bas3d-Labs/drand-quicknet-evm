@@ -154,6 +154,13 @@ function recoverySnapshot() {
       omittedCount: MAX_RETAINED_ATTEMPTS - detailedCount,
     },
     attempts,
+    lastCompletedWork: {
+      iteration: MAX_COUNT,
+      kind: 'discovery',
+      completedAt: AT,
+    },
+    lastDiscoveryCompleted: { iteration: MAX_COUNT, completedAt: AT },
+    lastQualifyingReconciliation: { sequence: MAX_COUNT, completedAt: AT },
     lastCompletedCycle: {
       cycle: MAX_COUNT,
       completedAt: AT,

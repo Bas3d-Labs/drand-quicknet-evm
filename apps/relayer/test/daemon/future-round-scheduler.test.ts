@@ -12,7 +12,7 @@ import {
 import {
   FutureRoundScheduler,
   MAX_WAITING_ROUNDS,
-  type ScheduledPass,
+  type DispatchObservation,
   type WaitTransition,
 } from '../../src/daemon/future-round-scheduler.js';
 
@@ -76,16 +76,80 @@ function importer() {
   }));
 }
 
-function emptyPass(): ScheduledPass {
-  return {
-    attempted: 0,
-    handedOff: 0,
-    failed: false,
-    outcomes: [],
-  };
-}
-
 describe('future-round scheduler', () => {
+  it('reports admission without changing legacy offer effects or clock reads', () => {
+    function exercise(explicit: boolean) {
+      const events: WaitTransition[] = [];
+
+      const now = vi.fn(() => Number(roundScheduledTime(100n) * 1000n));
+
+      const queue = new FutureRoundScheduler({
+        chainId: 46630,
+        registry: REGISTRY,
+        now,
+        onTransition: (event) => {
+          events.push(event);
+        },
+      });
+
+      const statuses: string[] = [];
+
+      function offer(round: bigint): void {
+        if (explicit) {
+          statuses.push(queue.admit(request(round), roundScheduledTime(round)).status);
+        } else {
+          expect(queue.offer(request(round), roundScheduledTime(round))).toBeUndefined();
+        }
+      }
+
+      for (let round = 100n; round < 100n + BigInt(MAX_WAITING_ROUNDS); round += 1n) {
+        offer(round);
+      }
+
+      offer(100n);
+      offer(2_000n);
+      offer(99n);
+
+      return {
+        events,
+        clockReads: now.mock.calls.length,
+        population: queue.observe(Number(roundScheduledTime(100n) * 1000n)),
+        statuses,
+      };
+    }
+
+    const legacy = exercise(false);
+
+    const explicit = exercise(true);
+
+    expect(explicit.events).toEqual(legacy.events);
+    expect(explicit.population).toEqual(legacy.population);
+    expect(explicit.clockReads).toBe(legacy.clockReads);
+    expect(explicit.clockReads).toBe(MAX_WAITING_ROUNDS + 2);
+    expect(explicit.statuses.slice(-3)).toEqual(['duplicate', 'rejected', 'accepted']);
+    expect(explicit.events.slice(-2).map((event) => event.kind)).toEqual([
+      'evicted',
+      'started',
+    ]);
+    expect(explicit.events.at(-2)?.entry.request.round).toBe(1_123n);
+  });
+
+  it('keeps an accepted result when transition reporting throws', () => {
+    const queue = new FutureRoundScheduler({
+      chainId: 46630,
+      registry: REGISTRY,
+      now: () => 0,
+      onTransition: () => {
+        throw new Error('observer failed');
+      },
+    });
+
+    const result = queue.admit(request(100n), roundScheduledTime(100n));
+
+    expect(result.status).toBe('accepted');
+    expect(queue.size).toBe(1);
+  });
+
   it('uses the exact release boundary and bigint for distant rounds', () => {
     const release = Number(roundScheduledTime(100n) * 1000n);
 
@@ -134,7 +198,6 @@ describe('future-round scheduler', () => {
     expect(pass.handedOff).toBe(16);
     expect(run).toHaveBeenCalledTimes(16);
     expect(f.queue.size).toBe(4);
-    expect(f.queue.sleepMilliseconds(1000, pass)).toBe(0);
     expect(f.events.filter((event) => event.kind === 'started')).toHaveLength(20);
   });
 
@@ -151,7 +214,6 @@ describe('future-round scheduler', () => {
     expect(run).toHaveBeenCalledExactlyOnceWith(98n);
     expect(first.failed).toBe(true);
     expect(f.queue.size).toBe(2);
-    expect(f.queue.sleepMilliseconds(1000, first)).toBe(1000);
     expect(f.events.filter((event) => event.kind === 'released')).toHaveLength(0);
 
     await f.queue.dispatch(run);
@@ -173,7 +235,6 @@ describe('future-round scheduler', () => {
       const pass = await f.queue.dispatch(run);
 
       expect(pass.attempted).toBe(1);
-      expect(f.queue.sleepMilliseconds(1000, pass)).toBe(1000);
     }
 
     expect(run.mock.calls.map(([round]) => round)).toEqual([98n, 99n, 98n, 99n]);
@@ -212,7 +273,6 @@ describe('future-round scheduler', () => {
       expect(second.outcomes[0]).toMatchObject({
         reportDeferred: false,
       });
-      expect(f.queue.sleepMilliseconds(1000, second)).toBe(1000);
       expect(f.events.filter((event) => event.kind === 'released')).toHaveLength(0);
 
       run.mockImplementation(async (round) => ({
@@ -255,7 +315,6 @@ describe('future-round scheduler', () => {
       attempted: 2,
       blocked: true,
     });
-    expect(f.queue.sleepMilliseconds(1000, pass)).toBe(1000);
     expect(f.queue.size).toBe(2);
   });
 
@@ -333,22 +392,6 @@ describe('future-round scheduler', () => {
 
     expect(pass.handedOff).toBe(0);
     expect(f.queue.size).toBe(1);
-    expect(f.queue.sleepMilliseconds(1000, pass)).toBe(1000);
-  });
-
-  it('uses release-aware sleep without oversized timers or a recovery-failure spin', () => {
-    const f = clock();
-
-    f.offer(101n);
-    f.offer((1n << 64n) - 1n);
-    f.setNow(Number(roundScheduledTime(101n) * 1000n) - 200);
-
-    expect(f.queue.sleepMilliseconds(1000, emptyPass())).toBe(200);
-    expect(f.queue.sleepMilliseconds(1000)).toBe(1000);
-
-    f.setNow(Number(roundScheduledTime(101n) * 1000n));
-
-    expect(f.queue.sleepMilliseconds(1000, emptyPass())).toBe(1000);
   });
 
   it('keeps the soonest entries and provides no consumer reservation', async () => {
@@ -486,4 +529,172 @@ describe('scheduler status capture', () => {
     expect(f.queue.observe(at).rejectedOffers).toBe('1');
     expect(clock().queue.observe(at).rejectedOffers).toBe('0');
   });
+});
+
+
+describe('dispatch observation adapter', () => {
+  async function run(throws: boolean | undefined) {
+    const facts: DispatchObservation[] = [];
+    const calls: bigint[] = [];
+    const transitions: WaitTransition[] = [];
+    const now = vi.fn(() => Number(roundScheduledTime(200n) * 1000n));
+    const queue = new FutureRoundScheduler({
+      chainId: 46630,
+      registry: REGISTRY,
+      now,
+      onTransition(event) {
+        transitions.push(event);
+      },
+      ...(throws === undefined ? {} : {
+        onDispatch(fact: DispatchObservation) {
+          facts.push(fact);
+
+          if (throws) {
+            throw new Error('observer failure');
+          }
+        },
+      }),
+    });
+
+    for (let round = 100n; round < 118n; round += 1n) {
+      queue.offer(request(round), roundScheduledTime(round));
+    }
+
+    const pass = await queue.dispatch(async (round) => {
+      calls.push(round);
+
+      if (round === 100n) {
+        return {
+          status: 'waiting',
+          reason: 'round-not-released',
+          round,
+          releaseTime: roundScheduledTime(round),
+        };
+      }
+
+      return { status: 'already-stored', round, randomness: HASH };
+    });
+
+    return { pass, calls, transitions, facts, reads: now.mock.calls.length };
+  }
+
+  it.each([false, true])('preserves dispatch with throwing hook: %s', async (throws) => {
+    const baseline = await run(undefined);
+    const observed = await run(throws);
+
+    expect(observed.pass).toEqual(baseline.pass);
+    expect(observed.calls).toEqual(baseline.calls);
+    expect(observed.transitions).toEqual(baseline.transitions);
+    expect(observed.reads).toBe(baseline.reads);
+    expect(observed.facts.filter((fact) => fact.disposition === 'waiting')).toHaveLength(1);
+    expect(observed.facts.filter((fact) => fact.disposition === 'completed')).toHaveLength(15);
+    expect(observed.facts.filter((fact) => fact.disposition === 'remainder')).toHaveLength(2);
+    expect(observed.facts.every(Object.isFrozen)).toBe(true);
+  });
+
+  it('does not turn backward-clock skips into dispatch remainders', async () => {
+    const release = Number(roundScheduledTime(100n) * 1000n);
+    let now = release;
+    const facts: DispatchObservation[] = [];
+    const queue = new FutureRoundScheduler({
+      chainId: 46630,
+      registry: REGISTRY,
+      now: () => now,
+      onDispatch: (fact) => facts.push(fact),
+    });
+
+    queue.offer(request(99n), roundScheduledTime(99n));
+    queue.offer(request(100n), roundScheduledTime(100n));
+
+    const pass = await queue.dispatch(async (round) => {
+      now = release - 1;
+
+      return { status: 'already-stored', round, randomness: HASH };
+    });
+
+    expect(pass.handedOff).toBe(1);
+    expect(facts.map((fact) => fact.disposition)).toEqual(['completed', 'clock-deferred']);
+    expect(queue.size).toBe(1);
+  });
+
+  it.each(['failed', 'blocked'] as const)('reports %s without a continuation', async (disposition) => {
+    const facts: DispatchObservation[] = [];
+    const queue = new FutureRoundScheduler({
+      chainId: 46630,
+      registry: REGISTRY,
+      now: () => Number(roundScheduledTime(200n) * 1000n),
+      onDispatch: (fact) => facts.push(fact),
+    });
+
+    for (let round = 100n; round < 118n; round += 1n) {
+      queue.offer(request(round), roundScheduledTime(round));
+    }
+
+    await queue.dispatch(async (round) => {
+      if (disposition === 'failed') {
+        throw new Error('import failed');
+      }
+
+      return {
+        status: 'deferred',
+        round,
+        reason: 'signer-unavailable',
+        blocker: 'recovery-incomplete',
+      };
+    });
+
+    expect(facts.map((fact) => fact.disposition)).toEqual([disposition]);
+    expect(queue.size).toBe(18);
+  });
+
+  it('does not report cap continuation when every attempted round is waiting', async () => {
+    const facts: DispatchObservation[] = [];
+    const queue = new FutureRoundScheduler({
+      chainId: 46630,
+      registry: REGISTRY,
+      now: () => Number(roundScheduledTime(200n) * 1000n),
+      onDispatch: (fact) => facts.push(fact),
+    });
+
+    for (let round = 100n; round < 118n; round += 1n) {
+      queue.offer(request(round), roundScheduledTime(round));
+    }
+
+    const pass = await queue.dispatch(async (round) => ({
+      status: 'waiting',
+      reason: 'round-not-released',
+      round,
+      releaseTime: roundScheduledTime(round),
+    }));
+
+    expect(facts).toHaveLength(16);
+    expect(facts.every((fact) => fact.disposition === 'waiting')).toBe(true);
+    expect(pass.handedOff).toBe(0);
+  });
+
+  it('suppresses cap continuation when an in-pass clock step makes selected work future', async () => {
+    let now = Number(roundScheduledTime(200n) * 1000n);
+    const facts: DispatchObservation[] = [];
+    const queue = new FutureRoundScheduler({
+      chainId: 46630,
+      registry: REGISTRY,
+      now: () => now,
+      onDispatch: (fact) => facts.push(fact),
+    });
+
+    for (let round = 100n; round < 118n; round += 1n) {
+      queue.offer(request(round), roundScheduledTime(round));
+    }
+
+    const pass = await queue.dispatch(async (round) => {
+      now = Number(roundScheduledTime(99n) * 1000n);
+
+      return { status: 'already-stored', round, randomness: HASH };
+    });
+
+    expect(pass.handedOff).toBe(1);
+    expect(facts.filter((fact) => fact.disposition === 'clock-deferred')).toHaveLength(15);
+    expect(facts.some((fact) => fact.disposition === 'remainder')).toBe(false);
+  });
+
 });

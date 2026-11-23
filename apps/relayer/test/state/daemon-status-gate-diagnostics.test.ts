@@ -37,6 +37,9 @@ function snapshot(): DaemonStatusSnapshot {
       omittedCount: 0,
     },
     attempts: [],
+    lastCompletedWork: null,
+    lastDiscoveryCompleted: null,
+    lastQualifyingReconciliation: null,
     lastCompletedCycle: null,
     lastRetryObservation: null,
     lastObservedGate: {

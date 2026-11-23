@@ -1074,6 +1074,7 @@ describe('runDaemonCycle', () => {
     expect(submitter.submit).not.toHaveBeenCalled();
 
     expect(result).toEqual({
+      recoveryFailed: true,
       consumers: [
         {
           status: 'failed',

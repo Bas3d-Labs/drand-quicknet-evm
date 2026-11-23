@@ -65,7 +65,7 @@ import {
   type OperatorAcceptanceRequest,
 } from './operator-acceptance.js';
 
-export interface CommittedAttemptResolution {
+interface CommittedAttemptResolution {
   readonly signer: JournalIdentity['signer'];
   readonly attemptId: string;
   readonly transactionHash: Hash;

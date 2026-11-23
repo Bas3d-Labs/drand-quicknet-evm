@@ -10,11 +10,16 @@ import {
 export interface ChainHeads {
   latestBlock: bigint;
   durableBlock: bigint;
+  latestBlockObservedAt?: string;
+  durableBlockObservedAt?: string;
 }
 
 export interface GetChainHeadsOptions {
   publicClient: PublicClient;
   finality: FinalityPolicy;
+
+  /** Optional diagnostic wall clock. Never participates in cache expiry. */
+  observationClock?: (() => number) | undefined;
 }
 
 export async function getChainHeads(
@@ -23,6 +28,11 @@ export async function getChainHeads(
   const durableBlock = await getDurableBlockNumber(
     options.publicClient,
     options.finality,
+  );
+
+  const durableObservation = observeHeadTime(
+    options.observationClock,
+    'durableBlockObservedAt',
   );
 
   const latestBlock = await options.publicClient.getBlockNumber({
@@ -38,5 +48,29 @@ export async function getChainHeads(
   return {
     latestBlock,
     durableBlock,
+    ...durableObservation,
+    ...observeHeadTime(options.observationClock, 'latestBlockObservedAt'),
   };
+}
+
+/** A diagnostic clock must not replace an RPC result or invent an observation. */
+export function observeHeadTime(
+  clock: (() => number) | undefined,
+  field: 'latestBlockObservedAt' | 'durableBlockObservedAt',
+): Pick<ChainHeads, 'latestBlockObservedAt' | 'durableBlockObservedAt'> {
+  if (clock === undefined) {
+    return {};
+  }
+
+  try {
+    const milliseconds = clock();
+
+    if (!Number.isSafeInteger(milliseconds)) {
+      return {};
+    }
+
+    return { [field]: new Date(milliseconds).toISOString() };
+  } catch {
+    return {};
+  }
 }

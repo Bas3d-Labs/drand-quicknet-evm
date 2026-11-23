@@ -561,7 +561,6 @@ describe('scheduled preparation conflict retry', () => {
       expect(t.snapshot().attempts).toEqual(retained);
       expect(t.snapshot().nextNonce).toBe(1n);
       expect(t.options.waiting.size).toBe(1);
-      expect(t.options.waiting.sleepMilliseconds(1000, result.scheduled)).toBe(1000);
       expect(t.manager.status).toMatchObject({
         open: false,
         recoveryComplete: false,

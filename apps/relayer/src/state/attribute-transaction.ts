@@ -124,7 +124,7 @@ export type AttributeTransactionOptions = AttributionOptions & (
     }
 );
 
-export type AttributionRefusalReason =
+type AttributionRefusalReason =
   | SignerRecoveryInspection['status']
   | Extract<SignerRecoveryInspection, { status: 'operator-hint-refused' }>['reason']
   | 'configuration-mismatch'

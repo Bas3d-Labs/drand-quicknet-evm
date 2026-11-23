@@ -73,7 +73,7 @@ export async function loadRegistryDeployment(
   );
 }
 
-export interface ParseRegistryDeploymentOptions {
+interface ParseRegistryDeploymentOptions {
   expectedChainId?: number;
 }
 

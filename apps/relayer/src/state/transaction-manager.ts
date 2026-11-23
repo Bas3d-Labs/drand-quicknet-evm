@@ -31,6 +31,10 @@ import {
   type SignerCoordinatorOptions,
 } from './signer-coordinator.js';
 
+import type {
+  SchedulerRecoveryObserver,
+} from './scheduler-recovery-observer.js';
+
 import {
   SignerRecoveryCycle,
   type SignerRecoveryCycleResult,
@@ -116,6 +120,7 @@ export interface TransactionManagerOptions
   readonly maxBlockRange: bigint;
   readonly retry: BroadcastRetryScheduleOptions;
   readonly durableRecovery?: DurableRecoveryScheduleOptions;
+  readonly schedulerObserver?: SchedulerRecoveryObserver;
 
   /**
    * Includes pre-submit recovery so diagnostics retain its result even
@@ -182,6 +187,9 @@ export class TransactionManager {
     const recovery = new SignerRecoveryCycle({
       coordinator,
       schedule,
+      ...(options.schedulerObserver === undefined
+        ? {}
+        : { schedulerObserver: options.schedulerObserver }),
       ...(durableSchedule === undefined ? {} : { durableSchedule }),
     });
 

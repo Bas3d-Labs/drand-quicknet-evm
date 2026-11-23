@@ -130,7 +130,7 @@ export type AcceptUnattributedOptions = AcceptanceOptions & (
     }
 );
 
-export type AcceptanceRefusalReason =
+type AcceptanceRefusalReason =
   | SignerRecoveryInspection['status']
   | Extract<SignerRecoveryInspection, { status: 'operator-acceptance-refused' }>['reason']
   | 'configuration-mismatch'

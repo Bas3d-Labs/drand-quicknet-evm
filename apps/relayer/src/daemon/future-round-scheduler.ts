@@ -31,7 +31,7 @@ import {
 } from '../rounds/round-release.js';
 
 export const MAX_WAITING_ROUNDS = 1_024;
-export const MAX_SCHEDULED_DISPATCHES = 16;
+const MAX_SCHEDULED_DISPATCHES = 16;
 
 export interface WaitingEntry {
   readonly workId: string;
@@ -62,7 +62,7 @@ export type WaitTransition =
       disposition: ImportQuicknetRoundResult['status'];
     };
 
-export type ScheduledOutcome =
+type ScheduledOutcome =
   | {
       entry: WaitingEntry;
       status: 'returned';
@@ -83,11 +83,29 @@ export interface ScheduledPass {
   outcomes: ScheduledOutcome[];
 }
 
+export interface DispatchObservation {
+  readonly workId: string;
+  readonly disposition:
+    | 'completed'
+    | 'waiting'
+    | 'blocked'
+    | 'failed'
+    | 'clock-deferred'
+    | 'remainder';
+  readonly handedOff: number;
+}
+
+export interface QueueAdmission {
+  readonly status: 'accepted' | 'duplicate' | 'rejected';
+  readonly workId: string;
+}
+
 interface SchedulerOptions {
   chainId: number;
   registry: Address;
   now?: () => number;
   onTransition?: ((event: WaitTransition) => void) | undefined;
+  onDispatch?: ((fact: DispatchObservation) => void) | undefined;
 }
 
 /** Ephemeral acceleration only. Checkpoints remain the discovery guarantee. */
@@ -142,6 +160,14 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
     releaseTime: bigint,
     source: 'durable' | 'soft' = 'soft',
   ): void {
+    this.admit(request, releaseTime, source);
+  }
+
+  admit(
+    request: QuicknetRandomnessRequest,
+    releaseTime: bigint,
+    source: 'durable' | 'soft' = 'soft',
+  ): QueueAdmission {
     const workId = createBeaconWorkId({
       chainId: this.options.chainId,
       registry: this.options.registry,
@@ -149,7 +175,7 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
     });
 
     if (this.entries.has(workId)) {
-      return;
+      return { status: 'duplicate', workId };
     }
 
     const entry: QueuedEntry = {
@@ -168,7 +194,8 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
 
       if (releaseOrder(entry, furthest) >= 0) {
         this.rejected += 1n;
-        return;
+
+        return { status: 'rejected', workId };
       }
 
       this.entries.delete(furthest.workId);
@@ -185,6 +212,8 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
       kind: 'started',
       entry,
     });
+
+    return { status: 'accepted', workId };
   }
 
   async dispatch(
@@ -202,7 +231,7 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
 
     // Never-failed entries first; rotate failures by their last failed turn.
     // Eviction remains release-ordered, independently of retry ordering.
-    const due = [...this.entries.values()]
+    const allDue = [...this.entries.values()]
       .filter((entry) => entry.releaseTime * 1000n <= now)
       .sort((a, b) => {
         if (a.lastFailure < b.lastFailure) {
@@ -214,14 +243,21 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
         }
 
         return releaseOrder(a, b);
-      })
-      .slice(0, MAX_SCHEDULED_DISPATCHES);
+      });
+
+    const due = allDue.slice(0, MAX_SCHEDULED_DISPATCHES);
+
+    let clockDeferred = false;
 
     for (const entry of due) {
       signal?.throwIfAborted();
 
       // Recheck after previous dispatches: wall time can move backwards.
       if (this.classify(entry.request.round) !== undefined) {
+        clockDeferred = true;
+
+        this.reportDispatch(entry.workId, 'clock-deferred', pass.handedOff);
+
         continue;
       }
 
@@ -231,6 +267,8 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
         const result = await importRound(entry.request.round);
 
         if (result.status === 'waiting') {
+          this.reportDispatch(entry.workId, 'waiting', pass.handedOff);
+
           continue;
         }
 
@@ -248,6 +286,8 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
           // Best-effort reporting is attempted only once per queue episode.
           entry.blockedReported = true;
 
+          this.reportDispatch(entry.workId, 'blocked', pass.handedOff);
+
           break;
         }
 
@@ -260,6 +300,8 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
           status: 'returned',
           result,
         });
+
+        this.reportDispatch(entry.workId, 'completed', pass.handedOff);
 
         this.report({
           kind: 'released',
@@ -281,41 +323,48 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
           status: 'failed',
           error,
         });
+
+        this.reportDispatch(entry.workId, 'failed', pass.handedOff);
+
         break;
+      }
+    }
+
+    if (
+      this.options.onDispatch !== undefined &&
+      pass.handedOff > 0 &&
+      !pass.failed &&
+      !pass.blocked &&
+      !clockDeferred
+    ) {
+      // These were due at selection and excluded solely by the dispatch cap.
+      // Release time must still be checked again before a later dispatch.
+      for (const entry of allDue.slice(MAX_SCHEDULED_DISPATCHES)) {
+        if (this.entries.has(entry.workId)) {
+          this.reportDispatch(entry.workId, 'remainder', pass.handedOff);
+        }
       }
     }
 
     return pass;
   }
 
-  sleepMilliseconds(pollIntervalMs: number, pass?: ScheduledPass): number {
-    // Failed recovery, signer blockage and all-failed passes must not spin.
-    if (
-      pass === undefined ||
-      pass.blocked === true ||
-      (pass.failed && pass.handedOff === 0)
-    ) {
-      return pollIntervalMs;
+  private reportDispatch(
+    workId: string,
+    disposition: DispatchObservation['disposition'],
+    handedOff: number,
+  ): void {
+    const observer = this.options.onDispatch;
+
+    if (observer === undefined) {
+      return;
     }
 
-    const now = BigInt(this.now());
-
-    let delay = BigInt(pollIntervalMs);
-
-    for (const entry of this.entries.values()) {
-      const remaining = entry.releaseTime * 1000n - now;
-
-      if (remaining <= 0n) {
-        if (pass.handedOff > 0) {
-          return 0;
-        }
-      } else if (remaining < delay) {
-        delay = remaining;
-      }
+    try {
+      observer(Object.freeze({ workId, disposition, handedOff }));
+    } catch {
+      // Observation delivery must not alter dispatch or its return value.
     }
-
-    // The result is bounded by the validated poll interval, never by a lead.
-    return Number(delay);
   }
 
   private report(event: WaitTransition): void {

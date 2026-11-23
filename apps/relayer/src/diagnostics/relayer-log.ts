@@ -63,6 +63,8 @@ type ScanType = 'durable' | 'soft' | 'scheduled';
 
 interface RelayerLogContext {
   readonly cycle?: number;
+  readonly iteration?: number;
+  readonly workKind?: 'full' | 'discovery';
   readonly signer?: Address;
   readonly attemptId?: string;
   readonly operation?: OperationContext;
@@ -90,6 +92,8 @@ export type ConsumerHealth =
       durableBlock: bigint;
       durableNextBlock: bigint;
       softNextBlock: bigint;
+      latestBlockObservedAt?: string;
+      durableBlockObservedAt?: string;
     };
 
 interface Values {
@@ -342,6 +346,12 @@ const EVENTS = {
       transactionHash: 'hash',
       reason: 'pendingReason',
     },
+  ],
+  workCompleted: [
+    'debug',
+    'work_completed',
+    'Daemon work completed',
+    { completedAt: 'timestamp' },
   ],
   heartbeat: [
     'info',
@@ -1026,10 +1036,16 @@ export function createRelayerLog(
       ...methods,
 
       withContext(context: RelayerLogContext): ScopedRelayerLog {
-        return bind(policy, Object.freeze({
+        const next = {
           ...bindings,
           ...projectBindings(context, policy),
-        }));
+        };
+
+        if (next.workKind === 'discovery' && next.cycle !== undefined) {
+          throw new TypeError('Discovery logging context cannot inherit a cycle.');
+        }
+
+        return bind(policy, Object.freeze(next));
       },
 
       withErrorSummary(
@@ -1444,6 +1460,16 @@ function project(
               errorSummary,
             );
           }
+          for (const field of [
+            'latestBlockObservedAt',
+            'durableBlockObservedAt',
+          ]) {
+            const observedAt = own(consumer, field);
+
+            if (observedAt !== undefined) {
+              health[field] = scalar('timestamp', observedAt, errorSummary);
+            }
+          }
         } else if (status !== 'failed') {
           throw new TypeError('Invalid consumer health.');
         }
@@ -1492,6 +1518,24 @@ function projectBindings(
     }
 
     result.cycle = cycle;
+  }
+
+  const iteration = own(input, 'iteration');
+  const workKind = own(input, 'workKind');
+
+  if (iteration !== undefined || workKind !== undefined) {
+    if (
+      typeof iteration !== 'number' ||
+      !Number.isSafeInteger(iteration) ||
+      iteration < 1 ||
+      (workKind !== 'full' && workKind !== 'discovery') ||
+      (workKind === 'discovery' && cycle !== undefined)
+    ) {
+      throw new TypeError('Invalid logging work context.');
+    }
+
+    result.iteration = iteration;
+    result.workKind = workKind;
   }
 
   for (const [key, kind] of [

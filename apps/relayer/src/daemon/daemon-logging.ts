@@ -3,12 +3,24 @@ import type {
 } from 'viem';
 
 import type {
-  TerminalRoundReason,
-} from '../rounds/terminal-round-reason.js';
+  DurableRequestResult
+} from '../consumers/durable-requests.js';
 
 import type {
   QuicknetRandomnessRequest,
 } from '../consumers/request-events.js';
+
+import type {
+  ProcessedQuicknetRound
+} from '../consumers/request-processor.js';
+
+import type {
+  RelayerLog,
+} from '../diagnostics/relayer-log.js';
+
+import type {
+  TerminalRoundReason,
+} from '../rounds/terminal-round-reason.js';
 
 import type {
   RunDaemonCycleResult,
@@ -19,17 +31,8 @@ import type {
 } from './daemon-iteration.js';
 
 import type {
-  ConsumerHealth,
-  RelayerLog,
-} from '../diagnostics/relayer-log.js';
-
-import type {
-  ProcessedQuicknetRound
-} from '../consumers/request-processor.js';
-
-import type {
-  DurableRequestResult
-} from '../consumers/durable-requests.js';
+  DaemonWorkResult,
+} from './daemon.js';
 
 import type {
   WaitTransition,
@@ -51,18 +54,15 @@ export interface CreateDaemonLoggerOptions {
 }
 
 export interface DaemonLogger {
+  onWork(result: DaemonWorkResult, workLogger?: RelayerLog): void;
+
   onUnfulfillable(
     scanType: DaemonScanType,
     request: QuicknetRandomnessRequest,
     reason: TerminalRoundReason,
   ): void;
 
-  onCycle(
-    result: RunDaemonCycleResult,
-    cycleLogger?: RelayerLog,
-  ): void;
-
-  onWaitTransition(event: WaitTransition): void;
+  onWaitTransition(event: WaitTransition, workLogger?: RelayerLog): void;
 }
 
 export function createDaemonLogger(
@@ -81,7 +81,40 @@ export function createDaemonLogger(
   const reported = new Set<string>();
 
   return {
-    onWaitTransition(event): void {
+    onWork(
+      result: DaemonWorkResult,
+      workLogger: RelayerLog = options.logger,
+    ): void {
+      try {
+        if (result.cycle !== undefined) {
+          logCycle(workLogger, result.cycle);
+        }
+
+        for (const failure of result.discoveryFailures) {
+          workLogger.consumerFailed({
+            consumer: failure.consumer,
+            error: failure.error,
+          });
+        }
+
+        const currentTime = now();
+
+        if (currentTime - lastHeartbeatAt >= heartbeatIntervalMs) {
+          workLogger.heartbeat({
+            consumers: result.consumers,
+            waitingRejectedOffers: result.waitingRejectedOffers,
+          });
+          lastHeartbeatAt = currentTime;
+        }
+      } catch (error) {
+        logLoggingFailure(workLogger, error);
+      }
+    },
+
+    onWaitTransition(
+      event,
+      workLogger: RelayerLog = options.logger,
+    ): void {
       const { entry } = event;
 
       const fields = {
@@ -99,11 +132,11 @@ export function createDaemonLogger(
 
       switch (event.kind) {
         case 'started':
-          options.logger.roundWaitStarted(fields);
+          workLogger.roundWaitStarted(fields);
           break;
 
         case 'released':
-          options.logger.roundWaitReleased({
+          workLogger.roundWaitReleased({
             ...fields,
             reason: 'released',
             disposition: event.disposition,
@@ -111,7 +144,7 @@ export function createDaemonLogger(
           break;
 
         case 'evicted':
-          options.logger.roundWaitEvicted({
+          workLogger.roundWaitEvicted({
             ...fields,
             reason: 'evicted',
           });
@@ -154,24 +187,6 @@ export function createDaemonLogger(
         });
       } catch {
         // Emission is best-effort; no flush or delivery acknowledgement.
-      }
-    },
-
-    onCycle(
-      result: RunDaemonCycleResult,
-      cycleLogger: RelayerLog = options.logger,
-    ): void {
-      try {
-        logCycle(cycleLogger, result);
-
-        const currentTime = now();
-
-        if (currentTime - lastHeartbeatAt >= heartbeatIntervalMs) {
-          logHeartbeat(cycleLogger, result);
-          lastHeartbeatAt = currentTime;
-        }
-      } catch (error) {
-        logLoggingFailure(cycleLogger, error);
       }
     },
   };
@@ -439,36 +454,6 @@ function logReconciliation(
       });
     }
   }
-}
-
-function logHeartbeat(
-  logger: RelayerLog,
-  result: RunDaemonCycleResult,
-): void {
-  const consumers = result.consumers.map((consumer): ConsumerHealth => {
-    if (consumer.status === 'failed') {
-      return {
-        consumer: consumer.consumer.address,
-        status: 'failed',
-      };
-    }
-
-    return {
-      consumer: consumer.consumer.address,
-      status: 'healthy',
-      latestBlock: consumer.iteration.latestBlock,
-      durableBlock: consumer.iteration.durableBlock,
-      durableNextBlock: consumer.iteration.durableNextBlock,
-      softNextBlock: consumer.iteration.softCursor.nextBlock,
-    };
-  });
-
-  logger.heartbeat({
-    consumers,
-    ...(result.waitingRejectedOffers === undefined
-      ? {}
-      : { waitingRejectedOffers: result.waitingRejectedOffers }),
-  });
 }
 
 function logLoggingFailure(

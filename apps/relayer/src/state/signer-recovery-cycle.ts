@@ -23,6 +23,10 @@ import {
 } from './is-durable-recovery-complete.js';
 
 import type {
+  SchedulerRecoveryObserver,
+} from './scheduler-recovery-observer.js';
+
+import type {
   SignerCoordinator,
   BroadcastAttemptResult,
   RecoverSignerOptions,
@@ -34,6 +38,7 @@ export interface SignerRecoveryCycleOptions {
   readonly coordinator: SignerCoordinator;
   readonly schedule: BroadcastRetrySchedule;
   readonly durableSchedule?: DurableRecoverySchedule;
+  readonly schedulerObserver?: SchedulerRecoveryObserver;
 }
 
 export interface RunSignerRecoveryCycleOptions
@@ -75,6 +80,8 @@ export class SignerRecoveryCycle {
   private readonly durableSchedule:
     DurableRecoverySchedule | undefined;
 
+  private readonly schedulerObserver: SchedulerRecoveryObserver | undefined;
+
   private busy = false;
   private completedDurableRevision: string | undefined;
 
@@ -82,6 +89,7 @@ export class SignerRecoveryCycle {
     this.coordinator = options.coordinator;
     this.schedule = options.schedule;
     this.durableSchedule = options.durableSchedule;
+    this.schedulerObserver = options.schedulerObserver;
   }
 
   /**
@@ -174,6 +182,18 @@ export class SignerRecoveryCycle {
           head,
           durableAnchor: recovery.anchor,
         };
+      }
+
+      const observer = this.schedulerObserver;
+
+      let inspectionStartedAt: number | undefined;
+
+      if (observer?.onInspectionCompleted !== undefined) {
+        try {
+          inspectionStartedAt = observer.now();
+        } catch {
+          // A failed observation clock must not prevent inspection.
+        }
       }
 
       const owner = this.coordinator.beginInspection(opening);
@@ -275,6 +295,27 @@ export class SignerRecoveryCycle {
           await owner.abandon();
         } else {
           owner.finish();
+
+          if (
+            observer?.onInspectionCompleted !== undefined &&
+            inspectionStartedAt !== undefined
+          ) {
+            try {
+              const completed = this.coordinator.status;
+              const retained = this.coordinator.attempts;
+
+              observer.onInspectionCompleted(Object.freeze({
+                startedAt: inspectionStartedAt,
+                completedAt: observer.now(),
+                recoveryComplete: completed.recoveryComplete,
+                inclusionChecksComplete: completed.inclusionChecksComplete,
+                persistenceIdle: completed.persistenceState === 'idle',
+                retainedCount: retained.length,
+              }));
+            } catch {
+              // Observation failure must not abandon a finished inspection.
+            }
+          }
         }
       } catch (error) {
         // Abandonment preserves acknowledged commits and pending writes.

@@ -76,6 +76,9 @@ function snapshot() {
     },
     storedFactDispute: null,
     queue: null,
+    lastCompletedWork: null,
+    lastDiscoveryCompleted: null,
+    lastQualifyingReconciliation: null,
     lastCompletedCycle: null,
     lastRetryObservation: null,
     attemptSummary: {

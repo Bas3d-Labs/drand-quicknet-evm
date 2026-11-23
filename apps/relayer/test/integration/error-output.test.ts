@@ -34,6 +34,10 @@ import {
   type RelayerLog,
 } from '../../src/diagnostics/relayer-log.js';
 
+import {
+  fullWorkResult,
+} from '../helpers/full-work-result.js';
+
 const CHAIN_ID = 4663;
 const SECRET = 'credential-canary-DO-NOT-LOG';
 
@@ -182,7 +186,7 @@ describe('error output boundaries', () => {
       now: () => 0,
     });
 
-    daemonLogger.onCycle(failedCycle(error));
+    daemonLogger.onWork(fullWorkResult(failedCycle(error)));
 
     expect(lines).toHaveLength(1);
 
@@ -220,7 +224,7 @@ describe('error output boundaries', () => {
     createDaemonLogger({
       logger,
       now: () => 0,
-    }).onCycle(failedCycle(nonceError()));
+    }).onWork(fullWorkResult(failedCycle(nonceError())));
 
     expect(lines).toHaveLength(1);
 
@@ -255,7 +259,7 @@ describe('error output boundaries', () => {
       createDaemonLogger({
         logger,
         now: () => 0,
-      }).onCycle(failedCycle(error));
+      }).onWork(fullWorkResult(failedCycle(error)));
 
       expect(lines).toHaveLength(1);
 
@@ -294,7 +298,7 @@ describe('error output boundaries', () => {
     createDaemonLogger({
       logger,
       now: () => 0,
-    }).onCycle(failedCycle(error));
+    }).onWork(fullWorkResult(failedCycle(error)));
 
     expect(lines).toHaveLength(1);
 
@@ -330,7 +334,7 @@ describe('error output boundaries', () => {
     });
 
     expect(() => {
-      daemonLogger.onCycle(failedCycle(error));
+      daemonLogger.onWork(fullWorkResult(failedCycle(error)));
     }).not.toThrow();
 
     expect(lines).toHaveLength(1);
@@ -363,8 +367,8 @@ describe('error output boundaries', () => {
       });
     }
 
-    daemonLogger.onCycle(failedCycle(cycle));
-    daemonLogger.onCycle(failedCycle(deep));
+    daemonLogger.onWork(fullWorkResult(failedCycle(cycle)));
+    daemonLogger.onWork(fullWorkResult(failedCycle(deep)));
 
     expect(lines).toHaveLength(2);
 
@@ -400,7 +404,7 @@ describe('error output boundaries', () => {
     createDaemonLogger({
       logger,
       now: () => 0,
-    }).onCycle(failedCycle(error));
+    }).onWork(fullWorkResult(failedCycle(error)));
 
     expect(lines).toHaveLength(1);
 
@@ -440,8 +444,8 @@ describe('error output boundaries', () => {
     });
 
     expect(() => {
-      daemonLogger.onCycle(
-        failedCycle(new Error(SECRET)),
+      daemonLogger.onWork(
+        fullWorkResult(failedCycle(new Error(SECRET))),
       );
     }).not.toThrow();
 

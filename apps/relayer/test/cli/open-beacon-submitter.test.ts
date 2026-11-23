@@ -374,6 +374,18 @@ describe('openBeaconSubmitter', () => {
     expect(boundWith).not.toHaveProperty('onRecoveryCompleted');
   });
 
+  it('forwards the inspection observer unchanged to the signer runtime', async () => {
+    const t = fixture();
+    const schedulerObserver = { now: () => 100, onInspectionCompleted: vi.fn() };
+
+    await openBeaconSubmitter({ ...t.options, schedulerObserver });
+
+    expect(vi.mocked(openSignerRuntime).mock.calls[0]![0].schedulerObserver)
+      .toBe(schedulerObserver);
+    expect(vi.mocked(createBeaconSubmitter).mock.calls[0]![0])
+      .not.toHaveProperty('schedulerObserver');
+  });
+
   it('does not expose an initialized reader for a missing journal', async () => {
     const t = fixture();
     const onInitialized = vi.fn();

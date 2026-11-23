@@ -174,6 +174,9 @@ describe('daemon status publisher', () => {
       version: 1,
       runId: RUN_ID,
       observedAt: new Date(START).toISOString(),
+      lastCompletedWork: null,
+      lastDiscoveryCompleted: null,
+      lastQualifyingReconciliation: null,
       lastCompletedCycle: null,
       lastRetryObservation: null,
       attemptSummary: {
@@ -207,7 +210,7 @@ describe('daemon status publisher', () => {
 
     t.setTime(START + 1_000);
     t.publisher.onInitialized(t.readObservation);
-    t.publisher.onCycleCompleted(1);
+    t.publisher.onWorkCompleted({ iteration: 1, kind: 'full', cycle: 1 }, false);
 
     t.setTime(START + 2_000);
     await t.publisher.publish();
@@ -259,7 +262,7 @@ describe('daemon status publisher', () => {
       });
 
       t.setTime(START + 1_000);
-      t.publisher.onCycleCompleted(1);
+      t.publisher.onWorkCompleted({ iteration: 1, kind: 'full', cycle: 1 }, false);
 
       expect(t.readObservation).toHaveBeenCalledOnce();
     } finally {
@@ -336,10 +339,10 @@ describe('daemon status publisher', () => {
     const t = fixture();
 
     t.publisher.onInitialized(t.readObservation);
-    t.publisher.onCycleCompleted(1);
+    t.publisher.onWorkCompleted({ iteration: 1, kind: 'full', cycle: 1 }, false);
     t.publisher.onRecoveryCompleted({ retryDelayMs: 5_000 });
 
-    t.publisher.onCycleCompleted(0);
+    t.publisher.onWorkCompleted({ iteration: 0, kind: 'full', cycle: 0 }, false);
     t.publisher.onRecoveryCompleted({ retryDelayMs: -1 });
 
     await t.publisher.publish();
@@ -619,5 +622,108 @@ describe('status queue capture timing', () => {
 
     expect(t.write).toHaveBeenCalledTimes(1);
     expect(t.onFailure).toHaveBeenCalledTimes(2);
+  });
+});
+
+
+describe('work and reconciliation observations', () => {
+  const inspection = {
+    startedAt: 10,
+    completedAt: 20,
+    recoveryComplete: true,
+    inclusionChecksComplete: true,
+    persistenceIdle: true,
+    retainedCount: 0,
+  };
+
+  it('separates discovery completion from full work and reconciliation', async () => {
+    const t = fixture();
+
+    t.publisher.onInitialized(t.readObservation);
+    await t.publisher.publish();
+
+    expect(t.write.mock.calls[0]![0].snapshot).toMatchObject({
+      lastCompletedWork: null,
+      lastDiscoveryCompleted: null,
+      lastQualifyingReconciliation: null,
+    });
+
+    t.publisher.onInspectionCompleted(inspection);
+    t.publisher.onWorkCompleted({ iteration: 1, kind: 'full', cycle: 1 }, true);
+    await t.publisher.publish();
+
+    const full = t.write.mock.calls[1]![0].snapshot;
+
+    t.setTime(START + 1_000);
+    t.publisher.onWorkCompleted({ iteration: 2, kind: 'discovery' }, true);
+    await t.publisher.publish();
+
+    const discovery = t.write.mock.calls[2]![0].snapshot;
+
+    expect(discovery.lastCompletedWork).toEqual({
+      iteration: 2,
+      kind: 'discovery',
+      completedAt: new Date(START + 1_000).toISOString(),
+    });
+    expect(discovery.lastDiscoveryCompleted?.iteration).toBe(2);
+    expect(discovery.lastCompletedCycle).toEqual(full.lastCompletedCycle);
+    expect(discovery.lastQualifyingReconciliation)
+      .toEqual(full.lastQualifyingReconciliation);
+
+    t.setTime(START + 2_000);
+    t.publisher.onWorkCompleted({ iteration: 3, kind: 'full', cycle: 2 }, false);
+    await t.publisher.publish();
+
+    const partial = t.write.mock.calls[3]![0].snapshot;
+
+    expect(partial.lastCompletedWork?.iteration).toBe(3);
+    expect(partial.lastCompletedCycle?.cycle).toBe(2);
+    expect(partial.lastDiscoveryCompleted).toEqual(discovery.lastDiscoveryCompleted);
+    expect(partial.lastQualifyingReconciliation)
+      .toEqual(full.lastQualifyingReconciliation);
+  });
+
+  it.each([
+    'recoveryComplete',
+    'inclusionChecksComplete',
+    'persistenceIdle',
+  ] as const)('does not refresh reconciliation when %s is false', async (field) => {
+    const t = fixture();
+
+    t.publisher.onInitialized(t.readObservation);
+    t.publisher.onInspectionCompleted(inspection);
+    t.setTime(START + 1_000);
+    t.publisher.onInspectionCompleted({ ...inspection, [field]: false });
+    t.publisher.onWorkCompleted({ iteration: 1, kind: 'full', cycle: 1 }, false);
+    await t.publisher.publish();
+
+    expect(t.write.mock.calls[0]![0].snapshot.lastQualifyingReconciliation).toEqual({
+      sequence: 1,
+      completedAt: new Date(START).toISOString(),
+    });
+  });
+
+  it('counts multiple inspections independently of work and isolates invalid clocks', async () => {
+    const t = fixture();
+
+    t.publisher.onInitialized(t.readObservation);
+    t.publisher.onInspectionCompleted(inspection);
+    t.setTime(START + 1_000);
+    t.publisher.onInspectionCompleted(inspection);
+    t.setTime(NaN);
+
+    expect(() => t.publisher.onInspectionCompleted(inspection)).not.toThrow();
+    expect(t.onFailure).toHaveBeenCalledOnce();
+
+    t.setTime(START + 2_000);
+    await t.publisher.publish();
+
+    expect(t.write.mock.calls[0]![0].snapshot).toMatchObject({
+      lastCompletedWork: null,
+      lastQualifyingReconciliation: {
+        sequence: 2,
+        completedAt: new Date(START + 1_000).toISOString(),
+      },
+    });
   });
 });

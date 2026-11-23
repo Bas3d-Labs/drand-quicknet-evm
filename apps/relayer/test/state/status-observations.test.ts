@@ -58,6 +58,9 @@ function snapshot() {
       rejectedOffers: '0',
     },
     storedFactDispute: observeStoredFactDispute(FACT_CONFLICT, 'preparation', AT),
+    lastCompletedWork: null,
+    lastDiscoveryCompleted: null,
+    lastQualifyingReconciliation: null,
     lastCompletedCycle: null,
     lastRetryObservation: null,
     attemptSummary: {

@@ -727,8 +727,28 @@ set `QUICKNET_POLL_INTERVAL_MS=1000` to retain the previous interval.
 Operators serving applications with short discovery deadlines should
 coordinate the setting with those teams before upgrading.
 
-Delay after each completed daemon cycle before starting the next one.
-Shutdown interrupts this delay. During first-use daemon startup, this 
+Wait between discovery checks once caught up. Discovery reads only the
+latest head and request logs, then queues requests for full work. Full work
+runs recovery, queued dispatch and the durable scan. The two kinds execute
+serially; startup begins with full work. A qualifying inspection schedules the
+next ordinary inspection after 90 seconds with no retained attempts, or 30
+seconds with any retained attempt. Pre-submit inspections count too. Full work
+that finishes with retained attempts can bring the next inspection forward to
+30 seconds after completion; it never postpones an earlier deadline. A broadcast
+acknowledgement does not trigger another full item.
+
+Released queued work and successful capped scans can make work due sooner.
+An unsuccessful inspection or durable scan retries after 15 seconds, preserving
+any longer retry delay already in force. A failed discovery pass retries after
+the configured poll interval. These are scheduling delays: ongoing serial work
+and provider latency can make execution later.
+
+An ordinary discovery round checks all consumers whose failure retry is eligible.
+The next ordinary round is scheduled from completion of the whole pass; capped
+continuations and failed consumers keep their own retry times. A consumer is not
+scanned by discovery until a successful full pass establishes its durable position.
+
+Shutdown interrupts the wait. During first-use daemon startup, this
 also sets the delay between signer initialization attempts when nonce 
 counts disagree or the selected durable anchor changes.
 
@@ -737,11 +757,15 @@ guarantee. Scanning, beacon retrieval, and transaction confirmation
 take additional time.
 
 A shorter interval improves responsiveness and catch-up throughput
-but increases RPC traffic. A longer interval reduces cycle frequency
-but can delay discovery of new requests and historical catch-up.
+but increases RPC traffic. A longer interval reduces discovery frequency but can delay new requests.
+It does not lengthen the internal inspection intervals, so RPC savings are not
+proportional to the polling interval. Operators using a long interval may see
+more recovery traffic than under the former combined-cycle scheduler.
 
-Catch-up scans remain limited by `QUICKNET_MAX_BLOCK_RANGE` and do not
-skip the polling delay merely because a cursor is behind. For a fresh
+Catch-up scans remain limited by `QUICKNET_MAX_BLOCK_RANGE`. A successful
+range that leaves a backlog can continue immediately, yielding to the other
+work kind when it is due. Discovery stops at the head read by its own pass;
+blocks arriving during that pass wait for the next ordinary check. For a fresh
 checkpoint, set `QUICKNET_START_BLOCK` to the earliest deployment block
 among the configured consumers to avoid scanning unrelated history
 without skipping their requests. Existing checkpoints retain their saved
@@ -755,31 +779,39 @@ before release.
 
 With a three-round Quicknet lead (7–9 seconds relative to the request
 block timestamp), the 15-second setting can discover requests after their
-scheduled beacon release. In a ten-request Robinhood testnet run, eight
-were discovered after release; in a separate ten-request run at 5 seconds,
-none were. These small sequential samples do not establish long-run miss
+scheduled beacon release. In the scheduler testnet measurement below, four
+of ten requests were discovered after release, compared with six of ten in
+the baseline. These small sequential samples do not establish long-run miss
 rates or latency bounds. Already-discovered future rounds can wake the
 scheduler at release rather than waiting for the entire polling delay.
 
-Observed daemon HTTP usage on Robinhood testnet with one consumer,
-safe finality, and a maximum block range of 2000:
+Measured daemon HTTP attempts on Robinhood testnet with one consumer,
+safe finality, a maximum block range of 2000, and a 15-second poll interval:
 
-| Poll interval | Idle HTTP attempts/hour | Workload HTTP attempts/hour |
+| Window | Combined cycle attempts/hour | Separate scheduler attempts/hour |
 | --- | ---: | ---: |
-| 15 seconds | about 2,609 | about 4,172 |
-| 5 seconds | about 6,507 | about 9,395 |
+| Idle | 2,573.07 | 1,073.65 |
+| Workload | 4,103.81 | 3,041.48 |
 
-The 15-second idle rate comes from a separate hour-long idle measurement.
-The 5-second idle rate extrapolates approximately ten minutes, observing
-one safe-head advance at heartbeat resolution. Workload rates cover
-approximately one hour with ten distinct requested rounds, exclude the
-subsequent drain, and are not steady-state loaded-cost estimates. They
-exclude the separate experiment observer's RPC traffic. Provider method
-weights, retries, consumer count, retained attempts, and chain behavior
-affect cost; these figures do not guarantee a particular bill or plan fit.
+The scheduler idle window recorded 1,084 HTTP attempts over 3,634.702 seconds;
+the workload window recorded 3,052 over 3,612.454 seconds. Neither window
+had RPC failures. All ten requests succeeded durably
+across ten distinct rounds. Median release-to-storage chain time was
+2 seconds, compared with 4 seconds in the baseline; the different discovery
+phase across these small samples prevents attributing that difference to
+the scheduler.
 
-This setting controls cycle frequency, not individual RPC calls.
-One cycle can make multiple calls and process multiple rounds.
+Both runs used approximately one-hour idle and workload windows. Workload
+rates exclude the subsequent drain and are not steady-state loaded-cost
+estimates. The runs were sequential, with similar safe-head cadence and
+retained occupancy; they do not isolate the scheduler's effect. Counts
+exclude the separate experiment observer's RPC traffic. These are measured
+testnet call counts, not reconciled billing or mainnet estimates. Provider
+method weights, retries, consumer count, retained attempts, and chain
+behavior affect cost.
+
+This setting controls polling waits, not individual RPC calls. Full work
+can make multiple calls and process multiple rounds.
 
 Accepts a positive decimal integer.
 
@@ -1472,7 +1504,11 @@ consumer points at the registry deployment the relayer is servicing.
 
 ## Soft and durable scanning
 
-The daemon separates low-latency observation from durable progress.
+The daemon separates low-latency observation from durable progress. Discovery
+owns the soft scan and queues both released and future requests. Full work
+performs recovery, dispatch and durable scanning, without a soft scan. A newly
+discovered released request therefore waits for recovery in the next full work
+item before dispatch; that added delay must be measured in the candidate capture.
 
 ### Soft scan
 
@@ -1629,6 +1665,26 @@ status_publication_failed
 `checkpoint_advanced` and `round_already_stored` are debug-level routine
 progress. `heartbeat` is emitted periodically at info level.
 
+Healthy heartbeat consumers include `latestBlockObservedAt` and
+`durableBlockObservedAt` when those head observations are available. They are
+wall-clock response observation times, separate from heartbeat emission time.
+A cached durable head keeps its original timestamp. For confirmations finality,
+the durable timestamp belongs to the head read used to derive that height.
+Diagnostic clock failures omit the affected timestamp; they never invent one.
+Failed consumers carry no head timestamps. Cursors remain current local state;
+there are no cursor-observation timestamps.
+
+Daemon-scoped request-discovery, queue-transition and completion events carry
+`iteration` and `workKind`. Full work also carries `cycle`; discovery work has no cycle.
+The debug `work_completed` event carries `completedAt` and provides the full
+cycle-to-iteration mapping. Transaction lifecycle events retain their existing
+cycle context. Events outside work carry no work context. Readers needing the
+mapping and request-discovery evidence must enable debug logging. The existing
+heartbeat rate limit is evaluated after either work kind. Full-work heartbeats
+keep the latest-head/soft-cursor pair from the last completed discovery pass;
+only the durable view changes. Recovery failure before scanning preserves that
+view; an actual consumer scan failure marks its row failed.
+
 `round_deferred` reports a round for which no new transaction attempt
 was prepared. Its reason distinguishes `signer-unavailable`, which
 includes a signer blocker, from `already-retained`, which includes the
@@ -1680,9 +1736,9 @@ available, an interval view. Logical rows are grouped by client and method;
 HTTP rows are grouped by client and include response-status counts.
 Average durations are null when there are no completions.
 
-The daemon checks the 60-second reporting threshold at completed cycle
-boundaries. There is no separate reporting timer or catch-up burst.
-Long-running startup or cycles can delay reports. The daemon also attempts
+The daemon checks the 60-second reporting threshold after either kind of
+completed work. There is no separate reporting timer or catch-up burst.
+Long-running startup or work can delay reports. The daemon also attempts
 one final report when its reporting session finishes, including when
 startup or execution fails.
 
@@ -1719,7 +1775,7 @@ totals or evidence of daemon health.
 
 The daemon attempts to publish `daemon-status.json` in the canonical
 `QUICKNET_STATE_DIR` after successful startup and after each completed
-cycle. Publication starts only after signer journal initialization.
+work item. Publication starts only after signer journal initialization.
 Writes are serialized and awaited.
 
 When available, the snapshot also includes cumulative RPC usage captured
@@ -1762,11 +1818,35 @@ nonce, phase, and every recorded candidate transaction hash.
 Explicit journal status reports every retained attempt. Signed transaction
 bytes are excluded from both status sources.
 
-Cycle completion and retry observations carry separate timestamps.
-Publishing another snapshot does not refresh those timestamps.
-A completed cycle may include consumer failures. A recorded retry
-delay is historical; it is neither a live countdown nor permission
-to broadcast.
+Status version 1 requires these separate, nullable observations:
+
+- `lastCompletedWork`: `{ iteration, kind, completedAt }`, null at startup.
+  Iteration advances for either kind; cycle advances only for full work.
+- `lastCompletedCycle`: `{ cycle, completedAt }`, updated only by full work.
+  A completed cycle can contain consumer failures.
+- `lastDiscoveryCompleted`: `{ iteration, completedAt }`, updated only when
+  the soft-scan path succeeds for every configured consumer. A caught-up check
+  counts without a log query. Completion of a bounded scan does not mean the
+  cursor is caught up, and waiting for fulfilment does not mean discovery failed.
+- `lastQualifyingReconciliation`: `{ sequence, completedAt }`, updated by an
+  inspection reporting recovery complete, inclusion checks complete and
+  persistence idle. The time is the completion callback's wall-clock observation.
+  The sequence is local to the run and includes pre-submit inspections. An open
+  gate alone does not update it. A later rebroadcast or scan failure does not
+  erase it. It does not identify the reconciliation behind the last signature.
+
+Publishing does not refresh these observations. Snapshot age describes publication
+freshness, not reconciliation freshness. A reader waiting for new reconciliation
+must require a sequence greater than at the start of its wait, within the same
+run ID. A restart invalidates that comparison. Discovery succeeded in a work item
+when `lastDiscoveryCompleted.iteration` equals `lastCompletedWork.iteration`;
+that equality says nothing about reconciliation or fulfilment.
+
+`lastRetryObservation` describes the recovery call that supplied the retry delay.
+The delay is historical, not a countdown or permission to broadcast.
+Discovery-only execution is not enabled in this slice. There is no compatibility
+reader for snapshots missing the new required fields; startup publication writes
+the current shape. There is no periodic or shutdown publication.
 
 The snapshot is diagnostic state. It does not replace the signer
 journal or checkpoints and is not used to authorize transaction work.
@@ -2135,9 +2215,9 @@ collection; it provides no reservation or fairness between consumers. A consumer
 requesting many nearer rounds can displace another consumer's later work.
 
 A cycle performs recovery, dispatches at most sixteen due entries when the
-recovery report shows an open gate, then scans consumers. If that cycle's recovery
+recovery report shows an open gate, then performs durable consumer scans. If that cycle's recovery
 report shows a closed gate, scheduled dispatch is skipped, queued entries remain,
-and the cycle uses the normal poll sleep. This avoids scheduled deployment reads,
+and ordinary full work remains scheduled. This avoids scheduled deployment reads,
 beacon fetching and simulation while blocked. Consumer scans still run and can
 discover and defer additional work. The report is never reused across cycles;
 recovery that reopens the gate permits dispatch in that same cycle. An open report
@@ -2156,28 +2236,34 @@ re-enters the normal importer's stored and retained-work checks.
 
 A returned imported, already-stored, pending or per-work already-retained result
 removes the entry. A signer-unavailable result keeps it queued and stops the pass:
-all such admission blockers apply to the signer, not just that round. Durable and
-soft scans offer signer-unavailable work to this same collection, including later
-requests skipped under the scan's cached blocker. Released rounds use their exact
+all such admission blockers apply to the signer, not just that round. Durable
+scans also offer signer-unavailable work to this collection. Discovery offers
+all non-terminal soft requests without calling the importer. Released rounds use their exact
 past release time and outrank future rounds under the existing eviction policy.
 Duplicate offers do not reset entry age or failure ordering.
 
 This retries queued work from memory after the gate reopens, even after the soft
-cursor has advanced. Earlier-import-failed work is not offered: the original
-failure prevents soft cursor advancement, so the range is rescanned. A backward
+cursor has advanced. A discovery offer rejected at the queue limit is counted;
+the soft cursor advances and durable rediscovery remains its fallback. This can
+delay fulfillment under overload; there is no fixed delay bound. A backward
 clock step can return an entry to waiting without removing it. There is no result
 cache shared by the scheduled pass and scans. Repeated importer calls are allowed;
 a second retained attempt for the same work is not. Durable scanning can still
 call the importer for queued work in its range, adding pre-admission RPC cost.
 The closed-gate skip applies only to scheduled dispatch, not consumer scans.
 
-A productive pass removes and hands off at least one entry.
-If eligible work remains after a productive pass, the next cycle need not sleep.
-A pass stopped by signer unavailability always takes the normal poll sleep,
-even if an earlier entry was productive. Otherwise sleep ends at the earlier of
-the poll interval and the next future release. Failed recovery and a pass with
-only thrown dispatches use the normal poll sleep. Release arithmetic uses bigint; a distant round cannot create an
-oversized timer. Recovery and imports remain sequential.
+An explicit unattempted cap remainder after a successful handoff can trigger an
+immediate full continuation, provided that pass had no failure, blockage or clock
+deferral. Explicit waiting entries retain their own delay. Waiting, failed and
+otherwise unattempted released entries retry after the poll interval capped at
+15 seconds. Recovery-clearable blockers use a 15-second release retry; ordinary
+full work may serve them sooner. Operator-only and unknown blockers do not
+trigger fast release retries. A duplicate offer cannot erase existing backoff.
+
+Release wake-ups map wall time to monotonic deadlines provisionally, recheck wall
+time after waking and before dispatch, and never sleep longer than the polling
+check. Recovery and imports remain sequential; inline fetches or RPCs can delay
+other due work. These scheduling decisions never grant signing authority.
 
 Only the scheduled wait is removed. After release, beacon fetching and its retries
 remain inline. With the default eight attempts, three endpoints, five-second

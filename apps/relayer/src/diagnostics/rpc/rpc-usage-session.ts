@@ -15,7 +15,7 @@ import {
   type RpcMetricsObservation,
 } from './rpc-usage-report.js';
 
-export const RPC_USAGE_INTERVAL_MS = 60_000;
+const RPC_USAGE_INTERVAL_MS = 60_000;
 
 export interface RpcUsageSessionOptions {
   readonly readSnapshot: () => RpcMetricsSnapshot;

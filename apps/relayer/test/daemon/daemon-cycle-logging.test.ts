@@ -68,6 +68,10 @@ import type {
   CheckpointStore,
 } from '../../src/state/checkpoint.js';
 
+import {
+  fullWorkResult,
+} from '../helpers/full-work-result.js';
+
 const CONSUMER_A: Address =
   '0x1111111111111111111111111111111111111111';
 
@@ -153,6 +157,7 @@ const loggerMocks = {
     vi.fn<RelayerLog['roundAlreadyStored']>(),
   roundDeferred: vi.fn<RelayerLog['roundDeferred']>(),
   roundPending: vi.fn<RelayerLog['roundPending']>(),
+  workCompleted: vi.fn(),
   heartbeat: vi.fn<RelayerLog['heartbeat']>(),
   rpcUsage: vi.fn<ScopedRelayerLog['rpcUsage']>(),
   loggingFailed: vi.fn<RelayerLog['loggingFailed']>(),
@@ -279,7 +284,7 @@ function logCycle(
   createDaemonLogger({
     logger: loggerMocks,
     now: () => 0,
-  }).onCycle(result);
+  }).onWork(fullWorkResult(result));
 }
 
 describe('daemon cycle diagnostic reporting', () => {
@@ -498,7 +503,7 @@ describe('daemon cycle diagnostic reporting', () => {
     });
 
     now = 1_000;
-    logger.onCycle(result);
+    logger.onWork(fullWorkResult(result));
 
     expect(loggerMocks.durableAnchorUnavailable)
       .toHaveBeenCalledExactlyOnceWith({

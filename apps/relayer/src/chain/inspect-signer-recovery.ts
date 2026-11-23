@@ -102,7 +102,7 @@ export interface InspectSignerRecoveryOptions {
   readonly acceptanceAttemptId?: string;
 }
 
-export type AcceptanceRefusalReason =
+type AcceptanceRefusalReason =
   | 'wrong-attempt'
   | 'nonce-unconsumed'
   | 'missing-lower-bound'

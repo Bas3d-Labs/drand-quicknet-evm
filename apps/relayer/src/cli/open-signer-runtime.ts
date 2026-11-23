@@ -62,6 +62,7 @@ export interface OpenSignerRuntimeOptions
     | 'readChainHeads'
     | 'maxBlockRange'
     | 'onRecoveryCompleted'
+    | 'schedulerObserver'
   > {
   readonly identity: JournalIdentity;
   readonly log: ScopedRelayerLog;
@@ -150,6 +151,9 @@ export async function openSignerRuntime(
     readChainHeads: options.readChainHeads,
     maxBlockRange: options.maxBlockRange,
     retry: options.retry,
+    ...(options.schedulerObserver === undefined
+      ? {}
+      : { schedulerObserver: options.schedulerObserver }),
     durableRecovery: {
       refreshIntervalMs: DURABLE_RECOVERY_REFRESH_INTERVAL_MS,
       now: () => performance.now(),

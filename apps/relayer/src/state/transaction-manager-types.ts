@@ -36,12 +36,12 @@ import type {
 
 export type TransactionAdmissionReason = SignerBlocker;
 
-export interface TransactionManagerOperationOptions {
+interface TransactionManagerOperationOptions {
   readonly signal?: AbortSignal | undefined;
   readonly cycle?: number | undefined;
 }
 
-export interface TransactionManagerAnchor {
+interface TransactionManagerAnchor {
   readonly blockNumber: bigint;
   readonly blockHash: Hash;
 }
@@ -52,7 +52,7 @@ export interface ReconcileTransactionsOptions
   readonly durable: Readonly<TransactionManagerAnchor>;
 }
 
-export interface TransactionWork {
+interface TransactionWork {
   readonly workId: string;
 
   readonly call: {
@@ -68,7 +68,7 @@ export interface SubmitTransactionWorkOptions
   readonly work: TransactionWork;
 }
 
-export interface RetainedTransactionIdentity {
+interface RetainedTransactionIdentity {
   readonly workId: string;
   readonly attemptId: string;
 }
@@ -139,11 +139,11 @@ export interface TransactionManagerStatus {
   readonly attempts: readonly TransactionAttemptSummary[];
 }
 
-export type TransactionRecoveryStatus =
+type TransactionRecoveryStatus =
   | SignerRecoveryResult['status']
   | 'skipped';
 
-export type TransactionInclusionStatus =
+type TransactionInclusionStatus =
   SignerInclusionInspection['status'];
 
 export interface TransactionReconciliationReport {

@@ -89,6 +89,9 @@ export interface RunDaemonIterationOptions {
   maxBlockRange: bigint;
   finality: FinalityPolicy;
   softCursor?: SoftScanCursor;
+  /** Internal scan ownership: the daemon loop supplies false after the split. */
+  scanSoft?: boolean;
+  selectDurableTarget?: (nextBlock: bigint, head: bigint) => bigint;
   waiting?: WaitingRequestScheduling | undefined;
   readChainHeads?: () => Promise<ChainHeads>;
   onOperation?: (operation: OperationContext) => void;
@@ -114,6 +117,8 @@ export interface RunDaemonIterationOptions {
 
 export interface RunDaemonIterationResult {
   status: 'caught-up' | 'processed' | 'deferred';
+  latestBlockObservedAt?: string;
+  durableBlockObservedAt?: string;
   consumer: Address;
   latestBlock: bigint;
   durableBlock: bigint;
@@ -194,14 +199,21 @@ export async function runDaemonIteration(
     checkpoint > 0n &&
     heads.durableBlock < checkpoint - 1n;
 
+  const durableTarget = options.selectDurableTarget?.(
+    durableNextBlock,
+    heads.durableBlock,
+  ) ?? heads.durableBlock;
+
+  const scanThrough = minimum(durableTarget, heads.durableBlock);
+
   let durableScan: ProcessedDaemonScan | undefined;
   
-  if (hasDurableBlocksToScan(durableNextBlock, heads.durableBlock)) {
+  if (hasDurableBlocksToScan(durableNextBlock, scanThrough)) {
     reportOperation({
       name: 'scan-requests',
       scanType: 'durable',
       fromBlock: durableNextBlock,
-      throughBlock: heads.durableBlock,
+      throughBlock: scanThrough,
       maxBlockRange: options.maxBlockRange,
     });
 
@@ -210,7 +222,7 @@ export async function runDaemonIteration(
       deployment: options.deployment,
       consumer: options.consumer,
       nextBlock: durableNextBlock,
-      durableBlock: heads.durableBlock,
+      durableBlock: scanThrough,
       maxBlockRange: options.maxBlockRange,
 
       ...(options.waiting === undefined
@@ -231,7 +243,7 @@ export async function runDaemonIteration(
             fromBlock: durableNextBlock,
             toBlock: minimum(
               durableNextBlock + options.maxBlockRange - 1n,
-              heads.durableBlock,
+              scanThrough,
             ),
             ...progress,
           });
@@ -342,6 +354,18 @@ export async function runDaemonIteration(
 
       throw importFailure.error;
     }
+  }
+
+  if (options.scanSoft === false) {
+    return createResult({
+      consumer: options.consumer,
+      heads,
+      durableNextBlock,
+      durableHeadRegressed,
+      softCursor: options.softCursor ?? { nextBlock: options.startBlock },
+      durableScan,
+      softScan: undefined,
+    });
   }
 
   const softNextBlock = getSoftNextBlock(
@@ -503,6 +527,12 @@ function createResult(
   return {
     status,
     consumer: options.consumer,
+    ...(options.heads.latestBlockObservedAt === undefined
+      ? {}
+      : { latestBlockObservedAt: options.heads.latestBlockObservedAt }),
+    ...(options.heads.durableBlockObservedAt === undefined
+      ? {}
+      : { durableBlockObservedAt: options.heads.durableBlockObservedAt }),
     latestBlock: options.heads.latestBlock,
     durableBlock: options.heads.durableBlock,
     durableNextBlock: options.durableNextBlock,
