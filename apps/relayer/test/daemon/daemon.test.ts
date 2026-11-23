@@ -105,8 +105,6 @@ function fixture() {
       inclusionChecksComplete: true,
       persistenceIdle: true,
       retainedCount: state.retainedCount,
-      retainedAttemptIds: [],
-      coveredAttemptIds: [],
     });
 
     const scheduled = state.open

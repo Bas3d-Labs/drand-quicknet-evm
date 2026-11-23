@@ -634,8 +634,6 @@ describe('work and reconciliation observations', () => {
     inclusionChecksComplete: true,
     persistenceIdle: true,
     retainedCount: 0,
-    retainedAttemptIds: [],
-    coveredAttemptIds: [],
   };
 
   it('separates discovery completion from full work and reconciliation', async () => {

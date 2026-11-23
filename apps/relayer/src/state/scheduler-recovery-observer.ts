@@ -6,15 +6,6 @@ export interface SchedulerInspectionCompletion {
   readonly inclusionChecksComplete: boolean;
   readonly persistenceIdle: boolean;
   readonly retainedCount: number;
-  readonly retainedAttemptIds: readonly string[];
-  /** Empty for partial inspections. Never inferred from retained identities. */
-  readonly coveredAttemptIds: readonly string[];
-}
-
-export interface SchedulerBroadcastAcknowledgement {
-  readonly attemptId: string;
-  readonly workId: string;
-  readonly acknowledgedAt: number;
 }
 
 /** Internal, synchronous observations. These never grant authorization. */
@@ -23,8 +14,5 @@ export interface SchedulerRecoveryObserver {
   readonly now: () => number;
   readonly onInspectionCompleted?: (
     fact: SchedulerInspectionCompletion,
-  ) => void;
-  readonly onBroadcastAcknowledged?: (
-    fact: SchedulerBroadcastAcknowledgement,
   ) => void;
 }

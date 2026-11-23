@@ -1714,8 +1714,6 @@ describe('runDaemonCommand', () => {
         inclusionChecksComplete: true,
         persistenceIdle: true,
         retainedCount: 0,
-        retainedAttemptIds: [],
-        coveredAttemptIds: [],
       });
 
       expect(inspection).toHaveBeenCalledOnce();

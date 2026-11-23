@@ -118,9 +118,6 @@ async function setup(options: {
   );
 
   const create = () => SignerCoordinator.create({
-    ...(options.schedulerObserver === undefined
-      ? {}
-      : { schedulerObserver: options.schedulerObserver }),
     identity: IDENTITY,
     maxRetainedAttempts: options.maxRetainedAttempts ?? 3,
     store: { load, save },
@@ -4753,7 +4750,7 @@ describe('scheduler recovery observations', () => {
   });
 
   it.each([false, true])(
-    'preserves provider and persistence order when hooks throw: %s',
+    'preserves provider and persistence order when the inspection hook throws: %s',
     async (throws) => {
       const baseline = await setup({ recordHeaders: true });
 
@@ -4762,19 +4759,11 @@ describe('scheduler recovery observations', () => {
       const order: string[] = [];
       const now = vi.fn()
         .mockReturnValueOnce(10)
-        .mockReturnValueOnce(20)
-        .mockReturnValueOnce(30);
+        .mockReturnValueOnce(20);
       const onInspectionCompleted = vi.fn<
         NonNullable<SchedulerRecoveryObserver['onInspectionCompleted']>
       >(() => {
         order.push('inspection');
-
-        if (throws) {
-          throw new Error('observer failure');
-        }
-      });
-      const onBroadcastAcknowledged = vi.fn(() => {
-        order.push('acknowledgement');
 
         if (throws) {
           throw new Error('observer failure');
@@ -4785,7 +4774,6 @@ describe('scheduler recovery observations', () => {
         schedulerObserver: {
           now,
           onInspectionCompleted,
-          onBroadcastAcknowledged,
         },
       });
 
@@ -4815,13 +4803,11 @@ describe('scheduler recovery observations', () => {
       const fact = onInspectionCompleted.mock.calls[0]![0];
 
       expect(Object.isFrozen(fact)).toBe(true);
-      expect(Object.isFrozen(fact.coveredAttemptIds)).toBe(true);
-      expect(Object.isFrozen(fact.retainedAttemptIds)).toBe(true);
       expect(abandon).not.toHaveBeenCalled();
       expect(t.events).toEqual(baseline.events);
       expect(result.broadcast?.status).toBe('acknowledged');
-      expect(order).toEqual(['finished', 'inspection', 'acknowledgement']);
-      expect(now).toHaveBeenCalledTimes(3);
+      expect(order).toEqual(['finished', 'inspection']);
+      expect(now).toHaveBeenCalledTimes(2);
       expect(onInspectionCompleted).toHaveBeenCalledWith({
         startedAt: 10,
         completedAt: 20,
@@ -4829,25 +4815,16 @@ describe('scheduler recovery observations', () => {
         inclusionChecksComplete: false,
         persistenceIdle: true,
         retainedCount: 1,
-        retainedAttemptIds: [t.coordinator.attempts[0]!.attemptId],
-        coveredAttemptIds: [],
-      });
-      expect(onBroadcastAcknowledged).toHaveBeenCalledWith({
-        attemptId: t.coordinator.attempts[0]!.attemptId,
-        workId: 'test-work:first',
-        acknowledgedAt: 30,
       });
     },
   );
 
   it('keeps inspection completion when the later broadcast throws', async () => {
     const onInspectionCompleted = vi.fn();
-    const onBroadcastAcknowledged = vi.fn();
     const t = await setup({
       schedulerObserver: {
         now: () => 10,
         onInspectionCompleted,
-        onBroadcastAcknowledged,
       },
     });
     const failure = new Error('broadcast failure');
@@ -4857,7 +4834,6 @@ describe('scheduler recovery observations', () => {
     await expect(t.cycle.run(t.recovery)).rejects.toBe(failure);
 
     expect(onInspectionCompleted).toHaveBeenCalledTimes(1);
-    expect(onBroadcastAcknowledged).not.toHaveBeenCalled();
   });
 
   it('does not publish completion after an abandoned inspection', async () => {
@@ -4886,7 +4862,6 @@ describe('scheduler recovery observations', () => {
           throw new Error('clock failure');
         },
         onInspectionCompleted: vi.fn(),
-        onBroadcastAcknowledged: vi.fn(),
       },
     });
 
@@ -4895,7 +4870,7 @@ describe('scheduler recovery observations', () => {
     expect(t.events).toEqual(baseline.events);
   });
 
-  it('does not claim latest coverage for attempts resolved during durable recovery', async () => {
+  it('reports zero retained attempts after durable recovery resolves them', async () => {
     const onInspectionCompleted = vi.fn();
     const t = await setup({
       schedulerObserver: { now: () => 10, onInspectionCompleted },
@@ -4919,12 +4894,10 @@ describe('scheduler recovery observations', () => {
       inclusionChecksComplete: true,
       persistenceIdle: true,
       retainedCount: 0,
-      retainedAttemptIds: [],
-      coveredAttemptIds: [],
     });
   });
 
-  it('reports only latest-checked coverage for a retained included attempt', async () => {
+  it('reports a retained included attempt after complete inspection', async () => {
     const onInspectionCompleted = vi.fn();
     const t = await setup({
       schedulerObserver: { now: () => 10, onInspectionCompleted },
@@ -4954,29 +4927,6 @@ describe('scheduler recovery observations', () => {
       inclusionChecksComplete: true,
       persistenceIdle: true,
       retainedCount: 1,
-      retainedAttemptIds: [attempt.attemptId],
-      coveredAttemptIds: [attempt.attemptId],
     });
-  });
-
-  it('reports every acknowledged rebroadcast for the same attempt', async () => {
-    const onBroadcastAcknowledged = vi.fn();
-    const now = vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(20);
-    const t = await setup({
-      schedulerObserver: { now, onBroadcastAcknowledged },
-    });
-
-    await t.cycle.run(t.recovery);
-
-    t.at(100);
-
-    await t.cycle.run(t.recovery);
-
-    expect(onBroadcastAcknowledged).toHaveBeenCalledTimes(2);
-    expect(onBroadcastAcknowledged.mock.calls[0]![0].attemptId)
-      .toBe(onBroadcastAcknowledged.mock.calls[1]![0].attemptId);
-    expect(onBroadcastAcknowledged.mock.calls[0]![0].acknowledgedAt).toBe(10);
-    expect(onBroadcastAcknowledged.mock.calls[1]![0].acknowledgedAt).toBe(20);
-    expect(now).toHaveBeenCalledTimes(2);
   });
 });

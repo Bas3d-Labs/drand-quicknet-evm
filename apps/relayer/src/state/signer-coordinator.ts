@@ -88,10 +88,6 @@ import {
   type RecoveryWriteCompletion,
 } from './plan-signer-recovery.js';
 
-import type {
-  SchedulerRecoveryObserver,
-} from './scheduler-recovery-observer.js';
-
 import {
   evaluateSignerGate,
   type CoordinatorBlocker,
@@ -137,7 +133,6 @@ export interface SignerCoordinatorOptions {
   readonly log: ScopedRelayerLog;
   readonly createErrorSummary: ErrorSummaryFactory;
   readonly now?: () => number;
-  readonly schedulerObserver?: SchedulerRecoveryObserver;
 }
 
 export interface RecoverSignerOptions {
@@ -369,7 +364,6 @@ export class SignerCoordinator {
     private readonly log: ScopedRelayerLog,
     private readonly now: () => number,
     private readonly createErrorSummary: ErrorSummaryFactory,
-    private readonly schedulerObserver: SchedulerRecoveryObserver | undefined,
   ) {}
 
   static async create(
@@ -396,7 +390,6 @@ export class SignerCoordinator {
       options.log.withContext({ signer: identity.signer }),
       options.now ?? Date.now,
       options.createErrorSummary,
-      options.schedulerObserver,
     );
 
     const current = persistence.current;
@@ -954,20 +947,6 @@ export class SignerCoordinator {
           transactionHash: transaction.transactionHash,
           nonce: attempt.nonce,
         });
-      }
-
-      const observer = this.schedulerObserver;
-
-      if (observer?.onBroadcastAcknowledged !== undefined) {
-        try {
-          observer.onBroadcastAcknowledged(Object.freeze({
-            attemptId: attempt.attemptId,
-            workId: attempt.workId,
-            acknowledgedAt: observer.now(),
-          }));
-        } catch {
-          // Scheduling observations must not replace a broadcast outcome.
-        }
       }
 
       this.emit(

@@ -1369,27 +1369,21 @@ describe('isOperationCancelled', () => {
   });
 });
 
-it('supplies inspection and acknowledgement facts through pre-submit reconciliation', async () => {
-  const order: string[] = [];
+it('supplies inspection completion through pre-submit reconciliation', async () => {
   const now = vi.fn(() => 100);
-  const onInspectionCompleted = vi.fn(() => {
-    order.push('inspection');
-  });
-  const onBroadcastAcknowledged = vi.fn(() => {
-    order.push('acknowledgement');
-  });
+  const onInspectionCompleted = vi.fn();
   const t = await managerFixture({
     schedulerObserver: {
       now,
       onInspectionCompleted,
-      onBroadcastAcknowledged,
     },
   });
 
-  await t.manager.submit(submissionOptions());
+  const result = await t.manager.submit(submissionOptions());
 
-  expect(order).toEqual(['inspection', 'acknowledgement']);
-  expect(now).toHaveBeenCalledTimes(3);
+  expect(result.status).toBe('submitted');
+  expect(now).toHaveBeenCalledTimes(2);
+  expect(onInspectionCompleted).toHaveBeenCalledTimes(1);
   expect(onInspectionCompleted).toHaveBeenCalledWith({
     startedAt: 100,
     completedAt: 100,
@@ -1397,8 +1391,5 @@ it('supplies inspection and acknowledgement facts through pre-submit reconciliat
     inclusionChecksComplete: true,
     persistenceIdle: true,
     retainedCount: 0,
-    retainedAttemptIds: [],
-    coveredAttemptIds: [],
   });
-  expect(onBroadcastAcknowledged).toHaveBeenCalledTimes(1);
 });

@@ -303,18 +303,6 @@ export class SignerRecoveryCycle {
             try {
               const completed = this.coordinator.status;
               const retained = this.coordinator.attempts;
-              const coveredAttemptIds: string[] = [];
-
-              // Partial results do not identify every checked attempt. Only
-              // a complete latest inspection supplies coverage here.
-              if (
-                inclusions?.status === 'inspected' &&
-                inclusions.inclusionChecksComplete
-              ) {
-                for (const attempt of inclusions.attempts) {
-                  coveredAttemptIds.push(attempt.attemptId);
-                }
-              }
 
               observer.onInspectionCompleted(Object.freeze({
                 startedAt: inspectionStartedAt,
@@ -323,10 +311,6 @@ export class SignerRecoveryCycle {
                 inclusionChecksComplete: completed.inclusionChecksComplete,
                 persistenceIdle: completed.persistenceState === 'idle',
                 retainedCount: retained.length,
-                retainedAttemptIds: Object.freeze(
-                  retained.map((attempt) => attempt.attemptId),
-                ),
-                coveredAttemptIds: Object.freeze(coveredAttemptIds),
               }));
             } catch {
               // Observation failure must not abandon a finished inspection.

@@ -779,29 +779,36 @@ before release.
 
 With a three-round Quicknet lead (7–9 seconds relative to the request
 block timestamp), the 15-second setting can discover requests after their
-scheduled beacon release. In a ten-request Robinhood testnet run, eight
-were discovered after release; in a separate ten-request run at 5 seconds,
-none were. These small sequential samples do not establish long-run miss
+scheduled beacon release. In the scheduler testnet measurement below, four
+of ten requests were discovered after release, compared with six of ten in
+the baseline. These small sequential samples do not establish long-run miss
 rates or latency bounds. Already-discovered future rounds can wake the
 scheduler at release rather than waiting for the entire polling delay.
 
-Historical daemon HTTP usage before discovery and full work were separated,
-on Robinhood testnet with one consumer, safe finality, and a maximum block
-range of 2000. These figures do not measure the separate scheduler:
+Measured daemon HTTP attempts on Robinhood testnet with one consumer,
+safe finality, a maximum block range of 2000, and a 15-second poll interval:
 
-| Poll interval | Idle HTTP attempts/hour | Workload HTTP attempts/hour |
+| Window | Combined cycle attempts/hour | Separate scheduler attempts/hour |
 | --- | ---: | ---: |
-| 15 seconds | about 2,609 | about 4,172 |
-| 5 seconds | about 6,507 | about 9,395 |
+| Idle | 2,573.07 | 1,073.65 |
+| Workload | 4,103.81 | 3,041.48 |
 
-The 15-second idle rate comes from a separate hour-long idle measurement.
-The 5-second idle rate extrapolates approximately ten minutes, observing
-one safe-head advance at heartbeat resolution. Workload rates cover
-approximately one hour with ten distinct requested rounds, exclude the
-subsequent drain, and are not steady-state loaded-cost estimates. They
-exclude the separate experiment observer's RPC traffic. Provider method
-weights, retries, consumer count, retained attempts, and chain behavior
-affect cost; these figures do not guarantee a particular bill or plan fit.
+The scheduler idle window recorded 1,084 HTTP attempts over 3,634.702 seconds;
+the workload window recorded 3,052 over 3,612.454 seconds. Neither window
+had RPC failures. All ten requests succeeded durably
+across ten distinct rounds. Median release-to-storage chain time was
+2 seconds, compared with 4 seconds in the baseline; the different discovery
+phase across these small samples prevents attributing that difference to
+the scheduler.
+
+Both runs used approximately one-hour idle and workload windows. Workload
+rates exclude the subsequent drain and are not steady-state loaded-cost
+estimates. The runs were sequential, with similar safe-head cadence and
+retained occupancy; they do not isolate the scheduler's effect. Counts
+exclude the separate experiment observer's RPC traffic. These are measured
+testnet call counts, not reconciled billing or mainnet estimates. Provider
+method weights, retries, consumer count, retained attempts, and chain
+behavior affect cost.
 
 This setting controls polling waits, not individual RPC calls. Full work
 can make multiple calls and process multiple rounds.
