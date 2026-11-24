@@ -31,7 +31,8 @@ import type {
   TransactionJournalStore,
 } from '../../src/state/transaction-journal.js';
 
-import * as verification from '../../src/state/transaction-journal-verification.js';
+import * as verification
+  from '../../src/state/transaction-journal-verification.js';
 import * as completion from '../../src/state/write-completion.js';
 
 import {
@@ -130,7 +131,9 @@ async function setup(kind: Scenario) {
 
   const baseRpc = client(200n);
 
-  const broadcastRequest = vi.fn(async () => first.signedTransactions[0].transactionHash);
+  const broadcastRequest = vi.fn(
+    async () => first.signedTransactions[0].transactionHash
+  );
 
   const rpc = {
     ...baseRpc,
@@ -167,7 +170,13 @@ async function setup(kind: Scenario) {
     };
   }
 
-  if (['bootstrap', 'prepared', 'broadcast', 'observation', 'inclusion'].includes(kind)) {
+  if ([
+    'bootstrap',
+    'prepared',
+    'broadcast',
+    'observation',
+    'inclusion'
+  ].includes(kind)) {
     rpc.getTransactionCount.mockResolvedValue(4);
   }
 
@@ -184,7 +193,9 @@ async function setup(kind: Scenario) {
     const hinted = client();
 
     rpc.getBlock.mockImplementation(hinted.getBlock.getMockImplementation()!);
-    rpc.getTransaction.mockImplementation(hinted.getTransaction.getMockImplementation()!);
+    rpc.getTransaction.mockImplementation(
+      hinted.getTransaction.getMockImplementation()!
+    );
   }
 
   if (kind === 'search-reset') {
@@ -218,7 +229,10 @@ async function setup(kind: Scenario) {
     });
 
     rpc.getTransactionCount.mockImplementation(async (input) => {
-      if (kind === 'search-unconsumed-bound-rebase' || input.blockNumber === 98n) {
+      if (
+        kind === 'search-unconsumed-bound-rebase' ||
+        input.blockNumber === 98n
+      ) {
         return 4;
       }
 
@@ -303,7 +317,10 @@ async function setup(kind: Scenario) {
 
   if (kind === 'prepared' || kind === 'broadcast' || kind === 'inclusion') {
     await coordinator.recover(options);
-    await coordinator.checkInclusions({ publicClient: rpc.publicClient, head: DURABLE });
+    await coordinator.checkInclusions({
+      publicClient: rpc.publicClient,
+      head: DURABLE
+    });
   }
 
   const run = () => {
@@ -348,7 +365,8 @@ async function setup(kind: Scenario) {
     signTransaction,
     timeline,
     lines,
-    records: (): Record<string, unknown>[] => lines.map((line) => JSON.parse(line)),
+    records: (): Record<string, unknown>[] =>
+      lines.map((line) => JSON.parse(line)),
     visible: () => visible,
     setVisible: (next: TransactionJournalSnapshot) => {
       visible = { kind: 'present', snapshot: next };
@@ -600,7 +618,8 @@ describe('coordinator write failure boundaries', () => {
       new TypeError('Injected verification failure'),
     );
 
-    await expect(t.run()).rejects.toThrow('Invalid journal persistence snapshot.');
+    await expect(t.run()).rejects
+      .toThrow('Invalid journal persistence snapshot.');
 
     expect(t.save).not.toHaveBeenCalled();
     expect(t.visible()).toBe(before);
@@ -651,209 +670,228 @@ describe('coordinator write failure boundaries', () => {
     expect(t.save).toHaveBeenCalled();
   });
 
-  it.each(WRITE_SITES)('retains %s when storage does not acknowledge', async (kind) => {
-    const t = await setup(kind);
+  it.each(WRITE_SITES)(
+    'retains %s when storage does not acknowledge',
+    async (kind) => {
+      const t = await setup(kind);
 
-    const before = t.visible();
+      const before = t.visible();
 
-    const attempts = t.coordinator.attempts;
+      const attempts = t.coordinator.attempts;
 
-    const revision = t.coordinator.durableRecoveryRevision;
+      const revision = t.coordinator.durableRecoveryRevision;
 
-    t.save.mockRejectedValueOnce(new Error('Uncertain storage'));
+      t.save.mockRejectedValueOnce(new Error('Uncertain storage'));
 
-    await expect(t.run()).rejects.toThrow(PERSISTENCE_ERROR);
+      await expect(t.run()).rejects.toThrow(PERSISTENCE_ERROR);
 
-    expect(t.visible()).toBe(before);
-    expect(t.coordinator.attempts).toEqual(attempts);
-    expect(t.coordinator.durableRecoveryRevision).toBe(revision);
-    expect(t.coordinator.status).toMatchObject({
-      open: false,
-      recoveryComplete: kind === 'inclusion',
-      inclusionChecksComplete: false,
-      persistenceState: 'failed',
-      primaryReason: 'persistence-failure',
-    });
-    expect(t.coordinator.canBroadcast).toBe(false);
-    expect(t.rpc.sendRawTransaction).not.toHaveBeenCalled();
-    expect(t.rpc.request).not.toHaveBeenCalled();
+      expect(t.visible()).toBe(before);
+      expect(t.coordinator.attempts).toEqual(attempts);
+      expect(t.coordinator.durableRecoveryRevision).toBe(revision);
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: kind === 'inclusion',
+        inclusionChecksComplete: false,
+        persistenceState: 'failed',
+        primaryReason: 'persistence-failure',
+      });
+      expect(t.coordinator.canBroadcast).toBe(false);
+      expect(t.rpc.sendRawTransaction).not.toHaveBeenCalled();
+      expect(t.rpc.request).not.toHaveBeenCalled();
 
-    const blockers = ['persistence-failure'];
+      const blockers = ['persistence-failure'];
 
-    if (kind === 'broadcast') {
-      blockers.push('unresolved-attempt');
+      if (kind === 'broadcast') {
+        blockers.push('unresolved-attempt');
+      }
+
+      blockers.push('recovery-incomplete');
+
+      expect(t.coordinator.status.blockers).toEqual(blockers);
+
+      await expect(t.run()).rejects.toMatchObject({
+        message: 'A pending journal write must be retried first.',
+      });
+
+      expect(t.save).toHaveBeenCalledTimes(1);
+
+      await t.coordinator.retryPersistence(RETRY_CYCLE);
+
+      expect(t.save.mock.calls[1]![0]).toBe(t.save.mock.calls[0]![0]);
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: kind === 'inclusion',
+        inclusionChecksComplete: false,
+        persistenceState: 'idle',
+      });
+      expect(t.coordinator.canBroadcast).toBe(false);
     }
+  );
 
-    blockers.push('recovery-incomplete');
+  it.each(KINDS)(
+    'retries %s with its event and operation but no grants or RPC',
+    async (kind) => {
+      const t = await setup(kind);
 
-    expect(t.coordinator.status.blockers).toEqual(blockers);
+      const expected = expectedEvent(kind, t.hash);
 
-    await expect(t.run()).rejects.toMatchObject({
-      message: 'A pending journal write must be retried first.',
-    });
+      // Model bytes becoming visible while durability remains uncertain.
+      t.save.mockImplementationOnce(async (next) => {
+        t.setVisible(next);
+        throw new Error('Visible but unacknowledged');
+      });
 
-    expect(t.save).toHaveBeenCalledTimes(1);
+      await expect(t.run()).rejects.toThrow(PERSISTENCE_ERROR);
 
-    await t.coordinator.retryPersistence(RETRY_CYCLE);
+      const pending = t.save.mock.calls[0]![0];
 
-    expect(t.save.mock.calls[1]![0]).toBe(t.save.mock.calls[0]![0]);
-    expect(t.coordinator.status).toMatchObject({
-      open: false,
-      recoveryComplete: kind === 'inclusion',
-      inclusionChecksComplete: false,
-      persistenceState: 'idle',
-    });
-    expect(t.coordinator.canBroadcast).toBe(false);
-  });
+      expectSavedWrite(kind, pending);
 
-  it.each(KINDS)('retries %s with its event and operation but no grants or RPC', async (kind) => {
-    const t = await setup(kind);
+      const counts = rpcCounts(t);
 
-    const expected = expectedEvent(kind, t.hash);
+      const signatures = t.signTransaction.mock.calls.length;
 
-    // Model bytes becoming visible while durability remains uncertain.
-    t.save.mockImplementationOnce(async (next) => {
-      t.setVisible(next);
-      throw new Error('Visible but unacknowledged');
-    });
+      expect(t.coordinator.status.persistenceState).toBe('failed');
+      expect(t.records().filter(
+        (record) => record.event !== 'signer_blocked'
+      )).toEqual([]);
 
-    await expect(t.run()).rejects.toThrow(PERSISTENCE_ERROR);
+      const failedStatus = t.coordinator.status;
 
-    const pending = t.save.mock.calls[0]![0];
+      const failedRecords = t.records();
 
-    expectSavedWrite(kind, pending);
+      t.save.mockRejectedValueOnce(new Error('Retry also unacknowledged'));
 
-    const counts = rpcCounts(t);
+      await expect(t.coordinator.retryPersistence(RETRY_CYCLE))
+        .rejects.toThrow(PERSISTENCE_ERROR);
 
-    const signatures = t.signTransaction.mock.calls.length;
+      expect(t.save.mock.calls[1]![0]).toBe(pending);
+      expect(t.coordinator.status).toEqual(failedStatus);
+      expect(t.records()).toEqual(failedRecords);
+      expect(t.coordinator.canBroadcast).toBe(false);
 
-    expect(t.coordinator.status.persistenceState).toBe('failed');
-    expect(t.records().filter((record) => record.event !== 'signer_blocked')).toEqual([]);
+      t.lines.length = 0;
+      t.timeline.length = 0;
 
-    const failedStatus = t.coordinator.status;
+      await t.coordinator.retryPersistence(RETRY_CYCLE);
 
-    const failedRecords = t.records();
+      expect(t.save.mock.calls[2]![0]).toBe(pending);
+      expect(t.visible()).toEqual({ kind: 'present', snapshot: pending });
+      expect(rpcCounts(t)).toEqual(counts);
+      expect(t.signTransaction).toHaveBeenCalledTimes(signatures);
+      expect(t.load).not.toHaveBeenCalled();
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: false,
+        inclusionChecksComplete: false,
+        persistenceState: 'idle',
+      });
+      expect(t.coordinator.canBroadcast).toBe(false);
 
-    t.save.mockRejectedValueOnce(new Error('Retry also unacknowledged'));
+      const blockers = [];
 
-    await expect(t.coordinator.retryPersistence(RETRY_CYCLE)).rejects.toThrow(PERSISTENCE_ERROR);
+      if ([
+        'prepared',
+        'broadcast',
+        'search-progress',
+        'search-reset',
+        'search-unconsumed-bound-rebase',
+        'search-lower-bound-replacement',
+      ].includes(kind)) {
+        blockers.push('unresolved-attempt');
+      }
 
-    expect(t.save.mock.calls[1]![0]).toBe(pending);
-    expect(t.coordinator.status).toEqual(failedStatus);
-    expect(t.records()).toEqual(failedRecords);
-    expect(t.coordinator.canBroadcast).toBe(false);
+      blockers.push('recovery-incomplete');
 
-    t.lines.length = 0;
-    t.timeline.length = 0;
+      expect(t.coordinator.status.blockers).toEqual(blockers);
+      expect(t.coordinator.status.primaryReason).toBe(blockers[0]);
 
-    await t.coordinator.retryPersistence(RETRY_CYCLE);
+      const expectedTimeline = ['save', 'ack'];
 
-    expect(t.save.mock.calls[2]![0]).toBe(pending);
-    expect(t.visible()).toEqual({ kind: 'present', snapshot: pending });
-    expect(rpcCounts(t)).toEqual(counts);
-    expect(t.signTransaction).toHaveBeenCalledTimes(signatures);
-    expect(t.load).not.toHaveBeenCalled();
-    expect(t.coordinator.status).toMatchObject({
-      open: false,
-      recoveryComplete: false,
-      inclusionChecksComplete: false,
-      persistenceState: 'idle',
-    });
-    expect(t.coordinator.canBroadcast).toBe(false);
+      if (expected !== null) {
+        expectedTimeline.push(expected.event);
+        expect(t.records()[0]).toMatchObject({
+          ...expected,
+          cycle: RETRY_CYCLE,
+          operation: { name: 'reconcile-attempt' },
+        });
+      }
 
-    const blockers = [];
+      expectedTimeline.push('signer_blocked');
 
-    if ([
-      'prepared',
-      'broadcast',
-      'search-progress',
-      'search-reset',
-      'search-unconsumed-bound-rebase',
-      'search-lower-bound-replacement',
-    ].includes(kind)) {
-      blockers.push('unresolved-attempt');
+      expect(t.timeline).toEqual(expectedTimeline);
+      expect(t.records().at(-1)).toMatchObject({
+        event: 'signer_blocked',
+        cycle: RETRY_CYCLE,
+        operation: { name: operationName(kind) },
+      });
+
+      await expect(t.coordinator.retryPersistence()).rejects.toThrow(
+        'No failed journal write is available to retry.',
+      );
+
+      expect(t.save).toHaveBeenCalledTimes(3);
+      expect(t.timeline).toEqual(expectedTimeline);
     }
+  );
 
-    blockers.push('recovery-incomplete');
+  it.each(EVENT_KINDS)(
+    'emits %s after acknowledgement and before gate changes',
+    async (kind) => {
+      const t = await setup(kind);
 
-    expect(t.coordinator.status.blockers).toEqual(blockers);
-    expect(t.coordinator.status.primaryReason).toBe(blockers[0]);
+      const started = deferred();
 
-    const expectedTimeline = ['save', 'ack'];
+      const finish = deferred();
 
-    if (expected !== null) {
-      expectedTimeline.push(expected.event);
+      const before = t.coordinator.attempts;
+
+      const revision = t.coordinator.durableRecoveryRevision;
+
+      t.save.mockImplementationOnce(async (next) => {
+        t.timeline.push('save');
+        started.resolve();
+        await finish.promise;
+        t.setVisible(next);
+        t.timeline.push('ack');
+      });
+
+      const running = t.run();
+
+      try {
+        await Promise.race([started.promise, running]);
+        expect(t.save).toHaveBeenCalledOnce();
+        expect(t.timeline).toEqual(['save']);
+        expect(t.coordinator.attempts).toEqual(before);
+        expect(t.coordinator.durableRecoveryRevision).toBe(revision);
+        expect(t.coordinator.canBroadcast).toBe(false);
+      } finally {
+        finish.resolve();
+        await running;
+      }
+
+      const expected = expectedEvent(kind, t.hash)!;
+
+      expect(t.timeline).toEqual([
+        'save',
+        'ack',
+        expected.event,
+        'signer_blocked'
+      ]);
       expect(t.records()[0]).toMatchObject({
         ...expected,
-        cycle: RETRY_CYCLE,
+        cycle: ORIGINAL_CYCLE,
         operation: { name: 'reconcile-attempt' },
       });
+      expect(t.records().filter(
+        (record) => record.event === expected.event
+      )).toHaveLength(1);
+
+      if (kind !== 'resolution') {
+        expect(t.coordinator.status.recoveryComplete).toBe(false);
+      }
     }
-
-    expectedTimeline.push('signer_blocked');
-
-    expect(t.timeline).toEqual(expectedTimeline);
-    expect(t.records().at(-1)).toMatchObject({
-      event: 'signer_blocked',
-      cycle: RETRY_CYCLE,
-      operation: { name: operationName(kind) },
-    });
-
-    await expect(t.coordinator.retryPersistence()).rejects.toThrow(
-      'No failed journal write is available to retry.',
-    );
-
-    expect(t.save).toHaveBeenCalledTimes(3);
-    expect(t.timeline).toEqual(expectedTimeline);
-  });
-
-  it.each(EVENT_KINDS)('emits %s after acknowledgement and before gate changes', async (kind) => {
-    const t = await setup(kind);
-
-    const started = deferred();
-
-    const finish = deferred();
-
-    const before = t.coordinator.attempts;
-
-    const revision = t.coordinator.durableRecoveryRevision;
-
-    t.save.mockImplementationOnce(async (next) => {
-      t.timeline.push('save');
-      started.resolve();
-      await finish.promise;
-      t.setVisible(next);
-      t.timeline.push('ack');
-    });
-
-    const running = t.run();
-
-    try {
-      await Promise.race([started.promise, running]);
-      expect(t.save).toHaveBeenCalledOnce();
-      expect(t.timeline).toEqual(['save']);
-      expect(t.coordinator.attempts).toEqual(before);
-      expect(t.coordinator.durableRecoveryRevision).toBe(revision);
-      expect(t.coordinator.canBroadcast).toBe(false);
-    } finally {
-      finish.resolve();
-      await running;
-    }
-
-    const expected = expectedEvent(kind, t.hash)!;
-
-    expect(t.timeline).toEqual(['save', 'ack', expected.event, 'signer_blocked']);
-    expect(t.records()[0]).toMatchObject({
-      ...expected,
-      cycle: ORIGINAL_CYCLE,
-      operation: { name: 'reconcile-attempt' },
-    });
-    expect(t.records().filter((record) => record.event === expected.event)).toHaveLength(1);
-
-    if (kind !== 'resolution') {
-      expect(t.coordinator.status.recoveryComplete).toBe(false);
-    }
-  });
+  );
 
   it.each([...WRITE_SITES, 'retry'] as const)(
     'retains the acknowledged journal when %s completion throws',
@@ -874,13 +912,15 @@ describe('coordinator write failure boundaries', () => {
       const revision = t.coordinator.durableRecoveryRevision;
 
       // Planner output does not naturally throw here. Fault the pure completion
-      // boundary after a real save, without accessing coordinator private state.
+      // boundary after a real save, without accessing coordinator private
+      // state.
       const describe = completion.describeWriteCompletion;
 
       const fault = vi.spyOn(completion, 'describeWriteCompletion');
 
       if (kind === 'observation') {
-        // Recovery first describes terminality immediately after acknowledgement.
+        // Recovery first describes terminality immediately after
+        // acknowledgement.
         // Let that succeed, then fault the dispatch/completion invocation.
         fault.mockImplementationOnce(describe);
       }
@@ -908,7 +948,9 @@ describe('coordinator write failure boundaries', () => {
         workId: attempt.workId,
         nonce: attempt.nonce,
         phase: attempt.phase,
-        transactionHashes: attempt.signedTransactions.map((signed) => signed.transactionHash),
+        transactionHashes: attempt.signedTransactions.map(
+          (signed) => signed.transactionHash
+        ),
       })));
       expect(t.coordinator.durableRecoveryRevision).toBe(revision);
       expect(t.coordinator.status).toMatchObject({
@@ -939,87 +981,102 @@ describe('coordinator write failure boundaries', () => {
     },
   );
 
-  it('keeps newly signed bytes protected after acknowledged preparation fails completion', async () => {
-    const t = await setup('prepared');
+  it(
+    'keeps newly signed bytes protected after acknowledged preparation fails completion',
+    async () => {
+      const t = await setup('prepared');
 
-    let bytes = '';
+      let bytes = '';
 
-    t.save.mockImplementationOnce(async (next) => {
-      bytes = next.attempts[0]!.signedTransactions[0].signedTransaction;
-      t.setVisible(next);
-      t.probe(`completion diagnostic ${bytes}`);
-    });
-    vi.spyOn(completion, 'describeWriteCompletion').mockImplementationOnce(() => {
-      throw new Error('Injected completion failure');
-    });
+      t.save.mockImplementationOnce(async (next) => {
+        bytes = next.attempts[0]!.signedTransactions[0].signedTransaction;
+        t.setVisible(next);
+        t.probe(`completion diagnostic ${bytes}`);
+      });
+      vi.spyOn(completion, 'describeWriteCompletion').mockImplementationOnce(
+        () => {
+          throw new Error('Injected completion failure');
+        }
+      );
 
-    await expect(t.run()).rejects.toMatchObject({ message: RESTART_ERROR });
+      await expect(t.run()).rejects.toMatchObject({ message: RESTART_ERROR });
 
-    expect(bytes).not.toBe('');
-    expect(t.records().some((record) => record.event === 'logging_failed')).toBe(true);
-    expect(t.lines.join('')).not.toContain(bytes);
-    expect(t.coordinator.status.persistenceState).toBe('idle');
-    expect(t.coordinator.attempts).toHaveLength(1);
-  });
-
-  it('waits for an unacknowledged inclusion save before completing abandonment', async () => {
-    const t = await setup('inclusion');
-
-    const owner = t.coordinator.beginInspection();
-
-    const started = deferred();
-
-    const finish = deferred();
-
-    t.save.mockImplementationOnce(async () => {
-      started.resolve();
-      await finish.promise;
-      throw new Error('Held write unacknowledged');
-    });
-
-    const operation = owner.checkInclusions({
-      publicClient: t.rpc.publicClient,
-      head: DURABLE,
-    });
-
-    const rejected = expect(operation).rejects.toThrow(PERSISTENCE_ERROR);
-
-    await started.promise;
-
-    let abandoned = false;
-
-    const abandonment = owner.abandon().then(() => {
-      abandoned = true;
-    });
-
-    try {
-      await Promise.resolve();
-      expect(abandoned).toBe(false);
-      expect(t.coordinator.status.persistenceState).toBe('writing');
-      expect(t.coordinator.canBroadcast).toBe(false);
-      expect(() => t.coordinator.beginInspection()).toThrow('already in progress');
-      await expect(t.coordinator.retryPersistence()).rejects.toThrow('already in progress');
-    } finally {
-      finish.resolve();
-      await Promise.all([rejected, abandonment]);
+      expect(bytes).not.toBe('');
+      expect(t.records().some(
+        (record) => record.event === 'logging_failed'
+      )).toBe(true);
+      expect(t.lines.join('')).not.toContain(bytes);
+      expect(t.coordinator.status.persistenceState).toBe('idle');
+      expect(t.coordinator.attempts).toHaveLength(1);
     }
+  );
 
-    expect(abandoned).toBe(true);
-    expect(t.coordinator.status).toMatchObject({
-      open: false,
-      recoveryComplete: true,
-      inclusionChecksComplete: false,
-      persistenceState: 'failed',
-    });
+  it(
+    'waits for an unacknowledged inclusion save before completing abandonment',
+    async () => {
+      const t = await setup('inclusion');
 
-    await t.coordinator.retryPersistence(RETRY_CYCLE);
+      const owner = t.coordinator.beginInspection();
 
-    expect(t.save.mock.calls[1]![0]).toBe(t.save.mock.calls[0]![0]);
-    expect(t.coordinator.status.open).toBe(false);
-    expect(t.coordinator.canBroadcast).toBe(false);
+      const started = deferred();
 
-    await t.coordinator.checkInclusions({ publicClient: t.rpc.publicClient, head: DURABLE });
+      const finish = deferred();
 
-    expect(t.coordinator.status.open).toBe(true);
-  });
+      t.save.mockImplementationOnce(async () => {
+        started.resolve();
+        await finish.promise;
+        throw new Error('Held write unacknowledged');
+      });
+
+      const operation = owner.checkInclusions({
+        publicClient: t.rpc.publicClient,
+        head: DURABLE,
+      });
+
+      const rejected = expect(operation).rejects.toThrow(PERSISTENCE_ERROR);
+
+      await started.promise;
+
+      let abandoned = false;
+
+      const abandonment = owner.abandon().then(() => {
+        abandoned = true;
+      });
+
+      try {
+        await Promise.resolve();
+        expect(abandoned).toBe(false);
+        expect(t.coordinator.status.persistenceState).toBe('writing');
+        expect(t.coordinator.canBroadcast).toBe(false);
+        expect(() => t.coordinator.beginInspection())
+          .toThrow('already in progress');
+        await expect(t.coordinator.retryPersistence())
+          .rejects.toThrow('already in progress');
+      } finally {
+        finish.resolve();
+        await Promise.all([rejected, abandonment]);
+      }
+
+      expect(abandoned).toBe(true);
+      expect(t.coordinator.status).toMatchObject({
+        open: false,
+        recoveryComplete: true,
+        inclusionChecksComplete: false,
+        persistenceState: 'failed',
+      });
+
+      await t.coordinator.retryPersistence(RETRY_CYCLE);
+
+      expect(t.save.mock.calls[1]![0]).toBe(t.save.mock.calls[0]![0]);
+      expect(t.coordinator.status.open).toBe(false);
+      expect(t.coordinator.canBroadcast).toBe(false);
+
+      await t.coordinator.checkInclusions({
+        publicClient: t.rpc.publicClient,
+        head: DURABLE
+      });
+
+      expect(t.coordinator.status.open).toBe(true);
+    }
+  );
 });

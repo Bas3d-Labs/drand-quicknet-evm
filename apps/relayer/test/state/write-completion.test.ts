@@ -64,13 +64,16 @@ describe('write completion descriptions', () => {
     ['broadcast', 'broadcast-attempt'],
     ['observation', 'reconcile-attempt'],
     ['search-progress', 'reconcile-attempt'],
-  ] as const)('describes %s without an event or correction', (kind, operation) => {
-    expect(describeWriteCompletion({ kind }, SIGNER)).toEqual({
-      operation,
-      terminalCorrection: false,
-      event: null,
-    });
-  });
+  ] as const)(
+    'describes %s without an event or correction',
+    (kind, operation) => {
+      expect(describeWriteCompletion({ kind }, SIGNER)).toEqual({
+        operation,
+        terminalCorrection: false,
+        event: null,
+      });
+    }
+  );
 
   it('preserves the resolution event and its own signer', () => {
     const pending: PendingWrite = {

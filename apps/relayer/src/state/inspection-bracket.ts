@@ -111,13 +111,17 @@ export function inspectionNeedsOpening(bracket: InspectionBracket): boolean {
   }
 
   if (bracket.phase !== 'opening') {
-    throw new Error('Signer inspection bracket cannot accept another operation.');
+    throw new Error(
+      'Signer inspection bracket cannot accept another operation.'
+    );
   }
 
   return true;
 }
 
-/** Failure is allowed from every phase, including a previously failed bracket. */
+/**
+ * Failure is allowed from every phase, including a previously failed bracket.
+ */
 export function nextInspectionPhase(
   phase: InspectionBracket['phase'],
   next: InspectionBracket['phase'],
@@ -134,16 +138,23 @@ export function nextInspectionPhase(
     persisting: 'completed',
     completed: null,
     failed: null,
-  } as const satisfies Record<InspectionBracket['phase'], InspectionBracket['phase'] | null>;
+  } as const satisfies Record<
+    InspectionBracket['phase'],
+    InspectionBracket['phase'] | null
+  >;
 
   if (successors[phase] !== next) {
-    throw new Error('Signer inspection bracket cannot accept another operation.');
+    throw new Error(
+      'Signer inspection bracket cannot accept another operation.'
+    );
   }
 
   return next;
 }
 
-/** Returns the remembered nonce, or null when durable evidence contradicts it. */
+/**
+ * Returns the remembered nonce, or null when durable evidence contradicts it.
+ */
 export function observeDurableNonce(
   bracket: InspectionBracket,
   observation: AnchoredNonceObservation,
@@ -152,7 +163,9 @@ export function observeDurableNonce(
     bracket.durableAnchor === undefined ||
     !blockAnchorsMatch(bracket.durableAnchor, observation.anchor)
   ) {
-    throw new Error('Durable observation does not match the inspection anchor.');
+    throw new Error(
+      'Durable observation does not match the inspection anchor.'
+    );
   }
 
   if (
@@ -174,7 +187,9 @@ export function latestNonceIsConsistent(
 
 export function assertInspectionCompleted(bracket: InspectionBracket): void {
   if (bracket.phase !== 'completed') {
-    throw new Error('Signer inspection bracket has not completed successfully.');
+    throw new Error(
+      'Signer inspection bracket has not completed successfully.'
+    );
   }
 }
 

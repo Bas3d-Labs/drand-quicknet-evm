@@ -39,11 +39,15 @@ type WriteCompletionEvent =
     }
   | {
       readonly kind: 'attemptOperatorAccepted';
-      readonly fields: Parameters<ScopedRelayerLog['attemptOperatorAccepted']>[0];
+      readonly fields: Parameters<
+        ScopedRelayerLog['attemptOperatorAccepted']
+      >[0];
     }
   | {
       readonly kind: 'attemptOperatorAttributed';
-      readonly fields: Parameters<ScopedRelayerLog['attemptOperatorAttributed']>[0];
+      readonly fields: Parameters<
+        ScopedRelayerLog['attemptOperatorAttributed']
+      >[0];
     }
   | {
       readonly kind: 'searchReset';
@@ -51,11 +55,15 @@ type WriteCompletionEvent =
     }
   | {
       readonly kind: 'searchUnconsumedBoundRebased';
-      readonly fields: Parameters<ScopedRelayerLog['searchUnconsumedBoundRebased']>[0];
+      readonly fields: Parameters<
+        ScopedRelayerLog['searchUnconsumedBoundRebased']
+      >[0];
     }
   | {
       readonly kind: 'searchLowerBoundReplaced';
-      readonly fields: Parameters<ScopedRelayerLog['searchLowerBoundReplaced']>[0];
+      readonly fields: Parameters<
+        ScopedRelayerLog['searchLowerBoundReplaced']
+      >[0];
     };
 
 interface WriteCompletionDescription {

@@ -19,7 +19,10 @@ export type WriteOutcome =
       readonly error: unknown;
     };
 
-export type RetryWriteOutcome = Exclude<WriteOutcome, { status: 'not-written' }>;
+export type RetryWriteOutcome = Exclude<
+  WriteOutcome,
+  { status: 'not-written' }
+>;
 
 /**
  * Called with idle persistence after the coordinator stages its completion.

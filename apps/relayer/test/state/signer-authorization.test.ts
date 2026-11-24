@@ -83,7 +83,8 @@ const TRANSITIONS: readonly TransitionCase[] = [
   },
   {
     name: 'preparation reached storage without completion',
-    apply: (authorization) => authorization.preparationReachedStorageWithoutCompletion(),
+    apply: (authorization) =>
+      authorization.preparationReachedStorageWithoutCompletion(),
     changes: CLEAR_ALL,
     clearsAll: true,
   },
@@ -159,7 +160,8 @@ const TRANSITIONS: readonly TransitionCase[] = [
   },
   {
     name: 'preparation permit granted',
-    apply: (authorization) => authorization.grantPreparationPermit(NEXT_ATTEMPT),
+    apply: (authorization) =>
+      authorization.grantPreparationPermit(NEXT_ATTEMPT),
     changes: { broadcastPermit: NEXT_ATTEMPT },
     allowsGrant: true,
   },
@@ -205,7 +207,11 @@ function states(): AuthorizationState[] {
 
   for (const recoveryComplete of [false, true]) {
     for (const inclusionChecksComplete of [false, true]) {
-      for (const broadcastPermit of [undefined, FIRST_ATTEMPT, SECOND_ATTEMPT]) {
+      for (const broadcastPermit of [
+        undefined,
+        FIRST_ATTEMPT,
+        SECOND_ATTEMPT
+      ]) {
         combinations.push({
           recoveryComplete,
           inclusionChecksComplete,
@@ -223,21 +229,24 @@ describe('signer authorization transitions', () => {
     expect(read(new SignerAuthorization())).toEqual(CLEAR_ALL);
   });
 
-  it.each(TRANSITIONS)('$name changes only its specified fields', (transition) => {
-    const before = {
-      recoveryComplete: true,
-      inclusionChecksComplete: true,
-      broadcastPermit: FIRST_ATTEMPT,
-    };
-    const authorization = seed(before);
+  it.each(TRANSITIONS)(
+    '$name changes only its specified fields',
+    (transition) => {
+      const before = {
+        recoveryComplete: true,
+        inclusionChecksComplete: true,
+        broadcastPermit: FIRST_ATTEMPT,
+      };
+      const authorization = seed(before);
 
-    transition.apply(authorization);
+      transition.apply(authorization);
 
-    expect(read(authorization)).toEqual({
-      ...before,
-      ...transition.changes,
-    });
-  });
+      expect(read(authorization)).toEqual({
+        ...before,
+        ...transition.changes,
+      });
+    }
+  );
 
   it.each(states())(
     'walks every transition from recovery=$recoveryComplete, inclusion=$inclusionChecksComplete, permit=$broadcastPermit',
@@ -264,7 +273,8 @@ describe('signer authorization transitions', () => {
           }
 
           if (after.broadcastPermit !== undefined) {
-            expect(after.broadcastPermit, transition.name).toBe(before.broadcastPermit);
+            expect(after.broadcastPermit, transition.name)
+              .toBe(before.broadcastPermit);
           }
         }
 
