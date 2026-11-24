@@ -25,6 +25,7 @@ const EXIT_CODE = {
   IMPORT_DEFERRED: 4,
   IMPORT_INTERRUPTED: 5,
   JOURNAL_BOUNDS_EXCEEDED: 6,
+  SIGNER_RESTART_REQUIRED: 7,
 } as const;
 
 const WRITE_BUDGET_MS = 250;
@@ -52,6 +53,10 @@ let importFailure: {
 let renderDiagnostic: RenderDiagnostic | undefined;
 
 let isJournalBoundsFailure:
+  | ((error: unknown) => boolean)
+  | undefined;
+
+let isSignerRestartFailure:
   | ((error: unknown) => boolean)
   | undefined;
 
@@ -199,6 +204,11 @@ try {
   renderDiagnostic = diagnostics.renderDiagnostic;
   isJournalBoundsFailure = diagnostics.isJournalBoundsFailure;
 
+  const restartFailure = await import(
+    './execution/signer-restart-failure.js'
+  );
+  isSignerRestartFailure = restartFailure.isSignerRestartFailure;
+
   const {
     renderCliOutput,
     renderOutputFailure,
@@ -249,6 +259,13 @@ try {
       isJournalBoundsFailure(error)
     ) {
       process.exitCode = EXIT_CODE.JOURNAL_BOUNDS_EXCEEDED;
+    }
+
+    if (
+      isSignerRestartFailure !== undefined &&
+      isSignerRestartFailure(error)
+    ) {
+      process.exitCode = EXIT_CODE.SIGNER_RESTART_REQUIRED;
     }
 
     try {

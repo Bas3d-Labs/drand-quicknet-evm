@@ -733,6 +733,83 @@ describe('bootstrap process boundary', () => {
     expect(result.stderr).toBe('');
   });
 
+  it.each([
+    { wrapped: false, closeStderr: false },
+    { wrapped: true, closeStderr: false },
+    { wrapped: true, closeStderr: true },
+  ])('exits 7 for restart failure: %j', ({ wrapped, closeStderr }) => {
+    setModule('cli', `
+      import { closeSync } from 'node:fs';
+      import {
+        SignerRestartRequiredError,
+      } from '../state/signer-restart-required-error.js';
+      import { TransactionManager } from '../state/transaction-manager.js';
+      import { createRelayerLog } from '../diagnostics/relayer-log.js';
+
+      export async function main() {
+        const error = new SignerRestartRequiredError();
+        error.message = ${JSON.stringify(RPC_URL)};
+
+        if (${closeStderr}) {
+          closeSync(2);
+        }
+
+        if (!${wrapped}) {
+          throw error;
+        }
+
+        const signer = '0x' + '11'.repeat(20);
+        const manager = await TransactionManager.create({
+          identity: { chainId: 4663, signer },
+          store: {
+            load: async () => ({ kind: 'missing' }),
+            save: async () => { throw new Error('Unexpected save'); },
+          },
+          maxRetainedAttempts: 1,
+          publicClient: {},
+          walletClient: {},
+          account: { address: signer },
+          readChainHeads: async () => { throw error; },
+          maxBlockRange: 2n,
+          retry: { initialDelayMs: 1000, maxDelayMs: 10000 },
+          log: createRelayerLog({
+            chainId: 4663,
+            destination: { write() {} },
+          }),
+          createErrorSummary: () => ({
+            scrubText: (text) => ({ text, removed: false }),
+          }),
+        });
+
+        await manager.submit({
+          work: {
+            workId: 'bootstrap:restart',
+            call: { to: signer, data: '0x', value: 0n },
+          },
+        });
+      }
+    `);
+
+    const result = launch();
+
+    expect(result.status, result.stderr).toBe(7);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).not.toContain(SECRET);
+
+    if (!closeStderr) {
+      expect(diagnostic(result.stderr)).toEqual({
+        event: 'cli_failed',
+        kind: 'signer-journal',
+        code: 'signer-restart-required',
+        message:
+          'Journal persistence was acknowledged, but coordinator ' +
+          'completion failed. The committed journal is retained. ' +
+          'Restart the relayer to reload it and run recovery; ' +
+          'persistence retry is unavailable.',
+      });
+    }
+  });
+
   it('exits with code 6 for a registered journal bounds failure', () => {
     setModule('cli', `
       import {

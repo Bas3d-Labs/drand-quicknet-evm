@@ -6,6 +6,10 @@ import {
   isOperationCancelled
 } from '../execution/is-operation-cancelled.js';
 
+import {
+  isSignerRestartFailure,
+} from '../execution/signer-restart-failure.js';
+
 import type {
   TerminalRoundReason,
 } from '../rounds/terminal-round-reason.js';
@@ -297,7 +301,10 @@ export async function processQuicknetRequestsWithOutcomes(
         // Reporting must not replace a successful import.
       }
     } catch (error) {
-      if (isOperationCancelled(error, options.signal)) {
+      if (
+        isSignerRestartFailure(error) ||
+        isOperationCancelled(error, options.signal)
+      ) {
         throw error;
       }
 

@@ -1045,8 +1045,22 @@ Package managers and supervisors may additionally report wrapper errors.
 | `4` | Import or nonce-sync inspection deferred, or attribution found an ordinary resolution and produced no ticket. |
 | `5` | One-shot command handled SIGINT/SIGTERM before producing a result. Retained journal state may still require recovery. |
 | `6` | A recognized signer-journal bounds failure occurred, including startup refusal for an over-bound journal. |
+| `7` | Acknowledged journal write could not complete bookkeeping. |
 | `9` | Node startup failure observed when a configured env file is missing. |
 | `75` | Another process holds the service lock; this may have no diagnostic output. |
+
+Exit code `7` applies to every command that reaches bootstrap with the
+recognized restart-required failure: daemon work, startup recovery, one-shot
+imports and operator commands. The journal change is committed; neither the
+save nor its failed completion is retried in that process. The diagnostic
+retains the existing restart guidance. Repeating the same accepted ticket
+returns `already-recorded` without applying it again.
+
+The process exits through normal cleanup. An external supervisor owns any
+automatic restart; without one, restart is manual. For systemd, use an
+applicable failure restart policy such as `Restart=on-failure`, with a restart
+delay, and do not exclude status `7` from restarting. A new process reloads
+the committed journal and performs normal recovery.
 
 For one-shot commands, a shutdown signal does not override an import
 outcome returned by active work. Completed, pending, and deferred results

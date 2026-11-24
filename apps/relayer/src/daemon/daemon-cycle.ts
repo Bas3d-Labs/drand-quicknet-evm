@@ -48,6 +48,10 @@ import {
   isOperationCancelled
 } from '../execution/is-operation-cancelled.js';
 
+import {
+  isSignerRestartFailure,
+} from '../execution/signer-restart-failure.js';
+
 import type {
   BeaconSubmitter,
 } from '../rounds/create-beacon-submitter.js';
@@ -147,7 +151,10 @@ export async function runDaemonCycle(
   try {
     recovery = await options.submitter.recover();
   } catch (error) {
-    if (isOperationCancelled(error, options.signal)) {
+    if (
+      isSignerRestartFailure(error) ||
+      isOperationCancelled(error, options.signal)
+    ) {
       throw error;
     }
 
@@ -275,7 +282,10 @@ export async function runDaemonCycle(
 
       consumers.push(successful);
     } catch (error) {
-      if (isOperationCancelled(error, options.signal)) {
+      if (
+        isSignerRestartFailure(error) ||
+        isOperationCancelled(error, options.signal)
+      ) {
         throw error;
       }
 

@@ -15,6 +15,10 @@ import {
 } from '../execution/is-operation-cancelled.js';
 
 import {
+  isSignerRestartFailure,
+} from '../execution/signer-restart-failure.js';
+
+import {
   createBeaconWorkId,
 } from '../rounds/beacon-work-identity.js';
 
@@ -309,7 +313,10 @@ export class FutureRoundScheduler implements WaitingRequestScheduling {
           disposition: result.status,
         });
       } catch (error) {
-        if (isOperationCancelled(error, signal)) {
+        if (
+          isSignerRestartFailure(error) ||
+          isOperationCancelled(error, signal)
+        ) {
           throw error;
         }
 
