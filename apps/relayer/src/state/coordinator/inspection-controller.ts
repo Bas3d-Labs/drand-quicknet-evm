@@ -24,7 +24,7 @@ import type {
 } from './coordinator-diagnostics.js';
 
 import type {
-  CoordinatorStateStore,
+  InspectionStateCapability,
 } from './coordinator-state.js';
 
 import type {
@@ -55,7 +55,7 @@ export interface InspectionOperationHandlers {
  */
 export class InspectionController {
   constructor(
-    private readonly state: CoordinatorStateStore,
+    private readonly state: InspectionStateCapability,
     private readonly diagnostics: CoordinatorDiagnostics,
   ) {}
 

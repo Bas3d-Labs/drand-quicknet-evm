@@ -1,50 +1,39 @@
 import {
   randomUUID,
 } from 'node:crypto';
-
 import {
   signPreparedTransaction,
   type SignedRelayerTransaction,
 } from '../../chain/sign-prepared-transaction.js';
-
 import {
   isWorkId,
 } from '../../execution/work-identity.js';
-
 import {
   planAttemptPreparation,
 } from '../plan-attempt-preparation.js';
-
 import {
   findStoredFactNonceConflict,
   StoredFactNonceConflictError,
 } from '../stored-fact-nonce-conflict.js';
-
-import type {
-  WriteOutcome,
-} from '../write-outcome.js';
-
 import type {
   CoordinatorDiagnostics,
 } from './coordinator-diagnostics.js';
-
 import type {
-  CoordinatorStateStore,
+  PrepareAttemptState,
 } from './coordinator-state.js';
-
 import type {
   PrepareAttemptOptions,
   PrepareAttemptResult,
 } from './coordinator-types.js';
-
 import type {
-  JournalCommitEngine,
+  SavedWriteOutcome,
+  WorkflowCommitHandle,
 } from './journal-commit-engine.js';
 
 export interface PrepareAttemptWorkflowDeps {
-  readonly state: CoordinatorStateStore;
+  readonly state: PrepareAttemptState;
   readonly diagnostics: CoordinatorDiagnostics;
-  readonly commit: JournalCommitEngine;
+  readonly commit: WorkflowCommitHandle;
 }
 
 /**
@@ -57,14 +46,12 @@ export async function prepareAttemptWorkflow(
   cycle?: number,
 ): Promise<PrepareAttemptResult> {
   const { state, diagnostics, commit } = deps;
-
   state.assertAvailable();
   state.assertPersistenceIdle();
 
-  const current = state.persistence.current;
-
+  const current = state.current;
   if (
-    !state.selectStatus(diagnostics.blockedSince).open ||
+    !state.isOpen(diagnostics.blockedSince) ||
     current.kind !== 'present'
   ) {
     throw new Error(
@@ -80,7 +67,6 @@ export async function prepareAttemptWorkflow(
   const retained = current.snapshot.attempts.find(
     (attempt) => attempt.workId === workId,
   );
-
   if (retained !== undefined) {
     // No state changed. This result neither grants nor consumes
     // broadcast authorization.
@@ -92,7 +78,6 @@ export async function prepareAttemptWorkflow(
   }
 
   const attemptId = randomUUID();
-
   const detail = findStoredFactNonceConflict([
     ...current.snapshot.attempts,
     {
@@ -104,7 +89,6 @@ export async function prepareAttemptWorkflow(
       },
     },
   ], current.snapshot.attempts);
-
   if (detail !== null) {
     state.authorization.storedFactConflictBeforeSigning();
     diagnostics.reportStoredFactConflict(detail, 'preparation', cycle);
@@ -113,32 +97,24 @@ export async function prepareAttemptWorkflow(
   }
 
   const previousDiagnostics = diagnostics.snapshotPreparationState();
-
   const previousInclusionChecksComplete =
     state.authorization.inclusionChecksComplete;
-
   state.authorization.preparationStarted();
-
   return state.runBusy(async () => {
     let signed: SignedRelayerTransaction;
-
-    let outcome: WriteOutcome;
-
+    let outcome: SavedWriteOutcome;
     try {
       const createdAt = diagnostics.timestamp();
-
       signed = await signPreparedTransaction({
         identity: state.identity,
         nonce: current.snapshot.nextNonce,
         account: options.account,
         transaction: options.transaction,
       });
-
       diagnostics.expandSignedAttemptLog(
         current.snapshot.attempts,
         signed.signedTransaction,
       );
-
       const next = planAttemptPreparation({
         identity: state.identity,
         snapshot: current.snapshot,
@@ -147,7 +123,6 @@ export async function prepareAttemptWorkflow(
         createdAt,
         signed,
       });
-
       diagnostics.seedBlockedSince(createdAt);
       state.authorization.preparationAboutToSave();
       outcome = await commit.saveWrite(next, { kind: 'prepared' });
@@ -162,32 +137,26 @@ export async function prepareAttemptWorkflow(
 
     switch (outcome.status) {
       case 'not-written':
-        commit.discardUnwrittenWrite();
         diagnostics.restorePreparationState(previousDiagnostics);
         state.authorization.preparationRolledBack(
           previousInclusionChecksComplete,
         );
         throw outcome.error;
-
       case 'uncertain':
         state.authorization.preparationReachedStorageWithoutCompletion();
         throw outcome.error;
-
       case 'acknowledged':
         break;
-
       default:
         outcome satisfies never;
     }
 
     try {
-      commit.applyCommittedWrite(cycle);
+      outcome.apply(cycle);
       state.authorization.grantPreparationPermit(attemptId);
-
       // Diagnostic only: a retained lookup or failed preparation does not
       // clear it.
       state.clearStoredFactDispute('preparation');
-
       return Object.freeze({
         status: 'prepared',
         attemptId,
@@ -197,7 +166,7 @@ export async function prepareAttemptWorkflow(
     } catch (error) {
       // Acknowledgement is permanent even when completion cannot finish.
       state.authorization.preparationReachedStorageWithoutCompletion();
-      return commit.throwCompletionFailure(error);
+      return outcome.failCompletion(error);
     }
   }, () => diagnostics.refresh(cycle, 'prepare-attempt'));
 }

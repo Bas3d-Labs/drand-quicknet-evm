@@ -1,28 +1,24 @@
 import {
   broadcastSignedTransaction,
 } from '../../chain/broadcast-signed-transaction.js';
-
 import type {
   CoordinatorDiagnostics,
 } from './coordinator-diagnostics.js';
-
 import type {
-  CoordinatorStateStore,
+  BroadcastAttemptState,
 } from './coordinator-state.js';
-
 import type {
   BroadcastAttemptOptions,
   BroadcastAttemptResult,
 } from './coordinator-types.js';
-
 import type {
-  JournalCommitEngine,
+  WorkflowCommitHandle,
 } from './journal-commit-engine.js';
 
 export interface BroadcastAttemptWorkflowDeps {
-  readonly state: CoordinatorStateStore;
+  readonly state: BroadcastAttemptState;
   readonly diagnostics: CoordinatorDiagnostics;
-  readonly commit: JournalCommitEngine;
+  readonly commit: WorkflowCommitHandle;
 }
 
 /**
@@ -35,12 +31,10 @@ export async function broadcastAttemptWorkflow(
   cycle?: number,
 ): Promise<BroadcastAttemptResult> {
   const { state, diagnostics, commit } = deps;
-
   state.assertAvailable();
   state.assertPersistenceIdle();
 
-  const current = state.persistence.current;
-
+  const current = state.current;
   if (current.kind !== 'present') {
     throw new Error('Broadcast does not match a recorded attempt.');
   }
@@ -48,27 +42,21 @@ export async function broadcastAttemptWorkflow(
   const attemptIndex = current.snapshot.attempts.findIndex(
     (candidate) => candidate.phase !== 'included',
   );
-
   const attempt = current.snapshot.attempts[attemptIndex];
-
   if (
     attempt === undefined ||
     options.attemptId !== attempt.attemptId
   ) {
     throw new Error('Broadcast does not match a recorded attempt.');
   }
-
   if (!state.selectCanBroadcast()) {
     throw new Error('Fresh reconciliation is required before broadcasting.');
   }
 
   const transaction =
     attempt.signedTransactions[attempt.signedTransactions.length - 1]!;
-
   const publicClient = options.publicClient;
-
   state.authorization.broadcastStarted();
-
   return state.runBusy(async () => {
     if (attempt.phase === 'signed') {
       const outcome = await commit.saveWrite({
@@ -83,15 +71,14 @@ export async function broadcastAttemptWorkflow(
             : candidate,
         ),
       }, { kind: 'broadcast' });
-
       if (outcome.status !== 'acknowledged') {
-        return commit.throwWriteFailure(outcome);
+        throw outcome.error;
       }
 
       try {
-        commit.completeCommittedWrite(cycle);
+        outcome.complete(cycle);
       } catch (error) {
-        return commit.throwCompletionFailure(error);
+        return outcome.failCompletion(error);
       }
     }
 
@@ -101,13 +88,11 @@ export async function broadcastAttemptWorkflow(
       transactionHash: transaction.transactionHash,
       nonce: attempt.nonce,
     };
-
     const result = await broadcastSignedTransaction({
       publicClient,
       signedTransaction: transaction.signedTransaction,
       transactionHash: transaction.transactionHash,
     });
-
     if (result.status === 'not-acknowledged') {
       diagnostics.emit(
         (log) => log.attemptBroadcastNotAcknowledged({
@@ -117,7 +102,6 @@ export async function broadcastAttemptWorkflow(
         cycle,
         'broadcast-attempt',
       );
-
       return Object.freeze({
         status: 'not-acknowledged',
         attemptId: attempt.attemptId,
@@ -131,7 +115,6 @@ export async function broadcastAttemptWorkflow(
       cycle,
       'broadcast-attempt',
     );
-
     return Object.freeze({
       status: 'acknowledged',
       attemptId: attempt.attemptId,

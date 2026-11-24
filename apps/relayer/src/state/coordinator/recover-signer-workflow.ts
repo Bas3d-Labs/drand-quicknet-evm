@@ -1,46 +1,52 @@
 import {
   blockAnchorsMatch,
 } from '../../chain/block-anchor.js';
-
 import {
   inspectSignerRecovery,
   type SignerRecoveryInspection,
 } from '../../chain/inspect-signer-recovery.js';
-
 import {
   validateAcceptanceRequest,
 } from '../operator-acceptance.js';
-
 import {
   journalSnapshotDigest,
   validateAttributionRequest,
 } from '../operator-attribution.js';
-
 import {
   planSignerRecovery,
   type SignerRecoveryPlan,
 } from '../plan-signer-recovery.js';
-
 import {
   describeWriteCompletion,
 } from '../write-completion.js';
-
-import type {
-  WriteOutcome,
-} from '../write-outcome.js';
-
 import {
   bootstrapSignerWorkflow,
-  type BootstrapSignerWorkflowDeps,
 } from './bootstrap-signer-workflow.js';
-
+import type {
+  CoordinatorDiagnostics,
+} from './coordinator-diagnostics.js';
+import type {
+  RecoverSignerState,
+} from './coordinator-state.js';
 import type {
   InspectionOwner,
   RecoverSignerOptions,
   SignerRecoveryResult,
 } from './coordinator-types.js';
+import type {
+  InspectionController,
+} from './inspection-controller.js';
+import type {
+  SavedWriteOutcome,
+  WorkflowCommitHandle,
+} from './journal-commit-engine.js';
 
-export type RecoverSignerWorkflowDeps = BootstrapSignerWorkflowDeps;
+export interface RecoverSignerWorkflowDeps {
+  readonly state: RecoverSignerState;
+  readonly diagnostics: CoordinatorDiagnostics;
+  readonly commit: WorkflowCommitHandle;
+  readonly inspections: InspectionController;
+}
 
 /**
  * Reconciles the signer against a durable block and saves the resulting
@@ -68,7 +74,7 @@ export async function recoverSignerWorkflow(
 
   state.assertPersistenceIdle();
 
-  const current = state.persistence.current;
+  const current = state.current;
 
   if (options.attribution !== undefined) {
     validateAttributionRequest(options.attribution);
@@ -169,7 +175,7 @@ export async function recoverSignerWorkflow(
 
     let plan: SignerRecoveryPlan;
 
-    let outcome: WriteOutcome;
+    let outcome: SavedWriteOutcome;
 
     try {
       result = await inspectSignerRecovery({
@@ -341,7 +347,7 @@ export async function recoverSignerWorkflow(
     if (outcome.status !== 'acknowledged') {
       state.authorization.recoveryFailed();
       inspections.failInspectionBracket(owner);
-      return commit.throwWriteFailure(outcome);
+      throw outcome.error;
     }
 
     try {
@@ -353,7 +359,7 @@ export async function recoverSignerWorkflow(
       );
 
       state.authorization.recoveryCommitted(terminalCorrection);
-      commit.applyCommittedWrite(cycle);
+      outcome.apply(cycle);
       if (terminalCorrection) {
         inspections.failInspectionBracket(owner);
       }
@@ -393,7 +399,7 @@ export async function recoverSignerWorkflow(
     } catch (error) {
       state.authorization.recoveryFailed();
       inspections.failInspectionBracket(owner);
-      return commit.throwCompletionFailure(error);
+      return outcome.failCompletion(error);
     }
   }, () => diagnostics.refresh(cycle));
 }

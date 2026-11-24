@@ -28,10 +28,12 @@ import type {
 
 import {
   broadcastAttemptWorkflow,
+  type BroadcastAttemptWorkflowDeps,
 } from './coordinator/broadcast-attempt-workflow.js';
 
 import {
   checkInclusionsWorkflow,
+  type CheckInclusionsWorkflowDeps,
 } from './coordinator/check-inclusions-workflow.js';
 
 import {
@@ -67,10 +69,12 @@ import {
 
 import {
   prepareAttemptWorkflow,
+  type PrepareAttemptWorkflowDeps,
 } from './coordinator/prepare-attempt-workflow.js';
 
 import {
   recoverSignerWorkflow,
+  type RecoverSignerWorkflowDeps,
 } from './coordinator/recover-signer-workflow.js';
 
 export type {
@@ -97,6 +101,8 @@ export class SignerCoordinator {
   private readonly commit: JournalCommitEngine;
   private readonly inspections: InspectionController;
   private readonly inspectionHandlers: InspectionOperationHandlers;
+  private readonly prepareDeps: PrepareAttemptWorkflowDeps;
+  private readonly broadcastDeps: BroadcastAttemptWorkflowDeps;
 
   private constructor(
     persistence: JournalPersistence,
@@ -113,34 +119,55 @@ export class SignerCoordinator {
     );
 
     this.diagnostics = new CoordinatorDiagnostics(
-      this.state,
+      this.state.createDiagnosticsCapability(),
       log,
       now,
       createErrorSummary,
     );
 
     this.commit = new JournalCommitEngine(
-      this.state,
+      this.state.createCommitEngineCapability(),
       this.diagnostics,
     );
 
     this.inspections = new InspectionController(
-      this.state,
+      this.state.createInspectionCapability(),
       this.diagnostics,
     );
 
-    const workflowDeps = {
-      state: this.state,
+    const workflowCommit = this.commit.createWorkflowHandle();
+
+    this.prepareDeps = Object.freeze({
+      state: this.state.createPrepareWorkflowCapability(),
       diagnostics: this.diagnostics,
-      commit: this.commit,
+      commit: workflowCommit,
+    });
+
+    this.broadcastDeps = Object.freeze({
+      state: this.state.createBroadcastWorkflowCapability(),
+      diagnostics: this.diagnostics,
+      commit: workflowCommit,
+    });
+
+    const recoverDeps: RecoverSignerWorkflowDeps = Object.freeze({
+      state: this.state.createRecoverWorkflowCapability(),
+      diagnostics: this.diagnostics,
+      commit: workflowCommit,
       inspections: this.inspections,
-    };
+    });
+
+    const checkInclusionsDeps: CheckInclusionsWorkflowDeps = Object.freeze({
+      state: this.state.createCheckInclusionsWorkflowCapability(),
+      diagnostics: this.diagnostics,
+      commit: workflowCommit,
+      inspections: this.inspections,
+    });
 
     this.inspectionHandlers = {
       recoverOwned: (options, owner, cycle) =>
-        recoverSignerWorkflow(workflowDeps, options, owner, cycle),
+        recoverSignerWorkflow(recoverDeps, options, owner, cycle),
       checkInclusionsOwned: (options, owner, cycle) =>
-        checkInclusionsWorkflow(workflowDeps, options, owner, cycle),
+        checkInclusionsWorkflow(checkInclusionsDeps, options, owner, cycle),
     };
   }
 
@@ -263,11 +290,7 @@ export class SignerCoordinator {
     options: PrepareAttemptOptions,
     cycle?: number,
   ): Promise<PrepareAttemptResult> {
-    return prepareAttemptWorkflow({
-      state: this.state,
-      diagnostics: this.diagnostics,
-      commit: this.commit,
-    }, options, cycle);
+    return prepareAttemptWorkflow(this.prepareDeps, options, cycle);
   }
 
   /**
@@ -278,11 +301,7 @@ export class SignerCoordinator {
     options: BroadcastAttemptOptions,
     cycle?: number,
   ): Promise<BroadcastAttemptResult> {
-    return broadcastAttemptWorkflow({
-      state: this.state,
-      diagnostics: this.diagnostics,
-      commit: this.commit,
-    }, options, cycle);
+    return broadcastAttemptWorkflow(this.broadcastDeps, options, cycle);
   }
 
   /**

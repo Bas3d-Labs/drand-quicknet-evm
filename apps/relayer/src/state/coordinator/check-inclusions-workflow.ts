@@ -2,56 +2,44 @@ import {
   blockAnchorsMatch,
   checkBlockAnchor,
 } from '../../chain/block-anchor.js';
-
 import {
   inspectSignerInclusions,
   type SignerInclusionInspection,
 } from '../../chain/inspect-signer-inclusions.js';
-
 import {
   createInspectionBracket,
   latestNonceIsConsistent,
   mergeBlockObservations,
   type InspectionBracket,
 } from '../inspection-bracket.js';
-
 import {
   planSignerInclusions,
 } from '../plan-signer-inclusions.js';
-
 import type {
   TransactionJournalSnapshot,
 } from '../transaction-journal.js';
-
-import type {
-  WriteOutcome,
-} from '../write-outcome.js';
-
 import type {
   CoordinatorDiagnostics,
 } from './coordinator-diagnostics.js';
-
 import type {
-  CoordinatorStateStore,
+  CheckInclusionsState,
 } from './coordinator-state.js';
-
 import type {
   CheckSignerInclusionsOptions,
   InspectionOwner,
 } from './coordinator-types.js';
-
 import type {
   InspectionController,
 } from './inspection-controller.js';
-
 import type {
-  JournalCommitEngine,
+  SavedWriteOutcome,
+  WorkflowCommitHandle,
 } from './journal-commit-engine.js';
 
 export interface CheckInclusionsWorkflowDeps {
-  readonly state: CoordinatorStateStore;
+  readonly state: CheckInclusionsState;
   readonly diagnostics: CoordinatorDiagnostics;
-  readonly commit: JournalCommitEngine;
+  readonly commit: WorkflowCommitHandle;
   readonly inspections: InspectionController;
 }
 
@@ -70,7 +58,7 @@ export async function checkInclusionsWorkflow(
   state.assertAvailable(owner);
   state.assertPersistenceIdle();
 
-  const current = state.persistence.current;
+  const current = state.current;
 
   if (current.kind !== 'present') {
     throw new Error(
@@ -87,7 +75,7 @@ export async function checkInclusionsWorkflow(
 
     let next: TransactionJournalSnapshot;
 
-    let outcome: WriteOutcome;
+    let outcome: SavedWriteOutcome;
 
     try {
       if (owner.bracket === null) {
@@ -213,14 +201,14 @@ export async function checkInclusionsWorkflow(
     if (outcome.status !== 'acknowledged') {
       state.authorization.inclusionCheckFailed();
       inspections.failInspectionBracket(owner);
-      return commit.throwWriteFailure(outcome);
+      throw outcome.error;
     }
 
     try {
       state.authorization.inclusionCheckCommitted(
         result.inclusionChecksComplete,
       );
-      commit.applyCommittedWrite(cycle);
+      outcome.apply(cycle);
 
       const attempt = next.attempts.find(
         (candidate) => candidate.phase !== 'included',
@@ -244,7 +232,7 @@ export async function checkInclusionsWorkflow(
     } catch (error) {
       state.authorization.inclusionCheckFailed();
       inspections.failInspectionBracket(owner);
-      return commit.throwCompletionFailure(error);
+      return outcome.failCompletion(error);
     }
   }, () => diagnostics.refresh(cycle));
 }

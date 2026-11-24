@@ -1,41 +1,32 @@
 import {
   inspectSignerBootstrap,
 } from '../../chain/inspect-signer-bootstrap.js';
-
 import type {
   AnchoredNonceObservation,
 } from '../transaction-journal.js';
-
-import type {
-  WriteOutcome,
-} from '../write-outcome.js';
-
 import type {
   CoordinatorDiagnostics,
 } from './coordinator-diagnostics.js';
-
 import type {
-  CoordinatorStateStore,
+  BootstrapSignerState,
 } from './coordinator-state.js';
-
 import type {
   InspectionOwner,
   RecoverSignerOptions,
   SignerRecoveryResult,
 } from './coordinator-types.js';
-
 import type {
   InspectionController,
 } from './inspection-controller.js';
-
 import type {
-  JournalCommitEngine,
+  SavedWriteOutcome,
+  WorkflowCommitHandle,
 } from './journal-commit-engine.js';
 
 export interface BootstrapSignerWorkflowDeps {
-  readonly state: CoordinatorStateStore;
+  readonly state: BootstrapSignerState;
   readonly diagnostics: CoordinatorDiagnostics;
-  readonly commit: JournalCommitEngine;
+  readonly commit: WorkflowCommitHandle;
   readonly inspections: InspectionController;
 }
 
@@ -49,11 +40,8 @@ export async function bootstrapSignerWorkflow(
   cycle?: number,
 ): Promise<SignerRecoveryResult> {
   const { state, diagnostics, commit, inspections } = deps;
-
   let observation: AnchoredNonceObservation;
-
-  let outcome: WriteOutcome;
-
+  let outcome: SavedWriteOutcome;
   try {
     if (state.hasBlockers) {
       throw new Error('Cannot bootstrap while coordinator blockers remain.');
@@ -64,7 +52,6 @@ export async function bootstrapSignerWorkflow(
       signer: state.identity.signer,
       anchor: options.anchor,
     });
-
     if (
       'observation' in result &&
       !inspections.observeInspectionDurableNonce(owner, result.observation)
@@ -78,7 +65,6 @@ export async function bootstrapSignerWorkflow(
     if (result.status === 'bootstrap-deferred') {
       inspections.failInspectionBracket(owner);
       diagnostics.reportBootstrapDeferred(result, cycle);
-
       return result;
     }
 
@@ -88,9 +74,7 @@ export async function bootstrapSignerWorkflow(
     }
 
     diagnostics.clearBootstrapDeferralDeduplication();
-
     observation = result.observation;
-
     outcome = await commit.saveWrite({
       version: 1,
       identity: state.identity,
@@ -114,13 +98,12 @@ export async function bootstrapSignerWorkflow(
   if (outcome.status !== 'acknowledged') {
     state.authorization.recoveryFailed();
     inspections.failInspectionBracket(owner);
-    return commit.throwWriteFailure(outcome);
+    throw outcome.error;
   }
 
   try {
     state.authorization.bootstrapCommitted();
-    commit.applyCommittedWrite(cycle);
-
+    outcome.apply(cycle);
     return {
       status: 'no-attempt',
       observations: Object.freeze([]),
@@ -129,6 +112,6 @@ export async function bootstrapSignerWorkflow(
   } catch (error) {
     state.authorization.recoveryFailed();
     inspections.failInspectionBracket(owner);
-    return commit.throwCompletionFailure(error);
+    return outcome.failCompletion(error);
   }
 }

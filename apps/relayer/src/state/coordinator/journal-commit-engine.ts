@@ -15,7 +15,6 @@ import {
 import {
   retryJournalWrite,
   saveJournalWrite,
-  type WriteOutcome,
 } from '../write-outcome.js';
 
 import type {
@@ -23,46 +22,152 @@ import type {
 } from './coordinator-diagnostics.js';
 
 import type {
-  CoordinatorStateStore,
+  CommitEngineStateCapability,
 } from './coordinator-state.js';
 
+export type SavedWriteOutcome =
+  | {
+      readonly status: 'not-written';
+      readonly error: unknown;
+    }
+  | {
+      readonly status: 'uncertain';
+      readonly error: unknown;
+    }
+  | {
+      readonly status: 'acknowledged';
+      readonly apply: (cycle?: number) => SignerEventOperation;
+      readonly complete: (cycle?: number) => SignerEventOperation;
+      readonly failCompletion: (error: unknown) => never;
+    };
+
+export interface WorkflowCommitHandle {
+  saveWrite(
+    snapshot: TransactionJournalSnapshot,
+    completion: PendingWrite,
+  ): Promise<SavedWriteOutcome>;
+}
+
 /**
- * Owns lockstep staging, journal persistence, the 6-step post-acknowledgement
- * completion sequence, the narrow fatal completion boundary, and retry
- * isolation.
+ * Sole authority for journal persistence, lockstep staging, the 6-step
+ * post-acknowledgement completion sequence, the narrow fatal completion
+ * boundary, and retry isolation.
  */
 export class JournalCommitEngine {
   constructor(
-    private readonly state: CoordinatorStateStore,
+    private readonly state: CommitEngineStateCapability,
     private readonly diagnostics: CoordinatorDiagnostics,
   ) {}
 
-  /** Stages one completion and saves without running any completion effects. */
-  async saveWrite(
-    snapshot: TransactionJournalSnapshot,
-    completion: PendingWrite,
-  ): Promise<WriteOutcome> {
-    this.state.stagePendingWrite(completion);
-
-    return saveJournalWrite(this.state.persistence, snapshot);
+  /**
+   * Returns a frozen save-gated capability for workflows. Completion controls
+   * are minted only after a journal write is acknowledged, preventing any
+   * workflow from staging or completing metadata without an acknowledged save.
+   */
+  createWorkflowHandle(): WorkflowCommitHandle {
+    return Object.freeze({
+      saveWrite: (
+        snapshot: TransactionJournalSnapshot,
+        completion: PendingWrite,
+      ) => this.saveWrite(snapshot, completion),
+    });
   }
 
-  discardUnwrittenWrite(): void {
-    this.state.discardPendingWrite();
-  }
+  /**
+   * Retries the retained journal snapshot after a persistence failure,
+   * then applies the corresponding observation or resolution transition.
+   * Performs no grant transitions (terminal-correction and completion-failure
+   * revocations remain permitted), zero signing, zero RPC, and zero replanning.
+   */
+  async retryPersistence(
+    cycle?: number,
+  ): Promise<void> {
+    this.state.assertAvailable();
+    this.state.assertRestartNotRequired();
 
-  throwWriteFailure(
-    outcome: Exclude<WriteOutcome, { status: 'acknowledged' }>,
-  ): never {
-    if (outcome.status === 'not-written') {
-      this.state.discardPendingWrite();
+    if (
+      !this.state.hasPendingWrite ||
+      this.state.persistence.state !== 'failed'
+    ) {
+      throw new Error('No failed journal write is available to retry.');
     }
 
-    throw outcome.error;
+    let operation: SignerEventOperation = 'reconcile-attempt';
+
+    await this.state.runBusy(async () => {
+      const outcome = await retryJournalWrite(this.state.persistence);
+
+      if (outcome.status === 'uncertain') {
+        throw outcome.error;
+      }
+
+      try {
+        operation = this.applyCommittedWrite(cycle);
+      } catch (error) {
+        return this.throwCompletionFailure(error);
+      }
+    }, () => this.diagnostics.refresh(cycle, operation));
+  }
+
+  /** Stages one completion and saves without running any completion effects. */
+  private async saveWrite(
+    snapshot: TransactionJournalSnapshot,
+    completion: PendingWrite,
+  ): Promise<SavedWriteOutcome> {
+    this.state.stagePendingWrite(completion);
+
+    const outcome = await saveJournalWrite(this.state.persistence, snapshot);
+
+    switch (outcome.status) {
+      case 'not-written':
+        this.state.discardPendingWrite();
+
+        return Object.freeze({
+          status: 'not-written' as const,
+          error: outcome.error,
+        });
+
+      case 'uncertain':
+        return Object.freeze({
+          status: 'uncertain' as const,
+          error: outcome.error,
+        });
+
+      case 'acknowledged': {
+        let completed = false;
+
+        const claimCompletion = (): void => {
+          if (completed) {
+            throw new Error('Journal write completion was already applied.');
+          }
+
+          completed = true;
+        };
+
+        return Object.freeze({
+          status: 'acknowledged' as const,
+          apply: (cycle?: number) => {
+            claimCompletion();
+
+            return this.applyCommittedWrite(cycle);
+          },
+          complete: (cycle?: number) => {
+            claimCompletion();
+
+            return this.completeCommittedWrite(cycle);
+          },
+          failCompletion: (error: unknown) =>
+            this.throwCompletionFailure(error),
+        });
+      }
+
+      default:
+        return outcome satisfies never;
+    }
   }
 
   /** Called only after acknowledgement; never reclassifies a committed save. */
-  throwCompletionFailure(error: unknown): never {
+  private throwCompletionFailure(error: unknown): never {
     if (this.state.hasPendingWrite) {
       this.state.latchRestartRequired();
 
@@ -73,7 +178,7 @@ export class JournalCommitEngine {
     throw error;
   }
 
-  applyCommittedWrite(
+  private applyCommittedWrite(
     cycle?: number,
   ): SignerEventOperation {
     const operation = this.completeCommittedWrite(cycle);
@@ -93,13 +198,13 @@ export class JournalCommitEngine {
    * 5. Latch unattributed activity and reconcile conflict-search exhaustion
    * 6. Update committed durable recovery revision
    */
-  completeCommittedWrite(
+  private completeCommittedWrite(
     cycle?: number,
   ): SignerEventOperation {
     // Construction must not throw for planner output: this is outside the
     // logging boundary.
     const description = describeWriteCompletion(
-      this.state.requirePendingWrite(),
+      this.state.requirePendingWrite() as PendingWrite,
       this.state.identity.signer,
     );
 
@@ -152,41 +257,5 @@ export class JournalCommitEngine {
     this.state.completePendingWrite();
 
     return description.operation;
-  }
-
-  /**
-   * Retries the retained journal snapshot after a persistence failure,
-   * then applies the corresponding observation or resolution transition.
-   * Performs no grant transitions (terminal-correction and completion-failure
-   * revocations remain permitted), zero signing, zero RPC, and zero replanning.
-   */
-  async retryPersistence(
-    cycle?: number,
-  ): Promise<void> {
-    this.state.assertAvailable();
-    this.state.assertRestartNotRequired();
-
-    if (
-      !this.state.hasPendingWrite ||
-      this.state.persistence.state !== 'failed'
-    ) {
-      throw new Error('No failed journal write is available to retry.');
-    }
-
-    let operation: SignerEventOperation = 'reconcile-attempt';
-
-    await this.state.runBusy(async () => {
-      const outcome = await retryJournalWrite(this.state.persistence);
-
-      if (outcome.status === 'uncertain') {
-        throw outcome.error;
-      }
-
-      try {
-        operation = this.applyCommittedWrite(cycle);
-      } catch (error) {
-        return this.throwCompletionFailure(error);
-      }
-    }, () => this.diagnostics.refresh(cycle, operation));
   }
 }

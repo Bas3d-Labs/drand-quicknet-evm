@@ -36,7 +36,7 @@ import type {
 } from '../write-completion.js';
 
 import type {
-  CoordinatorStateStore,
+  DiagnosticsStateCapability,
 } from './coordinator-state.js';
 
 export interface PreparationDiagnosticSnapshot {
@@ -62,7 +62,7 @@ export class CoordinatorDiagnostics {
   );
 
   constructor(
-    private readonly state: CoordinatorStateStore,
+    private readonly state: DiagnosticsStateCapability,
     private readonly log: ScopedRelayerLog,
     private readonly now: () => number,
     private readonly createErrorSummary: ErrorSummaryFactory,
@@ -73,7 +73,7 @@ export class CoordinatorDiagnostics {
   }
 
   initializeStartupRetention(): void {
-    const current = this.state.persistence.current;
+    const current = this.state.current;
 
     if (current.kind === 'present') {
       const attempts = current.snapshot.attempts;
@@ -253,7 +253,7 @@ export class CoordinatorDiagnostics {
       }, cycle, operation);
     });
 
-    const current = this.state.persistence.current;
+    const current = this.state.current;
 
     // Keep signed-byte protection through gate publication, including
     // logging-failure reporting, before releasing the attempt logger.
