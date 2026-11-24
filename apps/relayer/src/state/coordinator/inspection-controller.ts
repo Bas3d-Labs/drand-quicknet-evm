@@ -82,8 +82,7 @@ export class InspectionController {
       cycle: undefined,
     };
 
-    this.state.inspectionOwner = owner;
-    this.state.authorization.inspectionBegun();
+    this.state.acquireInspectionOwner(owner);
 
     return Object.freeze({
       recover: (
@@ -302,16 +301,8 @@ export class InspectionController {
       throw new Error('Signer inspection operation is still running.');
     }
 
-    if (this.state.busy || this.state.emitting) {
-      throw new Error('Signer coordinator operation is already in progress.');
-    }
-
-    if (
-      this.state.pendingWrite !== undefined ||
-      this.state.persistence.state !== 'idle'
-    ) {
-      throw new Error('Signer inspection has pending persistence.');
-    }
+    this.state.assertNotOperating();
+    this.state.assertInspectionPersistenceIdle();
 
     if (owner.bracket !== null) {
       assertInspectionCompleted(owner.bracket);
@@ -322,17 +313,16 @@ export class InspectionController {
     if (
       owner.bracket !== null &&
       this.state.authorization.recoveryComplete &&
-      this.state.authorization.inclusionChecksComplete &&
-      this.state.storedFactDispute?.origin === 'recovery'
+      this.state.authorization.inclusionChecksComplete
     ) {
-      this.state.storedFactDispute = null;
+      this.state.clearStoredFactDispute('recovery');
     }
 
     if (owner.bracket !== null) {
       owner.bracket.discardEvidence();
     }
 
-    this.state.inspectionOwner = null;
+    this.state.releaseInspectionOwner(owner);
     this.diagnostics.refresh(owner.cycle);
   }
 
@@ -377,7 +367,7 @@ export class InspectionController {
       owner.bracket.discardEvidence();
     }
 
-    this.state.inspectionOwner = null;
+    this.state.releaseInspectionOwner(owner);
     this.diagnostics.refresh(owner.cycle);
   }
 }

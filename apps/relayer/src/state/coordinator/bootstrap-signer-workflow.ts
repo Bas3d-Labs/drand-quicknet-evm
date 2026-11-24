@@ -55,7 +55,7 @@ export async function bootstrapSignerWorkflow(
   let outcome: WriteOutcome;
 
   try {
-    if (state.blockers.size !== 0) {
+    if (state.hasBlockers) {
       throw new Error('Cannot bootstrap while coordinator blockers remain.');
     }
 

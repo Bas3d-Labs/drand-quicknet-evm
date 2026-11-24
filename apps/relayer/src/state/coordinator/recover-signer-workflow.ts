@@ -122,9 +122,8 @@ export async function recoverSignerWorkflow(
   }
 
   state.authorization.recoveryStarted();
-  state.busy = true;
 
-  try {
+  return state.runBusy(async () => {
     try {
       if (owner.bracket !== null) {
         const bracket = owner.bracket;
@@ -207,7 +206,7 @@ export async function recoverSignerWorkflow(
           attribution: options.attribution,
         }),
         unattributedActivity:
-          state.blockers.has('unattributed-signer-activity'),
+          state.hasBlocker('unattributed-signer-activity'),
       });
 
       if (plan.kind === 'inconsistent-observations') {
@@ -381,7 +380,7 @@ export async function recoverSignerWorkflow(
         inspectedAttempt.phase !== 'included' &&
         result.observation.nonce === inspectedAttempt.nonce &&
         result.search === null &&
-        state.blockers.size === 0 &&
+        !state.hasBlockers &&
         (
           result.receipt.status === 'receipt-not-found' ||
           result.receipt.status === 'fork-served-receipt'
@@ -396,8 +395,5 @@ export async function recoverSignerWorkflow(
       inspections.failInspectionBracket(owner);
       return commit.throwCompletionFailure(error);
     }
-  } finally {
-    state.busy = false;
-    diagnostics.refresh(cycle);
-  }
+  }, () => diagnostics.refresh(cycle));
 }

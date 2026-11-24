@@ -42,20 +42,20 @@ export class JournalCommitEngine {
     snapshot: TransactionJournalSnapshot,
     completion: PendingWrite,
   ): Promise<WriteOutcome> {
-    if (this.state.pendingWrite !== undefined) {
-      throw new Error('A journal write is already signed.');
-    }
-
-    this.state.pendingWrite = completion;
+    this.state.stagePendingWrite(completion);
 
     return saveJournalWrite(this.state.persistence, snapshot);
+  }
+
+  discardUnwrittenWrite(): void {
+    this.state.discardPendingWrite();
   }
 
   throwWriteFailure(
     outcome: Exclude<WriteOutcome, { status: 'acknowledged' }>,
   ): never {
     if (outcome.status === 'not-written') {
-      this.state.pendingWrite = undefined;
+      this.state.discardPendingWrite();
     }
 
     throw outcome.error;
@@ -63,9 +63,8 @@ export class JournalCommitEngine {
 
   /** Called only after acknowledgement; never reclassifies a committed save. */
   throwCompletionFailure(error: unknown): never {
-    if (this.state.pendingWrite !== undefined) {
-      this.state.restartRequired = true;
-      this.state.authorization.completionFailed();
+    if (this.state.hasPendingWrite) {
+      this.state.latchRestartRequired();
 
       throw new SignerRestartRequiredError();
     }
@@ -100,7 +99,7 @@ export class JournalCommitEngine {
     // Construction must not throw for planner output: this is outside the
     // logging boundary.
     const description = describeWriteCompletion(
-      this.state.pendingWrite!,
+      this.state.requirePendingWrite(),
       this.state.identity.signer,
     );
 
@@ -150,11 +149,7 @@ export class JournalCommitEngine {
       }, cycle);
     }
 
-    this.state.pendingWrite = undefined;
-
-    this.state.latchUnattributedActivity();
-    this.state.reconcileExhaustedSearch();
-    this.state.updateDurableRecoveryRevision();
+    this.state.completePendingWrite();
 
     return description.operation;
   }
@@ -172,7 +167,7 @@ export class JournalCommitEngine {
     this.state.assertRestartNotRequired();
 
     if (
-      this.state.pendingWrite === undefined ||
+      !this.state.hasPendingWrite ||
       this.state.persistence.state !== 'failed'
     ) {
       throw new Error('No failed journal write is available to retry.');
@@ -180,9 +175,7 @@ export class JournalCommitEngine {
 
     let operation: SignerEventOperation = 'reconcile-attempt';
 
-    this.state.busy = true;
-
-    try {
+    await this.state.runBusy(async () => {
       const outcome = await retryJournalWrite(this.state.persistence);
 
       if (outcome.status === 'uncertain') {
@@ -194,9 +187,6 @@ export class JournalCommitEngine {
       } catch (error) {
         return this.throwCompletionFailure(error);
       }
-    } finally {
-      this.state.busy = false;
-      this.diagnostics.refresh(cycle, operation);
-    }
+    }, () => this.diagnostics.refresh(cycle, operation));
   }
 }

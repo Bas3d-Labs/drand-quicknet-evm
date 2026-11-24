@@ -118,9 +118,8 @@ export async function prepareAttemptWorkflow(
     state.authorization.inclusionChecksComplete;
 
   state.authorization.preparationStarted();
-  state.busy = true;
 
-  try {
+  return state.runBusy(async () => {
     let signed: SignedRelayerTransaction;
 
     let outcome: WriteOutcome;
@@ -163,7 +162,7 @@ export async function prepareAttemptWorkflow(
 
     switch (outcome.status) {
       case 'not-written':
-        state.pendingWrite = undefined;
+        commit.discardUnwrittenWrite();
         diagnostics.restorePreparationState(previousDiagnostics);
         state.authorization.preparationRolledBack(
           previousInclusionChecksComplete,
@@ -187,9 +186,7 @@ export async function prepareAttemptWorkflow(
 
       // Diagnostic only: a retained lookup or failed preparation does not
       // clear it.
-      if (state.storedFactDispute?.origin === 'preparation') {
-        state.storedFactDispute = null;
-      }
+      state.clearStoredFactDispute('preparation');
 
       return Object.freeze({
         status: 'prepared',
@@ -202,8 +199,5 @@ export async function prepareAttemptWorkflow(
       state.authorization.preparationReachedStorageWithoutCompletion();
       return commit.throwCompletionFailure(error);
     }
-  } finally {
-    state.busy = false;
-    diagnostics.refresh(cycle, 'prepare-attempt');
-  }
+  }, () => diagnostics.refresh(cycle, 'prepare-attempt'));
 }

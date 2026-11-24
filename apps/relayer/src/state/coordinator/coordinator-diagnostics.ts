@@ -165,18 +165,15 @@ export class CoordinatorDiagnostics {
   /**
    * Records a stored-fact dispute and reports it directly via the scoped base
    * logger (outside `emit()` error containment and without toggling
-   * `emitting`).
-   * Deduplication key updates only after the log call succeeds.
+   * `emitting`). Deduplication key updates only after the log call succeeds.
    */
   reportStoredFactConflict(
     detail: StoredFactNonceConflict,
     origin: StoredFactDisputeObservation['origin'],
     cycle?: number,
   ): void {
-    this.state.storedFactDispute = observeStoredFactDispute(
-      detail,
-      origin,
-      this.timestamp(),
+    this.state.recordStoredFactDispute(
+      observeStoredFactDispute(detail, origin, this.timestamp()),
     );
 
     const fields = {
@@ -215,19 +212,10 @@ export class CoordinatorDiagnostics {
     action: () => Promise<T>,
     cycle?: number,
   ): Promise<T> {
-    if (this.state.reconciliationObservationActive) {
-      throw new Error('Signer reconciliation observation is already active.');
-    }
-
-    this.state.assertAvailable();
-    this.state.reconciliationObservationActive = true;
-
-    try {
-      return await action();
-    } finally {
-      this.state.reconciliationObservationActive = false;
-      this.refresh(cycle);
-    }
+    return this.state.runReconciliationObservation(
+      action,
+      () => this.refresh(cycle),
+    );
   }
 
   /**
@@ -238,7 +226,7 @@ export class CoordinatorDiagnostics {
     cycle?: number,
     operation: SignerEventOperation = 'reconcile-attempt',
   ): void {
-    if (this.state.reconciliationObservationActive) {
+    if (this.state.isReconciliationObservationActive) {
       return;
     }
 
@@ -271,7 +259,7 @@ export class CoordinatorDiagnostics {
     // logging-failure reporting, before releasing the attempt logger.
     if (
       status.open &&
-      this.state.pendingWrite === undefined &&
+      !this.state.hasPendingWrite &&
       current.kind === 'present' &&
       current.snapshot.attempts.length === 0
     ) {
@@ -285,30 +273,29 @@ export class CoordinatorDiagnostics {
     operation: SignerEventOperation = 'reconcile-attempt',
   ): void {
     const log = this.attemptLog ?? this.log;
-    this.state.emitting = true;
 
-    let failureLog = log;
+    this.state.runEmitting(() => {
+      let failureLog = log;
 
-    try {
-      let scoped = log.withContext({
-        operation: { name: operation },
-      });
-
-      if (cycle !== undefined) {
-        scoped = scoped.withContext({ cycle });
-      }
-
-      failureLog = scoped;
-      action(scoped);
-    } catch (error) {
       try {
-        failureLog.loggingFailed({ error });
-      } catch {
-        // Diagnostics must not interrupt recovery.
+        let scoped = log.withContext({
+          operation: { name: operation },
+        });
+
+        if (cycle !== undefined) {
+          scoped = scoped.withContext({ cycle });
+        }
+
+        failureLog = scoped;
+        action(scoped);
+      } catch (error) {
+        try {
+          failureLog.loggingFailed({ error });
+        } catch {
+          // Diagnostics must not interrupt recovery.
+        }
       }
-    } finally {
-      this.state.emitting = false;
-    }
+    });
   }
 
   timestamp(): string {

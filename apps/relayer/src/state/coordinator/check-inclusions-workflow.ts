@@ -79,9 +79,8 @@ export async function checkInclusionsWorkflow(
   }
 
   state.authorization.inclusionCheckEntered();
-  state.busy = true;
 
-  try {
+  return state.runBusy(async () => {
     let bracket: InspectionBracket;
 
     let result: SignerInclusionInspection;
@@ -201,7 +200,7 @@ export async function checkInclusionsWorkflow(
         snapshot: current.snapshot,
         inspection: result,
         unattributedActivity:
-          state.blockers.has('unattributed-signer-activity'),
+          state.hasBlocker('unattributed-signer-activity'),
       });
 
       outcome = await commit.saveWrite(next, { kind: 'observation' });
@@ -229,7 +228,7 @@ export async function checkInclusionsWorkflow(
 
       if (
         state.authorization.recoveryComplete &&
-        state.blockers.size === 0 &&
+        !state.hasBlockers &&
         attempt !== undefined &&
         result.broadcastAttemptId === attempt.attemptId &&
         next.lastObservation.nonce === attempt.nonce
@@ -247,8 +246,5 @@ export async function checkInclusionsWorkflow(
       inspections.failInspectionBracket(owner);
       return commit.throwCompletionFailure(error);
     }
-  } finally {
-    state.busy = false;
-    diagnostics.refresh(cycle);
-  }
+  }, () => diagnostics.refresh(cycle));
 }

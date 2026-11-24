@@ -47,28 +47,54 @@ import type {
 
 /**
  * Single owner of orthogonal mutable coordinator state, guard checks,
- * explicit blocker updates, and pure read projections.
+ * explicit state transitions, blocker updates, and pure read projections.
  */
 export class CoordinatorStateStore {
   readonly authorization = new SignerAuthorization();
-  readonly blockers = new Set<CoordinatorBlocker>();
 
-  reconciliationObservationActive = false;
-  busy = false;
-  emitting = false;
-
-  inspectionOwner: InspectionOwner | null = null;
-
-  pendingWrite: PendingWrite | undefined;
-  restartRequired = false;
-  committedDurableRecoveryRevision = '';
-  storedFactDispute: StoredFactDisputeObservation | null = null;
+  private readonly blockers = new Set<CoordinatorBlocker>();
+  private reconciliationObservationActive = false;
+  private busy = false;
+  private emitting = false;
+  private inspectionOwner: InspectionOwner | null = null;
+  private pendingWrite: PendingWrite | undefined;
+  private restartRequired = false;
+  private committedDurableRecoveryRevision = '';
+  private storedFactDispute: StoredFactDisputeObservation | null = null;
 
   constructor(
     readonly persistence: JournalPersistence,
     readonly identity: JournalIdentity,
     readonly maxRetainedAttempts: number,
   ) {}
+
+  get durableRecoveryRevision(): string {
+    return this.committedDurableRecoveryRevision;
+  }
+
+  get isReconciliationObservationActive(): boolean {
+    return this.reconciliationObservationActive;
+  }
+
+  get hasPendingWrite(): boolean {
+    return this.pendingWrite !== undefined;
+  }
+
+  get hasBlockers(): boolean {
+    return this.blockers.size !== 0;
+  }
+
+  hasBlocker(blocker: CoordinatorBlocker): boolean {
+    return this.blockers.has(blocker);
+  }
+
+  requirePendingWrite(): PendingWrite {
+    if (this.pendingWrite === undefined) {
+      throw new Error('No journal write is pending.');
+    }
+
+    return this.pendingWrite;
+  }
 
   selectAttempts(): readonly AttemptSummary[] {
     const current = this.persistence.current;
@@ -237,41 +263,121 @@ export class CoordinatorStateStore {
     });
   }
 
-  latchUnattributedActivity(): void {
-    const current = this.persistence.current;
+  initializeStartupBlockers(): void {
+    this.latchUnattributedActivity();
+    this.reconcileExhaustedSearch();
+  }
 
-    if (current.kind !== 'present') {
-      return;
+  initializeDurableRecoveryRevision(): void {
+    this.updateDurableRecoveryRevision();
+  }
+
+  async runBusy<T>(
+    action: () => Promise<T>,
+    afterRelease: () => void,
+  ): Promise<T> {
+    if (this.busy) {
+      throw new Error('Signer coordinator operation is already in progress.');
     }
 
-    if (
-      current.snapshot.lastObservation.nonce >
-      current.snapshot.nextNonce
-    ) {
-      this.blockers.add('unattributed-signer-activity');
+    this.busy = true;
+
+    try {
+      return await action();
+    } finally {
+      this.busy = false;
+      afterRelease();
     }
   }
 
-  reconcileExhaustedSearch(): void {
-    const current = this.persistence.current;
-    const exhausted = current.kind === 'present' &&
-      current.snapshot.attempts.some((attempt) =>
-        attempt.replacementSearch !== null &&
-        attempt.replacementSearch.exhausted !== null,
-      );
+  runEmitting(action: () => void): void {
+    if (this.emitting) {
+      throw new Error('Signer coordinator operation is already in progress.');
+    }
 
-    if (exhausted) {
-      this.blockers.add('conflict-search-exhausted');
-    } else {
-      this.blockers.delete('conflict-search-exhausted');
+    this.emitting = true;
+
+    try {
+      action();
+    } finally {
+      this.emitting = false;
     }
   }
 
-  updateDurableRecoveryRevision(): void {
-    this.committedDurableRecoveryRevision = computeDurableRecoveryRevision(
-      this.persistence.current,
-      this.blockers,
-    );
+  async runReconciliationObservation<T>(
+    action: () => Promise<T>,
+    afterRelease: () => void,
+  ): Promise<T> {
+    if (this.reconciliationObservationActive) {
+      throw new Error('Signer reconciliation observation is already active.');
+    }
+
+    this.assertAvailable();
+    this.reconciliationObservationActive = true;
+
+    try {
+      return await action();
+    } finally {
+      this.reconciliationObservationActive = false;
+      afterRelease();
+    }
+  }
+
+  acquireInspectionOwner(owner: InspectionOwner): void {
+    if (this.inspectionOwner !== null) {
+      throw new Error('Signer inspection is already in progress.');
+    }
+
+    this.inspectionOwner = owner;
+    this.authorization.inspectionBegun();
+  }
+
+  releaseInspectionOwner(owner: InspectionOwner): void {
+    this.assertInspectionOwner(owner);
+    this.inspectionOwner = null;
+  }
+
+  stagePendingWrite(completion: PendingWrite): void {
+    if (this.pendingWrite !== undefined) {
+      throw new Error('A journal write is already signed.');
+    }
+
+    this.pendingWrite = completion;
+  }
+
+  discardPendingWrite(): void {
+    this.pendingWrite = undefined;
+  }
+
+  /**
+   * Executes post-emission completion steps 4-6 in strict order:
+   * clears pending metadata before updating blockers and revision so any
+   * later failure preserves the original error without latching restart.
+   */
+  completePendingWrite(): void {
+    this.pendingWrite = undefined;
+    this.latchUnattributedActivity();
+    this.reconcileExhaustedSearch();
+    this.updateDurableRecoveryRevision();
+  }
+
+  latchRestartRequired(): void {
+    this.restartRequired = true;
+    this.authorization.completionFailed();
+  }
+
+  recordStoredFactDispute(
+    dispute: StoredFactDisputeObservation,
+  ): void {
+    this.storedFactDispute = dispute;
+  }
+
+  clearStoredFactDispute(
+    origin: StoredFactDisputeObservation['origin'],
+  ): void {
+    if (this.storedFactDispute?.origin === origin) {
+      this.storedFactDispute = null;
+    }
   }
 
   assertInspectionOwner(
@@ -292,6 +398,12 @@ export class CoordinatorStateStore {
     }
   }
 
+  assertNotOperating(): void {
+    if (this.busy || this.emitting) {
+      throw new Error('Signer coordinator operation is already in progress.');
+    }
+  }
+
   assertAvailable(
     owner?: InspectionOwner,
   ): void {
@@ -307,9 +419,7 @@ export class CoordinatorStateStore {
       }
     }
 
-    if (this.busy || this.emitting) {
-      throw new Error('Signer coordinator operation is already in progress.');
-    }
+    this.assertNotOperating();
   }
 
   assertRestartNotRequired(): void {
@@ -327,5 +437,51 @@ export class CoordinatorStateStore {
     ) {
       throw new Error('A pending journal write must be retried first.');
     }
+  }
+
+  assertInspectionPersistenceIdle(): void {
+    if (
+      this.pendingWrite !== undefined ||
+      this.persistence.state !== 'idle'
+    ) {
+      throw new Error('Signer inspection has pending persistence.');
+    }
+  }
+
+  private latchUnattributedActivity(): void {
+    const current = this.persistence.current;
+
+    if (current.kind !== 'present') {
+      return;
+    }
+
+    if (
+      current.snapshot.lastObservation.nonce >
+      current.snapshot.nextNonce
+    ) {
+      this.blockers.add('unattributed-signer-activity');
+    }
+  }
+
+  private reconcileExhaustedSearch(): void {
+    const current = this.persistence.current;
+    const exhausted = current.kind === 'present' &&
+      current.snapshot.attempts.some((attempt) =>
+        attempt.replacementSearch !== null &&
+        attempt.replacementSearch.exhausted !== null,
+      );
+
+    if (exhausted) {
+      this.blockers.add('conflict-search-exhausted');
+    } else {
+      this.blockers.delete('conflict-search-exhausted');
+    }
+  }
+
+  private updateDurableRecoveryRevision(): void {
+    this.committedDurableRecoveryRevision = computeDurableRecoveryRevision(
+      this.persistence.current,
+      this.blockers,
+    );
   }
 }

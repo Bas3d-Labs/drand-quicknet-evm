@@ -68,9 +68,8 @@ export async function broadcastAttemptWorkflow(
   const publicClient = options.publicClient;
 
   state.authorization.broadcastStarted();
-  state.busy = true;
 
-  try {
+  return state.runBusy(async () => {
     if (attempt.phase === 'signed') {
       const outcome = await commit.saveWrite({
         ...current.snapshot,
@@ -139,8 +138,5 @@ export async function broadcastAttemptWorkflow(
       transactionHash: transaction.transactionHash,
       nonce: attempt.nonce,
     });
-  } finally {
-    state.busy = false;
-    diagnostics.refresh(cycle, 'broadcast-attempt');
-  }
+  }, () => diagnostics.refresh(cycle, 'broadcast-attempt'));
 }

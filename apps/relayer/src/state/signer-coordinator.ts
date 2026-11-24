@@ -171,10 +171,9 @@ export class SignerCoordinator {
     );
 
     coordinator.diagnostics.initializeStartupRetention();
-    coordinator.state.latchUnattributedActivity();
-    coordinator.state.reconcileExhaustedSearch();
+    coordinator.state.initializeStartupBlockers();
     coordinator.diagnostics.refresh();
-    coordinator.state.updateDurableRecoveryRevision();
+    coordinator.state.initializeDurableRecoveryRevision();
 
     return coordinator;
   }
@@ -253,7 +252,7 @@ export class SignerCoordinator {
    * the retained token is not eligible for recovery reuse.
    */
   get durableRecoveryRevision(): string {
-    return this.state.committedDurableRecoveryRevision;
+    return this.state.durableRecoveryRevision;
   }
 
   /**
