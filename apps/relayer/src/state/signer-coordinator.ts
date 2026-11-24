@@ -79,6 +79,10 @@ import {
 } from './inspection-bracket.js';
 
 import {
+  SignerRestartRequiredError,
+} from './signer-restart-required-error.js';
+
+import {
   JournalPersistence,
 } from './journal-persistence.js';
 
@@ -329,6 +333,7 @@ export class SignerCoordinator {
   private inspectionOwner: InspectionOwner | null = null;
 
   private pendingWrite: PendingWrite | undefined;
+  private restartRequired = false;
   private attemptLog: ScopedRelayerLog | undefined;
   private lastBootstrapDeferral: {
     readonly durableNonce: bigint;
@@ -659,8 +664,9 @@ export class SignerCoordinator {
   }
 
   /**
-   * Deterministic representation of committed state relevant to durable
-   * recovery. Equal content produces the same value across writes.
+   * Token for the last completed recovery-relevant bookkeeping.
+   * It is not a storage acknowledgement receipt. After completion fails,
+   * the retained token is not eligible for recovery reuse.
    */
   get durableRecoveryRevision(): string {
     return this.committedDurableRecoveryRevision;
@@ -1960,12 +1966,10 @@ export class SignerCoordinator {
   /** Called only after acknowledgement; never reclassifies a committed save. */
   private throwCompletionFailure(error: unknown): never {
     if (this.pendingWrite !== undefined) {
-      throw new Error(
-        'Journal persistence was acknowledged, but coordinator completion failed. ' +
-        'The committed journal is retained. ' +
-        'Restart the relayer to reload it and run recovery; ' +
-        'persistence retry is unavailable.'
-      );
+      this.restartRequired = true;
+      this.authorization.completionFailed();
+
+      throw new SignerRestartRequiredError();
     }
 
     // Completion already cleared its metadata: preserve later failures as-is.
@@ -2084,6 +2088,7 @@ export class SignerCoordinator {
     cycle?: number,
   ): Promise<void> {
     this.assertAvailable();
+    this.assertRestartNotRequired();
 
     if (
       this.pendingWrite === undefined ||
@@ -2208,7 +2213,15 @@ export class SignerCoordinator {
     }
   }
 
+  private assertRestartNotRequired(): void {
+    if (this.restartRequired) {
+      throw new SignerRestartRequiredError();
+    }
+  }
+
   private assertPersistenceIdle(): void {
+    this.assertRestartNotRequired();
+
     if (
       this.pendingWrite !== undefined ||
       this.persistence.state !== 'idle'

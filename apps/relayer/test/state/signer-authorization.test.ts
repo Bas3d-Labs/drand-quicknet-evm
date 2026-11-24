@@ -39,6 +39,12 @@ const CLEAR_ALL = {
 
 const TRANSITIONS: readonly TransitionCase[] = [
   {
+    name: 'acknowledged completion failed',
+    apply: (authorization) => authorization.completionFailed(),
+    changes: CLEAR_ALL,
+    clearsAll: true,
+  },
+  {
     name: 'inspection begun',
     apply: (authorization) => authorization.inspectionBegun(),
     changes: CLEAR_ACTION,
