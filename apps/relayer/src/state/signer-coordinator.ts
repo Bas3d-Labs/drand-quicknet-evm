@@ -37,6 +37,7 @@ import {
 import {
   signPreparedTransaction,
   type PreparedRelayerTransaction,
+  type SignedRelayerTransaction,
 } from '../chain/sign-prepared-transaction.js';
 
 import type {
@@ -52,16 +53,10 @@ import {
 } from '../execution/work-identity.js';
 
 import {
-  isFixedHex,
-} from '../shared/hex.js';
-
-import {
   isPositiveSafeInteger,
 } from '../shared/integer.js';
 
 import {
-  contradictsExhaustionNonce,
-  supersedesNoMatch,
   validateAttributionRequest,
   journalSnapshotDigest,
   type OperatorAttributionRequest,
@@ -70,6 +65,18 @@ import {
 import {
   durableRecoveryRevision as computeDurableRecoveryRevision,
 } from './durable-recovery-revision.js';
+
+import {
+  assertInspectionCompleted,
+  createInspectionBracket,
+  discardInspectionEvidence,
+  inspectionNeedsOpening,
+  latestNonceIsConsistent,
+  mergeBlockObservations,
+  nextInspectionPhase,
+  observeDurableNonce,
+  type InspectionBracket,
+} from './inspection-bracket.js';
 
 import {
   JournalPersistence,
@@ -85,13 +92,17 @@ import {
 
 import {
   planSignerRecovery,
-  type RecoveryWriteCompletion,
+  type SignerRecoveryPlan,
 } from './plan-signer-recovery.js';
 
 import {
   evaluateSignerGate,
   type CoordinatorBlocker,
 } from './signer-gate.js';
+
+import {
+  SignerAuthorization,
+} from './signer-authorization.js';
 
 import {
   SignerGateDiagnostics,
@@ -117,7 +128,7 @@ import {
   type AnchoredNonceObservation,
   type JournalAttempt,
   type JournalIdentity,
-  type TransactionJournalRead,
+  type TransactionJournalSnapshot,
   type TransactionJournalStore,
 } from './transaction-journal.js';
 
@@ -125,6 +136,18 @@ import {
   validateAcceptanceRequest,
   type OperatorAcceptanceRequest,
 } from './operator-acceptance.js';
+
+import {
+  describeWriteCompletion,
+  type PendingWrite,
+  type SignerEventOperation,
+} from './write-completion.js';
+
+import {
+  retryJournalWrite,
+  saveJournalWrite,
+  type WriteOutcome,
+} from './write-outcome.js';
 
 export interface SignerCoordinatorOptions {
   readonly identity: JournalIdentity;
@@ -169,18 +192,6 @@ export type SignerRecoveryResult =
       { status: 'bootstrap-deferred' }
     >;
 
-type PendingWrite =
-  | RecoveryWriteCompletion
-  | {
-      kind: 'bootstrap';
-    }
-  | {
-      kind: 'prepared';
-    }
-  | {
-      kind: 'broadcast';
-    };
-
 export interface PrepareAttemptOptions {
   readonly account: LocalAccount;
   readonly transaction: PreparedRelayerTransaction;
@@ -206,11 +217,6 @@ export type PrepareAttemptResult =
       readonly attemptId: string;
       readonly workId: string;
     };
-
-type SignerEventOperation =
-  | 'prepare-attempt'
-  | 'broadcast-attempt'
-  | 'reconcile-attempt';
 
 export interface BroadcastAttemptOptions {
   readonly publicClient: PublicClient;
@@ -268,24 +274,6 @@ export interface OpenSignerInspectionOptions {
   readonly durableAnchor?: Readonly<BlockAnchor>;
 }
 
-interface InspectionBracket {
-  readonly publicClient: PublicClient;
-  readonly head: Readonly<BlockAnchor>;
-  readonly durableAnchor: Readonly<BlockAnchor> | undefined;
-  durableNonce: bigint | undefined;
-
-  /** Observed hashes for this inspection only; never persisted or cached. */
-  durableObservations: ReadonlyMap<bigint, Hash>;
-  phase:
-    | 'opening'
-    | 'durable'
-    | 'latest'
-    | 'closing'
-    | 'persisting'
-    | 'completed'
-    | 'failed';
-}
-
 export interface SignerInspection {
   recover(
     options: RecoverSignerOptions,
@@ -333,12 +321,10 @@ export class SignerCoordinator {
 
   private storedFactDispute: StoredFactDisputeObservation | null = null;
 
-  private recoveryComplete = false;
-  private inclusionChecksComplete = false;
+  private readonly authorization = new SignerAuthorization();
   private reconciliationObservationActive = false;
   private busy = false;
   private emitting = false;
-  private broadcastPermit: string | undefined;
 
   private inspectionOwner: InspectionOwner | null = null;
 
@@ -428,7 +414,7 @@ export class SignerCoordinator {
     const owner: InspectionOwner = {
       bracket: options === undefined
         ? null
-        : this.createInspectionBracket(options),
+        : createInspectionBracket(options),
       activeOperation: null,
       abandonment: null,
       abandoning: false,
@@ -436,7 +422,7 @@ export class SignerCoordinator {
     };
 
     this.inspectionOwner = owner;
-    this.revokeActionAuthorization();
+    this.authorization.inspectionBegun();
 
     return Object.freeze({
       recover: (
@@ -641,8 +627,8 @@ export class SignerCoordinator {
     }
 
     return (
-      this.recoveryComplete &&
-      this.broadcastPermit === attempt.attemptId &&
+      this.authorization.recoveryComplete &&
+      this.authorization.broadcastPermit === attempt.attemptId &&
       this.blockers.size === 0 &&
       current.snapshot.lastObservation.nonce === attempt.nonce
     );
@@ -651,8 +637,8 @@ export class SignerCoordinator {
   get status() {
     const gate = evaluateSignerGate({
       persistence: this.persistence,
-      recoveryComplete: this.recoveryComplete,
-      inclusionChecksComplete: this.inclusionChecksComplete,
+      recoveryComplete: this.authorization.recoveryComplete,
+      inclusionChecksComplete: this.authorization.inclusionChecksComplete,
       maxRetainedAttempts: this.maxRetainedAttempts,
       blockers: this.blockers,
     });
@@ -665,8 +651,8 @@ export class SignerCoordinator {
         gate.open &&
         !this.busy &&
         this.inspectionOwner === null,
-      recoveryComplete: this.recoveryComplete,
-      inclusionChecksComplete: this.inclusionChecksComplete,
+      recoveryComplete: this.authorization.recoveryComplete,
+      inclusionChecksComplete: this.authorization.inclusionChecksComplete,
       persistenceState: this.persistence.state,
       blockedSince: this.gateDiagnostics.blockedSince,
     });
@@ -772,84 +758,101 @@ export class SignerCoordinator {
     ], current.snapshot.attempts);
 
     if (detail !== null) {
-      this.invalidateRecoveryAuthorization();
+      this.authorization.storedFactConflictBeforeSigning();
       this.reportStoredFactConflict(detail, 'preparation', cycle);
       this.refresh(cycle, 'prepare-attempt');
       throw new StoredFactNonceConflictError(detail);
     }
 
     const previousAttemptLog = this.attemptLog;
-    const previousBlockedSince = this.gateDiagnostics.blockedSince;
-    const previousInclusionChecksComplete = this.inclusionChecksComplete;
 
-    this.broadcastPermit = undefined;
+    const previousBlockedSince = this.gateDiagnostics.blockedSince;
+
+    const previousInclusionChecksComplete =
+      this.authorization.inclusionChecksComplete;
+
+    this.authorization.preparationStarted();
     this.busy = true;
 
     try {
-      const createdAt = this.timestamp();
+      let signed: SignedRelayerTransaction;
 
-      const signed = await signPreparedTransaction({
-        identity: this.identity,
-        nonce: current.snapshot.nextNonce,
-        account: options.account,
-        transaction: options.transaction,
-      });
+      let outcome: WriteOutcome;
 
-      this.attemptLog = this.createSignedAttemptLog(
-        current.snapshot.attempts,
-        signed.signedTransaction,
-      );
+      try {
+        const createdAt = this.timestamp();
 
-      const next = planAttemptPreparation({
-        identity: this.identity,
-        snapshot: current.snapshot,
-        attemptId,
-        workId,
-        createdAt,
-        signed,
-      });
+        signed = await signPreparedTransaction({
+          identity: this.identity,
+          nonce: current.snapshot.nextNonce,
+          account: options.account,
+          transaction: options.transaction,
+        });
 
-      this.gateDiagnostics.blockedSince ??= createdAt;
-      this.inclusionChecksComplete = false;
-      this.stageWrite({ kind: 'prepared' });
+        this.attemptLog = this.createSignedAttemptLog(
+          current.snapshot.attempts,
+          signed.signedTransaction,
+        );
 
-      await this.persistence.save(next);
+        const next = planAttemptPreparation({
+          identity: this.identity,
+          snapshot: current.snapshot,
+          attemptId,
+          workId,
+          createdAt,
+          signed,
+        });
 
-      this.applyCommittedWrite(cycle);
-      this.broadcastPermit = attemptId;
-
-      // Diagnostic only: a retained lookup or failed preparation does not clear it.
-      if (this.storedFactDispute?.origin === 'preparation') {
-        this.storedFactDispute = null;
-      }
-
-      return Object.freeze({
-        status: 'prepared',
-        attemptId,
-        transactionHash: signed.transactionHash,
-        nonce: signed.nonce,
-      });
-    } catch (error) {
-      const unacknowledged =
-        this.persistence.state === 'idle' &&
-        this.persistence.current === current;
-
-      if (unacknowledged) {
-        this.discardUnacknowledgedWrite(current);
-        
-        // Restore the previous queue's policy and authorization only
-        // when this operation did not acknowledge a new journal state.
+        this.gateDiagnostics.blockedSince ??= createdAt;
+        this.authorization.preparationAboutToSave();
+        outcome = await this.saveWrite(next, { kind: 'prepared' });
+      } catch (error) {
+        // Signing, diagnostics or planning failed before a save outcome existed.
         this.attemptLog = previousAttemptLog;
         this.gateDiagnostics.blockedSince = previousBlockedSince;
-        this.inclusionChecksComplete = previousInclusionChecksComplete;
-      } else {
-        // Retain protection for newly signed bytes after acknowledgement
-        // or an uncertain write, and require fresh recovery.
-        this.invalidateRecoveryAuthorization();
-        this.discardUnacknowledgedWrite(current);
+        this.authorization.preparationRolledBack(previousInclusionChecksComplete);
+        throw error;
       }
 
-      throw error;
+      switch (outcome.status) {
+        case 'not-written':
+          this.pendingWrite = undefined;
+          this.attemptLog = previousAttemptLog;
+          this.gateDiagnostics.blockedSince = previousBlockedSince;
+          this.authorization.preparationRolledBack(previousInclusionChecksComplete);
+          throw outcome.error;
+
+        case 'uncertain':
+          this.authorization.preparationReachedStorageWithoutCompletion();
+          throw outcome.error;
+
+        case 'acknowledged':
+          break;
+
+        default:
+          outcome satisfies never;
+      }
+
+      try {
+        this.applyCommittedWrite(cycle);
+        this.authorization.grantPreparationPermit(attemptId);
+
+        // Diagnostic only: a retained lookup or failed preparation does not clear it.
+        if (this.storedFactDispute?.origin === 'preparation') {
+          this.storedFactDispute = null;
+        }
+
+        return Object.freeze({
+          status: 'prepared',
+          attemptId,
+          transactionHash: signed.transactionHash,
+          nonce: signed.nonce,
+        });
+      } catch (error) {
+        // Acknowledgement is permanent even when completion cannot finish.
+        this.authorization.preparationReachedStorageWithoutCompletion();
+        this.throwCompletionFailure(error);
+      }
     } finally {
       this.busy = false;
       this.refresh(cycle, 'prepare-attempt');
@@ -895,14 +898,12 @@ export class SignerCoordinator {
 
     const publicClient = options.publicClient;
 
-    this.invalidateRecoveryAuthorization();
+    this.authorization.broadcastStarted();
     this.busy = true;
 
     try {
       if (attempt.phase === 'signed') {
-        this.stageWrite({ kind: 'broadcast' });
-
-        await this.persistence.save({
+        const outcome = await this.saveWrite({
           ...current.snapshot,
           attempts: current.snapshot.attempts.map((candidate, index) => 
             index === attemptIndex
@@ -913,9 +914,17 @@ export class SignerCoordinator {
                 }
               : candidate,
           ),
-        });
+        }, { kind: 'broadcast' });
 
-        this.completeCommittedWrite(cycle);
+        if (outcome.status !== 'acknowledged') {
+          this.throwWriteFailure(outcome);
+        }
+
+        try {
+          this.completeCommittedWrite(cycle);
+        } catch (error) {
+          this.throwCompletionFailure(error);
+        }
       }
 
       const identity = {
@@ -961,9 +970,6 @@ export class SignerCoordinator {
         transactionHash: transaction.transactionHash,
         nonce: attempt.nonce,
       });
-    } catch (error) {
-      this.discardUnacknowledgedWrite(current);
-      throw error;
     } finally {
       this.busy = false;
       this.refresh(cycle, 'broadcast-attempt');
@@ -1050,240 +1056,265 @@ export class SignerCoordinator {
       };
     }
 
-    this.invalidateRecoveryAuthorization();
+    this.authorization.recoveryStarted();
     this.busy = true;
 
     try {
-      if (owner.bracket !== null) {
-        const bracket = owner.bracket;
+      try {
+        if (owner.bracket !== null) {
+          const bracket = owner.bracket;
 
-        if (
-          bracket.publicClient !== options.publicClient ||
-          bracket.durableAnchor === undefined ||
-          !blockAnchorsMatch(bracket.durableAnchor, options.anchor)
-        ) {
-          throw new Error('Recovery does not match the inspection anchors.');
+          if (
+            bracket.publicClient !== options.publicClient ||
+            bracket.durableAnchor === undefined ||
+            !blockAnchorsMatch(bracket.durableAnchor, options.anchor)
+          ) {
+            throw new Error('Recovery does not match the inspection anchors.');
+          }
+
+          const changed = await this.openInspectionBracket(owner);
+
+          if (changed !== null) {
+            return {
+              status: 'anchor-changed',
+              observedAnchor: changed,
+            };
+          }
         }
 
-        const changed = await this.openInspectionBracket(owner);
+        if (current.kind === 'missing') {
+          if (options.acceptance !== undefined) {
+            throw new Error('Operator acceptance requires a retained attempt.');
+          }
 
-        if (changed !== null) {
-          return {
-            status: 'anchor-changed',
-            observedAnchor: changed,
-          };
+          if (options.attribution !== undefined) {
+            throw new Error('Operator attribution requires a retained attempt.');
+          }
         }
+      } catch (error) {
+        this.authorization.recoveryFailed();
+        this.failInspectionBracket(owner);
+        throw error;
       }
 
       if (current.kind === 'missing') {
-        if (options.acceptance !== undefined) {
-          throw new Error('Operator acceptance requires a retained attempt.');
-        }
-
-        if (options.attribution !== undefined) {
-          throw new Error('Operator attribution requires a retained attempt.');
-        }
-
         return await this.bootstrapOwned(options, owner, cycle);
       }
-      
-      const result = await inspectSignerRecovery({
-        publicClient: options.publicClient,
-        snapshot: current.snapshot,
-        anchor: options.anchor,
-        maxBlockRange: options.maxBlockRange,
-        ...(options.acceptance === undefined ? {} : {
-          acceptanceAttemptId: options.acceptance.attemptId,
-        }),
-        ...(options.attribution === undefined ? {} : {
-          hint: options.attribution.hint,
-        }),
-      });
 
-      if (
-        'observation' in result &&
-        !this.observeInspectionDurableNonce(owner, result.observation)
-      ) {
-        return {
-          status: 'inconsistent-observations',
-          observation: result.observation,
-        };
-      }
+      let result: SignerRecoveryInspection;
 
-      const plan = planSignerRecovery({
-        identity: this.identity,
-        snapshot: current.snapshot,
-        inspection: result,
-        ...(options.acceptance === undefined ? {} : {
-          acceptance: options.acceptance,
-        }),
-        ...(options.attribution === undefined ? {} : {
-          attribution: options.attribution,
-        }),
-        unattributedActivity:
-          this.blockers.has('unattributed-signer-activity'),
-      });
+      let plan: SignerRecoveryPlan;
 
-      if (plan.kind === 'inconsistent-observations') {
-        this.recoveryComplete = false;
-        this.failInspectionBracket(owner);
+      let outcome: WriteOutcome;
 
-        const detail = plan.detail;
+      try {
+        result = await inspectSignerRecovery({
+          publicClient: options.publicClient,
+          snapshot: current.snapshot,
+          anchor: options.anchor,
+          maxBlockRange: options.maxBlockRange,
+          ...(options.acceptance === undefined ? {} : {
+            acceptanceAttemptId: options.acceptance.attemptId,
+          }),
+          ...(options.attribution === undefined ? {} : {
+            hint: options.attribution.hint,
+          }),
+        });
 
-        this.reportStoredFactConflict(detail, 'recovery', cycle);
-
-        if (!('observation' in result)) {
-          throw new Error('A conflicting recovery plan requires an observation.');
-        }
-
-        return {
-          status: 'inconsistent-observations',
-          observation: result.observation,
-          detail,
-        };
-      }
-
-      // Admit only after nonce validation and planning. A preservation-only
-      // skip still carries valid evidence, even though recovery stays incomplete.
-      if (
-        (
-          plan.kind === 'persist' ||
-          plan.reason === 'preserved-higher-observation'
-        ) &&
-        'observations' in result &&
-        !this.admitDurableBlockObservations(owner, result.observations)
-      ) {
-        this.failInspectionBracket(owner);
-        return {
-          status: 'inconsistent-observations',
-          observation: result.observation,
-        };
-      }
-
-      if (plan.kind === 'unchanged') {
-        this.failInspectionBracket(owner);
-
-        if (result.status === 'operator-acceptance-available') {
-          let reason: 'ledger-capacity-reached' | 'stale-evidence' = 'stale-evidence';
-
-          if (plan.reason === 'ledger-capacity-reached') {
-            reason = plan.reason;
-          }
-
+        if (
+          'observation' in result &&
+          !this.observeInspectionDurableNonce(owner, result.observation)
+        ) {
           return {
-            status: 'operator-acceptance-refused',
+            status: 'inconsistent-observations',
             observation: result.observation,
-            reason,
           };
         }
 
-        if (result.status === 'operator-attribution-available') {
-          let reason: 'ledger-capacity-reached' | 'stale-evidence' = 'stale-evidence';
+        plan = planSignerRecovery({
+          identity: this.identity,
+          snapshot: current.snapshot,
+          inspection: result,
+          ...(options.acceptance === undefined ? {} : {
+            acceptance: options.acceptance,
+          }),
+          ...(options.attribution === undefined ? {} : {
+            attribution: options.attribution,
+          }),
+          unattributedActivity:
+            this.blockers.has('unattributed-signer-activity'),
+        });
 
-          if (plan.reason === 'ledger-capacity-reached') {
-            reason = plan.reason;
+        if (plan.kind === 'inconsistent-observations') {
+          this.authorization.evidenceContradicted();
+          this.failInspectionBracket(owner);
+
+          const detail = plan.detail;
+
+          this.reportStoredFactConflict(detail, 'recovery', cycle);
+
+          if (!('observation' in result)) {
+            throw new Error('A conflicting recovery plan requires an observation.');
           }
 
           return {
-            status: 'operator-hint-refused',
+            status: 'inconsistent-observations',
             observation: result.observation,
-            reason,
+            detail,
           };
+        }
+
+        // Admit only after nonce validation and planning. A preservation-only
+        // skip still carries valid evidence, even though recovery stays incomplete.
+        if (
+          (
+            plan.kind === 'persist' ||
+            plan.reason === 'preserved-higher-observation'
+          ) &&
+          'observations' in result &&
+          !this.admitDurableBlockObservations(owner, result.observations)
+        ) {
+          this.failInspectionBracket(owner);
+          return {
+            status: 'inconsistent-observations',
+            observation: result.observation,
+          };
+        }
+
+        if (plan.kind === 'unchanged') {
+          this.failInspectionBracket(owner);
+
+          if (result.status === 'operator-acceptance-available') {
+            let reason: 'ledger-capacity-reached' | 'stale-evidence' = 'stale-evidence';
+
+            if (plan.reason === 'ledger-capacity-reached') {
+              reason = plan.reason;
+            }
+
+            return {
+              status: 'operator-acceptance-refused',
+              observation: result.observation,
+              reason,
+            };
+          }
+
+          if (result.status === 'operator-attribution-available') {
+            let reason: 'ledger-capacity-reached' | 'stale-evidence' = 'stale-evidence';
+
+            if (plan.reason === 'ledger-capacity-reached') {
+              reason = plan.reason;
+            }
+
+            return {
+              status: 'operator-hint-refused',
+              observation: result.observation,
+              reason,
+            };
+          }
+
+          return result;
+        }
+
+        // Ticketed apply may commit only the exact attribution previewed earlier.
+        // In particular, a newly available ordinary resolution is not that proposal.
+        if (commitment !== undefined && (
+          plan.completion.kind !== 'operator-attribution' ||
+          plan.completion.outcome.proposalDigest !== commitment.proposalDigest ||
+          !blockAnchorsMatch(plan.completion.outcome.replacement.inclusion, commitment.inclusion) ||
+          !blockAnchorsMatch(plan.completion.outcome.durable.anchor, commitment.durable.anchor) ||
+          plan.completion.outcome.durable.nonce !== commitment.durable.nonce
+        )) {
+          this.failInspectionBracket(owner);
+
+          return {
+            status: 'operator-ticket-refused',
+            reason: 'proposal-changed',
+          };
+        }
+
+        // Ticketed acceptance must not substitute an ordinary resolution or repair.
+        if (acceptanceCommitment !== undefined && (
+          plan.completion.kind !== 'operator-acceptance' ||
+          plan.completion.outcome.proposalDigest !== acceptanceCommitment.proposalDigest ||
+          !blockAnchorsMatch(
+            plan.completion.outcome.durable.anchor,
+            acceptanceCommitment.durable.anchor,
+          ) ||
+          plan.completion.outcome.durable.nonce !== acceptanceCommitment.durable.nonce
+        )) {
+          this.failInspectionBracket(owner);
+
+          return {
+            status: 'operator-ticket-refused',
+            reason: 'proposal-changed',
+          };
+        }
+
+        this.lastStoredFactConflict = undefined;
+
+        outcome = await this.saveWrite(plan.snapshot, plan.completion);
+      } catch (error) {
+        this.authorization.recoveryFailed();
+        this.failInspectionBracket(owner);
+        throw error;
+      }
+
+      if (outcome.status !== 'acknowledged') {
+        this.authorization.recoveryFailed();
+        this.failInspectionBracket(owner);
+        this.throwWriteFailure(outcome);
+      }
+
+      try {
+        // Construction must not throw for planner output: this is after acknowledgement.
+        const { terminalCorrection } = describeWriteCompletion(
+          plan.completion,
+          this.identity.signer,
+        );
+
+        this.authorization.recoveryCommitted(terminalCorrection);
+        this.applyCommittedWrite(cycle);
+        if (terminalCorrection) {
+          this.failInspectionBracket(owner);
+        }
+
+        if (plan.completion.kind === 'operator-acceptance') {
+          return {
+            status: 'operator-acceptance-committed',
+            requestId: plan.completion.outcome.requestId,
+          };
+        }
+
+        if (plan.completion.kind === 'operator-attribution') {
+          return {
+            status: 'operator-attribution-committed',
+            requestId: plan.completion.outcome.requestId,
+          };
+        }
+
+        const inspectedAttempt = current.snapshot.attempts[0];
+
+        if (
+          result.status === 'unresolved' &&
+          inspectedAttempt !== undefined &&
+          inspectedAttempt.phase !== 'included' &&
+          result.observation.nonce === inspectedAttempt.nonce &&
+          result.search === null &&
+          this.blockers.size === 0 &&
+          (
+            result.receipt.status === 'receipt-not-found' ||
+            result.receipt.status === 'fork-served-receipt'
+          )
+        ) {
+          this.authorization.grantRecoveryPermit(inspectedAttempt.attemptId);
         }
 
         return result;
-      }
-
-      // Ticketed apply may commit only the exact attribution previewed earlier.
-      // In particular, a newly available ordinary resolution is not that proposal.
-      if (commitment !== undefined && (
-        plan.completion.kind !== 'operator-attribution' ||
-        plan.completion.outcome.proposalDigest !== commitment.proposalDigest ||
-        !blockAnchorsMatch(plan.completion.outcome.replacement.inclusion, commitment.inclusion) ||
-        !blockAnchorsMatch(plan.completion.outcome.durable.anchor, commitment.durable.anchor) ||
-        plan.completion.outcome.durable.nonce !== commitment.durable.nonce
-      )) {
+      } catch (error) {
+        this.authorization.recoveryFailed();
         this.failInspectionBracket(owner);
-
-        return {
-          status: 'operator-ticket-refused',
-          reason: 'proposal-changed',
-        };
+        this.throwCompletionFailure(error);
       }
-
-      // Ticketed acceptance must not substitute an ordinary resolution or repair.
-      if (acceptanceCommitment !== undefined && (
-        plan.completion.kind !== 'operator-acceptance' ||
-        plan.completion.outcome.proposalDigest !== acceptanceCommitment.proposalDigest ||
-        !blockAnchorsMatch(
-          plan.completion.outcome.durable.anchor,
-          acceptanceCommitment.durable.anchor,
-        ) ||
-        plan.completion.outcome.durable.nonce !== acceptanceCommitment.durable.nonce
-      )) {
-        this.failInspectionBracket(owner);
-
-        return {
-          status: 'operator-ticket-refused',
-          reason: 'proposal-changed',
-        };
-      }
-
-      this.lastStoredFactConflict = undefined;
-
-      this.stageWrite(plan.completion);
-
-      await this.persistence.save(plan.snapshot);
-
-      const terminalCorrection =
-        plan.completion.kind === 'operator-acceptance' ||
-        plan.completion.kind === 'operator-attribution' ||
-        plan.completion.kind === 'search-unconsumed-bound-rebase' ||
-        plan.completion.kind === 'search-reset' ||
-        plan.completion.kind === 'search-lower-bound-replacement';
-      this.recoveryComplete = !terminalCorrection;
-      this.applyCommittedWrite(cycle);
-      if (terminalCorrection) {
-        this.failInspectionBracket(owner);
-      }
-
-      if (plan.completion.kind === 'operator-acceptance') {
-        return {
-          status: 'operator-acceptance-committed',
-          requestId: plan.completion.outcome.requestId,
-        };
-      }
-
-      if (plan.completion.kind === 'operator-attribution') {
-        return {
-          status: 'operator-attribution-committed',
-          requestId: plan.completion.outcome.requestId,
-        };
-      }
-
-      const inspectedAttempt = current.snapshot.attempts[0];
-
-      if (
-        result.status === 'unresolved' &&
-        inspectedAttempt !== undefined &&
-        inspectedAttempt.phase !== 'included' &&
-        result.observation.nonce === inspectedAttempt.nonce &&
-        result.search === null &&
-        this.blockers.size === 0 &&
-        (
-          result.receipt.status === 'receipt-not-found' ||
-          result.receipt.status === 'fork-served-receipt'
-        )
-      ) {
-        this.broadcastPermit = inspectedAttempt.attemptId;
-      }
-
-      return result;
-    } catch (error) {
-      this.recoveryComplete = false;
-      this.failInspectionBracket(owner);
-      this.discardUnacknowledgedWrite(current);
-      throw error;
     } finally {
       this.busy = false;
       this.refresh(cycle);
@@ -1336,152 +1367,171 @@ export class SignerCoordinator {
       )
     }
 
-    this.revokeActionAuthorization();
+    this.authorization.inclusionCheckEntered();
     this.busy = true;
 
     try {
-      if (owner.bracket === null) {
-        owner.bracket = this.createInspectionBracket(options);
-      }
+      let bracket: InspectionBracket;
 
-      const bracket = owner.bracket;
+      let result: SignerInclusionInspection;
 
-      if (
-        bracket.publicClient !== options.publicClient ||
-        !blockAnchorsMatch(bracket.head, options.head)
-      ) {
-        throw new Error('Inclusion inspection does not match the selected head.');
-      }
+      let next: TransactionJournalSnapshot;
 
-      const changed = await this.openInspectionBracket(owner);
+      let outcome: WriteOutcome;
 
-      if (changed !== null) {
-        return {
-          status: 'anchor-changed',
-          observedAnchor: changed,
-        };
-      }
-
-      if (bracket.durableAnchor !== undefined && !this.recoveryComplete) {
-        throw new Error(
-          'Fresh durable recovery must complete before latest inspection.',
-        );
-      }
-
-      bracket.phase = 'latest';
-
-      const maxReplacementBlockRange = options.maxReplacementBlockRange;
-
-      const inspectionOptions = {
-        publicClient: options.publicClient,
-        snapshot: current.snapshot,
-        head: options.head,
-        ...(maxReplacementBlockRange === undefined
-          ? {}
-          : { maxReplacementBlockRange }),
-      };
-
-      const result = await inspectSignerInclusions(inspectionOptions);
-
-      if (result.status !== 'inspected') {
-        this.failInspectionBracket(owner);
-
-        if (
-          result.status === 'nonce-behind-journal' ||
-          result.status === 'inconsistent-observations'
-        ) {
-          this.recoveryComplete = false;
+      try {
+        if (owner.bracket === null) {
+          owner.bracket = createInspectionBracket(options);
         }
 
+        bracket = owner.bracket;
+
+        if (
+          bracket.publicClient !== options.publicClient ||
+          !blockAnchorsMatch(bracket.head, options.head)
+        ) {
+          throw new Error('Inclusion inspection does not match the selected head.');
+        }
+
+        const changed = await this.openInspectionBracket(owner);
+
+        if (changed !== null) {
+          return {
+            status: 'anchor-changed',
+            observedAnchor: changed,
+          };
+        }
+
+        if (
+          bracket.durableAnchor !== undefined &&
+          !this.authorization.recoveryComplete
+        ) {
+          throw new Error(
+            'Fresh durable recovery must complete before latest inspection.',
+          );
+        }
+
+        bracket.phase = nextInspectionPhase(bracket.phase, 'latest');
+
+        const maxReplacementBlockRange = options.maxReplacementBlockRange;
+
+        const inspectionOptions = {
+          publicClient: options.publicClient,
+          snapshot: current.snapshot,
+          head: options.head,
+          ...(maxReplacementBlockRange === undefined
+            ? {}
+            : { maxReplacementBlockRange }),
+        };
+
+        result = await inspectSignerInclusions(inspectionOptions);
+
+        if (result.status !== 'inspected') {
+          this.failInspectionBracket(owner);
+
+          if (
+            result.status === 'nonce-behind-journal' ||
+            result.status === 'inconsistent-observations'
+          ) {
+            this.authorization.evidenceContradicted();
+          }
+
+          return result;
+        }
+
+        // Keep the result uncommitted until the owner confirms that the selected
+        // latest block still matches the hash checked before the inspection.
+        bracket.phase = nextInspectionPhase(bracket.phase, 'closing');
+
+        const closing = await checkBlockAnchor(
+          options.publicClient,
+          bracket.head,
+          { operation: 'signer-inclusions' },
+        );
+
+        this.assertInspectionContinuing(owner);
+
+        if (closing !== null) {
+          this.failInspectionBracket(owner);
+          return closing;
+        }
+
+        if (!latestNonceIsConsistent(bracket, result.observation.nonce)) {
+          this.authorization.evidenceContradicted();
+          this.failInspectionBracket(owner);
+          return {
+            status: 'inconsistent-observations',
+            observation: result.observation,
+          };
+        }
+
+        // Check repeated heights within the latest pass as well as overlaps with
+        // durable evidence. This runs after the closing check, before planning.
+        const latestEvidence = mergeBlockObservations(
+          bracket.durableObservations,
+          result.observations,
+        );
+
+        if (latestEvidence === null) {
+          this.authorization.evidenceContradicted();
+          this.failInspectionBracket(owner);
+          return {
+            status: 'inconsistent-observations',
+            observation: result.observation,
+          };
+        }
+
+        bracket.phase = nextInspectionPhase(bracket.phase, 'persisting');
+
+        next = planSignerInclusions({
+          identity: this.identity,
+          snapshot: current.snapshot,
+          inspection: result,
+          unattributedActivity:
+            this.blockers.has('unattributed-signer-activity'),
+        });
+
+        outcome = await this.saveWrite(next, { kind: 'observation' });
+      } catch (error) {
+        this.authorization.inclusionCheckFailed();
+        this.failInspectionBracket(owner);
+        throw error;
+      }
+
+      if (outcome.status !== 'acknowledged') {
+        this.authorization.inclusionCheckFailed();
+        this.failInspectionBracket(owner);
+        this.throwWriteFailure(outcome);
+      }
+
+      try {
+        this.authorization.inclusionCheckCommitted(result.inclusionChecksComplete);
+        this.applyCommittedWrite(cycle);
+
+        const attempt = next.attempts.find(
+          (candidate) => candidate.phase !== 'included',
+        );
+
+        if (
+          this.authorization.recoveryComplete &&
+          this.blockers.size === 0 &&
+          attempt !== undefined &&
+          result.broadcastAttemptId === attempt.attemptId &&
+          next.lastObservation.nonce === attempt.nonce
+        ) {
+          this.authorization.grantInclusionPermit(attempt.attemptId);
+        }
+
+        // The durable permit was revoked on entry. Only the acknowledged latest
+        // result above may grant a replacement permit before successful finish.
+        bracket.phase = nextInspectionPhase(bracket.phase, 'completed');
+
         return result;
-      }
-
-      // Keep the result uncommitted until the owner confirms that the selected
-      // latest block still matches the hash checked before the inspection.
-      bracket.phase = 'closing';
-
-      const closing = await checkBlockAnchor(
-        options.publicClient,
-        bracket.head,
-        { operation: 'signer-inclusions' },
-      );
-
-      this.assertInspectionContinuing(owner);
-
-      if (closing !== null) {
+      } catch (error) {
+        this.authorization.inclusionCheckFailed();
         this.failInspectionBracket(owner);
-        return closing;
+        this.throwCompletionFailure(error);
       }
-
-      if (
-        bracket.durableNonce !== undefined &&
-        result.observation.nonce < bracket.durableNonce
-      ) {
-        this.recoveryComplete = false;
-        this.failInspectionBracket(owner);
-        return {
-          status: 'inconsistent-observations',
-          observation: result.observation,
-        };
-      }
-
-      // Check repeated heights within the latest pass as well as overlaps with
-      // durable evidence. This runs after the closing check, before planning.
-      const latestEvidence = this.mergeBlockObservations(
-        bracket.durableObservations,
-        result.observations,
-      );
-
-      if (latestEvidence === null) {
-        this.recoveryComplete = false;
-        this.failInspectionBracket(owner);
-        return {
-          status: 'inconsistent-observations',
-          observation: result.observation,
-        };
-      }
-
-      bracket.phase = 'persisting';
-
-      const next = planSignerInclusions({
-        identity: this.identity,
-        snapshot: current.snapshot,
-        inspection: result,
-        unattributedActivity:
-          this.blockers.has('unattributed-signer-activity'),
-      });
-
-      this.stageWrite({ kind: 'observation' });
-
-      await this.persistence.save(next);
-
-      this.inclusionChecksComplete = result.inclusionChecksComplete;
-      this.applyCommittedWrite(cycle);
-
-      const attempt = next.attempts.find(
-        (candidate) => candidate.phase !== 'included',
-      );
-
-      if (
-        this.recoveryComplete &&
-        this.blockers.size === 0 &&
-        attempt !== undefined &&
-        result.broadcastAttemptId === attempt.attemptId &&
-        next.lastObservation.nonce === attempt.nonce
-      ) {
-        this.broadcastPermit = attempt.attemptId;
-      }
-
-      // The durable permit was revoked on entry. Only the acknowledged latest
-      // result above may grant a replacement permit before successful finish.
-      bracket.phase = 'completed';
-
-      return result;
-    } catch (error) {
-      this.inclusionChecksComplete = false;
-      this.failInspectionBracket(owner);
-      this.discardUnacknowledgedWrite(current);
-      throw error;
     } finally {
       this.busy = false;
       this.refresh(cycle);
@@ -1545,138 +1595,118 @@ export class SignerCoordinator {
     owner: InspectionOwner,
     cycle?: number,
   ): Promise<SignerRecoveryResult> {
-    if (this.blockers.size !== 0) {
-      throw new Error('Cannot bootstrap while coordinator blockers remain.');
-    }
+    let observation: AnchoredNonceObservation;
 
-    const result = await inspectSignerBootstrap({
-      publicClient: options.publicClient,
-      signer: this.identity.signer,
-      anchor: options.anchor,
-    });
+    let outcome: WriteOutcome;
 
-    if (
-      'observation' in result &&
-      !this.observeInspectionDurableNonce(owner, result.observation)
-    ) {
-      return {
-        status: 'inconsistent-observations',
-        observation: result.observation,
-      };
-    }
+    try {
+      if (this.blockers.size !== 0) {
+        throw new Error('Cannot bootstrap while coordinator blockers remain.');
+      }
 
-    if (result.status === 'bootstrap-deferred') {
-      this.failInspectionBracket(owner);
-      const {
-        observation,
-        latestNonce,
-        pendingNonce,
-      } = result;
-
-      const previous = this.lastBootstrapDeferral;
+      const result = await inspectSignerBootstrap({
+        publicClient: options.publicClient,
+        signer: this.identity.signer,
+        anchor: options.anchor,
+      });
 
       if (
-        previous === undefined ||
-        previous.durableNonce !== observation.nonce ||
-        previous.latestNonce !== latestNonce ||
-        previous.pendingNonce !== pendingNonce
+        'observation' in result &&
+        !this.observeInspectionDurableNonce(owner, result.observation)
       ) {
-        this.lastBootstrapDeferral = {
-          durableNonce: observation.nonce,
+        return {
+          status: 'inconsistent-observations',
+          observation: result.observation,
+        };
+      }
+
+      if (result.status === 'bootstrap-deferred') {
+        this.failInspectionBracket(owner);
+        const {
+          observation,
           latestNonce,
           pendingNonce,
-        };
+        } = result;
 
-        this.emit(
-          (log) => log.signerBootstrapDeferred({
-            signer: this.identity.signer,
-            durableBlock: observation.anchor.blockNumber,
-            durableBlockHash: observation.anchor.blockHash,
+        const previous = this.lastBootstrapDeferral;
+
+        if (
+          previous === undefined ||
+          previous.durableNonce !== observation.nonce ||
+          previous.latestNonce !== latestNonce ||
+          previous.pendingNonce !== pendingNonce
+        ) {
+          this.lastBootstrapDeferral = {
             durableNonce: observation.nonce,
             latestNonce,
             pendingNonce,
-          }),
-          cycle,
-        );
+          };
+
+          this.emit(
+            (log) => log.signerBootstrapDeferred({
+              signer: this.identity.signer,
+              durableBlock: observation.anchor.blockNumber,
+              durableBlockHash: observation.anchor.blockHash,
+              durableNonce: observation.nonce,
+              latestNonce,
+              pendingNonce,
+            }),
+            cycle,
+          );
+        }
+
+        return result;
       }
 
-      return result;
-    }
+      if (result.status === 'anchor-changed') {
+        this.failInspectionBracket(owner);
+        return result;
+      }
 
-    if (result.status === 'anchor-changed') {
+      this.lastBootstrapDeferral = undefined;
+
+      observation = result.observation;
+
+      outcome = await this.saveWrite({
+        version: 1,
+        identity: this.identity,
+        baseline: observation,
+        lastObservation: observation,
+        nextNonce: observation.nonce,
+        durableNextNonce: observation.nonce,
+        repairs: [],
+        ledger: {
+          outcomes: [],
+          obligations: [],
+        },
+        attempts: [],
+      }, { kind: 'bootstrap' });
+    } catch (error) {
+      this.authorization.recoveryFailed();
       this.failInspectionBracket(owner);
-      return result;
+      throw error;
     }
 
-    this.lastBootstrapDeferral = undefined;
-
-    const { observation } = result;
-
-    this.stageWrite({ kind: 'bootstrap' });
-
-    await this.persistence.save({
-      version: 1,
-      identity: this.identity,
-      baseline: observation,
-      lastObservation: observation,
-      nextNonce: observation.nonce,
-      durableNextNonce: observation.nonce,
-      repairs: [],
-      ledger: {
-        outcomes: [],
-        obligations: [],
-      },
-      attempts: [],
-    });
-
-    this.recoveryComplete = true;
-    this.applyCommittedWrite(cycle);
-
-    return {
-      status: 'no-attempt',
-      observations: Object.freeze([]),
-      observation,
-    };
-  }
-
-  private createInspectionBracket(
-    options: OpenSignerInspectionOptions,
-  ): InspectionBracket {
-    const head = Object.freeze({ ...options.head });
-    const durable = options.durableAnchor;
-
-    if (
-      typeof head.blockNumber !== 'bigint' ||
-      head.blockNumber < 0n ||
-      head.blockNumber >= (1n << 256n) ||
-      !isFixedHex(head.blockHash, 32) ||
-      (
-        durable !== undefined &&
-        (
-          typeof durable.blockNumber !== 'bigint' ||
-          durable.blockNumber < 0n ||
-          !isFixedHex(durable.blockHash, 32) ||
-          head.blockNumber < durable.blockNumber ||
-          (
-            head.blockNumber === durable.blockNumber &&
-            !blockAnchorsMatch(head, durable)
-          )
-        )
-      )
-    ) {
-      throw new TypeError('Invalid signer inspection anchors.');
+    if (outcome.status !== 'acknowledged') {
+      this.authorization.recoveryFailed();
+      this.failInspectionBracket(owner);
+      this.throwWriteFailure(outcome);
     }
 
-    return {
-      publicClient: options.publicClient,
-      head,
-      durableAnchor: durable === undefined
-        ? undefined
-        : Object.freeze({ ...durable }),
-      durableNonce: undefined,
-      durableObservations: new Map(),
-      phase: 'opening',
-    };
+    try {
+      this.authorization.bootstrapCommitted();
+      this.applyCommittedWrite(cycle);
+
+      return {
+        status: 'no-attempt',
+        observations: Object.freeze([]),
+        observation,
+      };
+    } catch (error) {
+      this.authorization.recoveryFailed();
+      this.failInspectionBracket(owner);
+      this.throwCompletionFailure(error);
+    }
   }
 
   private assertInspectionContinuing(owner: InspectionOwner): void {
@@ -1692,12 +1722,8 @@ export class SignerCoordinator {
   ): Promise<Readonly<BlockAnchor> | null> {
     const bracket = owner.bracket!;
 
-    if (bracket.phase === 'durable') {
+    if (!inspectionNeedsOpening(bracket)) {
       return null;
-    }
-
-    if (bracket.phase !== 'opening') {
-      throw new Error('Signer inspection bracket cannot accept another operation.');
     }
 
     const changed = await checkBlockAnchor(
@@ -1713,7 +1739,7 @@ export class SignerCoordinator {
       return changed.observedAnchor;
     }
 
-    bracket.phase = 'durable';
+    bracket.phase = nextInspectionPhase(bracket.phase, 'durable');
     return null;
   }
 
@@ -1731,48 +1757,19 @@ export class SignerCoordinator {
       return true;
     }
 
-    if (
-      bracket.durableAnchor === undefined ||
-      !blockAnchorsMatch(bracket.durableAnchor, observation.anchor)
-    ) {
-      throw new Error('Durable observation does not match the inspection anchor.');
-    }
+    const nonce = observeDurableNonce(bracket, observation);
 
-    if (bracket.durableNonce === undefined) {
-      bracket.durableNonce = observation.nonce;
-      return true;
-    }
-
-    if (bracket.durableNonce !== observation.nonce) {
-      this.recoveryComplete = false;
+    if (nonce === null) {
+      this.authorization.evidenceContradicted();
       this.failInspectionBracket(owner);
       return false;
     }
 
-    return true;
-  }
-
-  /** Matching repeats are allowed. Different hashes at one height fail closed. */
-  private mergeBlockObservations(
-    previous: ReadonlyMap<bigint, Hash>,
-    observations: readonly Readonly<BlockAnchor>[],
-  ): ReadonlyMap<bigint, Hash> | null {
-    const merged = new Map(previous);
-
-    for (const observation of observations) {
-      const known = merged.get(observation.blockNumber);
-
-      if (
-        known !== undefined &&
-        known.toLowerCase() !== observation.blockHash.toLowerCase()
-      ) {
-        return null;
-      }
-
-      merged.set(observation.blockNumber, observation.blockHash);
+    if (bracket.durableNonce === undefined) {
+      bracket.durableNonce = nonce;
     }
 
-    return merged;
+    return true;
   }
 
   private admitDurableBlockObservations(
@@ -1787,7 +1784,7 @@ export class SignerCoordinator {
       return true;
     }
 
-    const merged = this.mergeBlockObservations(
+    const merged = mergeBlockObservations(
       bracket.durableObservations,
       observations,
     );
@@ -1804,19 +1801,9 @@ export class SignerCoordinator {
 
   private failInspectionBracket(owner: InspectionOwner): void {
     if (owner.bracket !== null) {
-      owner.bracket.phase = 'failed';
-      this.revokeActionAuthorization();
+      owner.bracket.phase = nextInspectionPhase(owner.bracket.phase, 'failed');
+      this.authorization.bracketFailed();
     }
-  }
-
-  private revokeActionAuthorization(): void {
-    this.broadcastPermit = undefined;
-    this.inclusionChecksComplete = false;
-  }
-
-  private invalidateRecoveryAuthorization(): void {
-    this.recoveryComplete = false;
-    this.revokeActionAuthorization();
   }
 
   private assertInspectionOwner(
@@ -1879,24 +1866,22 @@ export class SignerCoordinator {
       throw new Error('Signer inspection has pending persistence.');
     }
 
-    if (owner.bracket !== null && owner.bracket.phase !== 'completed') {
-      throw new Error(
-        'Signer inspection bracket has not completed successfully.',
-      );
+    if (owner.bracket !== null) {
+      assertInspectionCompleted(owner.bracket);
     }
 
     // Diagnostic only; preparation disputes require a later successful preparation.
     if (
       owner.bracket !== null &&
-      this.recoveryComplete &&
-      this.inclusionChecksComplete &&
+      this.authorization.recoveryComplete &&
+      this.authorization.inclusionChecksComplete &&
       this.storedFactDispute?.origin === 'recovery'
     ) {
       this.storedFactDispute = null;
     }
 
     if (owner.bracket !== null) {
-      owner.bracket.durableObservations = new Map();
+      owner.bracket = discardInspectionEvidence(owner.bracket);
     }
 
     this.inspectionOwner = null;
@@ -1913,7 +1898,7 @@ export class SignerCoordinator {
     }
 
     owner.abandoning = true;
-    this.revokeActionAuthorization();
+    this.authorization.abandonmentRequested();
 
     const pending = owner.activeOperation;
 
@@ -1938,41 +1923,43 @@ export class SignerCoordinator {
     // Failure here is an internal lifecycle invariant violation.
     this.assertInspectionOwner(owner);
 
-    this.revokeActionAuthorization();
+    this.authorization.abandonmentCompleted();
 
     if (owner.bracket !== null) {
-      owner.bracket.durableObservations = new Map();
+      owner.bracket = discardInspectionEvidence(owner.bracket);
     }
 
     this.inspectionOwner = null;
     this.refresh(owner.cycle);
   }
 
-  private stageWrite(
+  /** Stages one completion and saves without running any completion effects. */
+  private async saveWrite(
+    snapshot: TransactionJournalSnapshot,
     completion: PendingWrite,
-  ): void {
+  ): Promise<WriteOutcome> {
     if (this.pendingWrite !== undefined) {
       throw new Error('A journal write is already signed.');
     }
 
     this.pendingWrite = completion;
+
+    return saveJournalWrite(this.persistence, snapshot);
   }
 
-  /**
-   * Discards completion metadata only when persistence is idle and
-   * no new journal state was acknowledged during this operation.
-   */
-  private discardUnacknowledgedWrite(
-    previousCommitted: TransactionJournalRead,
-  ): void {
-    if (
-      this.pendingWrite === undefined ||
-      this.persistence.state !== 'idle'
-    ) {
-      return;
+  private throwWriteFailure(
+    outcome: Exclude<WriteOutcome, { status: 'acknowledged' }>,
+  ): never {
+    if (outcome.status === 'not-written') {
+      this.pendingWrite = undefined;
     }
 
-    if (this.persistence.current !== previousCommitted) {
+    throw outcome.error;
+  }
+
+  /** Called only after acknowledgement; never reclassifies a committed save. */
+  private throwCompletionFailure(error: unknown): never {
+    if (this.pendingWrite !== undefined) {
       throw new Error(
         'Journal persistence was acknowledged, but coordinator completion failed. ' +
         'The committed journal is retained. ' +
@@ -1981,7 +1968,8 @@ export class SignerCoordinator {
       );
     }
 
-    this.pendingWrite = undefined;
+    // Completion already cleared its metadata: preserve later failures as-is.
+    throw error;
   }
 
   private applyCommittedWrite(
@@ -1997,116 +1985,56 @@ export class SignerCoordinator {
   private completeCommittedWrite(
     cycle?: number
   ): SignerEventOperation {
-    const pending = this.pendingWrite!;
+    // Construction must not throw for planner output: this is outside the logging boundary.
+    const description = describeWriteCompletion(
+      this.pendingWrite!,
+      this.identity.signer,
+    );
 
-    if (pending.kind === 'resolution') {
-      // Keep ownership and the signed-byte diagnostic policy through
-      // resolution reporting.
-      this.emit(
-        (log) => log.attemptResolved(pending.event),
-        cycle,
-      );
+    if (description.terminalCorrection) {
+      this.authorization.terminalCorrectionCommitted();
     }
 
-    if (pending.kind === 'operator-acceptance') {
-      this.invalidateRecoveryAuthorization();
+    const event = description.event;
 
-      const outcome = pending.outcome;
+    if (event !== null) {
+      // Keep ownership and the signed-byte diagnostic policy through reporting.
+      this.emit((log) => {
+        switch (event.kind) {
+          case 'attemptResolved':
+            log.attemptResolved(event.fields);
 
-      this.emit((log) => log.attemptOperatorAccepted({
-        signer: this.identity.signer,
-        requestId: outcome.requestId,
-        attemptId: outcome.attemptId,
-        nonce: outcome.nonce,
-        durableBlock: outcome.durable.anchor.blockNumber,
-        durableBlockHash: outcome.durable.anchor.blockHash,
-      }), cycle);
-    }
+            return;
 
-    if (pending.kind === 'operator-attribution') {
-      this.invalidateRecoveryAuthorization();
+          case 'attemptOperatorAccepted':
+            log.attemptOperatorAccepted(event.fields);
 
-      const outcome = pending.outcome;
+            return;
 
-      this.emit((log) => log.attemptOperatorAttributed({
-        signer: this.identity.signer,
-        requestId: outcome.requestId,
-        attemptId: outcome.attemptId,
-        transactionHash: outcome.replacement.transactionHash,
-        nonce: outcome.nonce,
-        durableBlock: outcome.durable.anchor.blockNumber,
-        durableBlockHash: outcome.durable.anchor.blockHash,
-        supersededNoMatch: supersedesNoMatch(outcome),
-        contradictsExhaustionNonce: contradictsExhaustionNonce(outcome),
-      }), cycle);
-    }
+          case 'attemptOperatorAttributed':
+            log.attemptOperatorAttributed(event.fields);
 
-    if (pending.kind === 'search-reset') {
-      this.invalidateRecoveryAuthorization();
-      this.emit((log) => log.searchReset(pending.event), cycle);
-    }
+            return;
 
-    if (pending.kind === 'search-unconsumed-bound-rebase') {
-      this.invalidateRecoveryAuthorization();
+          case 'searchReset':
+            log.searchReset(event.fields);
 
-      const {
-        evidence,
-        observation,
-        signer,
-        attemptId,
-        nonce,
-      } = pending.event;
+            return;
 
-      this.emit((log) => log.searchUnconsumedBoundRebased({
-        signer,
-        attemptId,
-        nonce,
-        oldLowerBlock: evidence.lowerBound.anchor.blockNumber,
-        oldLowerBlockHash: evidence.lowerBound.anchor.blockHash,
-        oldLowerNonce: evidence.lowerBound.nonce,
-        observedLowerBlockHash: evidence.observedLower.blockHash,
-        durableBlock: observation.anchor.blockNumber,
-        durableBlockHash: observation.anchor.blockHash,
-        durableNonce: observation.nonce,
-        invalidatedFact: {
-          expectedBlock: evidence.fact.anchor.blockNumber,
-          expectedBlockHash: evidence.fact.anchor.blockHash,
-          observedBlock: evidence.observedFact.blockNumber,
-          observedBlockHash: evidence.observedFact.blockHash,
-        },
-      }), cycle);
-    }
+          case 'searchUnconsumedBoundRebased':
+            log.searchUnconsumedBoundRebased(event.fields);
 
-    if (pending.kind === 'search-lower-bound-replacement') {
-      this.invalidateRecoveryAuthorization();
-      const event = pending.event;
-      let invalidatedFact = null;
-      if (event.invalidatedFact !== null) {
-        invalidatedFact = {
-          expectedBlock: event.invalidatedFact.fact.anchor.blockNumber,
-          expectedBlockHash: event.invalidatedFact.fact.anchor.blockHash,
-          observedBlock: event.invalidatedFact.observedAnchor.blockNumber,
-          observedBlockHash: event.invalidatedFact.observedAnchor.blockHash,
-        };
-      }
-      this.emit((log) => log.searchLowerBoundReplaced({
-        signer: event.signer,
-        attemptId: event.attemptId,
-        nonce: event.nonce,
-        oldLowerBlock: event.oldLowerBound.anchor.blockNumber,
-        oldLowerBlockHash: event.oldLowerBound.anchor.blockHash,
-        oldLowerNonce: event.oldLowerBound.nonce,
-        observedLowerBlock: event.observedLower.blockNumber,
-        observedLowerBlockHash: event.observedLower.blockHash,
-        replacementBlock: event.replacement.anchor.blockNumber,
-        replacementBlockHash: event.replacement.anchor.blockHash,
-        replacementNonce: event.replacement.nonce,
-        durableBlock: event.durableObservation.anchor.blockNumber,
-        durableBlockHash: event.durableObservation.anchor.blockHash,
-        durableNonce: event.durableObservation.nonce,
-        probeCount: BigInt(event.probeCount),
-        invalidatedFact,
-      }), cycle);
+            return;
+
+          case 'searchLowerBoundReplaced':
+            log.searchLowerBoundReplaced(event.fields);
+
+            return;
+
+          default:
+            event satisfies never;
+        }
+      }, cycle);
     }
 
     this.pendingWrite = undefined;
@@ -2115,15 +2043,7 @@ export class SignerCoordinator {
     this.reconcileExhaustedSearch();
     this.updateDurableRecoveryRevision();
 
-    let operation: SignerEventOperation = 'reconcile-attempt';
-
-    if (pending.kind === 'prepared') {
-      operation = 'prepare-attempt';
-    } else if (pending.kind === 'broadcast') {
-      operation = 'broadcast-attempt';
-    }
-
-    return operation;
+    return description.operation;
   }
 
   private latchUnattributedActivity(): void {
@@ -2172,18 +2092,22 @@ export class SignerCoordinator {
       throw new Error('No failed journal write is available to retry.');
     }
 
-    const previousCommitted = this.persistence.current;
     let operation: SignerEventOperation = 'reconcile-attempt';
 
     this.busy = true;
 
     try {
-      await this.persistence.retry();
+      const outcome = await retryJournalWrite(this.persistence);
 
-      operation = this.applyCommittedWrite(cycle);
-    } catch (error) {
-      this.discardUnacknowledgedWrite(previousCommitted);
-      throw error;
+      if (outcome.status === 'uncertain') {
+        throw outcome.error;
+      }
+
+      try {
+        operation = this.applyCommittedWrite(cycle);
+      } catch (error) {
+        this.throwCompletionFailure(error);
+      }
     } finally {
       this.busy = false;
       this.refresh(cycle, operation);
