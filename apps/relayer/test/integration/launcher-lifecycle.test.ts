@@ -133,6 +133,7 @@ function writePreload(
   startupRecovery = false,
   command: 'daemon' | 'import' | 'import-when-available' = 'daemon',
   interrupted = false,
+  restartRequired = false,
 ): string {
   const preload = join(directory, 'preload.mjs');
 
@@ -697,6 +698,24 @@ function writePreload(
         }
       `);
     }
+  }
+
+  if (restartRequired) {
+    replace('daemon/daemon-cycle.js', `
+      import {
+        assertServiceLockHeld,
+      } from ${JSON.stringify(compiledModuleUrl('state/service-lock.js'))};
+      import {
+        SignerRestartRequiredError,
+      } from ${JSON.stringify(
+        compiledModuleUrl('state/signer-restart-required-error.js'),
+      )};
+
+      export async function runDaemonCycle() {
+        assertServiceLockHeld();
+        throw new SignerRestartRequiredError();
+      }
+    `);
   }
 
   writeFileSync(preload, `
@@ -1785,4 +1804,55 @@ it.skipIf(process.platform !== 'linux').each([
     }
   },
   20_000,
+);
+
+it.skipIf(process.platform !== 'linux')(
+  'releases launcher ownership after a restart-required exit with code 7',
+  () => {
+    const directory = mkdtempSync(join(fixture, 'restart-required-'));
+
+    const preload = writePreload(
+      directory,
+      'SIGTERM',
+      directory,
+      compiledApplication,
+      false,
+      'daemon',
+      false,
+      true,
+    );
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: fixture + delimiter + (process.env.PATH ?? ''),
+      NODE_ENV: 'production',
+      NODE_OPTIONS: '--import=' + pathToFileURL(preload).href,
+      QUICKNET_STATE_DIR: directory,
+      QUICKNET_LOG_LEVEL: 'info',
+    };
+
+    delete env.QUICKNET_ENV_FILE;
+
+    const result = spawnSync('sh', [
+      launcher, 'daemon', '--network', 'robinhood-testnet',
+    ], {
+      cwd: APP,
+      env,
+      encoding: 'utf8',
+      timeout: WAIT_TIMEOUT_MS,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status, result.stderr).toBe(7);
+    expect(result.stderr).toContain('signer-restart-required');
+
+    const reacquired = spawnSync('flock', [
+      '--exclusive', '--nonblock', '--conflict-exit-code', '75',
+      join(directory, 'relayer.flock'), 'true',
+    ], { encoding: 'utf8', timeout: WAIT_TIMEOUT_MS });
+
+    expect(reacquired.error).toBeUndefined();
+    expect(reacquired.status, reacquired.stderr).toBe(0);
+  },
 );

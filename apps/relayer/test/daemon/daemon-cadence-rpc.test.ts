@@ -3,6 +3,7 @@ import {
 } from 'node:perf_hooks';
 
 import {
+  afterEach,
   describe,
   expect,
   it,
@@ -54,6 +55,16 @@ import type {
   TransactionJournalSnapshot,
 } from '../../src/state/transaction-journal.js';
 
+import * as completion from '../../src/state/write-completion.js';
+
+import {
+  SignerRestartRequiredError,
+} from '../../src/state/signer-restart-required-error.js';
+
+import {
+  isSignerRestartFailure,
+} from '../../src/execution/signer-restart-failure.js';
+
 const beacon = vi.hoisted(() => vi.fn());
 
 vi.mock('../../src/rounds/fetch-beacon-with-retry.js', () => ({
@@ -78,7 +89,11 @@ function anchor(number: bigint) {
 
 async function loadedFixture(
   unacknowledged: boolean,
-  options: { secondRequest?: boolean; preparationFailure?: boolean } = {},
+  options: {
+    secondRequest?: boolean;
+    preparationFailure?: boolean;
+    completionFault?: 'recovery' | 'consumer' | 'scheduled';
+  } = {},
 ) {
   let time = 0;
   let pendingRound = 0n;
@@ -96,6 +111,14 @@ async function loadedFixture(
     retained: number;
   }[] = [];
   const errors: unknown[] = [];
+
+  let faulted = false;
+  let faultCallCount = 0;
+  let savesAfterFault = 0;
+  let checkpointsAfterFault = 0;
+  let completedAfterFault = 0;
+  let sleepsAfterFault = 0;
+  let escaped: unknown;
 
   let preparationFailed = false;
 
@@ -150,7 +173,15 @@ async function loadedFixture(
     async getBlock(args: { blockNumber?: bigint; blockTag?: string }) {
       calls.push(`eth_getBlockByNumber:${args.blockTag ?? args.blockNumber}`);
 
-      const number = args.blockNumber ?? (time >= 90_000 ? 250n : 100n);
+      let durable = 100n;
+
+      if (time >= 90_000) {
+        durable = 250n;
+      } else if (options.completionFault === 'consumer') {
+        durable = 150n;
+      }
+
+      const number = args.blockNumber ?? durable;
 
       return { number, hash: anchor(number).blockHash };
     },
@@ -174,7 +205,13 @@ async function loadedFixture(
     async getLogs(args: { fromBlock: bigint; toBlock: bigint }) {
       calls.push(`eth_getLogs:${args.fromBlock}-${args.toBlock}`);
 
-      const requests = [{ round: 100n, height: 205n }];
+      let height = 205n;
+
+      if (options.completionFault === 'consumer') {
+        height = 101n;
+      }
+
+      const requests = [{ round: 100n, height }];
 
       if (options.secondRequest !== false) {
         requests.push({ round: 108n, height: 210n });
@@ -254,6 +291,10 @@ async function loadedFixture(
     store: {
       load: async () => ({ kind: 'present', snapshot }),
       save: async (next) => {
+        if (faulted) {
+          savesAfterFault += 1;
+        }
+
         snapshot = next;
       },
     },
@@ -291,6 +332,25 @@ async function loadedFixture(
 
   const controller = new AbortController();
 
+  if (options.completionFault !== undefined) {
+    const describeWrite = completion.describeWriteCompletion;
+
+    vi.spyOn(completion, 'describeWriteCompletion')
+      .mockImplementation((pending, signer) => {
+        if (
+          !faulted &&
+          (options.completionFault === 'recovery' ||
+            pending.kind === 'prepared')
+        ) {
+          faulted = true;
+          faultCallCount = calls.length;
+          throw new Error('Injected acknowledged completion failure');
+        }
+
+        return describeWrite(pending, signer);
+      });
+  }
+
   await runDaemon({
     account: ACCOUNT,
     publicClient: client,
@@ -306,6 +366,10 @@ async function loadedFixture(
     checkpointStore: {
       load: async () => checkpoint,
       save: async (_consumer, next) => {
+        if (faulted) {
+          checkpointsAfterFault += 1;
+        }
+
         checkpoint = next;
       },
     },
@@ -329,6 +393,11 @@ async function loadedFixture(
     monotonicNow: () => time,
     now: () => WALL + time,
     sleep: async (delay) => {
+      if (faulted) {
+        sleepsAfterFault += 1;
+        controller.abort();
+      }
+
       time += delay;
 
       if (time >= 210_000) {
@@ -340,6 +409,11 @@ async function loadedFixture(
       discoveries.push({ round: event.round, at: time });
     },
     onWork(result, context) {
+      if (faulted) {
+        completedAfterFault += 1;
+        controller.abort();
+      }
+
       for (const outcome of result.cycle?.scheduled?.outcomes ?? []) {
         if (outcome.status === 'failed') {
           errors.push(outcome.error);
@@ -352,9 +426,32 @@ async function loadedFixture(
         retained: manager.status.attempts.length,
       });
     },
+  }).catch((error: unknown) => {
+    if (options.completionFault === undefined) {
+      throw error;
+    }
+
+    escaped = error;
   });
 
-  return { inspections, sent, discoveries, work, snapshot, errors };
+  return {
+    inspections,
+    sent,
+    discoveries,
+    work,
+    snapshot,
+    errors,
+    fault: {
+      faulted,
+      escaped,
+      savesAfterFault,
+      checkpointsAfterFault,
+      completedAfterFault,
+      sleepsAfterFault,
+      detached: observe === undefined,
+      callsAfterFault: calls.slice(faultCallCount),
+    },
+  };
 }
 
 function header(height: number | 'safe') {
@@ -537,4 +634,41 @@ describe('loaded cadence through the real daemon and transaction manager', () =>
     expect(preparation).toHaveLength(2);
     expect(provider).toHaveLength(unacknowledged ? 225 : 227);
   });
+});
+
+describe('fatal completion failures through the running daemon', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(['recovery', 'consumer', 'scheduled'] as const)(
+    'escapes the %s path without subsequent work or publication',
+    async (completionFault) => {
+      const result = await loadedFixture(false, {
+        secondRequest: false,
+        completionFault,
+      });
+
+      expect(result.fault.faulted).toBe(true);
+      expect(isSignerRestartFailure(result.fault.escaped)).toBe(true);
+
+      if (completionFault === 'recovery') {
+        expect(result.fault.escaped)
+          .toBeInstanceOf(SignerRestartRequiredError);
+      } else {
+        expect(result.fault.escaped).toMatchObject({
+          name: 'TransactionSubmissionError',
+          cause: expect.any(SignerRestartRequiredError),
+        });
+      }
+
+      expect(result.fault).toMatchObject({
+        savesAfterFault: 0,
+        checkpointsAfterFault: 0,
+        completedAfterFault: 0,
+        sleepsAfterFault: 0,
+        callsAfterFault: [],
+        detached: true,
+      });
+      expect(result.sent).toEqual([]);
+    },
+  );
 });

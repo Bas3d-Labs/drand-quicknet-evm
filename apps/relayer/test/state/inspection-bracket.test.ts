@@ -16,11 +16,9 @@ import type {
 import {
   assertInspectionCompleted,
   createInspectionBracket,
-  discardInspectionEvidence,
   inspectionNeedsOpening,
   latestNonceIsConsistent,
   mergeBlockObservations,
-  nextInspectionPhase,
   observeDurableNonce,
   type InspectionBracket,
 } from '../../src/state/inspection-bracket.js';
@@ -51,6 +49,32 @@ function bracket(): InspectionBracket {
   return createInspectionBracket({ publicClient, head, durableAnchor });
 }
 
+function bracketAt(phase: InspectionBracket['phase']): InspectionBracket {
+  const state = bracket();
+
+  if (phase === 'failed') {
+    state.advancePhase('failed');
+  } else {
+    for (const next of [
+      'durable',
+      'latest',
+      'closing',
+      'persisting',
+      'completed',
+    ] as const) {
+      if (state.phase === phase) {
+        break;
+      }
+
+      state.advancePhase(next);
+    }
+  }
+
+  expect(state.phase).toBe(phase);
+
+  return state;
+}
+
 describe('inspection bracket', () => {
   it(
     'captures frozen anchor copies and starts with isolated empty evidence',
@@ -59,7 +83,7 @@ describe('inspection bracket', () => {
 
       const second = bracket();
 
-      expect(first).toEqual({
+      expect(first).toMatchObject({
         publicClient,
         head: { blockNumber: 20n, blockHash: HASH_B },
         durableAnchor: { blockNumber: 10n, blockHash: HASH_A },
@@ -113,7 +137,7 @@ describe('inspection bracket', () => {
   it.each(phases)(
     'checks opening, completion and every move from %s',
     (phase) => {
-      const state = { ...bracket(), phase };
+      const state = bracketAt(phase);
 
       // Expected moves are independent of the production transition table.
       const allowed = new Set([
@@ -132,12 +156,17 @@ describe('inspection bracket', () => {
       ]);
 
       for (const next of phases) {
+        const candidate = bracketAt(phase);
+
         if (allowed.has(`${phase}:${next}`)) {
-          expect(nextInspectionPhase(phase, next)).toBe(next);
+          candidate.advancePhase(next);
+
+          expect(candidate.phase).toBe(next);
         } else {
-          expect(() => nextInspectionPhase(phase, next)).toThrow(
+          expect(() => candidate.advancePhase(next)).toThrow(
             'Signer inspection bracket cannot accept another operation.',
           );
+          expect(candidate.phase).toBe(phase);
         }
       }
 
@@ -264,22 +293,46 @@ describe('inspection bracket', () => {
     }
   );
 
-  it(
-    'discards evidence without changing the old value or seeding another bracket',
-    () => {
-      const state = bracket();
+  it.each(['completed', 'failed'] as const)(
+    'discards evidence in place while preserving %s phase and nonce',
+    (phase) => {
+      const state = bracketAt(phase);
 
-      state.durableObservations = new Map([[10n, HASH_A]]);
+      const retained = new Map<bigint, Hash>([[10n, HASH_A]]);
+
+      state.durableObservations = retained;
       state.durableNonce = 2n;
-      state.phase = 'completed';
 
-      const discarded = discardInspectionEvidence(state);
+      const same = state;
 
-      expect(discarded).toEqual({ ...state, durableObservations: new Map() });
-      expect(discarded).not.toBe(state);
-      expect(state.durableObservations).toEqual(new Map([[10n, HASH_A]]));
+      const capturedHead = state.head;
+
+      const capturedDurable = state.durableAnchor;
+
+      state.discardEvidence();
+
+      expect(state).toBe(same);
+      expect(same.durableObservations).toEqual(new Map());
+      expect(state.durableObservations).not.toBe(retained);
+      expect(retained).toEqual(new Map([[10n, HASH_A]]));
+      expect(state.phase).toBe(phase);
+      expect(state.durableNonce).toBe(2n);
+      expect(state.publicClient).toBe(publicClient);
+      expect(state.head).toBe(capturedHead);
+      expect(state.durableAnchor).toBe(capturedDurable);
       expect(bracket().durableObservations.size).toBe(0);
       expect(bracket().durableNonce).toBeUndefined();
-    }
+      expect(bracket().phase).toBe('opening');
+    },
   );
+
+  it('rejects direct phase assignment in TypeScript and at runtime', () => {
+    const state = bracket();
+
+    expect(() => {
+      // @ts-expect-error Phase changes must use the checked transition method.
+      state.phase = 'completed';
+    }).toThrow(TypeError);
+    expect(state.phase).toBe('opening');
+  });
 });

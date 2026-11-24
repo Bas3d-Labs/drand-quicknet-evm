@@ -1,4 +1,12 @@
 import {
+  isSignerRestartFailure,
+} from '../execution/signer-restart-failure.js';
+
+import {
+  SignerRestartRequiredError,
+} from '../state/signer-restart-required-error.js';
+
+import {
   journalBoundsViolations,
 } from '../state/journal-bounds-error.js';
 
@@ -47,6 +55,15 @@ export function renderDiagnostic(
   importProgress?: RoundImportProgress,
 ): string {
   try {
+    if (isSignerRestartFailure(error)) {
+      return JSON.stringify({
+        event: 'cli_failed',
+        kind: 'signer-journal',
+        code: 'signer-restart-required',
+        message: new SignerRestartRequiredError().message,
+      });
+    }
+
     const classified = classificationError(error);
 
     const code = usageCode(classified);

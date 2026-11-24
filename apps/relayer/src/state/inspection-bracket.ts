@@ -22,23 +22,45 @@ interface InspectionBracketOptions {
   readonly durableAnchor?: Readonly<BlockAnchor>;
 }
 
-export interface InspectionBracket {
-  readonly publicClient: PublicClient;
-  readonly head: Readonly<BlockAnchor>;
-  readonly durableAnchor: Readonly<BlockAnchor> | undefined;
+type InspectionPhase =
+  | 'opening'
+  | 'durable'
+  | 'latest'
+  | 'closing'
+  | 'persisting'
+  | 'completed'
+  | 'failed';
+
+/** Owns phase transitions only; nonce and evidence writes remain external. */
+class InspectionBracket {
+  private phaseValue: InspectionPhase = 'opening';
+
   durableNonce: bigint | undefined;
 
   /** Observed hashes for this inspection only; never persisted or cached. */
-  durableObservations: ReadonlyMap<bigint, Hash>;
-  phase:
-    | 'opening'
-    | 'durable'
-    | 'latest'
-    | 'closing'
-    | 'persisting'
-    | 'completed'
-    | 'failed';
+  durableObservations: ReadonlyMap<bigint, Hash> = new Map();
+
+  constructor(
+    readonly publicClient: PublicClient,
+    readonly head: Readonly<BlockAnchor>,
+    readonly durableAnchor: Readonly<BlockAnchor> | undefined,
+  ) {}
+
+  get phase(): InspectionPhase {
+    return this.phaseValue;
+  }
+
+  advancePhase(next: InspectionPhase): void {
+    this.phaseValue = nextInspectionPhase(this.phaseValue, next);
+  }
+
+  /** Release this inspection's evidence without changing its phase or nonce. */
+  discardEvidence(): void {
+    this.durableObservations = new Map();
+  }
 }
+
+export type { InspectionBracket };
 
 export function createInspectionBracket(
   options: InspectionBracketOptions,
@@ -69,16 +91,11 @@ export function createInspectionBracket(
     throw new TypeError('Invalid signer inspection anchors.');
   }
 
-  return {
-    publicClient: options.publicClient,
+  return new InspectionBracket(
+    options.publicClient,
     head,
-    durableAnchor: durable === undefined
-      ? undefined
-      : Object.freeze({ ...durable }),
-    durableNonce: undefined,
-    durableObservations: new Map(),
-    phase: 'opening',
-  };
+    durable === undefined ? undefined : Object.freeze({ ...durable }),
+  );
 }
 
 /** Matching repeats are allowed. Different hashes at one height fail closed. */
@@ -122,7 +139,7 @@ export function inspectionNeedsOpening(bracket: InspectionBracket): boolean {
 /**
  * Failure is allowed from every phase, including a previously failed bracket.
  */
-export function nextInspectionPhase(
+function nextInspectionPhase(
   phase: InspectionBracket['phase'],
   next: InspectionBracket['phase'],
 ): InspectionBracket['phase'] {
@@ -191,11 +208,4 @@ export function assertInspectionCompleted(bracket: InspectionBracket): void {
       'Signer inspection bracket has not completed successfully.'
     );
   }
-}
-
-/** Release only this inspection's evidence; no journal state is involved. */
-export function discardInspectionEvidence(
-  bracket: InspectionBracket,
-): InspectionBracket {
-  return { ...bracket, durableObservations: new Map() };
 }

@@ -25,6 +25,10 @@ import {
   type RecoverSignerOptions,
 } from '../../src/state/signer-coordinator.js';
 
+import {
+  SignerRestartRequiredError,
+} from '../../src/state/signer-restart-required-error.js';
+
 import type {
   TransactionJournalRead,
   TransactionJournalSnapshot,
@@ -937,6 +941,7 @@ describe('coordinator write failure boundaries', () => {
         running = t.run();
       }
 
+      await expect(running).rejects.toBeInstanceOf(SignerRestartRequiredError);
       await expect(running).rejects.toMatchObject({ message: RESTART_ERROR });
 
       const saved = t.save.mock.lastCall![0];
@@ -956,18 +961,20 @@ describe('coordinator write failure boundaries', () => {
       expect(t.coordinator.status).toMatchObject({
         open: false,
         persistenceState: 'idle',
-        recoveryComplete: kind === 'inclusion',
+        recoveryComplete: false,
         inclusionChecksComplete: false,
       });
       expect(t.coordinator.canBroadcast).toBe(false);
       expect(t.rpc.sendRawTransaction).not.toHaveBeenCalled();
       expect(t.rpc.request).not.toHaveBeenCalled();
 
-      await expect(t.coordinator.retryPersistence()).rejects.toThrow(
-        'No failed journal write is available to retry.',
-      );
+      await expect(t.coordinator.retryPersistence()).rejects.toMatchObject({
+        name: 'SignerRestartRequiredError',
+        message: RESTART_ERROR,
+      });
       await expect(t.coordinator.recover(t.options)).rejects.toMatchObject({
-        message: 'A pending journal write must be retried first.',
+        name: 'SignerRestartRequiredError',
+        message: RESTART_ERROR,
       });
 
       let expectedSaves = 1;

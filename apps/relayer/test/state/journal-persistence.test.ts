@@ -250,13 +250,19 @@ describe('journal persistence latch', () => {
     save.mockRejectedValueOnce(new Error('Second failure.'));
 
     await expect(persistence.save(next))
-      .rejects.toThrow('The pending snapshot must be retried.');
+      .rejects.toMatchObject({
+        message: 'Journal persistence did not complete. ' +
+          'The pending snapshot must be retried.',
+      });
 
     // Mutation of the caller's candidate cannot change a retained retry.
     next.nextNonce = 99n;
 
     await expect(persistence.retry())
-      .rejects.toThrow('The pending snapshot must be retried.');
+      .rejects.toMatchObject({
+        message: 'Journal persistence did not complete. ' +
+          'The pending snapshot must be retried.',
+      });
 
     expect(persistence.state).toBe('failed');
     expect(persistence.current).toEqual({

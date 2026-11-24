@@ -57,6 +57,11 @@ export class SignerAuthorization {
     this.clearAllAuthorization();
   }
 
+  /** Revokes all grants after acknowledged completion fails. */
+  completionFailed(): void {
+    this.clearAllAuthorization();
+  }
+
   terminalCorrectionCommitted(): void {
     this.clearAllAuthorization();
   }

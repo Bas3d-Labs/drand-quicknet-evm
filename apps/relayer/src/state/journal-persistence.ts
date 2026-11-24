@@ -167,7 +167,7 @@ export class JournalPersistence {
       this.stateValue = 'failed';
 
       throw new Error(
-        'Journal persistence did not complete.' +
+        'Journal persistence did not complete. ' +
         'The pending snapshot must be retried.'
       );
     }
