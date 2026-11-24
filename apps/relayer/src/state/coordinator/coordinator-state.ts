@@ -166,7 +166,9 @@ export class CoordinatorStateStore {
       return undefined;
     }
 
-    return current.snapshot.ledger.outcomes.find((row) => row.requestId === requestId);
+    return current.snapshot.ledger.outcomes.find(
+      (row) => row.requestId === requestId,
+    );
   }
 
   /**

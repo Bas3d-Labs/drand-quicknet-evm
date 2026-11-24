@@ -77,7 +77,10 @@ export async function recoverSignerWorkflow(
   if (options.acceptance !== undefined) {
     validateAcceptanceRequest(options.acceptance);
 
-    if (options.attribution !== undefined || options.attributionCommitment !== undefined) {
+    if (
+      options.attribution !== undefined ||
+      options.attributionCommitment !== undefined
+    ) {
       throw new TypeError('Conflicting operator recovery requests.');
     }
   }
@@ -85,14 +88,18 @@ export async function recoverSignerWorkflow(
   const acceptanceCommitment = options.acceptanceCommitment;
 
   if (acceptanceCommitment !== undefined) {
-    if (options.attribution !== undefined || options.attributionCommitment !== undefined) {
+    if (
+      options.attribution !== undefined ||
+      options.attributionCommitment !== undefined
+    ) {
       throw new TypeError('Conflicting operator recovery requests.');
     }
 
     if (
       options.acceptance === undefined ||
       current.kind !== 'present' ||
-      journalSnapshotDigest(current.snapshot) !== acceptanceCommitment.snapshotDigest
+      journalSnapshotDigest(current.snapshot) !==
+        acceptanceCommitment.snapshotDigest
     ) {
       return {
         status: 'operator-ticket-refused',
@@ -212,7 +219,9 @@ export async function recoverSignerWorkflow(
         diagnostics.reportStoredFactConflict(detail, 'recovery', cycle);
 
         if (!('observation' in result)) {
-          throw new Error('A conflicting recovery plan requires an observation.');
+          throw new Error(
+            'A conflicting recovery plan requires an observation.',
+          );
         }
 
         return {
@@ -223,7 +232,8 @@ export async function recoverSignerWorkflow(
       }
 
       // Admit only after nonce validation and planning. A preservation-only
-      // skip still carries valid evidence, even though recovery stays incomplete.
+      // skip still carries valid evidence, even though recovery stays
+      // incomplete.
       if (
         (
           plan.kind === 'persist' ||
@@ -243,7 +253,8 @@ export async function recoverSignerWorkflow(
         inspections.failInspectionBracket(owner);
 
         if (result.status === 'operator-acceptance-available') {
-          let reason: 'ledger-capacity-reached' | 'stale-evidence' = 'stale-evidence';
+          let reason: 'ledger-capacity-reached' | 'stale-evidence' =
+            'stale-evidence';
 
           if (plan.reason === 'ledger-capacity-reached') {
             reason = plan.reason;
@@ -257,7 +268,8 @@ export async function recoverSignerWorkflow(
         }
 
         if (result.status === 'operator-attribution-available') {
-          let reason: 'ledger-capacity-reached' | 'stale-evidence' = 'stale-evidence';
+          let reason: 'ledger-capacity-reached' | 'stale-evidence' =
+            'stale-evidence';
 
           if (plan.reason === 'ledger-capacity-reached') {
             reason = plan.reason;
@@ -274,12 +286,19 @@ export async function recoverSignerWorkflow(
       }
 
       // Ticketed apply may commit only the exact attribution previewed earlier.
-      // In particular, a newly available ordinary resolution is not that proposal.
+      // In particular, a newly available ordinary resolution is not that
+      // proposal.
       if (commitment !== undefined && (
         plan.completion.kind !== 'operator-attribution' ||
         plan.completion.outcome.proposalDigest !== commitment.proposalDigest ||
-        !blockAnchorsMatch(plan.completion.outcome.replacement.inclusion, commitment.inclusion) ||
-        !blockAnchorsMatch(plan.completion.outcome.durable.anchor, commitment.durable.anchor) ||
+        !blockAnchorsMatch(
+          plan.completion.outcome.replacement.inclusion,
+          commitment.inclusion,
+        ) ||
+        !blockAnchorsMatch(
+          plan.completion.outcome.durable.anchor,
+          commitment.durable.anchor,
+        ) ||
         plan.completion.outcome.durable.nonce !== commitment.durable.nonce
       )) {
         inspections.failInspectionBracket(owner);
@@ -290,15 +309,18 @@ export async function recoverSignerWorkflow(
         };
       }
 
-      // Ticketed acceptance must not substitute an ordinary resolution or repair.
+      // Ticketed acceptance must not substitute an ordinary resolution or
+      // repair.
       if (acceptanceCommitment !== undefined && (
         plan.completion.kind !== 'operator-acceptance' ||
-        plan.completion.outcome.proposalDigest !== acceptanceCommitment.proposalDigest ||
+        plan.completion.outcome.proposalDigest !==
+          acceptanceCommitment.proposalDigest ||
         !blockAnchorsMatch(
           plan.completion.outcome.durable.anchor,
           acceptanceCommitment.durable.anchor,
         ) ||
-        plan.completion.outcome.durable.nonce !== acceptanceCommitment.durable.nonce
+        plan.completion.outcome.durable.nonce !==
+          acceptanceCommitment.durable.nonce
       )) {
         inspections.failInspectionBracket(owner);
 
@@ -324,7 +346,8 @@ export async function recoverSignerWorkflow(
     }
 
     try {
-      // Construction must not throw for planner output: this is after acknowledgement.
+      // Construction must not throw for planner output: this is after
+      // acknowledgement.
       const { terminalCorrection } = describeWriteCompletion(
         plan.completion,
         state.identity.signer,

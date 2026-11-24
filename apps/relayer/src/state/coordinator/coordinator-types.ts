@@ -85,7 +85,9 @@ export type SignerRecoveryResult =
       readonly reason: 'snapshot-changed' | 'proposal-changed';
     }
   | {
-      readonly status: 'operator-attribution-committed' | 'operator-acceptance-committed';
+      readonly status:
+        | 'operator-attribution-committed'
+        | 'operator-acceptance-committed';
       readonly requestId: string;
     }
   | SignerRecoveryInspection

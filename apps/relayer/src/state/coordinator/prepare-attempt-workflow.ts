@@ -155,7 +155,9 @@ export async function prepareAttemptWorkflow(
     } catch (error) {
       // Signing, diagnostics or planning failed before a save outcome existed.
       diagnostics.restorePreparationState(previousDiagnostics);
-      state.authorization.preparationRolledBack(previousInclusionChecksComplete);
+      state.authorization.preparationRolledBack(
+        previousInclusionChecksComplete,
+      );
       throw error;
     }
 
@@ -163,7 +165,9 @@ export async function prepareAttemptWorkflow(
       case 'not-written':
         state.pendingWrite = undefined;
         diagnostics.restorePreparationState(previousDiagnostics);
-        state.authorization.preparationRolledBack(previousInclusionChecksComplete);
+        state.authorization.preparationRolledBack(
+          previousInclusionChecksComplete,
+        );
         throw outcome.error;
 
       case 'uncertain':
@@ -181,7 +185,8 @@ export async function prepareAttemptWorkflow(
       commit.applyCommittedWrite(cycle);
       state.authorization.grantPreparationPermit(attemptId);
 
-      // Diagnostic only: a retained lookup or failed preparation does not clear it.
+      // Diagnostic only: a retained lookup or failed preparation does not
+      // clear it.
       if (state.storedFactDispute?.origin === 'preparation') {
         state.storedFactDispute = null;
       }

@@ -28,7 +28,8 @@ import type {
 
 /**
  * Owns lockstep staging, journal persistence, the 6-step post-acknowledgement
- * completion sequence, the narrow fatal completion boundary, and retry isolation.
+ * completion sequence, the narrow fatal completion boundary, and retry
+ * isolation.
  */
 export class JournalCommitEngine {
   constructor(
@@ -87,7 +88,8 @@ export class JournalCommitEngine {
    * Strict 6-step completion boundary:
    * 1. Describe completion
    * 2. Revoke authorization on terminal correction
-   * 3. Emit completion event (before metadata clearance, blocker updates, or revision update)
+   * 3. Emit completion event (before metadata clearance, blocker updates,
+   *    or revision update)
    * 4. Clear pendingWrite
    * 5. Latch unattributed activity and reconcile conflict-search exhaustion
    * 6. Update committed durable recovery revision
@@ -95,7 +97,8 @@ export class JournalCommitEngine {
   completeCommittedWrite(
     cycle?: number,
   ): SignerEventOperation {
-    // Construction must not throw for planner output: this is outside the logging boundary.
+    // Construction must not throw for planner output: this is outside the
+    // logging boundary.
     const description = describeWriteCompletion(
       this.state.pendingWrite!,
       this.state.identity.signer,

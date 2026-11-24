@@ -164,7 +164,8 @@ export class CoordinatorDiagnostics {
 
   /**
    * Records a stored-fact dispute and reports it directly via the scoped base
-   * logger (outside `emit()` error containment and without toggling `emitting`).
+   * logger (outside `emit()` error containment and without toggling
+   * `emitting`).
    * Deduplication key updates only after the log call succeeds.
    */
   reportStoredFactConflict(

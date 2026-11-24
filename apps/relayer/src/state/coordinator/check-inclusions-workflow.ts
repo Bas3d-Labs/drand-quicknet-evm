@@ -101,7 +101,9 @@ export async function checkInclusionsWorkflow(
         bracket.publicClient !== options.publicClient ||
         !blockAnchorsMatch(bracket.head, options.head)
       ) {
-        throw new Error('Inclusion inspection does not match the selected head.');
+        throw new Error(
+          'Inclusion inspection does not match the selected head.',
+        );
       }
 
       const changed = await inspections.openInspectionBracket(owner);
@@ -216,7 +218,9 @@ export async function checkInclusionsWorkflow(
     }
 
     try {
-      state.authorization.inclusionCheckCommitted(result.inclusionChecksComplete);
+      state.authorization.inclusionCheckCommitted(
+        result.inclusionChecksComplete,
+      );
       commit.applyCommittedWrite(cycle);
 
       const attempt = next.attempts.find(

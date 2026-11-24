@@ -104,10 +104,14 @@ export class InspectionController {
             attribution: structuredClone(recoverOptions.attribution),
           }),
           ...(recoverOptions.acceptanceCommitment === undefined ? {} : {
-            acceptanceCommitment: structuredClone(recoverOptions.acceptanceCommitment),
+            acceptanceCommitment: structuredClone(
+              recoverOptions.acceptanceCommitment,
+            ),
           }),
           ...(recoverOptions.attributionCommitment === undefined ? {} : {
-            attributionCommitment: structuredClone(recoverOptions.attributionCommitment),
+            attributionCommitment: structuredClone(
+              recoverOptions.attributionCommitment,
+            ),
           }),
         };
 
@@ -313,7 +317,8 @@ export class InspectionController {
       assertInspectionCompleted(owner.bracket);
     }
 
-    // Diagnostic only; preparation disputes require a later successful preparation.
+    // Diagnostic only; preparation disputes require a later successful
+    // preparation.
     if (
       owner.bracket !== null &&
       this.state.authorization.recoveryComplete &&

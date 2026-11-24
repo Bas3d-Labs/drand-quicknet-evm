@@ -58,8 +58,10 @@ function interceptLog(
   return {
     ...inner,
     ...overrides,
-    withContext: (context) => interceptLog(inner.withContext(context), overrides),
-    withErrorSummary: (policy) => interceptLog(inner.withErrorSummary(policy), overrides),
+    withContext: (context) =>
+      interceptLog(inner.withContext(context), overrides),
+    withErrorSummary: (policy) =>
+      interceptLog(inner.withErrorSummary(policy), overrides),
   };
 }
 
@@ -75,7 +77,9 @@ function sampleTransaction() {
   };
 }
 
-async function captureRejection(promise: Promise<unknown>): Promise<string | null> {
+async function captureRejection(
+  promise: Promise<unknown>,
+): Promise<string | null> {
   try {
     await promise;
     return null;
@@ -85,7 +89,9 @@ async function captureRejection(promise: Promise<unknown>): Promise<string | nul
 }
 
 describe('SignerCoordinator preserved invariants', () => {
-  it('keeps status.open observable while excluding commands during gate-release and loggingFailed callbacks', async () => {
+  it(
+    'keeps status.open observable while excluding commands during gate-release and loggingFailed callbacks',
+    async () => {
     const base = await fixture();
     let visible: TransactionJournalRead = {
       kind: 'present',
@@ -116,7 +122,8 @@ describe('SignerCoordinator preserved invariants', () => {
       try {
         coordinator.beginInspection();
       } catch (error) {
-        beginInspectionError = error instanceof Error ? error.message : String(error);
+        beginInspectionError =
+          error instanceof Error ? error.message : String(error);
       }
 
       // Trigger async entry points synchronously inside emit() so their
@@ -130,7 +137,8 @@ describe('SignerCoordinator preserved invariants', () => {
         async () => undefined,
       );
 
-      // Attach no-op rejection handlers to avoid unhandledRejection before await.
+      // Attach no-op rejection handlers to avoid unhandledRejection before
+      // await.
       void prepareAttemptPromise.catch(() => {});
       void observeReconciliationPromise.catch(() => {});
 
@@ -199,25 +207,29 @@ describe('SignerCoordinator preserved invariants', () => {
       revisionReadable: probe.revisionReadable,
       beginInspectionError: probe.beginInspectionError,
       prepareAttemptError: await captureRejection(probe.prepareAttemptPromise),
-      observeReconciliationError: await captureRejection(probe.observeReconciliationPromise),
+      observeReconciliationError: await captureRejection(
+        probe.observeReconciliationPromise,
+      ),
     })));
+
+    const inProgress = 'Signer coordinator operation is already in progress.';
 
     expect(observations).toEqual([
       {
         phase: 'released',
         open: true,
         revisionReadable: true,
-        beginInspectionError: 'Signer coordinator operation is already in progress.',
-        prepareAttemptError: 'Signer coordinator operation is already in progress.',
-        observeReconciliationError: 'Signer coordinator operation is already in progress.',
+        beginInspectionError: inProgress,
+        prepareAttemptError: inProgress,
+        observeReconciliationError: inProgress,
       },
       {
         phase: 'loggingFailed',
         open: true,
         revisionReadable: true,
-        beginInspectionError: 'Signer coordinator operation is already in progress.',
-        prepareAttemptError: 'Signer coordinator operation is already in progress.',
-        observeReconciliationError: 'Signer coordinator operation is already in progress.',
+        beginInspectionError: inProgress,
+        prepareAttemptError: inProgress,
+        observeReconciliationError: inProgress,
       },
     ]);
 
@@ -226,7 +238,9 @@ describe('SignerCoordinator preserved invariants', () => {
     nextInspection.finish();
   });
 
-  it('propagates logger errors from reportStoredFactConflict without containment or advancing deduplication', async () => {
+  it(
+    'propagates logger errors from reportStoredFactConflict without containment or advancing deduplication',
+    async () => {
     const initial = await searchFactFixture([4, 5]);
     const attempts = initial.attempts.map((attempt) => ({
       ...attempt,
@@ -287,15 +301,20 @@ describe('SignerCoordinator preserved invariants', () => {
         parentHash: factAnchor(blockNumber - 1n).blockHash,
         transactions: [],
       })),
-      getTransactionCount: vi.fn(async ({ blockNumber }: { blockNumber: bigint }) => (
-        blockNumber === 100n ? 4 : 6
-      )),
-      getTransactionReceipt: vi.fn(async ({ hash }: { hash: `0x${string}` }) => {
-        throw new TransactionReceiptNotFoundError({ hash });
-      }),
+      getTransactionCount: vi.fn(
+        async ({ blockNumber }: { blockNumber: bigint }) => (
+          blockNumber === 100n ? 4 : 6
+        ),
+      ),
+      getTransactionReceipt: vi.fn(
+        async ({ hash }: { hash: `0x${string}` }) => {
+          throw new TransactionReceiptNotFoundError({ hash });
+        },
+      ),
     } as unknown as PublicClient;
 
-    // First conflict: logger throws directly (not contained by emit / loggingFailed),
+    // First conflict: logger throws directly (not contained by
+    // emit / loggingFailed),
     // storedFactDispute is recorded, and deduplication key is NOT advanced.
     await expect(
       coordinator.recover({
@@ -310,7 +329,8 @@ describe('SignerCoordinator preserved invariants', () => {
     expect(coordinator.status.storedFactDispute?.origin).toBe('recovery');
     expect(conflictCalls).toEqual(['initial']);
 
-    // Second identical conflict: still calls storedFactNonceConflict (not Repeated)
+    // Second identical conflict: still calls storedFactNonceConflict
+    // (not Repeated)
     // because the first call threw before updating lastStoredFactConflict.
     const second = await coordinator.recover({
       publicClient,
@@ -321,7 +341,8 @@ describe('SignerCoordinator preserved invariants', () => {
     expect(second.status).toBe('inconsistent-observations');
     expect(conflictCalls).toEqual(['initial', 'initial']);
 
-    // Third identical conflict: now deduplicated to storedFactNonceConflictRepeated.
+    // Third identical conflict: now deduplicated to
+    // storedFactNonceConflictRepeated.
     const third = await coordinator.recover({
       publicClient,
       anchor: factAnchor(120n),
@@ -332,9 +353,14 @@ describe('SignerCoordinator preserved invariants', () => {
     expect(conflictCalls).toEqual(['initial', 'initial', 'repeated']);
   });
 
-  it('keeps stored blockers and historical revision unchanged during completion-event emission', async () => {
+  it(
+    'keeps stored blockers and historical revision unchanged during completion-event emission',
+    async () => {
     const initial = await fixture();
-    let visible: TransactionJournalRead = { kind: 'present', snapshot: initial };
+    let visible: TransactionJournalRead = {
+      kind: 'present',
+      snapshot: initial,
+    };
     const rpc = client();
 
     let coordinator!: SignerCoordinator;
@@ -411,8 +437,11 @@ describe('SignerCoordinator preserved invariants', () => {
       reentrantError: 'Signer inspection is already in progress.',
     });
 
-    // After step 5 & 6 finish, exhaustion blocker is reconciled and revision advances.
-    expect(coordinator.status.blockers).not.toContain('conflict-search-exhausted');
+    // After step 5 & 6 finish, exhaustion blocker is reconciled and
+    // revision advances.
+    expect(coordinator.status.blockers).not.toContain(
+      'conflict-search-exhausted',
+    );
     expect(coordinator.durableRecoveryRevision).not.toBe(initialRevision);
   });
 });
