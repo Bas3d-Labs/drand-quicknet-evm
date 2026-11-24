@@ -69,11 +69,9 @@ import {
 import {
   assertInspectionCompleted,
   createInspectionBracket,
-  discardInspectionEvidence,
   inspectionNeedsOpening,
   latestNonceIsConsistent,
   mergeBlockObservations,
-  nextInspectionPhase,
   observeDurableNonce,
   type InspectionBracket,
 } from './inspection-bracket.js';
@@ -1417,7 +1415,7 @@ export class SignerCoordinator {
           );
         }
 
-        bracket.phase = nextInspectionPhase(bracket.phase, 'latest');
+        bracket.advancePhase('latest');
 
         const maxReplacementBlockRange = options.maxReplacementBlockRange;
 
@@ -1447,7 +1445,7 @@ export class SignerCoordinator {
 
         // Keep the result uncommitted until the owner confirms that the selected
         // latest block still matches the hash checked before the inspection.
-        bracket.phase = nextInspectionPhase(bracket.phase, 'closing');
+        bracket.advancePhase('closing');
 
         const closing = await checkBlockAnchor(
           options.publicClient,
@@ -1487,7 +1485,7 @@ export class SignerCoordinator {
           };
         }
 
-        bracket.phase = nextInspectionPhase(bracket.phase, 'persisting');
+        bracket.advancePhase('persisting');
 
         next = planSignerInclusions({
           identity: this.identity,
@@ -1530,7 +1528,7 @@ export class SignerCoordinator {
 
         // The durable permit was revoked on entry. Only the acknowledged latest
         // result above may grant a replacement permit before successful finish.
-        bracket.phase = nextInspectionPhase(bracket.phase, 'completed');
+        bracket.advancePhase('completed');
 
         return result;
       } catch (error) {
@@ -1745,7 +1743,7 @@ export class SignerCoordinator {
       return changed.observedAnchor;
     }
 
-    bracket.phase = nextInspectionPhase(bracket.phase, 'durable');
+    bracket.advancePhase('durable');
     return null;
   }
 
@@ -1807,7 +1805,7 @@ export class SignerCoordinator {
 
   private failInspectionBracket(owner: InspectionOwner): void {
     if (owner.bracket !== null) {
-      owner.bracket.phase = nextInspectionPhase(owner.bracket.phase, 'failed');
+      owner.bracket.advancePhase('failed');
       this.authorization.bracketFailed();
     }
   }
@@ -1887,7 +1885,7 @@ export class SignerCoordinator {
     }
 
     if (owner.bracket !== null) {
-      owner.bracket = discardInspectionEvidence(owner.bracket);
+      owner.bracket.discardEvidence();
     }
 
     this.inspectionOwner = null;
@@ -1932,7 +1930,7 @@ export class SignerCoordinator {
     this.authorization.abandonmentCompleted();
 
     if (owner.bracket !== null) {
-      owner.bracket = discardInspectionEvidence(owner.bracket);
+      owner.bracket.discardEvidence();
     }
 
     this.inspectionOwner = null;
