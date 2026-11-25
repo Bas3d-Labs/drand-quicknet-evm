@@ -12,6 +12,9 @@ import {
 import {
   JournalPersistence,
 } from '../../src/state/journal-persistence.js';
+import {
+  SignerRestartRequiredError,
+} from '../../src/state/signer-restart-required-error.js';
 import type {
   TransactionJournalSnapshot,
   TransactionJournalStore,
@@ -152,6 +155,8 @@ function assertPrivateStateStoreBoundaries(
   void store.storedFactDispute;
   // @ts-expect-error requirePendingWrite is private
   void store.requirePendingWrite;
+  // @ts-expect-error isPendingWrite is private
+  void store.isPendingWrite;
   // @ts-expect-error stagePendingWrite is private
   void store.stagePendingWrite;
   // @ts-expect-error discardPendingWrite is private
@@ -312,6 +317,7 @@ describe('Coordinator exclusive mutation authority', () => {
         'completePendingWrite',
         'latchRestartRequired',
         'requirePendingWrite',
+        'isPendingWrite',
         'acquireInspectionOwner',
         'releaseInspectionOwner',
       ];
@@ -407,6 +413,108 @@ describe('Coordinator exclusive mutation authority', () => {
       expect(() => acknowledged.complete()).toThrow(
         'Journal write completion was already applied.',
       );
+    },
+  );
+
+  it(
+    'makes failCompletion terminal for apply and complete on that handle',
+    async () => {
+      const { state, diagnostics } = await createAuthorityHarness();
+      const commit = new JournalCommitEngine(
+        state.createCommitEngineCapability(),
+        diagnostics,
+      );
+      const workflowCommit = commit.createWorkflowHandle();
+
+      const acknowledged = await workflowCommit.saveWrite(
+        createBaselineSnapshot(),
+        { kind: 'bootstrap' },
+      );
+      expect(acknowledged.status).toBe('acknowledged');
+      if (acknowledged.status !== 'acknowledged') {
+        throw new Error('Expected acknowledged outcome.');
+      }
+
+      expect(() =>
+        acknowledged.failCompletion(new Error('completion failed')),
+      ).toThrow(SignerRestartRequiredError);
+      expect(state.hasPendingWrite).toBe(true);
+
+      expect(() => acknowledged.apply()).toThrow(
+        'Journal write completion has already failed.',
+      );
+      expect(() => acknowledged.complete()).toThrow(
+        'Journal write completion has already failed.',
+      );
+      expect(state.hasPendingWrite).toBe(true);
+    },
+  );
+
+  it(
+    'binds failCompletion to its own write and preserves post-clear errors',
+    async () => {
+      const {
+        state,
+        diagnostics,
+        setSaveImpl,
+      } = await createAuthorityHarness();
+      const commit = new JournalCommitEngine(
+        state.createCommitEngineCapability(),
+        diagnostics,
+      );
+      const workflowCommit = commit.createWorkflowHandle();
+
+      // Write A completes and clears its own metadata.
+      const sharedMeta = { kind: 'observation' as const };
+      const writeA = await workflowCommit.saveWrite(
+        createBaselineSnapshot(),
+        sharedMeta,
+      );
+      expect(writeA.status).toBe('acknowledged');
+      if (writeA.status !== 'acknowledged') {
+        throw new Error('Expected acknowledged outcome for write A.');
+      }
+      writeA.apply();
+      expect(state.hasPendingWrite).toBe(false);
+
+      // Post-clear failure on A preserves original error without latching.
+      const postClearError = new Error('post-clear callback error');
+      let caughtPostClear: unknown;
+      try {
+        writeA.failCompletion(postClearError);
+      } catch (error) {
+        caughtPostClear = error;
+      }
+      expect(caughtPostClear).toBe(postClearError);
+      expect(caughtPostClear).not.toBeInstanceOf(SignerRestartRequiredError);
+
+      // Write B becomes uncertain with structurally identical metadata.
+      setSaveImpl(async () => {
+        throw new Error('simulated disk failure on write B');
+      });
+      const writeB = await workflowCommit.saveWrite(
+        createBaselineSnapshot(),
+        sharedMeta,
+      );
+      expect(writeB.status).toBe('uncertain');
+      expect(state.hasPendingWrite).toBe(true);
+
+      // Stale failCompletion on A must not latch restart for B.
+      const staleError = new Error('stale handle failure');
+      let caughtStale: unknown;
+      try {
+        writeA.failCompletion(staleError);
+      } catch (error) {
+        caughtStale = error;
+      }
+      expect(caughtStale).toBe(staleError);
+      expect(caughtStale).not.toBeInstanceOf(SignerRestartRequiredError);
+      expect(state.hasPendingWrite).toBe(true);
+
+      // Write B's retry remains valid and clears B's pending metadata.
+      setSaveImpl(async () => undefined);
+      await commit.retryPersistence();
+      expect(state.hasPendingWrite).toBe(false);
     },
   );
 });

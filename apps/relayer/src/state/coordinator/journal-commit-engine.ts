@@ -23,6 +23,7 @@ import type {
 
 import type {
   CommitEngineStateCapability,
+  ReadonlyPendingWrite,
 } from './coordinator-state.js';
 
 export type SavedWriteOutcome =
@@ -92,6 +93,7 @@ export class JournalCommitEngine {
       throw new Error('No failed journal write is available to retry.');
     }
 
+    const pendingWrite = this.state.requirePendingWrite();
     let operation: SignerEventOperation = 'reconcile-attempt';
 
     await this.state.runBusy(async () => {
@@ -104,7 +106,7 @@ export class JournalCommitEngine {
       try {
         operation = this.applyCommittedWrite(cycle);
       } catch (error) {
-        return this.throwCompletionFailure(error);
+        return this.throwCompletionFailure(error, pendingWrite);
       }
     }, () => this.diagnostics.refresh(cycle, operation));
   }
@@ -114,7 +116,7 @@ export class JournalCommitEngine {
     snapshot: TransactionJournalSnapshot,
     completion: PendingWrite,
   ): Promise<SavedWriteOutcome> {
-    this.state.stagePendingWrite(completion);
+    const pendingWrite = this.state.stagePendingWrite(completion);
 
     const outcome = await saveJournalWrite(this.state.persistence, snapshot);
 
@@ -135,8 +137,15 @@ export class JournalCommitEngine {
 
       case 'acknowledged': {
         let completed = false;
+        let failed = false;
 
         const claimCompletion = (): void => {
+          if (failed) {
+            throw new Error(
+              'Journal write completion has already failed.',
+            );
+          }
+
           if (completed) {
             throw new Error('Journal write completion was already applied.');
           }
@@ -156,8 +165,11 @@ export class JournalCommitEngine {
 
             return this.completeCommittedWrite(cycle);
           },
-          failCompletion: (error: unknown) =>
-            this.throwCompletionFailure(error),
+          failCompletion: (error: unknown) => {
+            failed = true;
+
+            return this.throwCompletionFailure(error, pendingWrite);
+          },
         });
       }
 
@@ -167,14 +179,17 @@ export class JournalCommitEngine {
   }
 
   /** Called only after acknowledgement; never reclassifies a committed save. */
-  private throwCompletionFailure(error: unknown): never {
-    if (this.state.hasPendingWrite) {
+  private throwCompletionFailure(
+    error: unknown,
+    pendingWrite: ReadonlyPendingWrite,
+  ): never {
+    if (this.state.isPendingWrite(pendingWrite)) {
       this.state.latchRestartRequired();
 
       throw new SignerRestartRequiredError();
     }
 
-    // Completion already cleared its metadata: preserve later failures as-is.
+    // Completion already cleared this write's metadata: preserve error as-is.
     throw error;
   }
 

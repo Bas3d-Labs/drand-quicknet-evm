@@ -94,7 +94,8 @@ export interface CommitEngineStateCapability {
   >;
   readonly hasPendingWrite: boolean;
   requirePendingWrite(): ReadonlyPendingWrite;
-  stagePendingWrite(completion: PendingWrite): void;
+  isPendingWrite(expected: ReadonlyPendingWrite): boolean;
+  stagePendingWrite(completion: PendingWrite): ReadonlyPendingWrite;
   discardPendingWrite(): void;
   completePendingWrite(): void;
   latchRestartRequired(): void;
@@ -408,14 +409,20 @@ export class CoordinatorStateStore {
     this.updateDurableRecoveryRevision();
   }
 
-  private stagePendingWrite(completion: PendingWrite): void {
+  private isPendingWrite(expected: ReadonlyPendingWrite): boolean {
+    return this.pendingWrite === expected;
+  }
+
+  private stagePendingWrite(completion: PendingWrite): ReadonlyPendingWrite {
     if (this.pendingWrite !== undefined) {
       throw new Error('A journal write is already signed.');
     }
 
     // Clone to detach caller aliases and freeze recursively so retained
     // completion metadata cannot be mutated through any read reference.
-    this.pendingWrite = deepFreeze(structuredClone(completion));
+    const staged = deepFreeze(structuredClone(completion));
+    this.pendingWrite = staged;
+    return staged;
   }
 
   createDiagnosticsCapability(): DiagnosticsStateCapability {
@@ -464,6 +471,8 @@ export class CoordinatorStateStore {
         return store.hasPendingWrite;
       },
       requirePendingWrite: () => store.requirePendingWrite(),
+      isPendingWrite: (expected: ReadonlyPendingWrite) =>
+        store.isPendingWrite(expected),
       stagePendingWrite: (completion: PendingWrite) =>
         store.stagePendingWrite(completion),
       discardPendingWrite: () => store.discardPendingWrite(),
